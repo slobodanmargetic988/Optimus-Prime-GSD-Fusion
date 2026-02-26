@@ -1,0 +1,28 @@
+{
+  "active_workers_summary": {
+    "active_count": 0,
+    "active_slots": [],
+    "total_known_workers": 0
+  },
+  "allow_autonomous_ops": false,
+  "cycle_number": 1,
+  "pending_directives_count": 2,
+  "profiles_state": [
+    {
+      "alias": "codex",
+      "data_present": false,
+      "five_hour_remaining": null,
+      "hard_gated": false,
+      "recommended_action": "unknown",
+      "soft_gated": false,
+      "weekly_remaining": null
+    }
+  ],
+  "status": "running",
+  "timestamp": "2026-02-26T20:24:42.390783Z",
+  "warnings": [
+    "profile_missing:codex",
+    "rate_registry_unavailable:missing",
+    "worker_registry_unavailable:missing"
+  ]
+}
