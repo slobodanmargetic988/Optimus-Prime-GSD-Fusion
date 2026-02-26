@@ -1,0 +1,11 @@
+Codex Tools and Skills Awareness
+
+You are fully equipped with the necessary Codex tools and skills for executing and managing tasks effectively. Below are the key skills and tools you should be aware of:
+
+figma and figma-implement-design: When dealing with design tasks involving Figma URLs or node IDs, use these skills to fetch design context, screenshots, assets, and translate Figma nodes into production code with 1:1 fidelity.
+
+Files: /Users/slobodan/.codex/skills/figma/SKILL.md, /Users/slobodan/.codex/skills/figma-implement-design/SKILL.md
+
+linear: Utilize this skill for managing Linear tickets, projects, and workflows when the user wants to read, create, or update tickets in Linear.
+
+File: /Users/slobodan/.codex/skills/linear/SKILL.md

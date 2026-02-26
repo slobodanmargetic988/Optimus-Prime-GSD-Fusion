@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Optimus Reviewer Guide</title>
+  <style>
+    :root {
+      --bg-a: #171a21;
+      --bg-b: #2f3b52;
+      --bg-c: #f7f3ea;
+      --ink: #1c3148;
+      --ink-soft: #3a5870;
+      --light: #eef3ff;
+      --teal: #3dd6d0;
+      --amber: #f4a259;
+      --rose: #d96c6c;
+      --card: rgba(255, 255, 255, 0.93);
+      --border: rgba(18, 48, 72, 0.14);
+      --radius: 16px;
+      --shadow: 0 14px 38px rgba(7, 19, 30, 0.2);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Manrope", "Space Grotesk", "Avenir Next", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(860px 320px at 86% -8%, rgba(61,214,208,0.2), transparent 70%),
+        radial-gradient(760px 300px at -12% 8%, rgba(244,162,89,0.22), transparent 70%),
+        linear-gradient(162deg, var(--bg-c), #fbfdff);
+      line-height: 1.55;
+    }
+
+    header {
+      background: linear-gradient(126deg, var(--bg-a), var(--bg-b));
+      color: var(--light);
+      padding: 2.8rem 1.2rem 2.2rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    header::after {
+      content: "";
+      position: absolute;
+      right: -80px;
+      bottom: -80px;
+      width: 250px;
+      height: 250px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(217,108,108,0.35), rgba(217,108,108,0));
+    }
+
+    .wrap { max-width: 1020px; margin: 0 auto; }
+    h1 {
+      margin: 0;
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .sub {
+      margin: 0.7rem 0 0;
+      max-width: 760px;
+      color: rgba(238,243,255,0.92);
+    }
+
+    .chips {
+      margin-top: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .chip {
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.24);
+      padding: 0.3rem 0.72rem;
+      font-size: 0.82rem;
+      background: rgba(255,255,255,0.08);
+    }
+
+    main { padding: 1.2rem; }
+    .grid {
+      max-width: 1020px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .card {
+      grid-column: span 12;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow);
+      padding: 1rem 1.08rem;
+    }
+
+    .half { grid-column: span 6; }
+    .third { grid-column: span 4; }
+
+    h2 { margin: 0.08rem 0 0.62rem; font-size: 1.04rem; color: #1f415b; }
+    ul { margin: 0.2rem 0 0.4rem 1.1rem; padding: 0; }
+    li { margin-bottom: 0.28rem; }
+
+    .flow {
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      background: linear-gradient(90deg, #fff4ee, #f0fcfb);
+      border: 1px dashed rgba(20,63,92,0.24);
+      border-radius: 12px;
+      padding: 0.74rem 0.8rem;
+      overflow-x: auto;
+      white-space: nowrap;
+      font-size: 0.88rem;
+    }
+
+    .payload {
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      background: #13293d;
+      color: #deefff;
+      border-radius: 12px;
+      padding: 0.82rem;
+      font-size: 0.86rem;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .note { color: var(--ink-soft); font-size: 0.92rem; margin-top: 0.54rem; }
+
+    @media (max-width: 860px) {
+      .half, .third { grid-column: span 12; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>Optimus Reviewer</h1>
+      <p class="sub">Final quality gate worker for Optimus Prime. Reviews tested units, validates remaining risk, and returns strict concise decisions for orchestration routing.</p>
+      <div class="chips">
+        <span class="chip">Mode: automated-handoff</span>
+        <span class="chip">Linear: forbidden</span>
+        <span class="chip">One active packet</span>
+        <span class="chip">Decision: pass/dev-fix/blocked</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="grid">
+      <section class="card">
+        <h2>Core Rules</h2>
+        <ul>
+          <li>Review only assigned unit and provided dev/test evidence.</li>
+          <li>Validate packet start anchor before final review decision.</li>
+          <li>Focus on correctness, regressions, and unresolved risk.</li>
+          <li>Use minimal additional checks needed for confidence.</li>
+          <li>Do not update Linear or orchestration tracking files.</li>
+        </ul>
+      </section>
+
+      <section class="card half">
+        <h2>Review Decision Contract</h2>
+        <ul>
+          <li><strong>review_passed</strong>: acceptance met and no blocking risk.</li>
+          <li><strong>needs_dev_fix</strong>: unresolved defect, regression, or high-risk issue.</li>
+          <li><strong>blocked</strong>: external dependency prevents valid final decision.</li>
+        </ul>
+      </section>
+
+      <section class="card half">
+        <h2>Branch Conflict Rule</h2>
+        <div class="flow">assigned branch locked -> create &lt;branch&gt;-review -> continue -> report mapping</div>
+        <p class="note">Reviewer never creates a new worktree and never alters orchestration ownership.</p>
+      </section>
+
+      <section class="card third">
+        <h2>Token Discipline</h2>
+        <ul>
+          <li>No emojis.</li>
+          <li>No decorative language.</li>
+          <li>No long explainers.</li>
+          <li>Short evidence-backed findings only.</li>
+        </ul>
+      </section>
+
+      <section class="card third">
+        <h2>Optional Skill</h2>
+        <ul>
+          <li>Playwright only when explicit browser-flow confirmation is required.</li>
+          <li>If missing, mark browser validation as pending.</li>
+        </ul>
+      </section>
+
+      <section class="card third">
+        <h2>Reviewer Boundary</h2>
+        <ul>
+          <li>No queue management.</li>
+          <li>No reprioritization.</li>
+          <li>No direct task dispatch.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Summary Payload</h2>
+        <div class="payload">task_identifier: MYO-23
+branch: MYO-23-make-menu-navbar-test-review
+branch_fallback_from: MYO-23-make-menu-navbar-test
+start_from_branch: MYO-23-make-menu-navbar
+start_from_commit: a1b2c3d
+head_commit: a1b2c3d
+checks:
+- npm run test -- navbar: pass
+- npm run build: pass
+decision: review_passed
+findings:
+- none
+blockers: none</div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Optimus Fullstack Developer Guide</title>
+  <style>
+    :root {
+      --bg-top: #1b263b;
+      --bg-mid: #415a77;
+      --bg-soft: #f7f4ea;
+      --ink: #13283d;
+      --ink-soft: #34546d;
+      --light: #eef5fc;
+      --accent-1: #ff7f51;
+      --accent-2: #2a9d8f;
+      --accent-3: #e9c46a;
+      --card: rgba(255, 255, 255, 0.92);
+      --border: rgba(16, 45, 68, 0.14);
+      --radius: 16px;
+      --shadow: 0 14px 40px rgba(7, 20, 30, 0.2);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Manrope", "Space Grotesk", "Avenir Next", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(900px 360px at 85% -5%, rgba(42,157,143,0.2), transparent 70%),
+        radial-gradient(740px 300px at -10% 5%, rgba(255,127,81,0.2), transparent 70%),
+        linear-gradient(165deg, var(--bg-soft), #f8fbff 60%);
+      line-height: 1.55;
+    }
+
+    header {
+      padding: 3rem 1.2rem 2.4rem;
+      background: linear-gradient(125deg, var(--bg-top), var(--bg-mid));
+      color: var(--light);
+      overflow: hidden;
+      position: relative;
+    }
+
+    header::after {
+      content: "";
+      position: absolute;
+      right: -80px;
+      bottom: -80px;
+      width: 260px;
+      height: 260px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(233,196,106,0.45), rgba(233,196,106,0));
+    }
+
+    .wrap {
+      max-width: 1040px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.8rem, 4vw, 2.7rem);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .sub {
+      margin: 0.7rem 0 0;
+      max-width: 760px;
+      color: rgba(238,245,252,0.92);
+    }
+
+    .chips {
+      margin-top: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .chip {
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.22);
+      padding: 0.3rem 0.72rem;
+      font-size: 0.82rem;
+      background: rgba(255,255,255,0.08);
+    }
+
+    main {
+      padding: 1.2rem;
+    }
+
+    .grid {
+      max-width: 1040px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .card {
+      grid-column: span 12;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow);
+      padding: 1rem 1.1rem;
+    }
+
+    .half { grid-column: span 6; }
+    .third { grid-column: span 4; }
+
+    h2 {
+      margin: 0.1rem 0 0.65rem;
+      font-size: 1.04rem;
+      color: #1b3a54;
+    }
+
+    ul {
+      margin: 0.2rem 0 0.4rem 1.1rem;
+      padding: 0;
+    }
+
+    li { margin-bottom: 0.3rem; }
+
+    .flow {
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      background: linear-gradient(90deg, #fff3ea, #effdfa);
+      border: 1px dashed rgba(25,71,104,0.24);
+      border-radius: 12px;
+      padding: 0.75rem 0.82rem;
+      overflow-x: auto;
+      white-space: nowrap;
+      font-size: 0.9rem;
+    }
+
+    .summary {
+      background: #0f2538;
+      color: #dff2ff;
+      border-radius: 12px;
+      padding: 0.82rem;
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      font-size: 0.86rem;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .note {
+      color: var(--ink-soft);
+      font-size: 0.92rem;
+      margin-top: 0.55rem;
+    }
+
+    @media (max-width: 860px) {
+      .half, .third { grid-column: span 12; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>Optimus Fullstack Developer</h1>
+      <p class="sub">A specialized worker profile for Optimus Prime. This agent executes one packet at a time, avoids unnecessary tools, and returns compact machine-friendly summaries.</p>
+      <div class="chips">
+        <span class="chip">Mode: automated-handoff</span>
+        <span class="chip">Linear: forbidden</span>
+        <span class="chip">One active task only</span>
+        <span class="chip">Emoji-free summaries</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="grid">
+      <section class="card">
+        <h2>Core Operating Rules</h2>
+        <ul>
+          <li>Trust Optimus packet as source of truth for task scope and acceptance criteria.</li>
+          <li>Validate packet start anchor before creating/continuing task branch.</li>
+          <li>Use the pre-assigned workstation; do not create worktrees.</li>
+          <li>Do not touch Linear or orchestration tracking files.</li>
+          <li>Complete one unit, then stop and wait for next packet.</li>
+          <li>Run only checks needed to validate touched scope.</li>
+        </ul>
+      </section>
+
+      <section class="card half">
+        <h2>Branch Policy</h2>
+        <div class="flow">assigned branch -> checkout ok -> work -> commit -> summary</div>
+        <div class="flow" style="margin-top:0.5rem;">assigned branch -> checkout denied (active elsewhere) -> create & use &lt;branch&gt;-dev</div>
+        <p class="note">Always report fallback mapping when fallback branch is used.</p>
+      </section>
+
+      <section class="card half">
+        <h2>Token Discipline</h2>
+        <ul>
+          <li>No motivational language and no decorative prose.</li>
+          <li>No emojis or reaction text.</li>
+          <li>No long narrative changelog in chat.</li>
+          <li>Report facts only: commit, checks, decision, blockers.</li>
+        </ul>
+      </section>
+
+      <section class="card third">
+        <h2>What To Avoid</h2>
+        <ul>
+          <li>Starting another task before closure.</li>
+          <li>Running broad full-suite checks when narrow checks are enough.</li>
+          <li>Skill usage unless packet requires it.</li>
+        </ul>
+      </section>
+
+      <section class="card third">
+        <h2>When Blocked</h2>
+        <ul>
+          <li>Stop quickly after confirming true blocker.</li>
+          <li>Report exact missing dependency.</li>
+          <li>Return decision as blocked.</li>
+        </ul>
+      </section>
+
+      <section class="card third">
+        <h2>Allowed Optional Skill</h2>
+        <ul>
+          <li>Use Playwright only if packet explicitly requires browser proof.</li>
+          <li>If missing, continue with code-level checks and report skip.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Summary Contract (Return To Optimus)</h2>
+        <div class="summary">task_identifier: MYO-23
+branch: MYO-23-make-menu-navbar-dev
+branch_fallback_from: MYO-23-make-menu-navbar
+start_from_branch: MYO-22-menu-shell
+start_from_commit: 9f3a1c2
+head_commit: a1b2c3d
+files_changed_count: 4
+checks:
+- npm run test -- navbar: pass
+- npm run build: pass
+decision: ready_for_test
+blockers: none</div>
+        <p class="note">Keep the response short. No extra commentary unless needed to explain blocker impact.</p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

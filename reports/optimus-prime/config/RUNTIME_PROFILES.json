@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "profiles": [
+    {
+      "profile_id": "default-web",
+      "kind": "web",
+      "start_cmd": "npm run preview",
+      "healthcheck": {
+        "type": "none",
+        "value": ""
+      },
+      "stop_cmd": "",
+      "env": {
+        "PW_FRONTEND_MODE": "preview"
+      },
+      "supports_shared": true,
+      "supports_isolated": true,
+      "default_for_playwright": true,
+      "default_base_url": "http://127.0.0.1:4173",
+      "mutating_flow_policy": "serialized",
+      "test_accounts": []
+    }
+  ]
+}

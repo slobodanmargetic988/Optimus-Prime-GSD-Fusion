@@ -22,6 +22,54 @@ TERMINAL_REASONS = {
     "all_rate_gates_blocking",
 }
 
+EVIDENCE_RULES: Dict[str, Dict[str, Any]] = {
+    "project_done": {
+        "expected_status": "done",
+        "required_keys": ["status", "evidence"],
+    },
+    "insurmountable_blocker": {
+        "expected_status": "blocked",
+        "required_keys": ["status", "reason"],
+    },
+    "all_rate_gates_blocking": {
+        "expected_status": "all_rate_gates_blocking",
+        "required_keys": ["status", "reason", "generated_at", "profiles"],
+    },
+}
+
+LINEAR_PHASES = {
+    "agent_working",
+    "agent_work_done",
+    "agent_testing",
+    "agent_test_done",
+    "agent_review",
+    "agent_review_done",
+    "human_review",
+    "done",
+    "backlog",
+}
+
+STATUS_TO_PHASE_HINT = {
+    "agent_working": "agent_working",
+    "working": "agent_working",
+    "agent_work_done": "agent_work_done",
+    "dev_done": "agent_work_done",
+    "developer_done": "agent_work_done",
+    "ready_for_test": "agent_work_done",
+    "agent_testing": "agent_testing",
+    "testing": "agent_testing",
+    "agent_test_done": "agent_test_done",
+    "test_done": "agent_test_done",
+    "ready_for_review": "agent_test_done",
+    "agent_review": "agent_review",
+    "reviewing": "agent_review",
+    "agent_review_done": "agent_review_done",
+    "review_done": "agent_review_done",
+    "done": "done",
+    "blocked": "backlog",
+    "failed": "backlog",
+}
+
 
 @dataclass
 class ControllerConfig:
@@ -55,9 +103,16 @@ def utc_now() -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Optimus cycle controller")
-    parser.add_argument("--input-json", required=True, help="Path to JSON file or '-' for stdin")
+    parser.add_argument("--input-json", help="Path to JSON file or '-' for stdin")
+    parser.add_argument(
+        "--verify-final-state",
+        help="Validate FINAL_STATE.json + evidence to authorize terminal stop",
+    )
     parser.add_argument("--json-pretty", action="store_true", help="Pretty-print output JSON")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if bool(args.input_json) == bool(args.verify_final_state):
+        parser.error("Provide exactly one of --input-json or --verify-final-state")
+    return args
 
 
 def _read_input_payload(input_json: str) -> Dict[str, Any]:
@@ -497,6 +552,88 @@ def maybe_emit_stdout(config: ControllerConfig, message: str) -> None:
         print(message, flush=True)
 
 
+def _first_non_empty(data: Dict[str, Any], keys: List[str]) -> Optional[str]:
+    for key in keys:
+        value = data.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _normalize_blockers(raw: Any) -> List[str]:
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    if isinstance(raw, str) and raw.strip():
+        return [raw.strip()]
+    return []
+
+
+def _derive_handoff_linear_phase(latest_handoff: Dict[str, Any]) -> Optional[str]:
+    direct_phase = _first_non_empty(
+        latest_handoff, ["target_phase", "next_phase", "phase", "linear_target_phase"]
+    )
+    if direct_phase:
+        normalized = direct_phase.strip().lower()
+        if normalized in LINEAR_PHASES:
+            return normalized
+
+    status_hint = _first_non_empty(
+        latest_handoff, ["status", "result", "handoff_result", "outcome"]
+    )
+    if status_hint:
+        normalized = status_hint.strip().lower().replace("-", "_")
+        return STATUS_TO_PHASE_HINT.get(normalized)
+
+    return None
+
+
+def _build_handoff_sync_directive(
+    cycle_number: int, latest_handoff: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    issue_identifier = _first_non_empty(
+        latest_handoff,
+        ["task_identifier", "issue_identifier", "issue", "task"],
+    )
+    if not issue_identifier:
+        return None
+
+    target_phase = _derive_handoff_linear_phase(latest_handoff)
+    if not target_phase:
+        return None
+
+    blockers = _normalize_blockers(latest_handoff.get("blockers"))
+    if not blockers:
+        blocker_summary = _first_non_empty(
+            latest_handoff, ["blocker", "blocker_summary", "reason"]
+        )
+        if blocker_summary:
+            blockers = [blocker_summary]
+
+    summary_payload = {
+        "task_identifier": issue_identifier,
+        "branch": _first_non_empty(latest_handoff, ["branch", "branch_name"]),
+        "head_commit": _first_non_empty(latest_handoff, ["head_commit", "commit"]),
+        "decision": _first_non_empty(latest_handoff, ["result", "status", "outcome"]) or "update",
+        "blockers": blockers,
+    }
+
+    return {
+        "directive_id": f"cycle-{cycle_number:06d}-sync-{issue_identifier.lower()}",
+        "directive_type": "sync_linear_phase",
+        "recommended_tool": "linear-handoff-sync",
+        "recommended_args": {
+            "issue_identifier": issue_identifier,
+            "target_phase": target_phase,
+            "summary_payload": summary_payload,
+        },
+        "reason": f"handoff suggests phase transition for {issue_identifier} -> {target_phase}",
+        "requires_optimus_action": True,
+    }
+
+
 def build_directives(
     cycle_number: int,
     snapshot: Dict[str, Any],
@@ -564,16 +701,168 @@ def build_directives(
             }
         )
 
+    workers = snapshot.get("workers", [])
+    latest_handoff = snapshot.get("latest_handoff_log")
+    handoff_runtime_strategy = None
+    if isinstance(latest_handoff, dict):
+        handoff_runtime_strategy = latest_handoff.get("runtime_strategy")
+
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        role = str(worker.get("role") or "").lower()
+        state = str(worker.get("state") or "").lower()
+        if role not in {"tester", "flex-tester"}:
+            continue
+        if state not in {"running", "busy"} and not worker.get("active_task"):
+            continue
+        if handoff_runtime_strategy in {"external_url", "shared_runtime", "isolated_runtime"}:
+            continue
+
+        directives.append(
+            {
+                "directive_id": f"cycle-{cycle_number:06d}-runtime-{worker.get('slot','tester')}",
+                "directive_type": "runtime_strategy_resolve",
+                "recommended_tool": "runtime-coordinator",
+                "recommended_args": {
+                    "action": "resolve",
+                    "task_identifier": worker.get("active_task"),
+                    "worker_slot": worker.get("slot"),
+                    "worker_role": worker.get("role"),
+                    "task_kind": "ui_flow",
+                    "requires_browser": True,
+                },
+                "reason": "tester activity detected without explicit runtime strategy in latest handoff",
+                "requires_optimus_action": True,
+            }
+        )
+        break
+
+    blocked_workers = [
+        worker
+        for worker in workers
+        if isinstance(worker, dict) and str(worker.get("state") or "").lower() == "blocked"
+    ]
+    latest_handoff_result = (
+        str(latest_handoff.get("result") or latest_handoff.get("status") or "").lower()
+        if isinstance(latest_handoff, dict)
+        else ""
+    )
+    if blocked_workers or "block" in latest_handoff_result:
+        directives.append(
+            {
+                "directive_id": f"cycle-{cycle_number:06d}-blocker-index-refresh",
+                "directive_type": "refresh_blocker_index",
+                "recommended_tool": "runtime-coordinator",
+                "recommended_args": {
+                    "action": "refresh_blocker_index",
+                },
+                "reason": "blocked worker or blocked handoff detected; refresh recurring blocker intelligence",
+                "requires_optimus_action": True,
+            }
+        )
+
+    if isinstance(latest_handoff, dict):
+        handoff_directive = _build_handoff_sync_directive(cycle_number, latest_handoff)
+        if handoff_directive:
+            directives.append(handoff_directive)
+
     return directives
 
 
 def can_optimus_stop_from_final_state(final_state_path: Path) -> bool:
-    payload, err = _read_json(final_state_path)
+    validation = validate_stop_authorization(final_state_path)
+    return bool(validation.get("authorized"))
+
+
+def validate_stop_authorization(
+    final_state_path: Path,
+    *,
+    require_evidence_exists: bool = True,
+) -> Dict[str, Any]:
+    final_state_resolved = final_state_path.expanduser().resolve()
+    payload, err = _read_json(final_state_resolved)
     if err or not payload:
-        return False
-    reason = payload.get("terminal_reason")
-    evidence = payload.get("evidence_file")
-    return bool(reason in TERMINAL_REASONS and isinstance(evidence, str) and evidence.strip())
+        return {
+            "authorized": False,
+            "code": "final_state_missing_or_invalid",
+            "message": f"Final state unavailable or malformed: {err or 'unknown'}",
+            "final_state_path": str(final_state_resolved),
+        }
+
+    terminal_reason = payload.get("terminal_reason")
+    if terminal_reason not in TERMINAL_REASONS:
+        return {
+            "authorized": False,
+            "code": "invalid_terminal_reason",
+            "message": f"terminal_reason must be one of {sorted(TERMINAL_REASONS)}",
+            "terminal_reason": terminal_reason,
+            "final_state_path": str(final_state_resolved),
+        }
+
+    evidence_raw = payload.get("evidence_file")
+    if not isinstance(evidence_raw, str) or not evidence_raw.strip():
+        return {
+            "authorized": False,
+            "code": "missing_evidence_file",
+            "message": "evidence_file is required and must be non-empty",
+            "terminal_reason": terminal_reason,
+            "final_state_path": str(final_state_resolved),
+        }
+
+    evidence_path = Path(evidence_raw).expanduser()
+    if not evidence_path.is_absolute():
+        evidence_path = (final_state_resolved.parent / evidence_path).resolve()
+    else:
+        evidence_path = evidence_path.resolve()
+
+    if require_evidence_exists and not evidence_path.exists():
+        return {
+            "authorized": False,
+            "code": "evidence_missing",
+            "message": "evidence_file path from final state does not exist",
+            "terminal_reason": terminal_reason,
+            "evidence_file": str(evidence_path),
+            "final_state_path": str(final_state_resolved),
+        }
+
+    rule = EVIDENCE_RULES[terminal_reason]
+    valid, _, evidence_err = validate_evidence_file(
+        evidence_path,
+        expected_status=str(rule["expected_status"]),
+        required_keys=list(rule["required_keys"]),
+    )
+    if not valid:
+        if evidence_err is None:
+            code = "evidence_missing"
+            message = "evidence_file missing"
+        elif evidence_err.startswith("malformed"):
+            code = "evidence_malformed"
+            message = f"evidence malformed: {evidence_err}"
+        elif evidence_err == "status_mismatch":
+            code = "evidence_status_mismatch"
+            message = "evidence status does not match terminal reason"
+        else:
+            code = "evidence_invalid"
+            message = f"evidence invalid: {evidence_err}"
+
+        return {
+            "authorized": False,
+            "code": code,
+            "message": message,
+            "terminal_reason": terminal_reason,
+            "evidence_file": str(evidence_path),
+            "final_state_path": str(final_state_resolved),
+        }
+
+    return {
+        "authorized": True,
+        "code": "authorized",
+        "message": "terminal final state and evidence are valid",
+        "terminal_reason": terminal_reason,
+        "evidence_file": str(evidence_path),
+        "final_state_path": str(final_state_resolved),
+    }
 
 
 def run_controller(config: ControllerConfig) -> Dict[str, Any]:
@@ -788,17 +1077,35 @@ def run_controller(config: ControllerConfig) -> Dict[str, Any]:
 
 def main() -> int:
     args = parse_args()
-    try:
-        payload = _read_input_payload(args.input_json)
-        config = normalize_config(payload)
-        result = run_controller(config)
-    except Exception as exc:  # pylint: disable=broad-except
-        result = {
-            "ok": False,
-            "tool": "optimus-cycle-controller",
-            "error": "runtime_error",
-            "message": str(exc),
-        }
+    if args.verify_final_state:
+        try:
+            validation = validate_stop_authorization(Path(args.verify_final_state))
+            result = {
+                "ok": bool(validation.get("authorized")),
+                "tool": "optimus-cycle-controller",
+                "mode": "verify_final_state",
+                **validation,
+            }
+        except Exception as exc:  # pylint: disable=broad-except
+            result = {
+                "ok": False,
+                "tool": "optimus-cycle-controller",
+                "mode": "verify_final_state",
+                "error": "runtime_error",
+                "message": str(exc),
+            }
+    else:
+        try:
+            payload = _read_input_payload(args.input_json)
+            config = normalize_config(payload)
+            result = run_controller(config)
+        except Exception as exc:  # pylint: disable=broad-except
+            result = {
+                "ok": False,
+                "tool": "optimus-cycle-controller",
+                "error": "runtime_error",
+                "message": str(exc),
+            }
 
     if args.json_pretty:
         print(json.dumps(result, indent=2, sort_keys=True))

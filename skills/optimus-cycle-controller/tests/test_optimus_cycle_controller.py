@@ -2,7 +2,6 @@ import importlib.util
 import json
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -178,6 +177,101 @@ def test_emits_directives_for_optimus_action(controller_module, tmp_path):
 
 
 
+def test_emits_linear_sync_directive_when_handoff_indicates_phase(controller_module, tmp_path):
+    handoff_path = tmp_path / "reports" / "optimus-prime" / "HANDOFF_LOG.jsonl"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(
+        json.dumps(
+            {
+                "task_identifier": "MYO-777",
+                "target_phase": "agent_review_done",
+                "status": "review_done",
+                "branch": "codex/dev-1/MYO-777",
+                "head_commit": "abc1234",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = make_config(controller_module, tmp_path, max_cycles=1)
+    controller_module.run_controller(config)
+
+    events = read_jsonl(config.events_path)
+    sync_directives = [
+        e
+        for e in events
+        if e.get("event_type") == "directive" and e.get("action_code") == "sync_linear_phase"
+    ]
+    assert sync_directives
+    payload = sync_directives[0]["payload"]
+    assert payload["recommended_tool"] == "linear-handoff-sync"
+    assert payload["recommended_args"]["issue_identifier"] == "MYO-777"
+    assert payload["recommended_args"]["target_phase"] == "agent_review_done"
+
+
+def test_emits_runtime_resolve_directive_for_tester_without_runtime_strategy(controller_module, tmp_path):
+    worker_registry_path = tmp_path / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+    write_json(
+        worker_registry_path,
+        {
+            "workers": [
+                {
+                    "slot": "test-1",
+                    "role": "tester",
+                    "state": "running",
+                    "active_task": "MYO-901",
+                }
+            ]
+        },
+    )
+
+    config = make_config(controller_module, tmp_path, max_cycles=1)
+    controller_module.run_controller(config)
+
+    events = read_jsonl(config.events_path)
+    runtime_directives = [
+        e
+        for e in events
+        if e.get("event_type") == "directive"
+        and e.get("action_code") == "runtime_strategy_resolve"
+    ]
+    assert runtime_directives
+    payload = runtime_directives[0]["payload"]
+    assert payload["recommended_tool"] == "runtime-coordinator"
+    assert payload["recommended_args"]["task_identifier"] == "MYO-901"
+
+
+def test_emits_blocker_refresh_directive_when_handoff_is_blocked(controller_module, tmp_path):
+    handoff_path = tmp_path / "reports" / "optimus-prime" / "HANDOFF_LOG.jsonl"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(
+        json.dumps(
+            {
+                "task_identifier": "MYO-902",
+                "status": "blocked",
+                "blocker_summary": "runtime start failed",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = make_config(controller_module, tmp_path, max_cycles=1)
+    controller_module.run_controller(config)
+
+    events = read_jsonl(config.events_path)
+    blocker_directives = [
+        e
+        for e in events
+        if e.get("event_type") == "directive"
+        and e.get("action_code") == "refresh_blocker_index"
+    ]
+    assert blocker_directives
+    payload = blocker_directives[0]["payload"]
+    assert payload["recommended_tool"] == "runtime-coordinator"
+
+
 def test_optimus_cannot_end_without_valid_final_state_terminal_payload(controller_module, tmp_path):
     final_state_path = tmp_path / "reports" / "optimus-prime" / "controller" / "FINAL_STATE.json"
 
@@ -190,8 +284,53 @@ def test_optimus_cannot_end_without_valid_final_state_terminal_payload(controlle
         final_state_path,
         {
             "terminal_reason": "project_done",
-            "evidence_file": "/tmp/proof.json",
+            "evidence_file": "/tmp/proof-missing.json",
+            "generated_at": "2026-02-26T00:00:00Z",
+        },
+    )
+    assert controller_module.can_optimus_stop_from_final_state(final_state_path) is False
+
+    evidence_path = tmp_path / "reports" / "optimus-prime" / "control" / "PROJECT_DONE.json"
+    write_json(evidence_path, {"status": "done", "evidence": "tests and gates passed"})
+
+    write_json(
+        final_state_path,
+        {
+            "terminal_reason": "project_done",
+            "evidence_file": str(evidence_path),
             "generated_at": "2026-02-26T00:00:00Z",
         },
     )
     assert controller_module.can_optimus_stop_from_final_state(final_state_path) is True
+
+
+
+def test_verify_final_state_cli_mode(controller_module, tmp_path):
+    evidence_path = tmp_path / "reports" / "optimus-prime" / "control" / "PROJECT_DONE.json"
+    write_json(evidence_path, {"status": "done", "evidence": "complete"})
+
+    final_state_path = tmp_path / "reports" / "optimus-prime" / "controller" / "FINAL_STATE.json"
+    write_json(
+        final_state_path,
+        {
+            "terminal_reason": "project_done",
+            "evidence_file": str(evidence_path),
+            "generated_at": "2026-02-26T00:00:00Z",
+        },
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--verify-final-state",
+            str(final_state_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["mode"] == "verify_final_state"

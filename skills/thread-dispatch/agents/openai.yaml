@@ -1,0 +1,4 @@
+interface:
+  display_name: "Thread Dispatch"
+  short_description: "Launch a separate Codex run from a prompt"
+  default_prompt: "Start a new Codex execution in another workspace or branch from a provided prompt."

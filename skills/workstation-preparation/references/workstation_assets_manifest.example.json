@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "assets": [
+    {
+      "id": "repo-env",
+      "source": "${REPO_ROOT}/.env",
+      "target": ".env",
+      "mode": "symlink",
+      "required": true,
+      "roles": ["all"]
+    },
+    {
+      "id": "auth-state",
+      "source": "${REPO_ROOT}/.myboard/auth-states",
+      "target": ".myboard/auth-states",
+      "mode": "symlink",
+      "required": true,
+      "roles": ["tester", "reviewer"]
+    },
+    {
+      "id": "node-modules",
+      "source": "${REPO_ROOT}/node_modules",
+      "target": "node_modules",
+      "mode": "symlink",
+      "required": false,
+      "roles": ["all"]
+    },
+    {
+      "id": "venv",
+      "source": "${REPO_ROOT}/.venv",
+      "target": ".venv",
+      "mode": "symlink",
+      "required": false,
+      "roles": ["developer", "tester"]
+    }
+  ]
+}

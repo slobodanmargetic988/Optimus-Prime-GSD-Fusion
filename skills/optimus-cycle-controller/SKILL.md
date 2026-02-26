@@ -19,6 +19,7 @@ The controller owns:
 - terminal condition checks
 
 It emits machine-readable cycle outputs so Optimus can monitor and act.
+It also supports a stop-authorization verification mode so Optimus cannot end early.
 
 ## Script
 
@@ -76,6 +77,14 @@ cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/
 JSON
 ```
 
+### Verify terminal stop authorization
+
+```bash
+python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py \
+  --verify-final-state /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/controller/FINAL_STATE.json \
+  --json-pretty
+```
+
 ## Runtime Outputs
 
 - `reports/optimus-prime/controller/HEARTBEAT.json`
@@ -92,4 +101,6 @@ Control/evidence files:
 
 - Lock file prevents concurrent controller loops.
 - Malformed evidence files are rejected and logged as warnings.
-- Optimus should treat absence of valid `FINAL_STATE.json` terminal payload as **not allowed to stop**.
+- Controller can emit `sync_linear_phase` directives when latest handoff state implies a deterministic phase/status transition.
+- Controller can emit runtime/blocker directives (`runtime_strategy_resolve`, `refresh_blocker_index`) when tester activity or blocked signals require intervention.
+- Optimus should treat absence of valid `FINAL_STATE.json` + valid evidence payload as **not allowed to stop**.

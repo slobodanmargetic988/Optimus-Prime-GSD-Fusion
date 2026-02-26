@@ -44,6 +44,15 @@ One JSON object per line:
 }
 ```
 
+Directive payload may include:
+- `show_snapshot`
+- `dispatch_filter`
+- `soft_throttle`
+- `review_dispatch_queue`
+- `runtime_strategy_resolve`
+- `refresh_blocker_index`
+- `sync_linear_phase` (when latest handoff state maps to a deterministic Linear phase transition)
+
 ## 3) Heartbeat Contract (`HEARTBEAT.json`)
 
 ```json
@@ -115,6 +124,14 @@ One JSON object per line:
 Optimus may only stop when:
 - `FINAL_STATE.json` exists, and
 - `terminal_reason` is one of the allowed terminal reasons, and
-- `evidence_file` is present and non-empty.
+- `evidence_file` is present and non-empty, and
+- evidence file exists and validates against the terminal reason schema.
+
+CLI verification mode:
+
+```bash
+python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py \
+  --verify-final-state /abs/path/to/FINAL_STATE.json
+```
 
 Otherwise, stop is unauthorized.

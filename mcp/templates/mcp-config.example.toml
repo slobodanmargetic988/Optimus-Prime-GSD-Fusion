@@ -1,0 +1,25 @@
+# Example MCP config template.
+# Use this as a reference only and merge into your real Codex MCP config.
+# Do not store real tokens in git.
+
+# Figma MCP (remote)
+[mcp_servers.figma]
+url = "https://mcp.figma.com/mcp"
+
+[mcp_servers.figma.http_headers]
+# Optional Figma-specific headers.
+X-Figma-Region = "us-east-1"
+
+# Linear MCP (remote)
+[mcp_servers.linear]
+url = "https://mcp.linear.app/mcp"
+
+# Context7 MCP (remote)
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+
+# Optional auth for Context7 if your plan requires API key auth.
+# [mcp_servers.context7.http_headers]
+# CONTEXT7_API_KEY = "<your-context7-api-key>"
+
+# After applying config changes, restart Codex.
