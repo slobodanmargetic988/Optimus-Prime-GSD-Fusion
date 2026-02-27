@@ -520,6 +520,9 @@ def test_build_resume_uses_existing_state_without_orphaning_progress():
         state2 = json.loads(state_path.read_text(encoding="utf-8"))
         assert state2["build_id"] == build_id_1
         assert state2["last_cycle"] > last_cycle_1
+        assert isinstance(state2.get("cycle_gate_decision"), dict)
+        assert isinstance(state2.get("remediation_state"), dict)
+        assert isinstance(state2.get("offset_recovery"), dict)
 
 
 if __name__ == "__main__":

@@ -486,6 +486,59 @@ def _read_rate_gate_window(repo_root: Path) -> dict[str, Any]:
         "profiles": hard_gated_profiles,
     }
 
+
+def _resolve_test_train_mode(repo_root: Path) -> str:
+    path = repo_root / "reports" / "optimus-prime" / "TEST_TRAIN_STATE.json"
+    if not path.exists():
+        return "off"
+    try:
+        payload = _read_json(path)
+    except OpError:
+        return "off"
+    if not isinstance(payload, dict):
+        return "off"
+    mode = (_as_str(payload.get("test_train_mode")) or "off").lower()
+    if mode not in {"off", "final-stage", "forced-shared-env"}:
+        return "off"
+    return mode
+
+
+def _active_workers_count(repo_root: Path) -> int | None:
+    reports = repo_root / "reports" / "optimus-prime"
+    snapshot_path = reports / "STATUS_SNAPSHOT.json"
+    if snapshot_path.exists():
+        try:
+            snapshot = _read_json(snapshot_path)
+        except OpError:
+            snapshot = None
+        if isinstance(snapshot, dict):
+            counts = snapshot.get("counts") if isinstance(snapshot.get("counts"), dict) else {}
+            active = counts.get("active_workers")
+            if isinstance(active, int):
+                return max(0, active)
+    registry_path = reports / "WORKER_REGISTRY.json"
+    if not registry_path.exists():
+        return None
+    try:
+        registry = _read_json(registry_path)
+    except OpError:
+        return None
+    workers: list[dict[str, Any]] = []
+    if isinstance(registry, dict):
+        raw = registry.get("workers")
+        if isinstance(raw, list):
+            workers = [item for item in raw if isinstance(item, dict)]
+        elif isinstance(raw, dict):
+            workers = [item for item in raw.values() if isinstance(item, dict)]
+    elif isinstance(registry, list):
+        workers = [item for item in registry if isinstance(item, dict)]
+    active = 0
+    for worker in workers:
+        state = (_as_str(worker.get("state")) or _as_str(worker.get("session_state")) or _as_str(worker.get("status")) or "").lower()
+        if state in {"running", "active", "busy"}:
+            active += 1
+    return active
+
 def _run(cmd: list[str], *, cwd: Path, stdin_text: str | None = None) -> tuple[int, str, str]:
     proc = subprocess.run(
         cmd,
@@ -1310,6 +1363,21 @@ def _load_build_state(path: Path) -> dict[str, Any]:
                 "sleep_until": None,
                 "manual_rerun_required": False,
             },
+            "cycle_gate_decision": {
+                "dispatch_blocked": False,
+                "reason": None,
+                "terminal_reason": None,
+            },
+            "remediation_state": {
+                "active": False,
+                "reason": None,
+                "last_queued_at": None,
+                "fingerprint": None,
+            },
+            "offset_recovery": {
+                "handoff_offset_resets": 0,
+                "last_reset_at": None,
+            },
             "strict_done_checks": {},
             "current_task_pointer": None,
             "handoff_log_offset": 0,
@@ -1335,6 +1403,30 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     payload.setdefault("strict_done_checks", {})
     payload.setdefault("current_task_pointer", None)
     payload.setdefault("handoff_log_offset", 0)
+    payload.setdefault(
+        "cycle_gate_decision",
+        {
+            "dispatch_blocked": False,
+            "reason": None,
+            "terminal_reason": None,
+        },
+    )
+    payload.setdefault(
+        "remediation_state",
+        {
+            "active": False,
+            "reason": None,
+            "last_queued_at": None,
+            "fingerprint": None,
+        },
+    )
+    payload.setdefault(
+        "offset_recovery",
+        {
+            "handoff_offset_resets": 0,
+            "last_reset_at": None,
+        },
+    )
     return payload
 
 
@@ -1491,12 +1583,32 @@ def _apply_strategy_action(req: OpRequest, strategy: str) -> dict[str, Any]:
     }
 
 
-def _apply_handoff_updates(repo_root: Path, task_state: dict[str, Any], build_state: dict[str, Any]) -> None:
+def _apply_handoff_updates(repo_root: Path, task_state: dict[str, Any], build_state: dict[str, Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
     handoff_path = repo_root / "reports" / "optimus-prime" / "HANDOFF_LOG.jsonl"
     rows = _read_jsonl(handoff_path)
     offset = int(build_state.get("handoff_log_offset", 0))
     if offset < 0:
         offset = 0
+    if offset > len(rows):
+        old_offset = offset
+        offset = 0
+        recovery = build_state.get("offset_recovery")
+        if not isinstance(recovery, dict):
+            recovery = {
+                "handoff_offset_resets": 0,
+                "last_reset_at": None,
+            }
+            build_state["offset_recovery"] = recovery
+        recovery["handoff_offset_resets"] = int(recovery.get("handoff_offset_resets", 0)) + 1
+        recovery["last_reset_at"] = utc_now_iso()
+        warnings.append(
+            {
+                "code": "handoff_offset_reset",
+                "message": f"handoff_log_offset reset due to truncation: old_offset={old_offset}, line_count={len(rows)}",
+                "stage": "build_loop",
+            }
+        )
     task_map = _task_by_id(task_state)
     for row in rows[offset:]:
         task_id = _as_str(row.get("task_identifier")) or _as_str(row.get("task_id"))
@@ -1566,6 +1678,7 @@ def _apply_handoff_updates(repo_root: Path, task_state: dict[str, Any], build_st
             task["status"] = "review_in_progress"
             continue
     build_state["handoff_log_offset"] = len(rows)
+    return warnings
 
 
 def _dispatch_task_packet(
@@ -1694,13 +1807,18 @@ def _apply_directives(
     build_state: dict[str, Any],
     plan_packets: dict[str, Any],
     task_state: dict[str, Any],
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     outcomes: list[dict[str, Any]] = []
     runtime_script = req.repo_root / "skills" / "runtime-coordinator" / "scripts" / "runtime_coordinator.py"
     train_script = req.repo_root / "skills" / "test-train-manager" / "scripts" / "test_train_manager.py"
+    resolved_mode = _resolve_test_train_mode(req.repo_root)
+    dispatch_requested = False
+    dispatch_blocked = False
+    dispatch_block_reason: str | None = None
+    remediation_queued = False
     runtime_defaults = {
         "repo_root": str(req.repo_root),
-        "test_train_mode": "final-stage",
+        "test_train_mode": resolved_mode,
         "runtime_profile_id": "default-web",
         "runtime_id": "rt-shared-default-web",
         "test_train_pipeline_path": str(req.repo_root / "reports" / "optimus-prime" / "config" / "TEST_TRAIN_PIPELINE.json"),
@@ -1711,7 +1829,7 @@ def _apply_directives(
     }
     train_defaults = {
         "repo_root": str(req.repo_root),
-        "test_train_mode": "final-stage",
+        "test_train_mode": resolved_mode,
         "dry_run": req.dry_run,
     }
 
@@ -1750,6 +1868,31 @@ def _apply_directives(
             elif directive_type == "refresh_blocker_index":
                 payload["action"] = "refresh_blocker_index"
             result = _run_tool_json(runtime_script, payload, req.repo_root)
+            if not _as_bool_field(result.get("ok")):
+                remediation_payload = dict(runtime_defaults)
+                remediation_payload["action"] = "repair"
+                remediation_payload["test_train_mode"] = resolved_mode
+                remediation = _run_tool_json(runtime_script, remediation_payload, req.repo_root)
+                fingerprint = _detect_blocker_fingerprint(req.repo_root)
+                build_state["remediation_state"] = {
+                    "active": True,
+                    "reason": f"{directive_type}_failed",
+                    "last_queued_at": utc_now_iso(),
+                    "fingerprint": None if fingerprint == "unknown-fingerprint" else fingerprint,
+                }
+                remediation_queued = True
+                dispatch_blocked = True
+                dispatch_block_reason = "directive_tool_failure"
+                outcomes.append(
+                    {
+                        "directive_type": directive_type,
+                        "status": "failed",
+                        "result": result,
+                        "warning_code": "directive_tool_failed_remediation_queued",
+                        "remediation": remediation,
+                    }
+                )
+                continue
             outcomes.append({"directive_type": directive_type, "status": "applied", "result": result})
             continue
         if directive_type in train_directives:
@@ -1758,11 +1901,36 @@ def _apply_directives(
             if directive_type == "hold_test_promotion":
                 payload["action"] = "evaluate_promotion_gate"
             result = _run_tool_json(train_script, payload, req.repo_root)
+            if not _as_bool_field(result.get("ok")):
+                remediation_payload = dict(runtime_defaults)
+                remediation_payload["action"] = "repair"
+                remediation_payload["test_train_mode"] = resolved_mode
+                remediation = _run_tool_json(runtime_script, remediation_payload, req.repo_root)
+                fingerprint = _detect_blocker_fingerprint(req.repo_root)
+                build_state["remediation_state"] = {
+                    "active": True,
+                    "reason": f"{directive_type}_failed",
+                    "last_queued_at": utc_now_iso(),
+                    "fingerprint": None if fingerprint == "unknown-fingerprint" else fingerprint,
+                }
+                remediation_queued = True
+                dispatch_blocked = True
+                dispatch_block_reason = "directive_tool_failure"
+                outcomes.append(
+                    {
+                        "directive_type": directive_type,
+                        "status": "failed",
+                        "result": result,
+                        "warning_code": "directive_tool_failed_remediation_queued",
+                        "remediation": remediation,
+                    }
+                )
+                continue
             outcomes.append({"directive_type": directive_type, "status": "applied", "result": result})
             continue
         if directive_type == "review_dispatch_queue":
-            result = _dispatch_next_task(req, plan_packets, task_state, build_state)
-            outcomes.append({"directive_type": directive_type, "status": "applied", "result": result})
+            dispatch_requested = True
+            outcomes.append({"directive_type": directive_type, "status": "queued", "reason": "dispatch reviewed by build loop"})
             continue
         if directive_type == "soft_throttle":
             soft_cap = int(args.get("soft_cap") or build_state.get("dispatch_window", {}).get("max_running_workers") or 3)
@@ -1775,10 +1943,19 @@ def _apply_directives(
         if directive_type == "dispatch_filter":
             build_state.setdefault("rate_gate_state", {})
             build_state["rate_gate_state"]["hard_gated"] = True
+            dispatch_blocked = True
+            dispatch_block_reason = "dispatch_filter"
             outcomes.append({"directive_type": directive_type, "status": "applied", "result": {"hard_gated": True}})
             continue
         outcomes.append({"directive_type": directive_type, "status": "skipped", "reason": "unsupported directive"})
-    return outcomes
+    return {
+        "outcomes": outcomes,
+        "dispatch_requested": dispatch_requested,
+        "dispatch_blocked": dispatch_blocked,
+        "dispatch_block_reason": dispatch_block_reason,
+        "remediation_queued": remediation_queued,
+        "resolved_test_train_mode": resolved_mode,
+    }
 
 
 def _collect_required_uat_ids(repo_root: Path, plan_packets: dict[str, Any]) -> set[str]:
@@ -2025,9 +2202,29 @@ def command_build(req: OpRequest) -> dict[str, Any]:
     try:
         while req.max_build_cycles is None or cycles < req.max_build_cycles:
             cycles += 1
+            cycle_local_warnings: list[dict[str, Any]] = []
             build_state["last_cycle"] = int(build_state.get("last_cycle", 0)) + 1
             build_state["updated_at"] = utc_now_iso()
-            _apply_handoff_updates(req.repo_root, task_state, build_state)
+            build_state["cycle_gate_decision"] = {
+                "dispatch_blocked": False,
+                "reason": None,
+                "terminal_reason": None,
+            }
+            remediation_state = build_state.get("remediation_state")
+            if not isinstance(remediation_state, dict):
+                remediation_state = {
+                    "active": False,
+                    "reason": None,
+                    "last_queued_at": None,
+                    "fingerprint": None,
+                }
+                build_state["remediation_state"] = remediation_state
+            else:
+                remediation_state["active"] = False
+                remediation_state["reason"] = None
+            handoff_warnings = _apply_handoff_updates(req.repo_root, task_state, build_state)
+            warnings.extend(handoff_warnings)
+            cycle_local_warnings.extend(handoff_warnings)
 
             if operator_stop_path.exists():
                 build_state["terminal_state"] = {
@@ -2060,28 +2257,36 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             directives: list[dict[str, Any]] = []
             if events_path_raw and last_cycle_number > 0:
                 directives = _extract_cycle_directives(Path(events_path_raw).expanduser().resolve(), last_cycle_number)
-            directive_outcomes = _apply_directives(req, directives, build_state, plan_packets, task_state)
-            if not any(item.get("directive_type") == "review_dispatch_queue" for item in directive_outcomes):
-                directive_outcomes.append(
-                    {
-                        "directive_type": "auto_dispatch",
-                        "status": "applied",
-                        "result": _dispatch_next_task(req, plan_packets, task_state, build_state),
+            directive_state = _apply_directives(req, directives, build_state, plan_packets, task_state)
+            directive_outcomes = directive_state.get("outcomes", [])
+            for outcome in directive_outcomes:
+                warning_code = _as_str(outcome.get("warning_code"))
+                if warning_code == "directive_tool_failed_remediation_queued":
+                    warning = {
+                        "code": "directive_tool_failed_remediation_queued",
+                        "message": "directive tool failed; remediation was queued and dispatch skipped for this cycle",
+                        "stage": "build_loop",
+                        "directive_type": outcome.get("directive_type"),
                     }
-                )
-            _apply_handoff_updates(req.repo_root, task_state, build_state)
+                    warnings.append(warning)
+                    cycle_local_warnings.append(warning)
+            handoff_warnings = _apply_handoff_updates(req.repo_root, task_state, build_state)
+            warnings.extend(handoff_warnings)
+            cycle_local_warnings.extend(handoff_warnings)
 
             history.append(
                 {
                     "timestamp": utc_now_iso(),
                     "cycle_result": cycle_result,
                     "directives": directive_outcomes,
+                    "cycle_warnings": cycle_local_warnings,
                     "strategy": build_state.get("current_strategy"),
                 }
             )
             build_state["history"] = history[-200:]
 
             terminal_reason = _as_str(cycle_result.get("terminal_reason"))
+            build_state["cycle_gate_decision"]["terminal_reason"] = terminal_reason
             if cycle_result.get("ok") is True and terminal_reason:
                 if terminal_reason == "project_done":
                     final_state_path = req.repo_root / "reports" / "optimus-prime" / "controller" / "FINAL_STATE.json"
@@ -2126,6 +2331,11 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                         }
                     )
                 elif terminal_reason == "all_rate_gates_blocking":
+                    build_state["cycle_gate_decision"] = {
+                        "dispatch_blocked": True,
+                        "reason": "all_rate_gates_blocking",
+                        "terminal_reason": terminal_reason,
+                    }
                     rate_window = _read_rate_gate_window(req.repo_root)
                     min_reset_at = _as_str(rate_window.get("min_reset_at"))
                     min_reset_hours = rate_window.get("min_reset_hours")
@@ -2203,6 +2413,55 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                         state_ref=str(build_state_path),
                         data={"terminal_reason": terminal_reason, "cycles_executed": cycles},
                     )
+
+            dispatch_blocked = bool(directive_state.get("dispatch_blocked"))
+            dispatch_block_reason = _as_str(directive_state.get("dispatch_block_reason"))
+            if dispatch_blocked:
+                build_state["cycle_gate_decision"] = {
+                    "dispatch_blocked": True,
+                    "reason": dispatch_block_reason or "dispatch_filter",
+                    "terminal_reason": terminal_reason,
+                }
+                warning = {
+                    "code": "dispatch_skipped_hard_gate",
+                    "message": f"dispatch skipped for cycle due to hard gate: {dispatch_block_reason or 'dispatch_filter'}",
+                    "stage": "build_loop",
+                }
+                warnings.append(warning)
+                cycle_local_warnings.append(warning)
+            else:
+                max_running_workers = int(build_state.get("dispatch_window", {}).get("max_running_workers", 6))
+                active_workers = _active_workers_count(req.repo_root)
+                if active_workers is not None and active_workers >= max_running_workers:
+                    build_state["cycle_gate_decision"] = {
+                        "dispatch_blocked": True,
+                        "reason": "dispatch_window_cap",
+                        "terminal_reason": terminal_reason,
+                    }
+                    warning = {
+                        "code": "dispatch_skipped_soft_cap",
+                        "message": (
+                            "dispatch skipped for cycle due to active worker cap: "
+                            f"active={active_workers}, cap={max_running_workers}"
+                        ),
+                        "stage": "build_loop",
+                    }
+                    warnings.append(warning)
+                    cycle_local_warnings.append(warning)
+                else:
+                    dispatch_result = _dispatch_next_task(req, plan_packets, task_state, build_state)
+                    directive_outcomes.append(
+                        {
+                            "directive_type": "review_dispatch_queue"
+                            if directive_state.get("dispatch_requested")
+                            else "auto_dispatch",
+                            "status": "applied",
+                            "result": dispatch_result,
+                        }
+                    )
+                    handoff_warnings = _apply_handoff_updates(req.repo_root, task_state, build_state)
+                    warnings.extend(handoff_warnings)
+                    cycle_local_warnings.extend(handoff_warnings)
 
             fingerprint = _detect_blocker_fingerprint(req.repo_root)
             if fingerprint != "unknown-fingerprint":

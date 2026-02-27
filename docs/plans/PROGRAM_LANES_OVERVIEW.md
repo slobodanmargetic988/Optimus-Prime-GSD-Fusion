@@ -10,7 +10,7 @@ Deterministic cycle controller core and stop-prevention rules.
 Full GSD fusion capabilities: planning lifecycle, plan gates, test-first contracts, UAT/gap closure, reliability layer.
 
 - Implemented now: Batch 1 runtime pipeline + hard gate remediation (`bootstrap/start/health/deploy/stop/repair`, single-flight locking, stale lease sweep, runtime repair routing, test-train hard gates).
-- Implemented now: OP command surface and planning/build flow (`/op-map-codebase`, `/op-new-project`, `/op-plan`, `/op-initialize`, `/op-build`) with strict build preflight, canonical task execution state, single-flight loop lock, in-loop directive auto-application, strict-done completion gate, and hard rate-gate policy (`<=2h` wait/resume, `>2h` manual rerun stop).
+- Implemented now: OP command surface and planning/build flow (`/op-map-codebase`, `/op-new-project`, `/op-plan`, `/op-initialize`, `/op-build`) with strict build preflight, canonical task execution state, single-flight loop lock, strict-first dispatch gating, state-derived test-train adapter mode, truncation-safe handoff offset recovery, remediation-then-continue behavior, strict-done completion gate, and hard rate-gate policy (`<=2h` wait/resume, `>2h` manual rerun stop).
 - Pending next: B3/B4 worker-side evidence normalization and Lane C packaging/installer UX.
 
 - Spec: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_B_FULL_GSD_FUSION_PLAN.md`

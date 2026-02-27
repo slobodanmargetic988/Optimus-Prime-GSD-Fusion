@@ -75,5 +75,10 @@ Repo-local CLI wrapper:
 - single-flight lock: `reports/optimus-prime/planning/BUILD_LOOP.lock`
 - default cadence: `sleep_minutes=5` (unless overridden)
 - canonical task state: `reports/optimus-prime/planning/TASK_EXECUTION_STATE.json`
+- strict-first dispatch gating: `dispatch_filter`/hard-gated cycles skip dispatch before any packet launch
+- adapter mode source: runtime/test-train directives derive `test_train_mode` from `TEST_TRAIN_STATE.json` (fallback `off`)
+- truncation-safe handoff ingestion: stale `handoff_log_offset` is reset with deterministic warning/event
+- directive failure handling: remediation is queued and feature dispatch is skipped for that cycle
+- dispatch cap enforcement: `dispatch_window.max_running_workers` is a hard cap
 - strict done completion requires all task/evidence/verify/UAT gates plus `--verify-final-state` authorization
 - hard rate-gate policy: wait/resume when reset is within 2 hours, otherwise stop and require manual rerun

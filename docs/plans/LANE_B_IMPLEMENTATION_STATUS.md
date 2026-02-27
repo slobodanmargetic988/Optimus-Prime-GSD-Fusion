@@ -65,6 +65,11 @@ Updated: 2026-02-27
   - single-flight loop lock (`BUILD_LOOP.lock`) with deterministic `lock_conflict`
   - controller directives are auto-applied in-loop (`runtime-coordinator`, `test-train-manager`, dispatch integration)
   - canonical task progression tracked in `TASK_EXECUTION_STATE.json`
+  - strict-first gate ordering: hard-gate/terminal decisions are evaluated before any dispatch attempt
+  - dispatch gating honors `dispatch_filter` directives and enforces `dispatch_window.max_running_workers` as hard cap
+  - runtime/test-train adapters resolve `test_train_mode` from `TEST_TRAIN_STATE.json` each cycle (fallback `off`)
+  - handoff ingestion auto-recovers from log truncation by resetting stale offsets with deterministic warning/event
+  - directive tool failures queue deterministic remediation and suppress feature dispatch for that cycle
 - Added autonomous recovery state machine in `/op-build`:
   - recoverable blocker attempts tracked per `(strategy,fingerprint)`
   - strategy escalates after 5 attempts only for concrete fingerprints (no synthetic escalation on `unknown-fingerprint`)
@@ -93,6 +98,7 @@ Updated: 2026-02-27
 - `reports/optimus-prime/runtime/locks/`
 - `reports/optimus-prime/planning/TASK_EXECUTION_STATE.json`
 - `reports/optimus-prime/planning/BUILD_LOOP.lock`
+- `reports/optimus-prime/planning/BUILD_STATE.json` (`cycle_gate_decision`, `remediation_state`, `offset_recovery`)
 - `reports/optimus-prime/BLOCKER_ADAPTATION_CANDIDATES.md`
 - `reports/optimus-prime/BLOCKER_INDEX.json`
 - `reports/optimus-prime/BLOCKERS.jsonl`
