@@ -76,6 +76,7 @@ Optional:
   - non-empty `requirement_ids[]`
   - non-empty `task_acceptance_refs[]`
   - non-empty `dev_ready_evidence_ref`
+- Legacy compatibility paths are intentionally out of scope for this repo; use the OP-build packet contract as the only supported model.
 
 ## Packet Requirements Included
 

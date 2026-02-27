@@ -69,3 +69,11 @@ Repo-local CLI wrapper:
 ./scripts/op/opctl.sh /op-initialize --mission \"Build MyBoard\" --scope \"Board workflows\" --json-pretty
 ./scripts/op/opctl.sh /op-build --json-pretty
 ```
+
+`/op-build` behavior (new-only model):
+
+- single-flight lock: `reports/optimus-prime/planning/BUILD_LOOP.lock`
+- default cadence: `sleep_minutes=5` (unless overridden)
+- canonical task state: `reports/optimus-prime/planning/TASK_EXECUTION_STATE.json`
+- strict done completion requires all task/evidence/verify/UAT gates plus `--verify-final-state` authorization
+- hard rate-gate policy: wait/resume when reset is within 2 hours, otherwise stop and require manual rerun

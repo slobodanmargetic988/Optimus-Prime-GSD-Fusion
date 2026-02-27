@@ -8,6 +8,8 @@ import json
 import os
 import subprocess
 import sys
+import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +44,8 @@ TEST_CONTRACT_MD = PLANNING_REL / "TEST_CONTRACT.md"
 PLAYWRIGHT_UAT_MD = PLANNING_REL / "PLAYWRIGHT_UAT_MATRIX.md"
 
 BUILD_STATE_JSON = PLANNING_REL / "BUILD_STATE.json"
+TASK_EXECUTION_STATE_JSON = PLANNING_REL / "TASK_EXECUTION_STATE.json"
+BUILD_LOOP_LOCK = PLANNING_REL / "BUILD_LOOP.lock"
 
 MANDATORY_BUILD_BASELINE = [
     PROJECT_MD,
@@ -53,6 +57,7 @@ MANDATORY_BUILD_BASELINE = [
     PLAN_CHECK_JSON,
     TEST_CONTRACT_MD,
     PLAYWRIGHT_UAT_MD,
+    TASK_EXECUTION_STATE_JSON,
 ]
 
 STRATEGY_LADDER = [
@@ -163,6 +168,323 @@ def _read_json(path: Path) -> Any:
     except OSError as exc:
         raise OpError("state_read_error", f"unable to read {path}: {exc}", stage="state") from exc
 
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                row = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+    except OSError as exc:
+        raise OpError("state_read_error", f"unable to read {path}: {exc}", stage="state") from exc
+    return rows
+
+
+def _parse_iso_utc(value: Any) -> datetime | None:
+    text = _as_str(value)
+    if not text:
+        return None
+    raw = text.strip()
+    try:
+        if raw.endswith("Z"):
+            dt = datetime.fromisoformat(raw[:-1] + "+00:00")
+        else:
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _acquire_build_loop_lock(lock_path: Path) -> tuple[bool, str, int | None]:
+    _ensure_parent(lock_path)
+    now = utc_now_iso()
+    pid = os.getpid()
+    lock_id = f"op-build-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+    if lock_path.exists():
+        try:
+            existing = _read_json(lock_path)
+        except OpError:
+            existing = None
+        if isinstance(existing, dict):
+            active_pid = existing.get("pid")
+            if isinstance(active_pid, int) and _pid_is_running(active_pid):
+                return False, lock_id, active_pid
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "lock_id": lock_id,
+        "pid": pid,
+        "acquired_at": now,
+    }
+    _atomic_write_json(lock_path, payload)
+    return True, lock_id, None
+
+
+def _release_build_loop_lock(lock_path: Path, lock_id: str | None) -> None:
+    if not lock_path.exists():
+        return
+    if lock_id is None:
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        return
+    try:
+        payload = _read_json(lock_path)
+    except OpError:
+        payload = None
+    if isinstance(payload, dict) and _as_str(payload.get("lock_id")) not in {None, lock_id}:
+        return
+    try:
+        lock_path.unlink()
+    except OSError:
+        pass
+
+
+def _task_state_from_plan(plan_packets: dict[str, Any]) -> dict[str, Any]:
+    tasks = plan_packets.get("tasks") if isinstance(plan_packets.get("tasks"), list) else []
+    out_tasks: list[dict[str, Any]] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        if not task_id:
+            continue
+        req_ids = []
+        for rid in task.get("requirement_ids", []):
+            rid_text = _as_str(rid)
+            if rid_text:
+                req_ids.append(rid_text)
+        out_tasks.append(
+            {
+                "task_id": task_id,
+                "requirement_ids": req_ids,
+                "status": "queued",
+                "owner_slot": None,
+                "attempts": {"dev": 0, "test": 0, "review": 0},
+                "evidence": {
+                    "dev_ready_evidence_ref": None,
+                    "verify_results": [],
+                    "uat_results": [],
+                },
+                "blockers": [],
+            }
+        )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "plan_id": _as_str(plan_packets.get("plan_id")),
+        "updated_at": utc_now_iso(),
+        "tasks": out_tasks,
+    }
+
+
+def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dict[str, Any]) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    tasks = task_state.get("tasks")
+    if not isinstance(tasks, list):
+        errors.append({"code": "task_state_invalid", "message": "TASK_EXECUTION_STATE.tasks must be a list"})
+        return errors
+    allowed = {
+        "queued",
+        "dev_in_progress",
+        "dev_done",
+        "test_in_progress",
+        "test_done",
+        "review_in_progress",
+        "review_done",
+        "blocked",
+    }
+    seen: set[str] = set()
+    for item in tasks:
+        if not isinstance(item, dict):
+            errors.append({"code": "task_state_invalid", "message": "task entries must be objects"})
+            continue
+        task_id = _as_str(item.get("task_id"))
+        if not task_id:
+            errors.append({"code": "task_state_invalid", "message": "task_id is required"})
+            continue
+        seen.add(task_id)
+        status = _as_str(item.get("status")) or ""
+        if status not in allowed:
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} has invalid status {status}"})
+        attempts = item.get("attempts")
+        if not isinstance(attempts, dict):
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} attempts must be object"})
+            continue
+        for key in ("dev", "test", "review"):
+            value = attempts.get(key)
+            if not isinstance(value, int) or value < 0:
+                errors.append({"code": "task_state_invalid", "message": f"task {task_id} attempts.{key} must be >=0 int"})
+        evidence = item.get("evidence")
+        if not isinstance(evidence, dict):
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} evidence must be object"})
+            continue
+        for key in ("verify_results", "uat_results"):
+            val = evidence.get(key)
+            if not isinstance(val, list):
+                errors.append({"code": "task_state_invalid", "message": f"task {task_id} evidence.{key} must be list"})
+    expected_task_ids = []
+    for task in plan_packets.get("tasks", []):
+        if isinstance(task, dict):
+            task_id = _as_str(task.get("task_id"))
+            if task_id:
+                expected_task_ids.append(task_id)
+    missing = [task_id for task_id in expected_task_ids if task_id not in seen]
+    if missing:
+        errors.append(
+            {
+                "code": "task_state_plan_mismatch",
+                "message": "TASK_EXECUTION_STATE missing plan task IDs",
+                "missing_task_ids": missing,
+            }
+        )
+    return errors
+
+
+def _extract_cycle_directives(events_path: Path, cycle_number: int) -> list[dict[str, Any]]:
+    rows = _read_jsonl(events_path)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if int(row.get("cycle_number") or 0) != int(cycle_number):
+            continue
+        if _as_str(row.get("event_type")) != "directive":
+            continue
+        payload = row.get("payload")
+        if isinstance(payload, dict):
+            out.append(payload)
+    return out
+
+
+def _task_by_id(task_state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for item in task_state.get("tasks", []):
+        if not isinstance(item, dict):
+            continue
+        task_id = _as_str(item.get("task_id"))
+        if task_id:
+            out[task_id] = item
+    return out
+
+
+def _run_tool_json(script: Path, payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
+    if not script.exists():
+        return {"ok": False, "error": "script_missing", "message": f"script not found: {script}"}
+    code, out, err = _run([sys.executable, str(script), "--input-json", "-"], cwd=cwd, stdin_text=json.dumps(payload))
+    raw = out.strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                parsed.setdefault("exit_code", code)
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    return {"ok": False, "error": "runtime_error", "message": err.strip() or raw or "tool execution failed", "exit_code": code}
+
+
+def _as_bool_field(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on", "passed", "ok", "success"}
+    return False
+
+
+def _plan_task_map(plan_packets: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for task in plan_packets.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        if task_id:
+            out[task_id] = task
+    return out
+
+
+def _read_rate_gate_window(repo_root: Path) -> dict[str, Any]:
+    path = repo_root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+    if not path.exists():
+        return {"hard_gated": False, "min_reset_at": None, "min_reset_hours": None, "profiles": []}
+    payload = _read_json(path)
+    if not isinstance(payload, dict):
+        return {"hard_gated": False, "min_reset_at": None, "min_reset_hours": None, "profiles": []}
+    profiles_raw = payload.get("profiles")
+    profile_items: list[tuple[str, dict[str, Any]]] = []
+    if isinstance(profiles_raw, dict):
+        for alias, data in profiles_raw.items():
+            if isinstance(data, dict):
+                profile_items.append((str(alias), data))
+    elif isinstance(profiles_raw, list):
+        for idx, data in enumerate(profiles_raw):
+            if isinstance(data, dict):
+                alias = _as_str(data.get("alias")) or f"profile-{idx+1}"
+                profile_items.append((alias, data))
+
+    hard_gated_profiles: list[dict[str, Any]] = []
+    min_reset_dt: datetime | None = None
+    now = datetime.now(timezone.utc)
+    for alias, data in profile_items:
+        five = data.get("five_hour") if isinstance(data.get("five_hour"), dict) else {}
+        weekly = data.get("weekly") if isinstance(data.get("weekly"), dict) else {}
+        recommended = (_as_str(data.get("recommended_action")) or "").lower()
+        hard = bool(data.get("hard_gated") or data.get("gated") or five.get("gated") or weekly.get("gated"))
+        if recommended in {"wind_down", "wait_until_reset"}:
+            hard = True
+        if not hard:
+            continue
+        reset_at = (
+            _as_str(data.get("reset_at"))
+            or _as_str(data.get("next_reset_at"))
+            or _as_str(five.get("reset_at"))
+            or _as_str(five.get("resets_at"))
+            or _as_str(five.get("resetAt"))
+            or _as_str(five.get("resetsAt"))
+            or _as_str(weekly.get("reset_at"))
+            or _as_str(weekly.get("resets_at"))
+            or _as_str(weekly.get("resetAt"))
+            or _as_str(weekly.get("resetsAt"))
+        )
+        reset_dt = _parse_iso_utc(reset_at)
+        hard_gated_profiles.append({"alias": alias, "reset_at": reset_at})
+        if reset_dt is not None and reset_dt > now and (min_reset_dt is None or reset_dt < min_reset_dt):
+            min_reset_dt = reset_dt
+    min_reset_at = None
+    min_reset_hours = None
+    if min_reset_dt is not None:
+        min_reset_at = min_reset_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        min_reset_hours = max(0.0, (min_reset_dt - now).total_seconds() / 3600.0)
+    return {
+        "hard_gated": bool(hard_gated_profiles),
+        "min_reset_at": min_reset_at,
+        "min_reset_hours": min_reset_hours,
+        "profiles": hard_gated_profiles,
+    }
 
 def _run(cmd: list[str], *, cwd: Path, stdin_text: str | None = None) -> tuple[int, str, str]:
     proc = subprocess.run(
@@ -896,6 +1218,7 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
 
     _atomic_write_json(_repo_path(repo_root, PLAN_PACKETS_JSON), plan_packets)
     _atomic_write_json(_repo_path(repo_root, PLAN_CHECK_JSON), plan_check)
+    _atomic_write_json(_repo_path(repo_root, TASK_EXECUTION_STATE_JSON), _task_state_from_plan(plan_packets))
     _write_text(_repo_path(repo_root, TEST_CONTRACT_MD), "\n".join(test_contract_md_lines) + "\n")
     _write_text(_repo_path(repo_root, PLAYWRIGHT_UAT_MD), "\n".join(uat_md_lines) + "\n")
     _atomic_write_json(state_path, state)
@@ -913,6 +1236,7 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
         artifacts=[
             str(_repo_path(repo_root, PLAN_PACKETS_JSON)),
             str(_repo_path(repo_root, PLAN_CHECK_JSON)),
+            str(_repo_path(repo_root, TASK_EXECUTION_STATE_JSON)),
             str(_repo_path(repo_root, TEST_CONTRACT_MD)),
             str(_repo_path(repo_root, PLAYWRIGHT_UAT_MD)),
             str(state_path),
@@ -975,6 +1299,20 @@ def _load_build_state(path: Path) -> dict[str, Any]:
             "fingerprint_attempts": {},
             "terminal_state": None,
             "completion_evidence": {},
+            "loop_lock_id": None,
+            "dispatch_window": {
+                "max_running_workers": 6,
+                "soft_cap_active": False,
+            },
+            "rate_gate_state": {
+                "hard_gated": False,
+                "min_reset_at": None,
+                "sleep_until": None,
+                "manual_rerun_required": False,
+            },
+            "strict_done_checks": {},
+            "current_task_pointer": None,
+            "handoff_log_offset": 0,
             "history": [],
         }
     payload = _read_json(path)
@@ -983,6 +1321,20 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     payload.setdefault("strategy_ladder", STRATEGY_LADDER)
     payload.setdefault("fingerprint_attempts", {})
     payload.setdefault("history", [])
+    payload.setdefault("loop_lock_id", None)
+    payload.setdefault("dispatch_window", {"max_running_workers": 6, "soft_cap_active": False})
+    payload.setdefault(
+        "rate_gate_state",
+        {
+            "hard_gated": False,
+            "min_reset_at": None,
+            "sleep_until": None,
+            "manual_rerun_required": False,
+        },
+    )
+    payload.setdefault("strict_done_checks", {})
+    payload.setdefault("current_task_pointer", None)
+    payload.setdefault("handoff_log_offset", 0)
     return payload
 
 
@@ -1139,7 +1491,405 @@ def _apply_strategy_action(req: OpRequest, strategy: str) -> dict[str, Any]:
     }
 
 
-def _preflight_build(req: OpRequest) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+def _apply_handoff_updates(repo_root: Path, task_state: dict[str, Any], build_state: dict[str, Any]) -> None:
+    handoff_path = repo_root / "reports" / "optimus-prime" / "HANDOFF_LOG.jsonl"
+    rows = _read_jsonl(handoff_path)
+    offset = int(build_state.get("handoff_log_offset", 0))
+    if offset < 0:
+        offset = 0
+    task_map = _task_by_id(task_state)
+    for row in rows[offset:]:
+        task_id = _as_str(row.get("task_identifier")) or _as_str(row.get("task_id"))
+        if not task_id:
+            continue
+        task = task_map.get(task_id)
+        if not isinstance(task, dict):
+            continue
+        evidence = task.get("evidence")
+        if not isinstance(evidence, dict):
+            evidence = {"dev_ready_evidence_ref": None, "verify_results": [], "uat_results": []}
+            task["evidence"] = evidence
+        verify_results = evidence.get("verify_results")
+        if not isinstance(verify_results, list):
+            verify_results = []
+            evidence["verify_results"] = verify_results
+        uat_results = evidence.get("uat_results")
+        if not isinstance(uat_results, list):
+            uat_results = []
+            evidence["uat_results"] = uat_results
+
+        row_verify = row.get("verify_results")
+        if isinstance(row_verify, list):
+            verify_results.extend(item for item in row_verify if isinstance(item, (str, dict)))
+        row_uat = row.get("uat_results")
+        if isinstance(row_uat, list):
+            uat_results.extend(item for item in row_uat if isinstance(item, (str, dict)))
+
+        dev_ready = _as_str(row.get("dev_ready_evidence_ref"))
+        if dev_ready:
+            evidence["dev_ready_evidence_ref"] = dev_ready
+
+        result = (_as_str(row.get("result")) or _as_str(row.get("status")) or _as_str(row.get("phase")) or "").lower()
+        if result in {"blocked", "failed", "error"}:
+            task["status"] = "blocked"
+            task["owner_slot"] = None
+            blockers = task.get("blockers")
+            if not isinstance(blockers, list):
+                blockers = []
+                task["blockers"] = blockers
+            blockers.append(
+                {
+                    "timestamp": utc_now_iso(),
+                    "summary": _as_str(row.get("reason")) or _as_str(row.get("message")) or "handoff blocked",
+                }
+            )
+            continue
+        if result in {"dev_done", "developer_done", "implementation_done"}:
+            task["status"] = "dev_done"
+            task["owner_slot"] = None
+            continue
+        if result in {"test_done", "tests_passed", "qa_done"}:
+            task["status"] = "test_done"
+            task["owner_slot"] = None
+            continue
+        if result in {"review_done", "accepted", "merged"}:
+            task["status"] = "review_done"
+            task["owner_slot"] = None
+            continue
+        if result in {"dev_in_progress", "developer_started"}:
+            task["status"] = "dev_in_progress"
+            continue
+        if result in {"test_in_progress", "tester_started"}:
+            task["status"] = "test_in_progress"
+            continue
+        if result in {"review_in_progress", "reviewer_started"}:
+            task["status"] = "review_in_progress"
+            continue
+    build_state["handoff_log_offset"] = len(rows)
+
+
+def _dispatch_task_packet(
+    req: OpRequest,
+    task: dict[str, Any],
+    plan_task: dict[str, Any],
+    stage: str,
+    plan_id: str,
+) -> dict[str, Any]:
+    script = req.repo_root / "skills" / "dispatch-worker-packet" / "scripts" / "dispatch_worker_packet.py"
+    task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
+    requirement_ids = [
+        rid
+        for rid in ((_as_str(item) for item in task.get("requirement_ids", [])))
+        if rid
+    ]
+    acceptance_refs = [
+        item
+        for item in ((_as_str(item) for item in plan_task.get("must_haves", [])))
+        if item
+    ]
+    if not acceptance_refs:
+        acceptance_refs = [f"{task_id} acceptance"]
+    dev_ready_ref = _as_str((task.get("evidence") or {}).get("dev_ready_evidence_ref"))
+    if not dev_ready_ref:
+        dev_ready_ref = f"reports/optimus-prime/planning/evidence/{task_id}/DEV_READY.json"
+        task.setdefault("evidence", {})["dev_ready_evidence_ref"] = dev_ready_ref
+
+    stage_cfg = {
+        "dev": {"slot": "dev-1", "role": "developer", "status": "dev_in_progress", "attempt_key": "dev"},
+        "test": {"slot": "test-1", "role": "tester", "status": "test_in_progress", "attempt_key": "test"},
+        "review": {"slot": "review-1", "role": "reviewer", "status": "review_in_progress", "attempt_key": "review"},
+    }
+    cfg = stage_cfg[stage]
+    start_from_commit = _git_text(req.repo_root, "rev-parse", "HEAD") or "HEAD"
+    payload = {
+        "slot": cfg["slot"],
+        "role": cfg["role"],
+        "task_identifier": task_id,
+        "repo_root": str(req.repo_root),
+        "worktree_root": str(req.repo_root),
+        "branch_name": f"codex/{cfg['slot']}/{task_id.lower()}",
+        "start_from_branch": "main",
+        "start_from_commit": start_from_commit,
+        "acceptance_criteria": acceptance_refs,
+        "packet_version": 1,
+        "codex_profile_alias": "codex",
+        "mcp_mode": "disable-all",
+        "mcp_allowlist": [],
+        "sandbox_mode": "danger-full-access",
+        "sandbox_add_dirs": [],
+        "test_train_mode": "off",
+        "op_build_mode": True,
+        "plan_id": plan_id,
+        "requirement_ids": requirement_ids,
+        "task_acceptance_refs": acceptance_refs,
+        "dev_ready_evidence_ref": dev_ready_ref,
+        "dry_run": req.dry_run,
+        "cycle_note": f"/op-build:{stage}:{task_id}",
+    }
+    result = _run_tool_json(script, payload, req.repo_root)
+    if _as_bool_field(result.get("ok")):
+        task["status"] = cfg["status"]
+        task["owner_slot"] = cfg["slot"]
+        attempts = task.get("attempts")
+        if not isinstance(attempts, dict):
+            attempts = {"dev": 0, "test": 0, "review": 0}
+            task["attempts"] = attempts
+        attempts[cfg["attempt_key"]] = int(attempts.get(cfg["attempt_key"], 0)) + 1
+        return {"ok": True, "task_id": task_id, "stage": stage, "dispatch": result}
+    task["status"] = "blocked"
+    task["owner_slot"] = None
+    blockers = task.get("blockers")
+    if not isinstance(blockers, list):
+        blockers = []
+        task["blockers"] = blockers
+    blockers.append(
+        {
+            "timestamp": utc_now_iso(),
+            "summary": f"dispatch failed for {stage}",
+            "details": result,
+        }
+    )
+    return {"ok": False, "task_id": task_id, "stage": stage, "dispatch": result}
+
+
+def _dispatch_next_task(req: OpRequest, plan_packets: dict[str, Any], task_state: dict[str, Any], build_state: dict[str, Any]) -> dict[str, Any]:
+    task_map = _task_by_id(task_state)
+    plan_map = _plan_task_map(plan_packets)
+    ordered_ids = [task_id for task_id in plan_map.keys()]
+    has_in_progress = any(
+        (_as_str(task_map.get(task_id, {}).get("status")) or "").endswith("_in_progress")
+        for task_id in ordered_ids
+    )
+    if has_in_progress:
+        return {"ok": True, "status": "skipped", "reason": "task already in progress"}
+
+    plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
+    for task_id in ordered_ids:
+        task = task_map.get(task_id)
+        plan_task = plan_map.get(task_id) or {}
+        if not isinstance(task, dict):
+            continue
+        status = _as_str(task.get("status")) or "queued"
+        build_state["current_task_pointer"] = task_id
+        if status == "queued":
+            return _dispatch_task_packet(req, task, plan_task, "dev", plan_id)
+        if status == "dev_done":
+            dev_ref = _as_str((task.get("evidence") or {}).get("dev_ready_evidence_ref"))
+            if not dev_ref:
+                return {
+                    "ok": False,
+                    "status": "blocked",
+                    "task_id": task_id,
+                    "reason": "missing_dev_ready_evidence_ref",
+                }
+            return _dispatch_task_packet(req, task, plan_task, "test", plan_id)
+        if status == "test_done":
+            return _dispatch_task_packet(req, task, plan_task, "review", plan_id)
+    return {"ok": True, "status": "noop", "reason": "no dispatchable tasks"}
+
+
+def _apply_directives(
+    req: OpRequest,
+    directives: list[dict[str, Any]],
+    build_state: dict[str, Any],
+    plan_packets: dict[str, Any],
+    task_state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    outcomes: list[dict[str, Any]] = []
+    runtime_script = req.repo_root / "skills" / "runtime-coordinator" / "scripts" / "runtime_coordinator.py"
+    train_script = req.repo_root / "skills" / "test-train-manager" / "scripts" / "test_train_manager.py"
+    runtime_defaults = {
+        "repo_root": str(req.repo_root),
+        "test_train_mode": "final-stage",
+        "runtime_profile_id": "default-web",
+        "runtime_id": "rt-shared-default-web",
+        "test_train_pipeline_path": str(req.repo_root / "reports" / "optimus-prime" / "config" / "TEST_TRAIN_PIPELINE.json"),
+        "runtime_health_path": str(req.repo_root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json"),
+        "runtime_action_log_path": str(req.repo_root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_ACTION_LOG.jsonl"),
+        "runtime_repair_tasks_path": str(req.repo_root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_REPAIR_TASKS.json"),
+        "runtime_locks_dir": str(req.repo_root / "reports" / "optimus-prime" / "runtime" / "locks"),
+    }
+    train_defaults = {
+        "repo_root": str(req.repo_root),
+        "test_train_mode": "final-stage",
+        "dry_run": req.dry_run,
+    }
+
+    runtime_directives = {
+        "runtime_health_check",
+        "runtime_repair",
+        "runtime_strategy_resolve",
+        "refresh_blocker_index",
+    }
+    train_directives = {
+        "close_test_wave",
+        "evaluate_promotion_gate",
+        "promote_test_next_to_test",
+        "deploy_test_branch",
+        "start_new_test_wave",
+        "hold_test_promotion",
+    }
+
+    for directive in directives:
+        if not isinstance(directive, dict):
+            continue
+        directive_type = _as_str(directive.get("directive_type")) or "unknown"
+        if directive.get("requires_optimus_action") is False:
+            outcomes.append({"directive_type": directive_type, "status": "skipped", "reason": "no action required"})
+            continue
+        args = directive.get("recommended_args") if isinstance(directive.get("recommended_args"), dict) else {}
+        if directive_type in runtime_directives:
+            payload = dict(runtime_defaults)
+            payload.update(args)
+            if directive_type == "runtime_health_check":
+                payload["action"] = "health"
+            elif directive_type == "runtime_repair":
+                payload["action"] = "repair"
+            elif directive_type == "runtime_strategy_resolve":
+                payload["action"] = "resolve"
+            elif directive_type == "refresh_blocker_index":
+                payload["action"] = "refresh_blocker_index"
+            result = _run_tool_json(runtime_script, payload, req.repo_root)
+            outcomes.append({"directive_type": directive_type, "status": "applied", "result": result})
+            continue
+        if directive_type in train_directives:
+            payload = dict(train_defaults)
+            payload.update(args)
+            if directive_type == "hold_test_promotion":
+                payload["action"] = "evaluate_promotion_gate"
+            result = _run_tool_json(train_script, payload, req.repo_root)
+            outcomes.append({"directive_type": directive_type, "status": "applied", "result": result})
+            continue
+        if directive_type == "review_dispatch_queue":
+            result = _dispatch_next_task(req, plan_packets, task_state, build_state)
+            outcomes.append({"directive_type": directive_type, "status": "applied", "result": result})
+            continue
+        if directive_type == "soft_throttle":
+            soft_cap = int(args.get("soft_cap") or build_state.get("dispatch_window", {}).get("max_running_workers") or 3)
+            build_state["dispatch_window"] = {
+                "max_running_workers": max(1, soft_cap),
+                "soft_cap_active": True,
+            }
+            outcomes.append({"directive_type": directive_type, "status": "applied", "result": {"soft_cap": soft_cap}})
+            continue
+        if directive_type == "dispatch_filter":
+            build_state.setdefault("rate_gate_state", {})
+            build_state["rate_gate_state"]["hard_gated"] = True
+            outcomes.append({"directive_type": directive_type, "status": "applied", "result": {"hard_gated": True}})
+            continue
+        outcomes.append({"directive_type": directive_type, "status": "skipped", "reason": "unsupported directive"})
+    return outcomes
+
+
+def _collect_required_uat_ids(repo_root: Path, plan_packets: dict[str, Any]) -> set[str]:
+    path = _repo_path(repo_root, PLAYWRIGHT_UAT_MD)
+    out: set[str] = set()
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            text = line.strip()
+            if not text.startswith("|"):
+                continue
+            parts = [item.strip() for item in text.split("|")]
+            if len(parts) < 3:
+                continue
+            req_id = _as_str(parts[1])
+            if req_id and req_id.startswith("REQ-"):
+                out.add(req_id)
+    if out:
+        return out
+    for task in plan_packets.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        for rid in task.get("requirement_ids", []):
+            rid_text = _as_str(rid)
+            if rid_text:
+                out.add(rid_text)
+    return out
+
+
+def _evaluate_strict_done(
+    repo_root: Path,
+    plan_packets: dict[str, Any],
+    task_state: dict[str, Any],
+    verification: dict[str, Any] | None,
+) -> dict[str, Any]:
+    plan_tasks = []
+    required_verify_cmds: set[str] = set()
+    for task in plan_packets.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        if task_id:
+            plan_tasks.append(task_id)
+        for cmd in task.get("verify_commands", []):
+            cmd_text = _as_str(cmd)
+            if cmd_text:
+                required_verify_cmds.add(cmd_text)
+
+    task_map = _task_by_id(task_state)
+    task_ids_present = all(task_id in task_map for task_id in plan_tasks)
+    all_review_done = True
+    all_dev_refs = True
+    passed_verify_cmds: set[str] = set()
+    passed_uat_reqs: set[str] = set()
+    for task_id in plan_tasks:
+        task = task_map.get(task_id)
+        if not isinstance(task, dict):
+            all_review_done = False
+            all_dev_refs = False
+            continue
+        status = _as_str(task.get("status")) or ""
+        if status != "review_done":
+            all_review_done = False
+        evidence = task.get("evidence") if isinstance(task.get("evidence"), dict) else {}
+        dev_ref = _as_str(evidence.get("dev_ready_evidence_ref"))
+        if not dev_ref:
+            all_dev_refs = False
+        verify_results = evidence.get("verify_results") if isinstance(evidence.get("verify_results"), list) else []
+        for item in verify_results:
+            if isinstance(item, str):
+                passed_verify_cmds.add(item.strip())
+            elif isinstance(item, dict) and _as_bool_field(item.get("passed")):
+                cmd = _as_str(item.get("command"))
+                if cmd:
+                    passed_verify_cmds.add(cmd)
+        uat_results = evidence.get("uat_results") if isinstance(evidence.get("uat_results"), list) else []
+        for item in uat_results:
+            if isinstance(item, dict) and _as_bool_field(item.get("passed")):
+                rid = _as_str(item.get("requirement_id"))
+                if rid:
+                    passed_uat_reqs.add(rid)
+                rid_list = item.get("requirement_ids")
+                if isinstance(rid_list, list):
+                    for rid_item in rid_list:
+                        rid_text = _as_str(rid_item)
+                        if rid_text:
+                            passed_uat_reqs.add(rid_text)
+                if not rid:
+                    for rid_item in task.get("requirement_ids", []):
+                        rid_text = _as_str(rid_item)
+                        if rid_text:
+                            passed_uat_reqs.add(rid_text)
+
+    required_uat_ids = _collect_required_uat_ids(repo_root, plan_packets)
+    verify_commands_passed = required_verify_cmds.issubset(passed_verify_cmds)
+    uat_passed = required_uat_ids.issubset(passed_uat_reqs)
+    final_state_ok = bool(verification and verification.get("ok") is True)
+    checks = {
+        "tasks_exist_in_task_state": task_ids_present,
+        "all_tasks_review_done": all_review_done,
+        "all_tasks_have_dev_ready_evidence_ref": all_dev_refs,
+        "verify_commands_passed": verify_commands_passed,
+        "uat_matrix_passed": uat_passed,
+        "final_state_authorized": final_state_ok,
+    }
+    checks["all_passed"] = all(checks.values())
+    checks["missing_verify_commands"] = sorted(required_verify_cmds - passed_verify_cmds)
+    checks["missing_uat_requirement_ids"] = sorted(required_uat_ids - passed_uat_reqs)
+    return checks
+
+
+def _preflight_build(req: OpRequest) -> tuple[list[dict[str, Any]], list[str], dict[str, Any], dict[str, Any], dict[str, Any]]:
     missing: list[str] = []
     for rel in MANDATORY_BUILD_BASELINE:
         if not _repo_path(req.repo_root, rel).exists():
@@ -1173,12 +1923,56 @@ def _preflight_build(req: OpRequest) -> tuple[list[dict[str, Any]], list[str], d
             }
         )
 
-    return warnings, missing, state_payload
+    plan_packets: dict[str, Any] = {}
+    plan_packets_path = _repo_path(req.repo_root, PLAN_PACKETS_JSON)
+    if plan_packets_path.exists():
+        parsed_plan = _read_json(plan_packets_path)
+        if isinstance(parsed_plan, dict):
+            plan_packets = parsed_plan
+        else:
+            warnings.append(
+                {
+                    "code": "plan_packets_invalid",
+                    "message": "PLAN_PACKETS.json must be a JSON object",
+                    "stage": "build_preflight",
+                }
+            )
+
+    task_state: dict[str, Any] = {}
+    task_state_path = _repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)
+    if task_state_path.exists():
+        parsed_task = _read_json(task_state_path)
+        if isinstance(parsed_task, dict):
+            task_state = parsed_task
+        else:
+            warnings.append(
+                {
+                    "code": "task_state_invalid",
+                    "message": "TASK_EXECUTION_STATE.json must be a JSON object",
+                    "stage": "build_preflight",
+                }
+            )
+    validation_errors = _validate_task_execution_state(task_state, plan_packets) if task_state and plan_packets else []
+    for item in validation_errors:
+        warnings.append(
+            {
+                "code": item.get("code") or "task_state_invalid",
+                "message": item.get("message") or "TASK_EXECUTION_STATE validation failed",
+                "stage": "build_preflight",
+                "details": item,
+            }
+        )
+
+    return warnings, missing, state_payload, plan_packets, task_state
 
 
 def command_build(req: OpRequest) -> dict[str, Any]:
-    warnings, missing, _ = _preflight_build(req)
-    if missing or any(item.get("code") == "plan_not_ready" for item in warnings):
+    warnings, missing, _, plan_packets, task_state = _preflight_build(req)
+    preflight_failed = bool(missing) or any(
+        item.get("code") in {"plan_not_ready", "task_state_invalid", "task_state_plan_mismatch", "plan_packets_invalid"}
+        for item in warnings
+    )
+    if preflight_failed:
         return _response(
             req,
             ok=False,
@@ -1198,6 +1992,29 @@ def command_build(req: OpRequest) -> dict[str, Any]:
 
     build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
     build_state = _load_build_state(build_state_path)
+    task_state_path = _repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)
+    lock_path = _repo_path(req.repo_root, BUILD_LOOP_LOCK)
+    lock_ok, lock_id, active_pid = _acquire_build_loop_lock(lock_path)
+    if not lock_ok:
+        return _response(
+            req,
+            ok=False,
+            status="lock_conflict",
+            summary="Build blocked: another /op-build loop is active.",
+            errors=[
+                {
+                    "code": "lock_conflict",
+                    "message": f"BUILD_LOOP.lock is held by pid {active_pid}",
+                    "stage": "build_lock",
+                }
+            ],
+            state_ref=str(lock_path),
+            next_action="Wait for active /op-build to finish, or clear stale lock after confirming owner process is gone.",
+            data={"active_pid": active_pid},
+        )
+    build_state["loop_lock_id"] = lock_id
+    build_state["updated_at"] = utc_now_iso()
+    _atomic_write_json(build_state_path, build_state)
 
     operator_stop_path = req.repo_root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
 
@@ -1205,155 +2022,246 @@ def command_build(req: OpRequest) -> dict[str, Any]:
     history: list[dict[str, Any]] = build_state.get("history", [])
     if not isinstance(history, list):
         history = []
+    try:
+        while req.max_build_cycles is None or cycles < req.max_build_cycles:
+            cycles += 1
+            build_state["last_cycle"] = int(build_state.get("last_cycle", 0)) + 1
+            build_state["updated_at"] = utc_now_iso()
+            _apply_handoff_updates(req.repo_root, task_state, build_state)
 
-    while req.max_build_cycles is None or cycles < req.max_build_cycles:
-        cycles += 1
-        build_state["last_cycle"] = int(build_state.get("last_cycle", 0)) + 1
-        build_state["updated_at"] = utc_now_iso()
-
-        if operator_stop_path.exists():
-            build_state["terminal_state"] = {
-                "reason": "operator_stop",
-                "timestamp": utc_now_iso(),
-            }
-            _atomic_write_json(build_state_path, build_state)
-            return _response(
-                req,
-                ok=False,
-                status="stopped_operator",
-                summary="Build stopped by explicit operator stop signal.",
-                warnings=warnings,
-                errors=[
-                    {
-                        "code": "operator_stop",
-                        "message": f"operator stop marker found: {operator_stop_path}",
-                        "stage": "build_loop",
-                    }
-                ],
-                state_ref=str(build_state_path),
-                next_action="Remove operator stop marker and rerun /op-build to resume.",
-                data={"terminal_reason": "operator_stop"},
-            )
-
-        cycle_result = _run_controller_cycle(req)
-        history.append({
-            "timestamp": utc_now_iso(),
-            "cycle_result": cycle_result,
-            "strategy": build_state.get("current_strategy"),
-        })
-        build_state["history"] = history[-200:]
-
-        terminal_reason = _as_str(cycle_result.get("terminal_reason"))
-        if cycle_result.get("ok") is True and terminal_reason:
-            if terminal_reason == "project_done":
-                final_state_path = req.repo_root / "reports" / "optimus-prime" / "controller" / "FINAL_STATE.json"
-                verification = _verify_final_state(req, final_state_path)
-                if verification.get("ok") is True:
-                    build_state["terminal_state"] = {
-                        "reason": "project_done",
-                        "timestamp": utc_now_iso(),
-                    }
-                    build_state["completion_evidence"] = {
-                        "final_state_path": str(final_state_path),
-                        "verify_result": verification,
-                    }
-                    build_state["updated_at"] = utc_now_iso()
-                    _atomic_write_json(build_state_path, build_state)
-                    return _response(
-                        req,
-                        ok=True,
-                        status="completed",
-                        summary="Build completed with strict final-state stop authorization.",
-                        warnings=warnings,
-                        artifacts=[str(build_state_path), str(final_state_path)],
-                        state_ref=str(build_state_path),
-                        data={
-                            "terminal_reason": "project_done",
-                            "cycles_executed": cycles,
-                            "current_strategy": build_state.get("current_strategy"),
-                        },
-                    )
-
-                warnings.append(
-                    {
-                        "code": "final_state_verification_failed",
-                        "message": "project_done detected but final-state verification failed; continuing autonomous recovery",
-                        "stage": "build_loop",
-                        "verification": verification,
-                    }
-                )
-            elif terminal_reason in TERMINAL_HARD_STOPS:
+            if operator_stop_path.exists():
                 build_state["terminal_state"] = {
-                    "reason": terminal_reason,
+                    "reason": "operator_stop",
                     "timestamp": utc_now_iso(),
                 }
-                build_state["updated_at"] = utc_now_iso()
+                _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
                 _atomic_write_json(build_state_path, build_state)
                 return _response(
                     req,
                     ok=False,
-                    status="blocked_terminal",
-                    summary=f"Build halted on hard terminal condition: {terminal_reason}.",
+                    status="stopped_operator",
+                    summary="Build stopped by explicit operator stop signal.",
                     warnings=warnings,
                     errors=[
                         {
-                            "code": "hard_terminal_condition",
-                            "message": f"controller reported terminal reason {terminal_reason}",
+                            "code": "operator_stop",
+                            "message": f"operator stop marker found: {operator_stop_path}",
                             "stage": "build_loop",
                         }
                     ],
                     state_ref=str(build_state_path),
-                    data={"terminal_reason": terminal_reason, "cycles_executed": cycles},
+                    next_action="Remove operator stop marker and rerun /op-build to resume.",
+                    data={"terminal_reason": "operator_stop"},
                 )
 
-        fingerprint = _detect_blocker_fingerprint(req.repo_root)
-        strategy = _as_str(build_state.get("current_strategy")) or STRATEGY_LADDER[0]
-        counter_key = f"{strategy}|{fingerprint}"
-        attempts = int(build_state.get("fingerprint_attempts", {}).get(counter_key, 0)) + 1
-        build_state.setdefault("fingerprint_attempts", {})[counter_key] = attempts
+            cycle_result = _run_controller_cycle(req)
+            last_cycle_number = int(cycle_result.get("last_cycle_number") or 0)
+            events_path_raw = _as_str(cycle_result.get("events_path"))
+            directives: list[dict[str, Any]] = []
+            if events_path_raw and last_cycle_number > 0:
+                directives = _extract_cycle_directives(Path(events_path_raw).expanduser().resolve(), last_cycle_number)
+            directive_outcomes = _apply_directives(req, directives, build_state, plan_packets, task_state)
+            if not any(item.get("directive_type") == "review_dispatch_queue" for item in directive_outcomes):
+                directive_outcomes.append(
+                    {
+                        "directive_type": "auto_dispatch",
+                        "status": "applied",
+                        "result": _dispatch_next_task(req, plan_packets, task_state, build_state),
+                    }
+                )
+            _apply_handoff_updates(req.repo_root, task_state, build_state)
 
-        if attempts >= 5:
-            current_idx = _strategy_index(build_state)
-            next_idx = min(current_idx + 1, len(STRATEGY_LADDER) - 1)
-            next_strategy = STRATEGY_LADDER[next_idx]
-            build_state["current_strategy"] = next_strategy
-            action_result = _apply_strategy_action(req, next_strategy)
-            warnings.append(
+            history.append(
                 {
-                    "code": "strategy_escalated",
-                    "message": (
-                        f"strategy escalated after 5 attempts for fingerprint '{fingerprint}': "
-                        f"{strategy} -> {next_strategy}"
-                    ),
-                    "stage": "build_loop",
-                    "action_result": action_result,
+                    "timestamp": utc_now_iso(),
+                    "cycle_result": cycle_result,
+                    "directives": directive_outcomes,
+                    "strategy": build_state.get("current_strategy"),
                 }
             )
+            build_state["history"] = history[-200:]
 
-        build_state["updated_at"] = utc_now_iso()
-        _atomic_write_json(build_state_path, build_state)
+            terminal_reason = _as_str(cycle_result.get("terminal_reason"))
+            if cycle_result.get("ok") is True and terminal_reason:
+                if terminal_reason == "project_done":
+                    final_state_path = req.repo_root / "reports" / "optimus-prime" / "controller" / "FINAL_STATE.json"
+                    verification = _verify_final_state(req, final_state_path)
+                    strict_checks = _evaluate_strict_done(req.repo_root, plan_packets, task_state, verification)
+                    build_state["strict_done_checks"] = strict_checks
+                    if verification.get("ok") is True and strict_checks.get("all_passed") is True:
+                        build_state["terminal_state"] = {
+                            "reason": "project_done",
+                            "timestamp": utc_now_iso(),
+                        }
+                        build_state["completion_evidence"] = {
+                            "final_state_path": str(final_state_path),
+                            "verify_result": verification,
+                            "strict_done_checks": strict_checks,
+                        }
+                        build_state["updated_at"] = utc_now_iso()
+                        _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
+                        _atomic_write_json(build_state_path, build_state)
+                        return _response(
+                            req,
+                            ok=True,
+                            status="completed",
+                            summary="Build completed with strict done verification.",
+                            warnings=warnings,
+                            artifacts=[str(build_state_path), str(task_state_path), str(final_state_path)],
+                            state_ref=str(build_state_path),
+                            data={
+                                "terminal_reason": "project_done",
+                                "cycles_executed": cycles,
+                                "current_strategy": build_state.get("current_strategy"),
+                                "strict_done_checks": strict_checks,
+                            },
+                        )
+                    warnings.append(
+                        {
+                            "code": "strict_done_incomplete",
+                            "message": "project_done detected but strict done checks failed; continuing autonomous execution",
+                            "stage": "build_loop",
+                            "strict_done_checks": strict_checks,
+                            "verification": verification,
+                        }
+                    )
+                elif terminal_reason == "all_rate_gates_blocking":
+                    rate_window = _read_rate_gate_window(req.repo_root)
+                    min_reset_at = _as_str(rate_window.get("min_reset_at"))
+                    min_reset_hours = rate_window.get("min_reset_hours")
+                    within_window = isinstance(min_reset_hours, (int, float)) and float(min_reset_hours) <= 2.0
+                    build_state["rate_gate_state"] = {
+                        "hard_gated": bool(rate_window.get("hard_gated")),
+                        "min_reset_at": min_reset_at,
+                        "sleep_until": min_reset_at if within_window else None,
+                        "manual_rerun_required": not within_window,
+                    }
+                    if within_window and min_reset_at:
+                        if not req.dry_run:
+                            reset_dt = _parse_iso_utc(min_reset_at)
+                            if reset_dt is not None:
+                                seconds = int(max(0, (reset_dt - datetime.now(timezone.utc)).total_seconds()))
+                                if seconds > 0:
+                                    time.sleep(seconds)
+                        build_state["updated_at"] = utc_now_iso()
+                        _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
+                        _atomic_write_json(build_state_path, build_state)
+                        continue
+                    build_state["terminal_state"] = {
+                        "reason": terminal_reason,
+                        "timestamp": utc_now_iso(),
+                    }
+                    build_state["updated_at"] = utc_now_iso()
+                    _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
+                    _atomic_write_json(build_state_path, build_state)
+                    return _response(
+                        req,
+                        ok=False,
+                        status="blocked_terminal",
+                        summary="Build halted: all rate gates blocking beyond auto-wait window.",
+                        warnings=warnings,
+                        errors=[
+                            {
+                                "code": "hard_terminal_condition",
+                                "message": "rate reset window exceeds 2h; rerun /op-build after reset",
+                                "stage": "build_loop",
+                            }
+                        ],
+                        state_ref=str(build_state_path),
+                        next_action=(
+                            f"Rerun /op-build after rate reset at {min_reset_at}."
+                            if min_reset_at
+                            else "Rerun /op-build after rate gates recover."
+                        ),
+                        data={
+                            "terminal_reason": terminal_reason,
+                            "cycles_executed": cycles,
+                            "rate_gate_state": build_state.get("rate_gate_state"),
+                        },
+                    )
+                elif terminal_reason in TERMINAL_HARD_STOPS:
+                    build_state["terminal_state"] = {
+                        "reason": terminal_reason,
+                        "timestamp": utc_now_iso(),
+                    }
+                    build_state["updated_at"] = utc_now_iso()
+                    _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
+                    _atomic_write_json(build_state_path, build_state)
+                    return _response(
+                        req,
+                        ok=False,
+                        status="blocked_terminal",
+                        summary=f"Build halted on hard terminal condition: {terminal_reason}.",
+                        warnings=warnings,
+                        errors=[
+                            {
+                                "code": "hard_terminal_condition",
+                                "message": f"controller reported terminal reason {terminal_reason}",
+                                "stage": "build_loop",
+                            }
+                        ],
+                        state_ref=str(build_state_path),
+                        data={"terminal_reason": terminal_reason, "cycles_executed": cycles},
+                    )
 
-    # Explicit bounded run mode (used by tests or operator batching) without terminal resolution.
-    return _response(
-        req,
-        ok=False,
-        status="running_needs_resume",
-        summary="Build loop executed bounded cycles without terminal resolution; resume with /op-build.",
-        warnings=warnings,
-        errors=[
-            {
-                "code": "max_build_cycles_reached",
-                "message": "bounded build run reached max_build_cycles before terminal condition",
-                "stage": "build_loop",
-            }
-        ],
-        state_ref=str(build_state_path),
-        next_action="Rerun /op-build to continue from BUILD_STATE.json.",
-        data={
-            "cycles_executed": cycles,
-            "current_strategy": build_state.get("current_strategy"),
-        },
-    )
+            fingerprint = _detect_blocker_fingerprint(req.repo_root)
+            if fingerprint != "unknown-fingerprint":
+                strategy = _as_str(build_state.get("current_strategy")) or STRATEGY_LADDER[0]
+                counter_key = f"{strategy}|{fingerprint}"
+                attempts = int(build_state.get("fingerprint_attempts", {}).get(counter_key, 0)) + 1
+                build_state.setdefault("fingerprint_attempts", {})[counter_key] = attempts
+                if attempts >= 5:
+                    current_idx = _strategy_index(build_state)
+                    next_idx = min(current_idx + 1, len(STRATEGY_LADDER) - 1)
+                    next_strategy = STRATEGY_LADDER[next_idx]
+                    if next_strategy != strategy:
+                        build_state["current_strategy"] = next_strategy
+                    action_result = _apply_strategy_action(req, build_state.get("current_strategy") or next_strategy)
+                    warnings.append(
+                        {
+                            "code": "strategy_escalated",
+                            "message": (
+                                f"strategy escalated after 5 attempts for fingerprint '{fingerprint}': "
+                                f"{strategy} -> {build_state.get('current_strategy')}"
+                            ),
+                            "stage": "build_loop",
+                            "action_result": action_result,
+                        }
+                    )
+
+            build_state["updated_at"] = utc_now_iso()
+            _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
+            _atomic_write_json(build_state_path, build_state)
+
+        return _response(
+            req,
+            ok=False,
+            status="running_needs_resume",
+            summary="Build loop executed bounded cycles without terminal resolution; resume with /op-build.",
+            warnings=warnings,
+            errors=[
+                {
+                    "code": "max_build_cycles_reached",
+                    "message": "bounded build run reached max_build_cycles before terminal condition",
+                    "stage": "build_loop",
+                }
+            ],
+            state_ref=str(build_state_path),
+            next_action="Rerun /op-build to continue from BUILD_STATE.json.",
+            data={
+                "cycles_executed": cycles,
+                "current_strategy": build_state.get("current_strategy"),
+                "strict_done_checks": build_state.get("strict_done_checks", {}),
+            },
+        )
+    finally:
+        try:
+            build_state["loop_lock_id"] = None
+            build_state["updated_at"] = utc_now_iso()
+            _atomic_write_json(build_state_path, build_state)
+            _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
+        finally:
+            _release_build_loop_lock(lock_path, lock_id)
 
 
 def parse_request(payload: dict[str, Any]) -> OpRequest:
@@ -1392,7 +2300,8 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             raise OpError("input_error", "max_build_cycles must be integer", stage="input") from exc
         max_cycles_out = parsed if parsed > 0 else None
 
-    sleep_minutes = payload.get("sleep_minutes", 0)
+    default_sleep = 5 if command == "op-build" else 0
+    sleep_minutes = payload.get("sleep_minutes", default_sleep)
     try:
         sleep_val = float(sleep_minutes)
     except (TypeError, ValueError) as exc:

@@ -57,15 +57,25 @@ Updated: 2026-02-27
   - map artifacts (`MAP_CODEBASE.json`, `MAP_CODEBASE.md`, `CODEBASE_INDEX.json`, `ARCHITECTURE_NOTES.md`, `RISK_REGISTER.json`)
   - baseline artifacts (`PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `STATE.md`, `STATE.json`)
   - plan artifacts (`PLAN_PACKETS.json`, `PLAN_CHECK.json`, `TEST_CONTRACT.md`, `PLAYWRIGHT_UAT_MATRIX.md`)
-  - autonomous build state (`BUILD_STATE.json`)
+  - autonomous build/task state (`BUILD_STATE.json`, `TASK_EXECUTION_STATE.json`)
 - Added strict build preflight gate:
-  - `/op-build` blocks when baseline artifacts are missing or `plan_ready=false`
+  - `/op-build` blocks when baseline artifacts are missing, `plan_ready=false`, or task-state contract is missing/invalid
   - blocked build response explicitly recommends `/op-initialize`
+- `/op-build` now owns execution (not monitor-only):
+  - single-flight loop lock (`BUILD_LOOP.lock`) with deterministic `lock_conflict`
+  - controller directives are auto-applied in-loop (`runtime-coordinator`, `test-train-manager`, dispatch integration)
+  - canonical task progression tracked in `TASK_EXECUTION_STATE.json`
 - Added autonomous recovery state machine in `/op-build`:
-  - recoverable blocker fingerprint attempts tracked per strategy
-  - strategy escalates after 5 attempts
+  - recoverable blocker attempts tracked per `(strategy,fingerprint)`
+  - strategy escalates after 5 attempts only for concrete fingerprints (no synthetic escalation on `unknown-fingerprint`)
+  - hard rate-gate policy enforced: `<=2h` reset waits and resumes automatically, `>2h` stops with manual rerun requirement
   - hard stops enforced for `insurmountable_blocker|all_rate_gates_blocking|operator_stop`
-  - strict completion requires `project_done` + `--verify-final-state` authorization
+- Strict done gate enforced for completion:
+  - all plan tasks present and `review_done`
+  - per-task `dev_ready_evidence_ref` present
+  - required verify commands recorded as passed
+  - UAT requirement coverage recorded as passed
+  - final-state authorization passes via `--verify-final-state`
 - Extended dispatch packet contract for OP build packets:
   - `op_build_mode`
   - `plan_id`
@@ -81,6 +91,8 @@ Updated: 2026-02-27
 - `reports/optimus-prime/runtime/RUNTIME_REPAIR_TASKS.json`
 - `reports/optimus-prime/runtime/DB_DEPLOY_DECISIONS.jsonl`
 - `reports/optimus-prime/runtime/locks/`
+- `reports/optimus-prime/planning/TASK_EXECUTION_STATE.json`
+- `reports/optimus-prime/planning/BUILD_LOOP.lock`
 - `reports/optimus-prime/BLOCKER_ADAPTATION_CANDIDATES.md`
 - `reports/optimus-prime/BLOCKER_INDEX.json`
 - `reports/optimus-prime/BLOCKERS.jsonl`
@@ -94,6 +106,7 @@ Run:
 
 ```bash
 python3 -m pytest \
+  /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/op/tests \
   /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/runtime-coordinator/tests/test_runtime_coordinator.py \
   /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/test-train-manager/tests/test_test_train_manager.py \
   /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py \
@@ -102,6 +115,5 @@ python3 -m pytest \
 
 ## Remaining Lane B Items (Next Batch)
 
-- B3 dev-ready evidence generation/validation per task before tester dispatch.
-- B4 UAT/gap-closure workflow with structured gap artifact generation.
-- B6 deeper controller integration so directives are auto-applied end-to-end (not only emitted and tracked).
+- B3/B4 evidence producers still need deeper worker-side normalization so strict-done inputs are always emitted without manual shaping.
+- Lane C packaging/installer and polished command UX remain pending.
