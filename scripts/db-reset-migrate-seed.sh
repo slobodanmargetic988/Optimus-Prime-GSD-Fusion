@@ -9,27 +9,17 @@ if [[ -n "${TT_DB_RESET_MIGRATE_SEED_CMD:-}" ]]; then
   exit 0
 fi
 
-steps=()
-for candidate in \
-  "$REPO_ROOT/scripts/db/reset.sh" \
-  "$REPO_ROOT/scripts/db/migrate.sh" \
-  "$REPO_ROOT/scripts/db/seed.sh" \
-  "$REPO_ROOT/scripts/db-reset.sh" \
-  "$REPO_ROOT/scripts/db-migrate.sh" \
-  "$REPO_ROOT/scripts/db-seed.sh"
-do
-  if [[ -x "$candidate" ]]; then
-    steps+=("$candidate")
-  fi
-done
+reset_cmd="$REPO_ROOT/scripts/db/reset.sh"
+migrate_cmd="$REPO_ROOT/scripts/db/migrate.sh"
+seed_cmd="$REPO_ROOT/scripts/db/seed.sh"
 
-if (( ${#steps[@]} == 0 )); then
-  echo "db reset/migrate/seed no-op: no known db scripts found"
+if [[ ! -x "$reset_cmd" || ! -x "$migrate_cmd" || ! -x "$seed_cmd" ]]; then
+  echo "db reset/migrate/seed no-op: canonical scripts missing (scripts/db/{reset,migrate,seed}.sh)"
   exit 0
 fi
 
-for step in "${steps[@]}"; do
-  "$step"
-done
+"$reset_cmd"
+"$migrate_cmd"
+"$seed_cmd"
 
 echo "db reset/migrate/seed completed"

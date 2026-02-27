@@ -90,6 +90,22 @@ def build_repo(root: Path) -> None:
                 "  echo \"{ invalid-json\"",
                 "  exit 0",
                 "fi",
+                "if [[ \"$mode\" == \"mismatch_to_commit\" ]]; then",
+                "  python3 - \"$TT_DB_FROM_COMMIT\" <<'PY'",
+                "import json",
+                "import sys",
+                "print(json.dumps({",
+                "  'schema_version': '1.0',",
+                "  'requires_reset_seed': False,",
+                "  'reason': 'mismatch_to_commit_for_test',",
+                "  'from_commit': (sys.argv[1] or None),",
+                "  'to_commit': 'deadbeef',",
+                "  'signals': [],",
+                "  'confidence': 'medium',",
+                "}))",
+                "PY",
+                "  exit 0",
+                "fi",
                 "requires=\"false\"",
                 "reason=\"no_db_impact_paths_changed\"",
                 "confidence=\"medium\"",
@@ -511,6 +527,31 @@ class TestTrainManagerTests(unittest.TestCase):
             self.assertFalse(out["ok"])
             self.assertEqual(out["status"], "failed_db_policy")
             self.assertEqual((out.get("repair") or {}).get("result"), "delegated")
+
+    def test_deploy_detector_commit_mismatch_blocks_and_delegates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            with mock.patch.dict(os.environ, {"TEST_DB_DETECTOR_MODE": "mismatch_to_commit"}, clear=False):
+                out = run_action(root, action="deploy_test_branch", test_train_mode="final-stage")
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["status"], "failed_db_policy")
+            self.assertIn("to_commit_mismatch", str((out.get("db_policy") or {}).get("failure_reason") or ""))
+            self.assertEqual((out.get("repair") or {}).get("result"), "delegated")
+
+    def test_deploy_rejects_database_enabled_false_in_train_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            pipeline_path = root / "reports" / "optimus-prime" / "config" / "TEST_TRAIN_PIPELINE.json"
+            pipeline = json.loads(pipeline_path.read_text(encoding="utf-8"))
+            pipeline["database"]["enabled"] = False
+            write_text(pipeline_path, json.dumps(pipeline, indent=2) + "\n")
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                run_action(root, action="deploy_test_branch", test_train_mode="final-stage")
+            self.assertEqual(ctx.exception.code, "config_error")
 
     def test_deploy_detector_invalid_json_blocks_and_delegates(self):
         with tempfile.TemporaryDirectory() as tmp:

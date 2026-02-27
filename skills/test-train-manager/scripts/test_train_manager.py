@@ -948,7 +948,7 @@ def _database_policy_config(inp: TrainInput, pipeline: dict[str, Any]) -> dict[s
 
     enabled = _bool(database.get("enabled"), True)
     if not enabled:
-        return {"enabled": False}
+        raise ToolError("config_error", "database.enabled must be true in test-train mode", stage="config")
 
     scope = _str(database.get("scope")) or "deploy_only"
     if scope != "deploy_only":
@@ -1217,6 +1217,81 @@ def _execute_db_policy(
     detector_reason = _str(detector_payload.get("reason")) or "detector_reason_missing"
     detector_signals = detector_payload.get("signals") if isinstance(detector_payload.get("signals"), list) else []
     detector_confidence = _str(detector_payload.get("confidence")) or "medium"
+    reported_from_commit = _str(detector_payload.get("from_commit"))
+    reported_to_commit = _str(detector_payload.get("to_commit"))
+    if reported_to_commit and reported_to_commit != to_commit:
+        reason = f"detector_contract_error:to_commit_mismatch(expected={to_commit},reported={reported_to_commit})"
+        db_policy = {
+            "enabled": True,
+            "scope": cfg.get("scope"),
+            "from_commit": from_commit,
+            "to_commit": to_commit,
+            "detector": {
+                "command": detector_command,
+                "cwd": str(detector_cwd),
+                "stdout": _str(detector_run.get("stdout")) or "",
+                "stderr": _str(detector_run.get("stderr")) or "",
+                "returncode": int(detector_run.get("returncode", 1)),
+            },
+            "decision": "reset_seed",
+            "decision_source": "optimus_policy",
+            "decision_reason": reason,
+            "failure_reason": reason,
+            "failure_stage": "detector",
+            "failure_fingerprint": "deploy|db_policy|detector_contract_to_commit_mismatch",
+        }
+        _append_db_deploy_decision(
+            inp,
+            wave_id=wave_id,
+            from_commit=from_commit,
+            to_commit=to_commit,
+            detector_requires_reset_seed=True,
+            detector_reason=reason,
+            decision="reset_seed",
+            decision_source="optimus_policy",
+            decision_reason=reason,
+            db_command_exit_code=None,
+            result="blocked",
+        )
+        return {"ok": False, "db_policy": db_policy, "db_execution": None}
+    if (from_commit or reported_from_commit) and (from_commit or "") != (reported_from_commit or ""):
+        reason = (
+            f"detector_contract_error:from_commit_mismatch(expected={from_commit or 'null'},"
+            f"reported={reported_from_commit or 'null'})"
+        )
+        db_policy = {
+            "enabled": True,
+            "scope": cfg.get("scope"),
+            "from_commit": from_commit,
+            "to_commit": to_commit,
+            "detector": {
+                "command": detector_command,
+                "cwd": str(detector_cwd),
+                "stdout": _str(detector_run.get("stdout")) or "",
+                "stderr": _str(detector_run.get("stderr")) or "",
+                "returncode": int(detector_run.get("returncode", 1)),
+            },
+            "decision": "reset_seed",
+            "decision_source": "optimus_policy",
+            "decision_reason": reason,
+            "failure_reason": reason,
+            "failure_stage": "detector",
+            "failure_fingerprint": "deploy|db_policy|detector_contract_from_commit_mismatch",
+        }
+        _append_db_deploy_decision(
+            inp,
+            wave_id=wave_id,
+            from_commit=from_commit,
+            to_commit=to_commit,
+            detector_requires_reset_seed=True,
+            detector_reason=reason,
+            decision="reset_seed",
+            decision_source="optimus_policy",
+            decision_reason=reason,
+            db_command_exit_code=None,
+            result="blocked",
+        )
+        return {"ok": False, "db_policy": db_policy, "db_execution": None}
     if not from_commit:
         detector_requires = True
         detector_reason = "from_commit_missing_conservative_reset_seed"
