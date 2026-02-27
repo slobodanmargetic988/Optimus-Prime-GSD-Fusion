@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "required_risk_tests": [
+    "scripts/op/tests/test_op_core.py::test_build_invalid_runtime_health_json_degrades_with_warning",
+    "scripts/op/tests/test_op_core.py::test_build_all_rate_gates_blocking_with_invalid_registry_continues_with_warning",
+    "scripts/op/tests/test_op_core.py::test_build_recovers_malformed_gap_closure_and_releases_lock",
+    "scripts/op/tests/test_op_core.py::test_build_recovers_malformed_gaps_with_backup_metadata",
+    "scripts/op/tests/test_op_core.py::test_build_recovers_when_both_gap_artifacts_malformed",
+    "scripts/op/tests/test_op_core.py::test_build_recovery_preserves_sticky_open_gaps_from_prior_state",
+    "scripts/op/tests/test_op_core.py::test_build_recovery_failure_on_single_backup_still_releases_lock",
+    "scripts/op/tests/test_op_core.py::test_stale_in_progress_blocked_when_slot_active",
+    "scripts/op/tests/test_op_core.py::test_stale_in_progress_missing_last_progress_at_recovers",
+    "scripts/op/tests/test_op_core.py::test_build_recovery_failure_returns_blocked_preflight_and_releases_lock",
+    "scripts/op/tests/test_op_core.py::test_status_blocks_on_gap_closure_schema_invalid_tasks_field",
+    "scripts/op/tests/test_op_core.py::test_status_blocks_on_gap_closure_schema_invalid_plan_id",
+    "scripts/op/tests/test_op_core.py::test_health_blocks_on_gap_closure_schema_invalid_tasks_field",
+    "scripts/op/tests/test_op_core.py::test_op_resume_malformed_build_state_backup_and_reset",
+    "scripts/op/tests/test_op_core.py::test_build_strict_done_blocks_when_sticky_open_gap_exists",
+    "scripts/op/tests/test_op_build_integration.py::test_dispatch_filter_blocks_dispatch_for_cycle",
+    "scripts/op/tests/test_op_build_integration.py::test_directive_failure_queues_remediation_and_skips_dispatch",
+    "scripts/op/tests/test_op_build_integration.py::test_build_does_not_silently_stall_on_stale_dev_in_progress",
+    "scripts/op/tests/test_op_build_integration.py::test_build_stale_in_progress_recovery_allows_next_dispatch",
+    "scripts/op/tests/test_op_build_integration.py::test_stale_in_progress_blocked_then_recovers_when_slot_clears",
+    "scripts/op/tests/test_op_build_integration.py::test_stale_recovery_advances_state_and_enables_dispatch",
+    "scripts/op/tests/test_op_build_integration.py::test_build_keeps_gap_open_until_explicit_closure_even_after_recovery",
+    "scripts/op/tests/test_op_build_integration.py::test_project_done_still_blocked_when_preserved_gap_survives_recovery",
+    "skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py::DispatchWorkerPacketTests::test_optional_bool_coercion_edge_cases",
+    "skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py::DispatchWorkerPacketTests::test_validation_mcp_mode_combinations",
+    "skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py::DispatchWorkerPacketTests::test_branch_name_prefix_validation_by_slot_family",
+    "skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py::DispatchWorkerPacketTests::test_start_from_commit_invalid_sha_fails_validation",
+    "skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py::DispatchWorkerPacketTests::test_handoff_log_failure_is_structured_error",
+    "skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py::DispatchWorkerPacketTests::test_branch_lineage_write_failure_is_warning",
+    "skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py::DispatchWorkerPacketTests::test_test_train_mode_runtime_health_invalid_json_returns_validation_error",
+    "skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py::DispatchWorkerPacketTests::test_dispatch_runtime_health_non_object_payload_validation_error",
+    "skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py::DispatchWorkerPacketTests::test_dispatch_runtime_health_missing_gate_fields_validation_error",
+    "skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py::DispatchWorkerPacketTests::test_dispatch_hard_gate_contract_for_flex_tester_matches_tester"
+  ],
+  "full_matrix_targets": [
+    "scripts/op/tests",
+    "skills/runtime-coordinator/tests/test_runtime_coordinator.py",
+    "skills/test-train-manager/tests/test_test_train_manager.py",
+    "skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py",
+    "skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py"
+  ],
+  "coverage_targets": [
+    "scripts/op/op_core.py",
+    "skills/dispatch-worker-packet/scripts/dispatch_worker_packet.py",
+    "skills/runtime-coordinator/scripts/runtime_coordinator.py",
+    "skills/test-train-manager/scripts/test_train_manager.py",
+    "skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py"
+  ]
+}

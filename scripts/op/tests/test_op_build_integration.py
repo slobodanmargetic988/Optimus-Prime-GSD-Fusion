@@ -760,6 +760,124 @@ def test_build_stale_in_progress_recovery_allows_next_dispatch(monkeypatch: pyte
         assert any(item.get("code") == "stale_in_progress_recovered" for item in out.get("warnings", []))
 
 
+def test_stale_in_progress_blocked_then_recovers_when_slot_clears(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        task_id = seed_stale_in_progress_task(root, status="dev_in_progress", owner_slot="dev-1", minutes_ago=30)
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        dispatch_calls = {"count": 0}
+
+        def fake_dispatch(req, plan, state, build, *_):
+            dispatch_calls["count"] += 1
+            return {"ok": True, "status": "noop"}
+
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", fake_dispatch)
+        monkeypatch.setattr(MODULE, "_active_worker_slots", lambda _root: {"dev-1"})
+        first = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert first["status"] == "running_needs_resume"
+        assert dispatch_calls["count"] == 1
+        assert any(item.get("code") == "stale_in_progress_blocked" for item in first.get("warnings", []))
+
+        monkeypatch.setattr(MODULE, "_active_worker_slots", lambda _root: set())
+        second = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert second["status"] == "running_needs_resume"
+        assert dispatch_calls["count"] == 2
+        assert any(item.get("code") == "stale_in_progress_recovered" for item in second.get("warnings", []))
+        task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        row = next(item for item in task_state["tasks"] if item.get("task_id") == task_id)
+        assert row["status"] == "queued"
+
+
+def test_stale_recovery_advances_state_and_enables_dispatch(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        task_id = seed_stale_in_progress_task(root, status="review_in_progress", owner_slot="review-1", minutes_ago=40)
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_active_worker_slots", lambda _root: set())
+        dispatch_calls = {"count": 0}
+
+        def fake_dispatch(req, plan, state, build, *_):
+            dispatch_calls["count"] += 1
+            return {"ok": True, "status": "noop"}
+
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", fake_dispatch)
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        assert dispatch_calls["count"] == 1
+        assert any(item.get("code") == "stale_in_progress_recovered" for item in out.get("warnings", []))
+        task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        row = next(item for item in task_state["tasks"] if item.get("task_id") == task_id)
+        assert row["status"] == "test_done"
+
+
 def test_gap_closure_does_not_generate_recursive_gapfix_tasks():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -965,3 +1083,87 @@ def test_build_keeps_gap_open_until_explicit_closure_even_after_recovery():
         gaps_after = json.loads(gaps_path.read_text(encoding="utf-8"))
         row = next(item for item in gaps_after["gaps"] if item.get("gap_id") == "gap-sticky-after-recovery-1")
         assert row["status"] == "open"
+
+
+def test_project_done_still_blocked_when_preserved_gap_survives_recovery():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        done_path = root / "reports" / "optimus-prime" / "control" / "PROJECT_DONE.json"
+        done_path.parent.mkdir(parents=True, exist_ok=True)
+        done_path.write_text(json.dumps({"status": "done", "evidence": "all scoped tasks complete"}, indent=2) + "\n", encoding="utf-8")
+
+        planning_root = root / "reports" / "optimus-prime" / "planning"
+        task_state_path = planning_root / "TASK_EXECUTION_STATE.json"
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        for task in task_state["tasks"]:
+            req_id = task["requirement_ids"][0]
+            evidence_rel = f"reports/optimus-prime/planning/evidence/{task['task_id']}/TASK_EVIDENCE.json"
+            evidence_path = root / evidence_rel
+            evidence_payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence_payload["dev"]["status"] = "done"
+            evidence_payload["dev"]["dev_ready"] = True
+            evidence_payload["dev"]["verify_results"] = [{"command": "python3 -m pytest", "passed": True}]
+            evidence_payload["test"]["status"] = "done"
+            evidence_payload["test"]["verify_results"] = [{"command": "python3 -m pytest", "passed": True}]
+            evidence_payload["test"]["uat_results"] = [{"requirement_id": req_id, "passed": True}]
+            evidence_payload["review"]["status"] = "done"
+            evidence_payload["review"]["decision"] = "accepted"
+            evidence_payload["gate"]["ready_for_test"] = True
+            evidence_payload["gate"]["ready_for_review"] = True
+            evidence_payload["gate"]["ready_for_phase_exit"] = True
+            evidence_payload["summary"]["result"] = "pass"
+            evidence_payload["summary"]["reason_codes"] = ["completed"]
+            evidence_path.write_text(json.dumps(evidence_payload, indent=2) + "\n", encoding="utf-8")
+            task["status"] = "review_done"
+            task["owner_slot"] = None
+            task["evidence"] = {
+                "task_evidence_ref": evidence_rel,
+                "dev_ready_evidence_ref": evidence_rel,
+                "verify_results": [{"command": "python3 -m pytest", "passed": True}],
+                "uat_results": [{"requirement_id": req_id, "passed": True}],
+            }
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        build_state_path = planning_root / "BUILD_STATE.json"
+        build_state = json.loads(build_state_path.read_text(encoding="utf-8"))
+        build_state["open_gap_ids"] = ["gap-preserved-done-1"]
+        build_state["active_gap_closure_phase_id"] = "phase-1"
+        build_state_path.write_text(json.dumps(build_state, indent=2) + "\n", encoding="utf-8")
+        (planning_root / "GAPS.json").write_text("{ invalid-json", encoding="utf-8")
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        assert any(item.get("code") == "strict_done_incomplete" for item in out.get("warnings", []))
+        gaps_after = json.loads((planning_root / "GAPS.json").read_text(encoding="utf-8"))
+        open_ids = {
+            row.get("gap_id")
+            for row in gaps_after.get("gaps", [])
+            if isinstance(row, dict) and row.get("status") == "open"
+        }
+        assert "gap-preserved-done-1" in open_ids

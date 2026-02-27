@@ -116,6 +116,15 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("fallback_branch", content)
             self.assertIn("fallback_reason", content)
 
+    def test_optional_bool_coercion_edge_cases(self):
+        self.assertTrue(MODULE._optional_bool("ON"))
+        self.assertTrue(MODULE._optional_bool(" yes "))
+        self.assertFalse(MODULE._optional_bool("off"))
+        self.assertFalse(MODULE._optional_bool("0"))
+        self.assertIsNone(MODULE._optional_bool(None))
+        with self.assertRaises(MODULE.ToolError):
+            MODULE._optional_bool("maybe")
+
     def test_dry_run_returns_no_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -131,6 +140,26 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             reports = root / "reports" / "optimus-prime"
             self.assertFalse((reports / "WORKER_REGISTRY.json").exists())
             self.assertFalse((reports / "HANDOFF_LOG.jsonl").exists())
+
+    def test_dry_run_op_build_mode_contract_parity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = make_cfg(
+                root,
+                dry_run=True,
+                op_build_mode=True,
+                plan_id="plan-risk-gate",
+                requirement_ids=["REQ-001"],
+                task_acceptance_refs=["AC-001"],
+                dev_ready_evidence_ref="reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+            )
+            out = MODULE.run_dispatch_worker_packet(cfg, dispatcher=FakeDispatcher())
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["status"], "skipped_dry_run")
+            self.assertFalse(out["dispatch_started"])
+            self.assertFalse(out["registry_updated"])
+            self.assertFalse(out["handoff_logged"])
+            self.assertTrue(any(item.get("code") == "dry_run" for item in out.get("warnings", [])))
 
     def test_success_flow_updates_registry_handoff_lineage(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -161,6 +190,55 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             thread_history = (root / "reports" / "optimus-prime" / "THREAD_HISTORY.log").read_text(encoding="utf-8")
             self.assertIn("slot | worker type | thread-id", thread_history)
             self.assertIn("dev-1 | developer | unknown", thread_history)
+
+    def test_registry_update_supports_workers_dict_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / "reports" / "optimus-prime"
+            reports.mkdir(parents=True, exist_ok=True)
+            (reports / "WORKER_REGISTRY.json").write_text(
+                json.dumps({"workers": {"dev-2": {"slot": "dev-2"}}}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            cfg = make_cfg(root)
+            out = MODULE.run_dispatch_worker_packet(cfg, dispatcher=FakeDispatcher())
+            self.assertTrue(out["ok"])
+            registry = json.loads((reports / "WORKER_REGISTRY.json").read_text(encoding="utf-8"))
+            self.assertIn("dev-1", registry["workers"])
+            self.assertEqual(registry["workers"]["dev-1"]["active_task"], "MYO-156")
+
+    def test_registry_update_supports_invalid_workers_field_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / "reports" / "optimus-prime"
+            reports.mkdir(parents=True, exist_ok=True)
+            (reports / "WORKER_REGISTRY.json").write_text(
+                json.dumps({"workers": "invalid-shape"}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            cfg = make_cfg(root)
+            out = MODULE.run_dispatch_worker_packet(cfg, dispatcher=FakeDispatcher())
+            self.assertTrue(out["ok"])
+            registry = json.loads((reports / "WORKER_REGISTRY.json").read_text(encoding="utf-8"))
+            self.assertIsInstance(registry["workers"], list)
+            self.assertEqual(registry["workers"][0]["slot"], "dev-1")
+
+    def test_registry_update_supports_root_list_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / "reports" / "optimus-prime"
+            reports.mkdir(parents=True, exist_ok=True)
+            (reports / "WORKER_REGISTRY.json").write_text(
+                json.dumps([{"slot": "dev-2"}], indent=2) + "\n",
+                encoding="utf-8",
+            )
+            cfg = make_cfg(root)
+            out = MODULE.run_dispatch_worker_packet(cfg, dispatcher=FakeDispatcher())
+            self.assertTrue(out["ok"])
+            registry = json.loads((reports / "WORKER_REGISTRY.json").read_text(encoding="utf-8"))
+            self.assertIsInstance(registry, dict)
+            self.assertIsInstance(registry["workers"], list)
+            self.assertEqual(registry["workers"][0]["slot"], "dev-1")
 
     def test_dispatch_failure_keeps_registry_non_running(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -199,11 +277,62 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("remediation", critical)
             self.assertEqual(critical["remediation"]["slot"], "dev-1")
 
+    def test_handoff_log_failure_is_structured_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = make_cfg(root)
+            reports = root / "reports" / "optimus-prime"
+            reports.mkdir(parents=True, exist_ok=True)
+            (reports / "HANDOFF_LOG.jsonl").mkdir(parents=True, exist_ok=True)
+            out = MODULE.run_dispatch_worker_packet(cfg, dispatcher=FakeDispatcher())
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["status"], "handoff_log_failed")
+            self.assertTrue(any(item.get("code") == "handoff_log_failed" for item in out.get("errors", [])))
+            self.assertEqual(out["state_updates"]["handoff_log"], "failed")
+
+    def test_branch_lineage_write_failure_is_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = make_cfg(root)
+            reports = root / "reports" / "optimus-prime"
+            reports.mkdir(parents=True, exist_ok=True)
+            (reports / "BRANCH_LINEAGE.json").mkdir(parents=True, exist_ok=True)
+            out = MODULE.run_dispatch_worker_packet(cfg, dispatcher=FakeDispatcher())
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["status"], "completed")
+            self.assertEqual(out["state_updates"]["branch_lineage"], "failed_warning")
+            self.assertTrue(any(item.get("code") == "branch_lineage_update_failed" for item in out.get("warnings", [])))
+
     def test_validation_forbidden_worker_mcp(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = make_cfg(Path(tmp), mcp_mode="enable-only", mcp_allowlist=["linear"]) 
             with self.assertRaises(MODULE.ToolError) as ctx:
                 MODULE.validate_policy(cfg)
+            self.assertEqual(ctx.exception.code, "validation_error")
+
+    def test_validation_mcp_mode_combinations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(MODULE.ToolError) as ctx1:
+                MODULE.validate_policy(make_cfg(root, mcp_mode="enable-only", mcp_allowlist=[]))
+            self.assertEqual(ctx1.exception.code, "validation_error")
+            with self.assertRaises(MODULE.ToolError) as ctx2:
+                MODULE.validate_policy(make_cfg(root, mcp_mode="disable-all", mcp_allowlist=["figma"]))
+            self.assertEqual(ctx2.exception.code, "validation_error")
+
+    def test_branch_name_prefix_validation_by_slot_family(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(MODULE.ToolError):
+                MODULE.validate_policy(make_cfg(root, slot="dev-1", role="developer", branch_name="codex/test-1/MYO-156"))
+            with self.assertRaises(MODULE.ToolError):
+                MODULE.validate_policy(make_cfg(root, slot="test-1", role="tester", branch_name="codex/dev-1/MYO-156"))
+
+    def test_start_from_commit_invalid_sha_fails_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(make_cfg(root, start_from_commit="not-a-sha"))
             self.assertEqual(ctx.exception.code, "validation_error")
 
     def test_test_train_mode_requires_hosted_runtime_for_tester(self):

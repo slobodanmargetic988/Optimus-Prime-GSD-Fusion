@@ -127,6 +127,12 @@ Updated: 2026-02-27
   - `requirement_ids`
   - `task_acceptance_refs`
   - `dev_ready_evidence_ref`
+- Added deterministic Lane B quality gate tooling:
+  - command: `python3 -m scripts.quality.lane_b_quality_gate --repo-root <repo>`
+  - runbook: `scripts/quality/run_lane_b_quality.sh`
+  - explicit risk-test manifest: `scripts/quality/lane_b_required_tests.json`
+  - quality artifact: `reports/optimus-prime/planning/LANE_B_QUALITY_GATE.json`
+  - gate status is reliability-first (`passed|blocked`) based on required risk tests + full matrix + coverage snapshot generation
 
 ## Runtime + Blocker Artifacts (Canonical)
 

@@ -62,6 +62,23 @@ def write_schema_invalid_tasks_artifact(path: Path, *, plan_id: str = "plan-test
     )
 
 
+def write_schema_invalid_gap_closure_artifact(
+    path: Path,
+    *,
+    plan_id: str | None = "plan-test",
+    tasks: object | None = None,
+) -> None:
+    payload: dict[str, object] = {
+        "schema_version": "1.0",
+        "generated_at": "2026-01-01T00:00:00Z",
+        "tasks": [] if tasks is None else tasks,
+    }
+    if plan_id is not None:
+        payload["plan_id"] = plan_id
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def assert_build_lock_released(root: Path) -> None:
     lock_path = root / "reports" / "optimus-prime" / "planning" / "BUILD_LOOP.lock"
     assert not lock_path.exists()
@@ -505,6 +522,73 @@ def test_gap_closure_retry_exhausts_after_five_attempts():
         assert source_gap_id in build_state["gap_retry_exhausted_ids"]
 
 
+def test_stale_in_progress_blocked_when_slot_active():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        task_state = json.loads(
+            (root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8")
+        )
+        build_state = MODULE._fresh_build_state_payload()
+        task = task_state["tasks"][0]
+        task["status"] = "dev_in_progress"
+        task["owner_slot"] = "dev-1"
+        task["last_progress_at"] = "2000-01-01T00:00:00Z"
+
+        original_slots = MODULE._active_worker_slots
+        MODULE._active_worker_slots = lambda _root: {"dev-1"}  # type: ignore[assignment]
+        try:
+            warnings = MODULE._recover_stale_in_progress_tasks(root, task_state, build_state)
+        finally:
+            MODULE._active_worker_slots = original_slots  # type: ignore[assignment]
+        assert any(item.get("code") == "stale_in_progress_blocked" for item in warnings)
+        assert task["status"] == "dev_in_progress"
+        assert task["owner_slot"] == "dev-1"
+
+
+def test_stale_in_progress_missing_last_progress_at_recovers():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        task_state = json.loads(
+            (root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8")
+        )
+        build_state = MODULE._fresh_build_state_payload()
+        task = task_state["tasks"][0]
+        task["status"] = "dev_in_progress"
+        task["owner_slot"] = "dev-1"
+        task["last_progress_at"] = None
+        task["updated_at"] = None
+
+        original_slots = MODULE._active_worker_slots
+        MODULE._active_worker_slots = lambda _root: set()  # type: ignore[assignment]
+        try:
+            warnings = MODULE._recover_stale_in_progress_tasks(root, task_state, build_state)
+        finally:
+            MODULE._active_worker_slots = original_slots  # type: ignore[assignment]
+        recovered = [item for item in warnings if item.get("code") == "stale_in_progress_recovered"]
+        assert recovered
+        assert recovered[0].get("reason") == "missing_last_progress_at"
+        assert task["status"] == "queued"
+        assert task["owner_slot"] is None
+
+
 def test_strategy_repair_uses_state_derived_mode(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -724,6 +808,39 @@ def test_build_recovers_malformed_gap_closure_and_releases_lock():
         assert out2["status"] != "lock_conflict"
 
 
+def test_build_recovers_when_both_gap_artifacts_malformed():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning_root = root / "reports" / "optimus-prime" / "planning"
+        (planning_root / "GAPS.json").write_text("{ invalid-json", encoding="utf-8")
+        (planning_root / "GAP_CLOSURE_PLAN_PACKETS.json").write_text("{ invalid-json", encoding="utf-8")
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        codes = {item.get("code") for item in out.get("warnings", [])}
+        assert "gaps_artifact_invalid" in codes
+        assert "gap_closure_artifact_invalid" in codes
+        assert "gaps_artifact_recovered" in codes
+        assert "gap_closure_artifact_recovered" in codes
+        assert_build_lock_released(root)
+
+
 def test_build_recovers_malformed_gaps_with_backup_metadata():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -756,6 +873,43 @@ def test_build_recovers_malformed_gaps_with_backup_metadata():
         assert any("GAPS.json" in item for item in recovery.get("recovered_files", []))
         backups = list((root / "reports" / "optimus-prime" / "planning").glob("GAPS.corrupt.*.json"))
         assert backups
+
+
+def test_build_recovery_failure_on_single_backup_still_releases_lock(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning_root = root / "reports" / "optimus-prime" / "planning"
+        (planning_root / "GAPS.json").write_text("{ invalid-json", encoding="utf-8")
+
+        def fail_backup(path: Path):
+            raise MODULE.OpError(
+                "state_read_error",
+                f"unable to backup corrupted artifact {path}: permission denied",
+                stage="state",
+            )
+
+        monkeypatch.setattr(MODULE, "_backup_corrupt_file", fail_backup)
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "blocked_preflight"
+        assert any(item.get("code") == "gap_artifact_recovery_failed" for item in out.get("errors", []))
+        assert_build_lock_released(root)
 
 
 def test_build_recovery_preserves_sticky_open_gaps_from_prior_state():
@@ -1102,6 +1256,27 @@ def test_status_blocks_on_gap_closure_schema_invalid_tasks_field():
         )
         closure_path = root / "reports" / "optimus-prime" / "planning" / "GAP_CLOSURE_PLAN_PACKETS.json"
         write_schema_invalid_tasks_artifact(closure_path)
+        out = run_payload({"command": "/op-status", "repo_root": str(root)})
+        assert out["ok"] is False
+        assert out["status"] == "blocked"
+        assert any(item.get("code") == "status_artifact_invalid" for item in out.get("warnings", []))
+        assert any(item.get("code") == "status_snapshot_degraded" for item in out.get("warnings", []))
+
+
+def test_status_blocks_on_gap_closure_schema_invalid_plan_id():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        closure_path = root / "reports" / "optimus-prime" / "planning" / "GAP_CLOSURE_PLAN_PACKETS.json"
+        write_schema_invalid_gap_closure_artifact(closure_path, plan_id="")
         out = run_payload({"command": "/op-status", "repo_root": str(root)})
         assert out["ok"] is False
         assert out["status"] == "blocked"

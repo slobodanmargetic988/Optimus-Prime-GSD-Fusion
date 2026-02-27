@@ -98,3 +98,19 @@ Repo-local CLI wrapper:
 - health gap-artifact parity: malformed `GAPS.json` or `GAP_CLOSURE_PLAN_PACKETS.json` blocks `/op-health` with `gap_artifact_integrity_blocked`
 - status resilience: `/op-status` degrades to deterministic blocked snapshot (no crash) with `status_artifact_invalid` and `status_snapshot_degraded`
 - resume resilience: `/op-resume` auto-backs up malformed `BUILD_STATE.json` to `BUILD_STATE.corrupt.<timestamp>.json`, resets state, and continues with warning `resume_state_corrupt_reset`
+
+## Lane B Quality Gate
+
+Deterministic reliability-first release gate:
+
+- command: `python3 -m scripts.quality.lane_b_quality_gate --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion`
+- runbook wrapper: `scripts/quality/run_lane_b_quality.sh`
+- required risk tests manifest: `scripts/quality/lane_b_required_tests.json`
+- quality artifact: `reports/optimus-prime/planning/LANE_B_QUALITY_GATE.json`
+
+Gate contract:
+
+- hard-blocks when any required risk-test is failing/missing
+- hard-blocks when full matrix fails
+- records module coverage snapshot for core Lane B modules
+- returns `status=passed|blocked` with deterministic `next_action`

@@ -948,8 +948,18 @@ def _load_gap_closure_payload_strict(path: Path, plan_id: str, *, code: str, sta
             }
         )
         payload["tasks"] = []
+    plan_id_value = _as_str(payload.get("plan_id"))
+    if not plan_id_value:
+        warnings.append(
+            {
+                "code": code,
+                "message": "GAP_CLOSURE_PLAN_PACKETS.json field 'plan_id' must be a non-empty string",
+                "stage": stage,
+                "artifact": str(path),
+            }
+        )
     payload.setdefault("schema_version", SCHEMA_VERSION)
-    payload["plan_id"] = _as_str(payload.get("plan_id")) or plan_id
+    payload["plan_id"] = plan_id_value or plan_id
     payload["generated_at"] = utc_now_iso()
     return payload, warnings
 
@@ -4638,6 +4648,17 @@ def command_status(req: OpRequest) -> dict[str, Any]:
         )
         status_degraded = True
         gap_closure_payload["tasks"] = []
+    if not _as_str(gap_closure_payload.get("plan_id")):
+        warnings.append(
+            {
+                "code": "status_artifact_invalid",
+                "message": "GAP_CLOSURE_PLAN_PACKETS.json field 'plan_id' must be a non-empty string",
+                "stage": "status",
+                "artifact": str(gap_closure_path),
+            }
+        )
+        status_degraded = True
+    gap_closure_payload["plan_id"] = _as_str(gap_closure_payload.get("plan_id")) or plan_id_for_gaps
 
     merged_plan = _merge_plan_with_gap_closure(
         plan_packets if isinstance(plan_packets, dict) else {},
