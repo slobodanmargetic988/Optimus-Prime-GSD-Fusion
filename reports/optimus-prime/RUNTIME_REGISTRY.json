@@ -4,16 +4,16 @@
       "active_testers": [],
       "base_url": "http://127.0.0.1:4173",
       "created_at": "2026-02-26T22:25:18Z",
-      "last_healthcheck_at": null,
+      "last_healthcheck_at": "2026-02-27T09:26:54Z",
       "lease_policy": "serialized",
       "mode": "shared",
       "owner": "optimus",
       "profile_id": "default-web",
       "runtime_id": "rt-shared-default-web",
-      "status": "starting",
-      "updated_at": "2026-02-26T22:25:25Z"
+      "status": "healthy",
+      "updated_at": "2026-02-27T09:26:54Z"
     }
   ],
   "schema_version": "1.0",
-  "updated_at": "2026-02-26T22:25:25Z"
+  "updated_at": "2026-02-27T09:26:54Z"
 }

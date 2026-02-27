@@ -62,6 +62,31 @@ def make_cfg(root: Path, **overrides):
     )
 
 
+def write_runtime_health(root: Path, *, gate_state: str = "healthy", both_sources_pass: bool = True) -> None:
+    path = root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "updated_at": MODULE.utc_now_iso(),
+                "test_train_mode": "final-stage",
+                "gate_state": gate_state,
+                "consecutive_passes": 2 if gate_state == "healthy" else 0,
+                "required_passes": 2,
+                "pipeline_checks": [],
+                "profile_checks": [],
+                "both_sources_pass": both_sources_pass,
+                "last_failure_fingerprint": None if gate_state == "healthy" else "pipeline|check|failed",
+                "next_heal_allowed_at": None,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 class DispatchWorkerPacketTests(unittest.TestCase):
     def test_slot_role_validation(self):
         MODULE.validate_slot_role("dev-1", "developer")
@@ -214,6 +239,7 @@ class DispatchWorkerPacketTests(unittest.TestCase):
     def test_train_mode_dispatch_writes_wave_fields_to_handoff(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            write_runtime_health(root, gate_state="healthy")
             cfg = make_cfg(
                 root,
                 slot="test-1",
@@ -243,6 +269,28 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertTrue(handoff["tester_must_not_start_runtime"])
             self.assertEqual(handoff["runtime_profile_id"], "default-web")
             self.assertEqual(handoff["runtime_lease_id"], "lease-xyz")
+
+    def test_test_train_mode_blocks_when_runtime_health_not_healthy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_runtime_health(root, gate_state="blocked", both_sources_pass=False)
+            cfg = make_cfg(
+                root,
+                slot="test-1",
+                role="tester",
+                branch_name="codex/test-1/MYO-156",
+                test_train_mode="final-stage",
+                runtime_strategy="external_url",
+                runtime_profile_id="default-web",
+                runtime_id="rt-external-default-web-11111111",
+                runtime_base_url="https://shared.example.test",
+                runtime_lease_id="lease-xyz",
+                tester_must_not_start_runtime=True,
+            )
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(cfg)
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("runtime health gate is not healthy", ctx.exception.message)
 
 
 if __name__ == "__main__":

@@ -47,6 +47,8 @@ Core actions:
   "runtime_id": "rt-shared-default-web",
   "lease_id": "uuid",
   "requested_status": "healthy",
+  "repair_force_fingerprint": "deploy|command_failed|exit_code=42",
+  "repair_force_delegate": false,
   "blocker_stage": "runtime|build|test|review|orchestration|...",
   "blocker_code": "runtime_start_failed",
   "blocker_category": "runtime|infra|env|test-train|dependency|code|test|review|orchestration|external|unknown",

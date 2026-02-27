@@ -28,11 +28,15 @@ if [[ -f "$PID_FILE" ]]; then
   rm -f "$PID_FILE"
 fi
 
-python3 "$REPO_ROOT/scripts/runtime/mock_runtime_server.py" >>"$LOG_FILE" 2>&1 &
+RUNTIME_HOST="$RUNTIME_HOST" RUNTIME_PORT="$RUNTIME_PORT" RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
+  python3 "$REPO_ROOT/scripts/runtime/mock_runtime_server.py" >>"$LOG_FILE" 2>&1 &
 pid="$!"
 echo "$pid" > "$PID_FILE"
 
 for _ in $(seq 1 60); do
+  if ! is_running "$pid"; then
+    break
+  fi
   if curl -fsS --max-time 2 "http://$RUNTIME_HOST:$RUNTIME_PORT/health" >/dev/null 2>&1; then
     started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     cat > "$BOOT_FILE" <<JSON
@@ -44,9 +48,6 @@ for _ in $(seq 1 60); do
 JSON
     echo "runtime started pid=$pid base_url=http://$RUNTIME_HOST:$RUNTIME_PORT"
     exit 0
-  fi
-  if ! is_running "$pid"; then
-    break
   fi
   sleep 0.25
 done

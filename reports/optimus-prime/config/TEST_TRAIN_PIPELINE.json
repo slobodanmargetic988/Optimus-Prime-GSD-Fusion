@@ -34,7 +34,7 @@
       "./scripts/runtime-heal.sh"
     ],
     "cooldown_sec": 300,
-    "max_attempts_per_fingerprint_window": 1,
+    "max_attempts_per_fingerprint_window": 5,
     "create_dev_task": true,
     "create_blocker": true
   },

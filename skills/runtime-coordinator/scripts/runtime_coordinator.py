@@ -99,6 +99,8 @@ class RuntimeInput:
     runtime_action_log_path: Path
     runtime_repair_tasks_path: Path
     runtime_locks_dir: Path
+    repair_force_fingerprint: str | None
+    repair_force_delegate: bool
 
 
 def utc_now_iso() -> str:
@@ -240,7 +242,7 @@ def _default_pipeline_config() -> dict[str, Any]:
         "repair": {
             "self_heal_commands": [],
             "cooldown_sec": 300,
-            "max_attempts_per_fingerprint_window": 1,
+            "max_attempts_per_fingerprint_window": 5,
             "create_dev_task": True,
             "create_blocker": True,
         },
@@ -399,6 +401,28 @@ def _read_repair_tasks(inp: RuntimeInput) -> dict[str, Any]:
 def _write_repair_tasks(inp: RuntimeInput, payload: dict[str, Any]) -> None:
     payload["updated_at"] = utc_now_iso()
     _write_json(inp.runtime_repair_tasks_path, payload)
+
+
+def _count_heal_attempts(inp: RuntimeInput, fingerprint: str) -> int:
+    if not inp.runtime_action_log_path.exists():
+        return 0
+    count = 0
+    for line in inp.runtime_action_log_path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            row = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        if (_str(row.get("action")) or "").lower() != "heal":
+            continue
+        if (_str(row.get("fingerprint")) or "") != fingerprint:
+            continue
+        count += 1
+    return count
 
 
 def _repair_task_id(fingerprint: str, now: datetime) -> str:
@@ -608,6 +632,8 @@ def build_input(payload: dict[str, Any]) -> RuntimeInput:
         _str(payload.get("runtime_locks_dir"))
         or str(reports_root / "runtime" / "locks")
     ).expanduser().resolve()
+    repair_force_fingerprint = _str(payload.get("repair_force_fingerprint"))
+    repair_force_delegate = _bool(payload.get("repair_force_delegate"), False)
 
     runtime_strategy_override = (_str(payload.get("runtime_strategy_override")) or None)
     if runtime_strategy_override and runtime_strategy_override not in STRATEGIES:
@@ -677,6 +703,8 @@ def build_input(payload: dict[str, Any]) -> RuntimeInput:
         runtime_action_log_path=runtime_action_log_path,
         runtime_repair_tasks_path=runtime_repair_tasks_path,
         runtime_locks_dir=runtime_locks_dir,
+        repair_force_fingerprint=repair_force_fingerprint,
+        repair_force_delegate=repair_force_delegate,
     )
 
 
@@ -1576,7 +1604,9 @@ def repair_runtime(inp: RuntimeInput) -> dict[str, Any]:
         required_passes = max(1, _int((health_cfg or {}).get("require_consecutive_passes"), 2))
         health_payload = _read_runtime_health(inp, required_passes)
         gate_state = _str(health_payload.get("gate_state")) or "blocked"
-        if gate_state == "healthy":
+        force_fingerprint = _str(inp.repair_force_fingerprint)
+        force_delegate = inp.repair_force_delegate
+        if gate_state == "healthy" and not force_fingerprint and not force_delegate:
             return {
                 "ok": True,
                 "tool": TOOL,
@@ -1595,27 +1625,14 @@ def repair_runtime(inp: RuntimeInput) -> dict[str, Any]:
         create_dev_task = _bool((repair_cfg or {}).get("create_dev_task"), True)
         create_blocker = _bool((repair_cfg or {}).get("create_blocker"), True)
 
-        fingerprint = _str(health_payload.get("last_failure_fingerprint")) or "runtime|repair|unknown"
+        fingerprint = force_fingerprint or _str(health_payload.get("last_failure_fingerprint")) or "runtime|repair|unknown"
         next_heal_allowed_at = _parse_iso_dt(health_payload.get("next_heal_allowed_at"))
         now = datetime.now(timezone.utc)
         cooldown_blocked = next_heal_allowed_at is not None and now < next_heal_allowed_at
 
-        payload = _read_repair_tasks(inp)
-        tasks_raw = payload.get("tasks")
-        tasks = tasks_raw if isinstance(tasks_raw, list) else []
-        attempted_recent = 0
-        for task in tasks:
-            if not isinstance(task, dict):
-                continue
-            if _str(task.get("dedup_key")) != fingerprint:
-                continue
-            created = _parse_iso_dt(task.get("created_at"))
-            if created is None:
-                continue
-            if created.date() == now.date():
-                attempted_recent += 1
+        attempted_recent = _count_heal_attempts(inp, fingerprint)
 
-        can_attempt = (not cooldown_blocked) and attempted_recent < max_attempts and bool(self_heal_commands)
+        can_attempt = (not force_delegate) and (not cooldown_blocked) and attempted_recent < max_attempts and bool(self_heal_commands)
         heal_results: list[dict[str, Any]] = []
         if can_attempt:
             for cmd_template in self_heal_commands:
@@ -1644,7 +1661,7 @@ def repair_runtime(inp: RuntimeInput) -> dict[str, Any]:
                 details={"commands": [item["command_template"] for item in heal_results]},
             )
             health_after = _evaluate_health(inp)
-            if health_after.get("gate_state") == "healthy":
+            if health_after.get("gate_state") == "healthy" and not force_delegate:
                 return {
                     "ok": True,
                     "tool": TOOL,
@@ -1682,6 +1699,8 @@ def repair_runtime(inp: RuntimeInput) -> dict[str, Any]:
                 "attempted_recent": attempted_recent,
                 "max_attempts_per_fingerprint_window": max_attempts,
                 "repair_task_id": _str(repair_task.get("repair_id")) if isinstance(repair_task, dict) else None,
+                "force_delegate": force_delegate,
+                "force_fingerprint": force_fingerprint,
             },
         )
         return {

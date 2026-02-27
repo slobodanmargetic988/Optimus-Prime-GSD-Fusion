@@ -141,6 +141,20 @@ def validate_slot_role(slot: str, role: str) -> None:
         raise ToolError("validation_error", "slot 'review-1' only supports role 'reviewer'", stage="validate")
 
 
+def _read_runtime_health(cfg: DispatchInput) -> dict[str, Any]:
+    path = cfg.repo_root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json"
+    if not path.exists():
+        raise ToolError(
+            "validation_error",
+            f"runtime health artifact missing for hard-gated test-train mode: {path}",
+            stage="validate",
+        )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ToolError("validation_error", "runtime health payload must be a JSON object", stage="validate")
+    return payload
+
+
 def validate_policy(cfg: DispatchInput) -> None:
     if cfg.slot not in SLOTS:
         raise ToolError("input_error", f"invalid slot '{cfg.slot}'", stage="input")
@@ -210,6 +224,15 @@ def validate_policy(cfg: DispatchInput) -> None:
                 "tester packets in test-train mode require runtime_lease_id",
                 stage="validate",
             )
+        if cfg.test_train_mode in {"final-stage", "forced-shared-env"}:
+            health = _read_runtime_health(cfg)
+            gate_state = str(health.get("gate_state") or "unknown").strip().lower()
+            if gate_state != "healthy":
+                raise ToolError(
+                    "validation_error",
+                    f"runtime health gate is not healthy for tester dispatch (gate_state={gate_state})",
+                    stage="validate",
+                )
 
     expected_prefix = f"codex/{cfg.slot}/"
     if not cfg.branch_name.startswith(expected_prefix):

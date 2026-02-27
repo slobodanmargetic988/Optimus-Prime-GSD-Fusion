@@ -125,6 +125,8 @@ class RuntimeCoordinatorTests(unittest.TestCase):
             "blocker_signature": overrides.get("blocker_signature"),
             "blocker_retryable": overrides.get("blocker_retryable"),
             "blocker_evidence_paths": overrides.get("blocker_evidence_paths"),
+            "repair_force_fingerprint": overrides.get("repair_force_fingerprint"),
+            "repair_force_delegate": overrides.get("repair_force_delegate"),
         }
         return MODULE.build_input(payload)
 
@@ -420,6 +422,70 @@ class RuntimeCoordinatorTests(unittest.TestCase):
             blockers_path = root / "reports" / "optimus-prime" / "BLOCKERS.jsonl"
             row = json.loads(blockers_path.read_text(encoding="utf-8").strip().splitlines()[-1])
             self.assertEqual(row["blocker_code"], "runtime_repair_required")
+
+    def test_repair_can_force_delegate_even_when_gate_healthy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo(tmp)
+            write_json(
+                root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json",
+                {
+                    "schema_version": "1.0",
+                    "updated_at": MODULE.utc_now_iso(),
+                    "test_train_mode": "final-stage",
+                    "gate_state": "healthy",
+                    "consecutive_passes": 2,
+                    "required_passes": 2,
+                    "pipeline_checks": [],
+                    "profile_checks": [],
+                    "both_sources_pass": True,
+                    "last_failure_fingerprint": None,
+                    "next_heal_allowed_at": None,
+                },
+            )
+            out = MODULE.run(
+                self._build_input(
+                    root,
+                    action="repair",
+                    test_train_mode="final-stage",
+                    repair_force_fingerprint="deploy|command_failed|exit_code=42",
+                    repair_force_delegate=True,
+                )
+            )
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["result"], "delegated")
+            self.assertEqual(out["repair_task"]["dedup_key"], "deploy|command_failed|exit_code=42")
+
+    def test_repair_respects_max_attempt_counter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo(tmp)
+            pipeline_path = root / "reports" / "optimus-prime" / "config" / "TEST_TRAIN_PIPELINE.json"
+            pipeline = json.loads(pipeline_path.read_text(encoding="utf-8"))
+            pipeline["health"]["checks"] = [{"id": "always-fail", "type": "cmd", "value": "false", "timeout_sec": 5}]
+            pipeline["repair"]["self_heal_commands"] = ["true"]
+            pipeline["repair"]["max_attempts_per_fingerprint_window"] = 1
+            write_json(pipeline_path, pipeline)
+
+            MODULE.run(self._build_input(root, action="health", test_train_mode="final-stage"))
+            health = json.loads((root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json").read_text(encoding="utf-8"))
+            fingerprint = health["last_failure_fingerprint"]
+            append_jsonl(
+                root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_ACTION_LOG.jsonl",
+                [
+                    {
+                        "timestamp": MODULE.utc_now_iso(),
+                        "action": "heal",
+                        "result": "ok",
+                        "runtime_id": None,
+                        "fingerprint": fingerprint,
+                        "details": {"source": "test"},
+                    }
+                ],
+            )
+
+            out = MODULE.run(self._build_input(root, action="repair", test_train_mode="final-stage"))
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["result"], "delegated")
+            self.assertIsNotNone(out.get("repair_task"))
 
     def test_health_lock_conflict_raises_locked_error(self):
         with tempfile.TemporaryDirectory() as tmp:

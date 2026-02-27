@@ -305,6 +305,36 @@ class TestTrainManagerTests(unittest.TestCase):
             self.assertTrue(out["ok"])
             self.assertEqual(out["status"], "success")
 
+    def test_deploy_failure_forces_repair_delegation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            pipeline_path = root / "reports" / "optimus-prime" / "config" / "TEST_TRAIN_PIPELINE.json"
+            pipeline = json.loads(pipeline_path.read_text(encoding="utf-8"))
+            pipeline["deploy"]["command"] = "false"
+            pipeline["repair"]["self_heal_commands"] = ["true"]
+            pipeline["repair"]["max_attempts_per_fingerprint_window"] = 5
+            write_text(pipeline_path, json.dumps(pipeline, indent=2) + "\n")
+
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            out = run_action(root, action="deploy_test_branch", test_train_mode="final-stage")
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["status"], "failed")
+            repair = out.get("repair") or {}
+            self.assertEqual(repair.get("result"), "delegated")
+            self.assertIsNotNone((repair.get("repair_task") or {}).get("repair_id"))
+
+    def test_deploy_single_flight_lock_conflict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            lock_path = root / "reports" / "optimus-prime" / "runtime" / "locks" / "deploy-test-branch.lock"
+            write_text(lock_path, json.dumps({"created_at": MODULE.utc_now_iso(), "lock_name": "deploy-test-branch"}) + "\n")
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                run_action(root, action="deploy_test_branch", test_train_mode="final-stage")
+            self.assertEqual(ctx.exception.code, "locked")
+
 
 if __name__ == "__main__":
     unittest.main()

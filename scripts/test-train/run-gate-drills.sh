@@ -44,13 +44,25 @@ FILES_TO_BACKUP=(
   "$BLOCKER_ADAPTATION_PATH"
   "$DEPLOY_STATE_PATH"
   "$BOOT_STATE_PATH"
-  "$RUNTIME_LOG_PATH"
-  "$RUNTIME_PID_PATH"
 )
 
 timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
 }
+
+runtime_pid_active() {
+  if [[ ! -f "$RUNTIME_PID_PATH" ]]; then
+    return 1
+  fi
+  local pid
+  pid="$(cat "$RUNTIME_PID_PATH" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+PRE_EXISTING_RUNTIME_ACTIVE=0
+if runtime_pid_active; then
+  PRE_EXISTING_RUNTIME_ACTIVE=1
+fi
 
 backup_key() {
   python3 - "$1" <<'PY'
@@ -86,9 +98,13 @@ restore_file() {
 
 restore_workspace() {
   set +e
+  "$TTCTL" stop >/dev/null 2>&1 || true
   for path in "${FILES_TO_BACKUP[@]}"; do
     restore_file "$path"
   done
+  if [[ "$PRE_EXISTING_RUNTIME_ACTIVE" == "1" ]]; then
+    "$TTCTL" start >/dev/null 2>&1 || "$REPO_ROOT/scripts/runtime/start.sh" >/dev/null 2>&1 || true
+  fi
   rm -rf "$BACKUP_DIR"
 }
 trap restore_workspace EXIT
@@ -204,9 +220,7 @@ reset_drill_state() {
     "$ATTEMPTS_PATH" \
     "$WAVE_LOG_PATH" \
     "$DEPLOY_STATE_PATH" \
-    "$BOOT_STATE_PATH" \
-    "$RUNTIME_LOG_PATH" \
-    "$RUNTIME_PID_PATH"
+    "$BOOT_STATE_PATH"
 }
 
 assert_equals() {
@@ -237,8 +251,8 @@ assert_ge() {
   echo "## Scenario 1: Healthy path (bootstrap -> start -> health x2 -> gate)"
 } > "$REPORT_PATH"
 
-reset_drill_state
 "$TTCTL" stop >/dev/null || true
+reset_drill_state
 
 "$TTCTL" bootstrap >/dev/null
 "$TTCTL" start >/dev/null
