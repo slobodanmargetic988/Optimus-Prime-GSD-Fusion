@@ -12,7 +12,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +83,8 @@ TERMINAL_HARD_STOPS = {
     "all_rate_gates_blocking",
     "operator_stop",
 }
+
+STALE_IN_PROGRESS_TIMEOUT_SEC = 900
 
 
 class OpError(Exception):
@@ -393,6 +395,7 @@ def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str,
                 "requirement_ids": req_ids,
                 "status": "queued",
                 "owner_slot": None,
+                "last_progress_at": None,
                 "attempts": {"dev": 0, "test": 0, "review": 0},
                 "evidence": {
                     "task_evidence_ref": evidence_ref,
@@ -731,6 +734,8 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         evidence["verify_results"] = verify_results
         test_block = payload.get("test") if isinstance(payload.get("test"), dict) else {}
         evidence["uat_results"] = test_block.get("uat_results") if isinstance(test_block.get("uat_results"), list) else []
+        if not _as_str(task.get("last_progress_at")):
+            task["last_progress_at"] = _as_str(payload.get("updated_at")) or utc_now_iso()
 
         gate = payload["gate"]
         review = payload["review"]
@@ -1020,7 +1025,87 @@ def _recover_gap_artifacts_for_build(
                     "artifact": str(gap_closure_path),
                 }
             )
+        prior_open_gap_ids = [
+            gap_id
+            for gap_id in (_as_str(item) for item in build_state.get("open_gap_ids", []))
+            if gap_id
+        ]
         gaps_payload, gap_closure_payload = _refresh_gap_artifacts(repo_root, plan_packets, task_state, build_state)
+        if prior_open_gap_ids:
+            existing_rows = gaps_payload.get("gaps") if isinstance(gaps_payload.get("gaps"), list) else []
+            existing_by_id = {
+                _as_str(item.get("gap_id")): item
+                for item in existing_rows
+                if isinstance(item, dict) and _as_str(item.get("gap_id"))
+            }
+            preserved_rows: list[dict[str, Any]] = []
+            phase_id = _as_str(build_state.get("active_gap_closure_phase_id")) or "phase-1"
+            now = utc_now_iso()
+            for gap_id in prior_open_gap_ids:
+                if gap_id in existing_by_id:
+                    continue
+                row = _default_gap_row(
+                    plan_id=plan_id,
+                    phase_id=phase_id,
+                    task_id="TASK-UNKNOWN",
+                    requirement_id=None,
+                    result="blocked",
+                    evidence_ref=str(TASK_EXECUTION_STATE_JSON),
+                    reason="preserved open gap from prior build state after artifact recovery",
+                    gap_id=gap_id,
+                )
+                row["updated_at"] = now
+                preserved_rows.append(row)
+            if preserved_rows:
+                existing_rows.extend(preserved_rows)
+                existing_rows.sort(key=lambda item: (_as_str(item.get("status")) != "open", _as_str(item.get("gap_id")) or ""))
+                gaps_payload["gaps"] = existing_rows
+                _atomic_write_json(gaps_path, gaps_payload)
+                warnings.append(
+                    {
+                        "code": "gaps_artifact_recovered",
+                        "message": f"Preserved {len(preserved_rows)} sticky open gap(s) from build state during recovery",
+                        "stage": "build_preflight",
+                        "artifact": str(gaps_path),
+                    }
+                )
+            closure_tasks = gap_closure_payload.get("tasks") if isinstance(gap_closure_payload.get("tasks"), list) else []
+            existing_closure_by_source = {
+                _as_str(item.get("source_gap_id"))
+                for item in closure_tasks
+                if isinstance(item, dict) and _as_str(item.get("source_gap_id"))
+            }
+            closure_added = False
+            for row in existing_rows:
+                if not isinstance(row, dict):
+                    continue
+                gap_id = _as_str(row.get("gap_id"))
+                if not gap_id or _as_str(row.get("status")) != "open":
+                    continue
+                if gap_id in existing_closure_by_source:
+                    continue
+                task_id = _as_str(row.get("task_id")) or "TASK-UNKNOWN"
+                phase_id = _as_str(row.get("phase_id")) or "phase-1"
+                closure_task_id = _as_str(row.get("closure_task_id")) or f"GAPFIX-{_sha256(gap_id)[:8].upper()}"
+                depends_on = [task_id] if task_id and not task_id.startswith("GAPFIX-") and task_id != "TASK-UNKNOWN" else []
+                closure_tasks.append(
+                    {
+                        "task_id": closure_task_id,
+                        "phase_id": phase_id,
+                        "source_gap_id": gap_id,
+                        "title": f"Close gap {gap_id}",
+                        "requirement_ids": [],
+                        "depends_on": depends_on,
+                        "must_haves": [f"Resolve {row.get('reason') or gap_id}"],
+                        "verify_commands": ["python3 -m pytest"],
+                        "is_gap_closure": True,
+                    }
+                )
+                existing_closure_by_source.add(gap_id)
+                closure_added = True
+            if closure_added:
+                gap_closure_payload["tasks"] = closure_tasks
+                _atomic_write_json(gap_closure_path, gap_closure_payload)
         _ensure_gap_closure_task_state(repo_root, task_state, gap_closure_payload, plan_id)
         build_state["gap_artifact_recovery"] = {
             "last_recovery_at": utc_now_iso(),
@@ -1338,6 +1423,7 @@ def _ensure_gap_closure_task_state(repo_root: Path, task_state: dict[str, Any], 
                 "requirement_ids": req_ids,
                 "status": "queued",
                 "owner_slot": None,
+                "last_progress_at": None,
                 "attempts": {"dev": 0, "test": 0, "review": 0},
                 "evidence": {
                     "task_evidence_ref": str(rel),
@@ -1565,6 +1651,104 @@ def _active_workers_count(repo_root: Path) -> int | None:
         if state in {"running", "active", "busy"}:
             active += 1
     return active
+
+
+def _active_worker_slots(repo_root: Path) -> set[str]:
+    reports = repo_root / "reports" / "optimus-prime"
+    registry_path = reports / "WORKER_REGISTRY.json"
+    if not registry_path.exists():
+        return set()
+    try:
+        registry = _read_json(registry_path)
+    except OpError:
+        return set()
+    workers: list[dict[str, Any]] = []
+    if isinstance(registry, dict):
+        raw = registry.get("workers")
+        if isinstance(raw, list):
+            workers = [item for item in raw if isinstance(item, dict)]
+        elif isinstance(raw, dict):
+            workers = [item for item in raw.values() if isinstance(item, dict)]
+    elif isinstance(registry, list):
+        workers = [item for item in registry if isinstance(item, dict)]
+    out: set[str] = set()
+    for worker in workers:
+        slot = _as_str(worker.get("slot"))
+        if not slot:
+            continue
+        state = (
+            _as_str(worker.get("state"))
+            or _as_str(worker.get("session_state"))
+            or _as_str(worker.get("status"))
+            or ""
+        ).lower()
+        if state in {"running", "active", "busy"}:
+            out.add(slot)
+    return out
+
+
+def _recover_stale_in_progress_tasks(repo_root: Path, task_state: dict[str, Any], build_state: dict[str, Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    policy = build_state.get("stale_in_progress_policy")
+    if not isinstance(policy, dict):
+        policy = {"timeout_sec": STALE_IN_PROGRESS_TIMEOUT_SEC}
+    timeout_sec = max(60, _coerce_nonneg_int(policy.get("timeout_sec"), default=STALE_IN_PROGRESS_TIMEOUT_SEC))
+    build_state["stale_in_progress_policy"] = {"timeout_sec": timeout_sec}
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=timeout_sec)
+    active_slots = _active_worker_slots(repo_root)
+    for task in task_state.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
+        status = (_as_str(task.get("status")) or "").lower()
+        if status not in {"dev_in_progress", "test_in_progress", "review_in_progress"}:
+            continue
+        owner_slot = _as_str(task.get("owner_slot"))
+        progress_at_raw = _as_str(task.get("last_progress_at")) or _as_str(task.get("updated_at"))
+        progress_at = _parse_iso_utc(progress_at_raw)
+        stale_reason: str | None = None
+        if progress_at is None:
+            stale_reason = "missing_last_progress_at"
+        elif progress_at <= stale_cutoff:
+            stale_reason = "timeout_elapsed"
+        if stale_reason is None:
+            continue
+        if owner_slot and owner_slot in active_slots:
+            warnings.append(
+                {
+                    "code": "stale_in_progress_blocked",
+                    "message": (
+                        f"task {task_id} appears stale in {status} but slot {owner_slot} is still active; "
+                        "automatic recovery skipped"
+                    ),
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "status": status,
+                    "owner_slot": owner_slot,
+                    "reason": stale_reason,
+                }
+            )
+            continue
+        recovered_status = {
+            "dev_in_progress": "queued",
+            "test_in_progress": "dev_done",
+            "review_in_progress": "test_done",
+        }[status]
+        task["status"] = recovered_status
+        task["owner_slot"] = None
+        task["last_progress_at"] = utc_now_iso()
+        warnings.append(
+            {
+                "code": "stale_in_progress_recovered",
+                "message": f"recovered stale task {task_id}: {status} -> {recovered_status}",
+                "stage": "build_loop",
+                "task_id": task_id,
+                "from_status": status,
+                "to_status": recovered_status,
+                "reason": stale_reason,
+            }
+        )
+    return warnings
 
 def _run(cmd: list[str], *, cwd: Path, stdin_text: str | None = None) -> tuple[int, str, str]:
     proc = subprocess.run(
@@ -2617,6 +2801,9 @@ def _fresh_build_state_payload() -> dict[str, Any]:
             "backup_paths": [],
             "reason": None,
         },
+        "stale_in_progress_policy": {
+            "timeout_sec": STALE_IN_PROGRESS_TIMEOUT_SEC,
+        },
         "state_recovery": {
             "last_recovery_at": None,
             "reason": None,
@@ -2664,6 +2851,12 @@ def _load_build_state(path: Path) -> dict[str, Any]:
             "recovered_files": [],
             "backup_paths": [],
             "reason": None,
+        },
+    )
+    payload.setdefault(
+        "stale_in_progress_policy",
+        {
+            "timeout_sec": STALE_IN_PROGRESS_TIMEOUT_SEC,
         },
     )
     payload.setdefault(
@@ -2926,6 +3119,7 @@ def _apply_handoff_updates(repo_root: Path, task_state: dict[str, Any], build_st
         if task_evidence_ref:
             evidence["task_evidence_ref"] = task_evidence_ref
             evidence["dev_ready_evidence_ref"] = task_evidence_ref
+        task["last_progress_at"] = utc_now_iso()
 
         result = (_as_str(row.get("result")) or _as_str(row.get("status")) or "").lower()
         if result in {"blocked", "failed", "error", "dispatch_failed"}:
@@ -3008,6 +3202,7 @@ def _dispatch_task_packet(
     if _as_bool_field(result.get("ok")):
         task["status"] = cfg["status"]
         task["owner_slot"] = cfg["slot"]
+        task["last_progress_at"] = utc_now_iso()
         attempts = task.get("attempts")
         if not isinstance(attempts, dict):
             attempts = {"dev": 0, "test": 0, "review": 0}
@@ -3016,6 +3211,7 @@ def _dispatch_task_packet(
         return {"ok": True, "task_id": task_id, "stage": stage, "dispatch": result}
     task["status"] = "blocked"
     task["owner_slot"] = None
+    task["last_progress_at"] = utc_now_iso()
     blockers = task.get("blockers")
     if not isinstance(blockers, list):
         blockers = []
@@ -3971,6 +4167,9 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 warnings.append(warning)
                 cycle_local_warnings.append(warning)
             else:
+                stale_recovery_warnings = _recover_stale_in_progress_tasks(req.repo_root, task_state, build_state)
+                warnings.extend(stale_recovery_warnings)
+                cycle_local_warnings.extend(stale_recovery_warnings)
                 max_running_workers = int(build_state.get("dispatch_window", {}).get("max_running_workers", 6))
                 active_workers = _active_workers_count(req.repo_root)
                 if active_workers is not None and active_workers >= max_running_workers:
@@ -4428,6 +4627,17 @@ def command_status(req: OpRequest) -> dict[str, Any]:
             }
         )
         status_degraded = True
+    if not isinstance(gap_closure_payload.get("tasks"), list):
+        warnings.append(
+            {
+                "code": "status_artifact_invalid",
+                "message": "GAP_CLOSURE_PLAN_PACKETS.json field 'tasks' must be a list",
+                "stage": "status",
+                "artifact": str(gap_closure_path),
+            }
+        )
+        status_degraded = True
+        gap_closure_payload["tasks"] = []
 
     merged_plan = _merge_plan_with_gap_closure(
         plan_packets if isinstance(plan_packets, dict) else {},

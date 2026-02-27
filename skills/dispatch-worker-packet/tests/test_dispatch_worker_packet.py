@@ -345,6 +345,85 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "validation_error")
             self.assertIn("unreadable", ctx.exception.message)
 
+    def test_dispatch_runtime_health_non_object_payload_validation_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            health_path = root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json"
+            health_path.parent.mkdir(parents=True, exist_ok=True)
+            health_path.write_text(json.dumps(["not-an-object"], indent=2) + "\n", encoding="utf-8")
+            cfg = make_cfg(
+                root,
+                slot="test-1",
+                role="tester",
+                branch_name="codex/test-1/MYO-156",
+                test_train_mode="final-stage",
+                runtime_strategy="external_url",
+                runtime_profile_id="default-web",
+                runtime_id="rt-external-default-web-11111111",
+                runtime_base_url="https://shared.example.test",
+                runtime_lease_id="lease-xyz",
+                tester_must_not_start_runtime=True,
+            )
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(cfg)
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("must be a JSON object", ctx.exception.message)
+
+    def test_dispatch_runtime_health_missing_gate_fields_validation_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            health_path = root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json"
+            health_path.parent.mkdir(parents=True, exist_ok=True)
+            health_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "updated_at": MODULE.utc_now_iso(),
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cfg = make_cfg(
+                root,
+                slot="test-1",
+                role="tester",
+                branch_name="codex/test-1/MYO-156",
+                test_train_mode="final-stage",
+                runtime_strategy="external_url",
+                runtime_profile_id="default-web",
+                runtime_id="rt-external-default-web-11111111",
+                runtime_base_url="https://shared.example.test",
+                runtime_lease_id="lease-xyz",
+                tester_must_not_start_runtime=True,
+            )
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(cfg)
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("runtime health gate is not healthy", ctx.exception.message)
+
+    def test_dispatch_hard_gate_contract_for_flex_tester_matches_tester(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_runtime_health(root, gate_state="healthy")
+            cfg = make_cfg(
+                root,
+                slot="test-2",
+                role="flex-tester",
+                branch_name="codex/test-2/MYO-156",
+                test_train_mode="final-stage",
+                runtime_strategy="external_url",
+                runtime_profile_id="default-web",
+                runtime_id="rt-external-default-web-11111111",
+                runtime_base_url="https://shared.example.test",
+                tester_must_not_start_runtime=True,
+            )
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(cfg)
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("runtime_lease_id", ctx.exception.message)
+
     def test_op_build_mode_requires_plan_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = make_cfg(Path(tmp), op_build_mode=True)
