@@ -51,8 +51,13 @@ def run_update(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Update Lane C managed install from a bundle.")
-    parser.add_argument("--bundle-dir", required=True)
+    parser = argparse.ArgumentParser(description="Update Lane C managed install from a bundle or private release.")
+    parser.add_argument("--bundle-dir")
+    parser.add_argument("--repo-owner")
+    parser.add_argument("--repo-name")
+    parser.add_argument("--channel", choices=["prerelease", "stable"], default="prerelease")
+    parser.add_argument("--version")
+    parser.add_argument("--github-token")
     parser.add_argument("--mode", choices=["global", "local"], default="global")
     parser.add_argument("--repo-root")
     parser.add_argument("--codex-home")
@@ -78,6 +83,11 @@ def main() -> int:
     args = parse_args()
     payload = {
         "bundle_dir": args.bundle_dir,
+        "repo_owner": args.repo_owner,
+        "repo_name": args.repo_name,
+        "channel": args.channel,
+        "version": args.version,
+        "github_token": args.github_token,
         "mode": args.mode,
         "repo_root": args.repo_root,
         "codex_home": args.codex_home,

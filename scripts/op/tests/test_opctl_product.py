@@ -54,3 +54,22 @@ def test_workflow_command_delegates_to_opctl(monkeypatch: pytest.MonkeyPatch):
     assert "--command" in seen["cmd"]
     assert "/op-status" in seen["cmd"]
 
+
+def test_doctor_command_uses_lifecycle_handler(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+    monkeypatch.setattr(
+        MODULE,
+        "run_doctor",
+        lambda payload: {
+            "schema_version": "1.0",
+            "ok": True,
+            "status": "passed",
+            "summary": "doctor passed",
+            "warnings": [],
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(sys, "argv", ["opctl_product.py", "doctor", "--mode", "global", "--json-pretty"])
+    rc = MODULE.main()
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert rc == 0
+    assert payload["status"] == "passed"

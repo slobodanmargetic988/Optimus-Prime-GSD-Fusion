@@ -20,8 +20,8 @@ Full GSD fusion capabilities: planning lifecycle, plan gates, test-first contrac
 ## Lane C (in progress)
 Installable product packaging, command UX, diagnostics, docs, and release framework.
 
-- Implemented now (start): deterministic GitHub-first release bundle builder + checksum artifacts, install/update/uninstall/doctor commands, and product `opctl` wrapper.
-- Pending next: complete config/profile resolution depth, release checklist automation, and full install smoke matrix across target platforms.
+- Implemented now: deterministic GitHub-first release bundle builder + checksum artifacts, install/update/uninstall/doctor commands, product `opctl` wrapper, private release fetch/auth installer path, release publish workflow, and private smoke matrix workflow.
+- Pending next: first real private prerelease execution (`vX.Y.Z-rc.N`) and green smoke evidence across macOS/Linux + global/local.
 
 - Spec: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_C_INSTALLABLE_PRODUCT_PLAN.md`
 - Status: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_C_IMPLEMENTATION_STATUS.md`

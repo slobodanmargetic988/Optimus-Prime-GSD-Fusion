@@ -7,7 +7,7 @@ Current implemented lane:
 - Lane B (core): generic runtime coordination + blocker intelligence (`runtime-coordinator`, runtime-aware packets/snapshots).
 - Lane B add-on: historical thread/token audit (`THREAD_HISTORY.log` + `thread-token-audit` skill).
 - Lane B command surface: deterministic `/op-*` planning + autonomous build flow (`/op-map-codebase`, `/op-new-project`, `/op-plan`, `/op-initialize`, `/op-build`, `/op-health`, `/op-status`, `/op-resume`) in provisional hardening.
-- Lane C (start): GitHub-first installable product foundation (bundle builder + install/update/uninstall/doctor + product CLI wrapper).
+- Lane C (in progress): private-first installable product flow (release fetch/auth + install/update/uninstall/doctor + product CLI wrapper + release/smoke workflows).
 
 See:
 - `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_PHASE1_PLAN.md`
@@ -116,22 +116,34 @@ Gate contract:
 - records module coverage snapshot for core Lane B modules
 - returns `status=passed|blocked` with deterministic `next_action`
 
-## Lane C Installable Product
+## Lane C Installable Product (Private-First)
 
-Lane C command/tooling added:
+Lane C command/tooling:
 
 - release bundle builder: `python3 -m scripts.release.build_lane_c_bundle`
+- release readiness validator: `python3 -m scripts.release.validate_release_readiness`
 - install command: `python3 scripts/install/op_install.py`
 - update command: `python3 scripts/install/op_update.py`
 - uninstall command: `python3 scripts/install/op_uninstall.py`
 - doctor command: `python3 scripts/install/op_doctor.py`
 - product wrapper: `python3 scripts/op/opctl_product.py`
 
+Installer/update source modes:
+
+- local bundle: `--bundle-dir`
+- private GitHub release: `--repo-owner --repo-name --channel [--version]`
+
+Private release auth resolution:
+
+1. `gh auth token`
+2. `GH_TOKEN`
+3. `GITHUB_TOKEN`
+
 Product CLI behavior:
 
 - `opctl /op-*` delegates to the existing Lane B workflow contract unchanged.
-- `opctl doctor` returns deterministic readiness report.
-- `opctl update` performs manual explicit bundle update with checksum enforcement.
+- `opctl doctor` returns deterministic readiness report with manifest + checksum integrity checks.
+- `opctl update` performs manual explicit update with checksum enforcement.
 - `opctl uninstall` removes only managed install paths.
 - `opctl version` returns `version/build/commit`.
 
@@ -140,6 +152,15 @@ Config/profile model:
 - deterministic precedence: CLI args -> project config (`<repo>/.optimus-prime/config.json`) -> global config (`$XDG_CONFIG_HOME/optimus-prime/config.json` or `~/.optimus-prime/config/config.json`) -> defaults
 - profiles: `quality`, `balanced`, `budget`
 - config validation returns field-level fix guidance via deterministic `config_error` details
+
+Deterministic install/update error codes:
+
+- `auth_error`
+- `release_not_found`
+- `asset_missing`
+- `download_error`
+- `checksum_mismatch`
+- `doctor_blocked`
 
 Primary docs:
 

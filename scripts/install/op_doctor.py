@@ -27,8 +27,10 @@ from scripts.install.common import (
     normalize_managed_paths,
     read_json,
     resolve_context,
+    sha256_file,
     standard_response,
     utc_now_iso,
+    verify_installed_payload_integrity,
 )
 from scripts.install.config import resolve_effective_config
 
@@ -150,6 +152,101 @@ def _check_state_and_managed_paths(state_path: Path) -> tuple[dict[str, Any], di
     )
 
 
+def _resolve_install_root(state: dict[str, Any], fallback: Path) -> Path:
+    manifest_path = as_str(state.get("installed_manifest_path"))
+    if manifest_path:
+        candidate = Path(manifest_path).expanduser().resolve().parent.parent
+        if candidate.exists():
+            return candidate
+    managed = normalize_managed_paths(state)
+    if managed:
+        return Path(managed[0]).expanduser().resolve()
+    return fallback
+
+
+def _check_manifest_and_checksums(state: dict[str, Any], install_root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    manifest_path = Path(
+        as_str(state.get("installed_manifest_path")) or str(install_root / ".manifest" / "bundle_manifest.json")
+    ).expanduser().resolve()
+    checksums_path = (install_root / ".manifest" / "SHA256SUMS.json").resolve()
+
+    manifest_payload: dict[str, Any] | None = None
+    checksums_payload: dict[str, Any] | None = None
+    manifest_passed = True
+    checksum_passed = True
+    details_manifest: dict[str, Any] = {"manifest_path": str(manifest_path), "checksums_path": str(checksums_path)}
+    details_checksums: dict[str, Any] = {"install_root": str(install_root)}
+
+    try:
+        parsed_manifest = read_json(manifest_path)
+        if not isinstance(parsed_manifest, dict):
+            raise InstallError("validation_error", "installed manifest must be object", stage="doctor")
+        manifest_payload = parsed_manifest
+    except InstallError as exc:
+        manifest_passed = False
+        details_manifest["error"] = exc.message
+
+    try:
+        parsed_checksums = read_json(checksums_path)
+        if not isinstance(parsed_checksums, dict):
+            raise InstallError("validation_error", "installed checksums must be object", stage="doctor")
+        checksums_payload = parsed_checksums
+    except InstallError as exc:
+        manifest_passed = False
+        details_manifest["error"] = details_manifest.get("error") or exc.message
+
+    expected_manifest_sha = as_str(state.get("installed_manifest_sha256"))
+    expected_checksums_sha = as_str(state.get("installed_checksums_sha256"))
+    if manifest_passed and expected_manifest_sha:
+        actual_manifest_sha = sha256_file(manifest_path)
+        details_manifest["expected_manifest_sha256"] = expected_manifest_sha
+        details_manifest["actual_manifest_sha256"] = actual_manifest_sha
+        if actual_manifest_sha != expected_manifest_sha:
+            manifest_passed = False
+            details_manifest["error"] = "installed manifest checksum drift detected"
+    if manifest_passed and expected_checksums_sha:
+        actual_checksums_sha = sha256_file(checksums_path)
+        details_manifest["expected_checksums_sha256"] = expected_checksums_sha
+        details_manifest["actual_checksums_sha256"] = actual_checksums_sha
+        if actual_checksums_sha != expected_checksums_sha:
+            manifest_passed = False
+            details_manifest["error"] = "installed checksum file drift detected"
+
+    if manifest_passed and manifest_payload is not None and checksums_payload is not None:
+        try:
+            checksum_passed, mismatches = verify_installed_payload_integrity(install_root, manifest_payload, checksums_payload)
+            details_checksums["mismatches"] = mismatches
+        except InstallError as exc:
+            checksum_passed = False
+            details_checksums["mismatches"] = []
+            details_checksums["error"] = exc.message
+    else:
+        checksum_passed = False
+        details_checksums["mismatches"] = []
+        details_checksums["error"] = "manifest validation failed; checksum audit skipped"
+
+    return (
+        {
+            "id": "managed_manifest_integrity",
+            "passed": manifest_passed,
+            "severity": "high",
+            "fixable": False,
+            "message": "installed manifest/checksum metadata integrity",
+            "details": details_manifest,
+        },
+        {
+            "id": "managed_files_checksum_integrity",
+            "passed": checksum_passed,
+            "severity": "high",
+            "fixable": False,
+            "message": "installed managed file checksum audit",
+            "details": details_checksums,
+        },
+        manifest_payload,
+        checksums_payload,
+    )
+
+
 def _repair(ctx, state: dict[str, Any] | None) -> list[dict[str, Any]]:
     repairs: list[dict[str, Any]] = []
     for path in [ctx.config_dir, ctx.state_path.parent, ctx.install_root.parent, ctx.bin_dir, ctx.codex_home]:
@@ -161,7 +258,8 @@ def _repair(ctx, state: dict[str, Any] | None) -> list[dict[str, Any]]:
         state["last_doctor_at"] = utc_now_iso()
         atomic_write_json(ctx.state_path, state)
         repairs.append({"action": "normalize_state", "path": str(ctx.state_path)})
-        install_root = Path(as_str(state.get("managed_paths")[0]) or str(ctx.install_root)).expanduser()
+        first_managed = managed[0] if managed else None
+        install_root = Path(as_str(first_managed) or str(ctx.install_root)).expanduser()
         product_entry = install_root / "scripts" / "op" / "opctl_product.py"
         if product_entry.exists():
             opctl = ctx.bin_dir / "opctl"
@@ -206,6 +304,11 @@ def run_doctor(payload: dict[str, Any]) -> dict[str, Any]:
     ]
     state_check, state_payload = _check_state_and_managed_paths(ctx.state_path)
     checks.append(state_check)
+    if state_payload is not None:
+        install_root = _resolve_install_root(state_payload, ctx.install_root)
+        manifest_check, checksum_check, _, _ = _check_manifest_and_checksums(state_payload, install_root)
+        checks.append(manifest_check)
+        checks.append(checksum_check)
 
     repairs: list[dict[str, Any]] = []
     if repair:
@@ -234,12 +337,39 @@ def run_doctor(payload: dict[str, Any]) -> dict[str, Any]:
         ]
         state_check, _ = _check_state_and_managed_paths(ctx.state_path)
         checks.append(state_check)
+        try:
+            reloaded_state = load_install_state(ctx.state_path)
+        except InstallError:
+            reloaded_state = None
+        if reloaded_state is not None:
+            install_root = _resolve_install_root(reloaded_state, ctx.install_root)
+            manifest_check, checksum_check, _, _ = _check_manifest_and_checksums(reloaded_state, install_root)
+            checks.append(manifest_check)
+            checks.append(checksum_check)
 
     passed = all(bool(item.get("passed")) for item in checks)
     status = "passed" if passed else "blocked"
     errors = []
     if not passed:
+        failed_ids = {str(item.get("id")) for item in checks if not bool(item.get("passed"))}
+        if "managed_files_checksum_integrity" in failed_ids:
+            errors.append(
+                {
+                    "code": "managed_checksum_mismatch",
+                    "message": "installed managed files failed checksum audit",
+                    "stage": "doctor",
+                }
+            )
+        if "managed_manifest_integrity" in failed_ids:
+            errors.append(
+                {
+                    "code": "manifest_integrity_failed",
+                    "message": "installed manifest/checksum metadata integrity check failed",
+                    "stage": "doctor",
+                }
+            )
         errors = [
+            *errors,
             {
                 "code": "doctor_blocked",
                 "message": "one or more readiness checks failed",

@@ -1,54 +1,61 @@
 # Lane C Troubleshooting
 
-## `checksum_mismatch` during install/update
+## `auth_error`
 
 Cause:
-
-- bundle file corruption
-- wrong `SHA256SUMS.json` for payload
+- no usable GitHub token for private releases
 
 Fix:
+1. Run `gh auth login`, or
+2. Set `GH_TOKEN` or `GITHUB_TOKEN`.
 
-1. Rebuild bundle with `build_lane_c_bundle.py`.
-2. Re-run install/update using the rebuilt bundle directory.
-
-## `state_missing` on update/uninstall
+## `release_not_found`
 
 Cause:
-
-- install state not found at expected path
+- selected channel/version does not exist
 
 Fix:
+1. Verify channel (`prerelease|stable`).
+2. Verify `--version` matches release tag (accepts `vX.Y.Z` or `X.Y.Z` forms).
 
-1. For global mode verify `~/.optimus-prime/install/INSTALL_STATE.json`.
-2. For local mode verify `<repo>/.optimus-prime/install/INSTALL_STATE.json`.
-3. If missing, reinstall first.
+## `asset_missing`
 
-## `doctor` returns blocked
+Cause:
+- release missing required assets (`*.tar.gz`, `bundle_manifest.json`, `SHA256SUMS.json`)
 
-Run:
+Fix:
+1. Re-run tag release workflow.
+2. Confirm release assets are attached.
 
-```bash
-opctl doctor --repair --json-pretty
-```
+## `checksum_mismatch` or `managed_checksum_mismatch`
 
-If still blocked, inspect:
+Cause:
+- downloaded bundle corruption, or
+- installed managed file drift/tamper
 
-- `checks[].id`
-- `checks[].details`
-- `errors[]`
+Fix:
+1. Reinstall/update from verified release assets.
+2. Re-run `opctl doctor --json-pretty`.
 
-and apply the indicated manual fix.
+## `doctor_blocked`
+
+Cause:
+- one or more readiness checks failed
+
+Fix:
+1. Run `opctl doctor --repair --json-pretty`.
+2. If still blocked, inspect `checks[].id`, `checks[].details`, `errors[]`.
+
+Note:
+- `--repair` does not bypass checksum integrity failures; it repairs only safe filesystem/launcher/state normalization paths.
 
 ## Launchers not found (`opctl`/`op`)
 
-Global default launcher path:
-
+Global default:
 - `~/.local/bin`
 
-Add to shell PATH:
+Add to PATH:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
-

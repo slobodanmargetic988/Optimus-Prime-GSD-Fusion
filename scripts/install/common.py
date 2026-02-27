@@ -221,6 +221,11 @@ def build_state_payload(
     ctx: InstallContext,
     installed_version: str,
     managed_paths: list[str],
+    source: str,
+    source_ref: str,
+    installed_manifest_path: str,
+    installed_manifest_sha256: str,
+    installed_checksums_sha256: str,
     recovery: dict[str, Any] | None = None,
     previous: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -233,6 +238,11 @@ def build_state_payload(
         "installed_version": installed_version,
         "installed_at": as_str((previous or {}).get("installed_at")) or now,
         "managed_paths": sorted(set(managed_paths)),
+        "source": source,
+        "source_ref": source_ref,
+        "installed_manifest_path": installed_manifest_path,
+        "installed_manifest_sha256": installed_manifest_sha256,
+        "installed_checksums_sha256": installed_checksums_sha256,
         "codex_home": str(ctx.codex_home),
         "last_update_at": now,
         "last_doctor_at": as_str((previous or {}).get("last_doctor_at")),
@@ -328,6 +338,56 @@ def copy_codex_assets(bundle_dir: Path, codex_home: Path) -> list[str]:
     return sorted(set(managed))
 
 
+def persist_install_manifest(install_root: Path, manifest: dict[str, Any], checksums: dict[str, str]) -> dict[str, str]:
+    try:
+        manifest_root = install_root / ".manifest"
+        manifest_root.mkdir(parents=True, exist_ok=True)
+        manifest_path = manifest_root / "bundle_manifest.json"
+        checksums_path = manifest_root / "SHA256SUMS.json"
+        atomic_write_json(manifest_path, manifest)
+        atomic_write_json(checksums_path, checksums)
+        return {
+            "installed_manifest_path": str(manifest_path),
+            "installed_manifest_sha256": sha256_file(manifest_path),
+            "installed_checksums_sha256": sha256_file(checksums_path),
+        }
+    except OSError as exc:
+        raise InstallError("manifest_persist_error", f"failed to persist installed manifest metadata: {exc}", stage="install") from exc
+
+
+def verify_installed_payload_integrity(
+    install_root: Path,
+    manifest: dict[str, Any],
+    checksums: dict[str, str],
+) -> tuple[bool, list[dict[str, str]]]:
+    managed_files = manifest.get("managed_files")
+    if not isinstance(managed_files, list):
+        raise InstallError("validation_error", "installed manifest managed_files must be list", stage="doctor")
+    mismatches: list[dict[str, str]] = []
+    for rel in managed_files:
+        rel_path = as_str(rel)
+        if not rel_path:
+            mismatches.append({"path": "", "reason": "invalid_managed_file_entry"})
+            continue
+        expected = checksums.get(f"payload/{rel_path}") or checksums.get(rel_path)
+        if not expected:
+            mismatches.append({"path": rel_path, "reason": "checksum_missing"})
+            continue
+        installed = install_root / rel_path
+        if not installed.exists():
+            mismatches.append({"path": rel_path, "reason": "missing_file"})
+            continue
+        actual = sha256_file(installed)
+        if actual != expected:
+            mismatches.append(
+                {
+                    "path": rel_path,
+                    "reason": "sha256_mismatch",
+                }
+            )
+    return len(mismatches) == 0, mismatches
+
+
 def parse_git_commit(repo_root: Path) -> str:
     run = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -363,4 +423,3 @@ def standard_response(
     if data:
         out["data"] = data
     return out
-

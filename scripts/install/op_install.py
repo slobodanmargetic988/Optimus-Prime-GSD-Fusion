@@ -7,6 +7,7 @@ import argparse
 import json
 import shutil
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,12 +22,14 @@ for candidate in (REPO_ROOT, SCRIPTS_ROOT, SCRIPT_DIR):
 from scripts.install.common import (
     InstallError,
     SCHEMA_VERSION,
+    as_str,
     atomic_write_json,
     build_state_payload,
     copy_codex_assets,
     copy_tree_replace,
     ensure_launcher,
     load_bundle,
+    persist_install_manifest,
     read_json,
     resolve_context,
     standard_response,
@@ -34,13 +37,39 @@ from scripts.install.common import (
     verify_bundle_integrity,
 )
 from scripts.install.config import resolve_effective_config
+from scripts.install.release_client import fetch_release_bundle
 
 
-def _bundle_dir(payload: dict[str, Any]) -> Path:
-    raw = payload.get("bundle_dir")
-    if not isinstance(raw, str) or not raw.strip():
-        raise InstallError("input_error", "bundle_dir is required", stage="input")
-    return Path(raw).expanduser().resolve()
+def _resolve_bundle_source(
+    payload: dict[str, Any],
+) -> tuple[Path, str, str, tempfile.TemporaryDirectory[str] | None]:
+    bundle_dir_raw = as_str(payload.get("bundle_dir"))
+    repo_owner = as_str(payload.get("repo_owner"))
+    repo_name = as_str(payload.get("repo_name"))
+    has_remote = bool(repo_owner or repo_name)
+    if bundle_dir_raw and has_remote:
+        raise InstallError(
+            "input_error",
+            "bundle_dir is mutually exclusive with repo_owner/repo_name remote source flags",
+            stage="input",
+        )
+    if bundle_dir_raw:
+        bundle_dir = Path(bundle_dir_raw).expanduser().resolve()
+        return bundle_dir, "bundle_dir", str(bundle_dir), None
+    if has_remote:
+        temp_holder = tempfile.TemporaryDirectory()
+        resolved = fetch_release_bundle(payload, Path(temp_holder.name))
+        return (
+            Path(resolved["bundle_dir"]).expanduser().resolve(),
+            str(resolved["source"]),
+            str(resolved["source_ref"]),
+            temp_holder,
+        )
+    raise InstallError(
+        "input_error",
+        "provide either --bundle-dir or --repo-owner/--repo-name release source flags",
+        stage="input",
+    )
 
 
 def _backup_existing_install(ctx_install_root: Path, backup_root: Path) -> str | None:
@@ -56,6 +85,7 @@ def _backup_existing_install(ctx_install_root: Path, backup_root: Path) -> str |
 
 
 def run_install(payload: dict[str, Any]) -> dict[str, Any]:
+    temp_source: tempfile.TemporaryDirectory[str] | None = None
     ctx = resolve_context(payload)
     config_resolution = resolve_effective_config(payload, ctx)
     if config_resolution["errors"]:
@@ -64,7 +94,7 @@ def run_install(payload: dict[str, Any]) -> dict[str, Any]:
             for item in config_resolution["errors"]
         )
         raise InstallError("config_error", f"invalid effective config: {rendered}", stage="config")
-    bundle_dir = _bundle_dir(payload)
+    bundle_dir, source, source_ref, temp_source = _resolve_bundle_source(payload)
     manifest, checksums = load_bundle(bundle_dir)
     verify_bundle_integrity(bundle_dir, manifest, checksums)
     version = str(manifest.get("product_version") or "0.0.0")
@@ -81,60 +111,77 @@ def run_install(payload: dict[str, Any]) -> dict[str, Any]:
     ctx.codex_home.mkdir(parents=True, exist_ok=True)
     backup_path = _backup_existing_install(ctx.install_root, ctx.backup_root)
 
-    payload_root = bundle_dir / "payload"
-    if not payload_root.exists():
-        raise InstallError("validation_error", f"bundle payload missing: {payload_root}", stage="validate")
-    copy_tree_replace(payload_root, ctx.install_root)
+    try:
+        payload_root = bundle_dir / "payload"
+        if not payload_root.exists():
+            raise InstallError("validation_error", f"bundle payload missing: {payload_root}", stage="validate")
+        copy_tree_replace(payload_root, ctx.install_root)
 
-    product_entry = ctx.install_root / "scripts" / "op" / "opctl_product.py"
-    if not product_entry.exists():
-        raise InstallError(
-            "validation_error",
-            f"installed product entrypoint missing from payload: {product_entry}",
-            stage="install",
+        product_entry = ctx.install_root / "scripts" / "op" / "opctl_product.py"
+        if not product_entry.exists():
+            raise InstallError(
+                "validation_error",
+                f"installed product entrypoint missing from payload: {product_entry}",
+                stage="install",
+            )
+        opctl_path = ctx.bin_dir / "opctl"
+        op_alias_path = ctx.bin_dir / "op"
+        ensure_launcher(opctl_path, product_entry)
+        ensure_launcher(op_alias_path, product_entry)
+
+        codex_managed = copy_codex_assets(bundle_dir, ctx.codex_home)
+        managed_paths = [str(ctx.install_root), str(opctl_path), str(op_alias_path), *codex_managed]
+        persisted = persist_install_manifest(ctx.install_root, manifest, checksums)
+        recovery = {
+            "last_backup_path": backup_path,
+            "last_recovery_reason": "in_place_replace" if backup_path else None,
+        }
+        install_state = build_state_payload(
+            ctx=ctx,
+            installed_version=version,
+            managed_paths=managed_paths,
+            source=source,
+            source_ref=source_ref,
+            installed_manifest_path=persisted["installed_manifest_path"],
+            installed_manifest_sha256=persisted["installed_manifest_sha256"],
+            installed_checksums_sha256=persisted["installed_checksums_sha256"],
+            recovery=recovery,
+            previous=previous_state,
         )
-    opctl_path = ctx.bin_dir / "opctl"
-    op_alias_path = ctx.bin_dir / "op"
-    ensure_launcher(opctl_path, product_entry)
-    ensure_launcher(op_alias_path, product_entry)
-
-    codex_managed = copy_codex_assets(bundle_dir, ctx.codex_home)
-    managed_paths = [str(ctx.install_root), str(opctl_path), str(op_alias_path), *codex_managed]
-    recovery = {
-        "last_backup_path": backup_path,
-        "last_recovery_reason": "in_place_replace" if backup_path else None,
-    }
-    install_state = build_state_payload(
-        ctx=ctx,
-        installed_version=version,
-        managed_paths=managed_paths,
-        recovery=recovery,
-        previous=previous_state,
-    )
-    atomic_write_json(ctx.state_path, install_state)
-    return standard_response(
-        ok=True,
-        status="completed",
-        summary="Lane C install completed.",
-        data={
-            "install_mode": ctx.mode,
-            "installed_version": version,
-            "install_state_path": str(ctx.state_path),
-            "install_root": str(ctx.install_root),
-            "bin_dir": str(ctx.bin_dir),
-            "codex_home": str(ctx.codex_home),
-            "managed_paths": install_state.get("managed_paths", []),
-            "effective_config": config_resolution["effective_config"],
-            "config_sources": config_resolution["sources"],
-            "updated_at": utc_now_iso(),
-        },
-        next_action="Run `opctl doctor` to validate environment and install integrity.",
-    )
+        atomic_write_json(ctx.state_path, install_state)
+        return standard_response(
+            ok=True,
+            status="completed",
+            summary="Lane C install completed.",
+            data={
+                "install_mode": ctx.mode,
+                "installed_version": version,
+                "install_state_path": str(ctx.state_path),
+                "install_root": str(ctx.install_root),
+                "bin_dir": str(ctx.bin_dir),
+                "codex_home": str(ctx.codex_home),
+                "managed_paths": install_state.get("managed_paths", []),
+                "source": source,
+                "source_ref": source_ref,
+                "effective_config": config_resolution["effective_config"],
+                "config_sources": config_resolution["sources"],
+                "updated_at": utc_now_iso(),
+            },
+            next_action="Run `opctl doctor` to validate environment and install integrity.",
+        )
+    finally:
+        if temp_source is not None:
+            temp_source.cleanup()
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Install Lane C bundle.")
-    parser.add_argument("--bundle-dir", required=True)
+    parser = argparse.ArgumentParser(description="Install Lane C bundle or private GitHub release.")
+    parser.add_argument("--bundle-dir")
+    parser.add_argument("--repo-owner")
+    parser.add_argument("--repo-name")
+    parser.add_argument("--channel", choices=["prerelease", "stable"], default="prerelease")
+    parser.add_argument("--version")
+    parser.add_argument("--github-token")
     parser.add_argument("--mode", choices=["global", "local"], default="global")
     parser.add_argument("--repo-root")
     parser.add_argument("--codex-home")
@@ -160,6 +207,11 @@ def main() -> int:
     args = parse_args()
     payload = {
         "bundle_dir": args.bundle_dir,
+        "repo_owner": args.repo_owner,
+        "repo_name": args.repo_name,
+        "channel": args.channel,
+        "version": args.version,
+        "github_token": args.github_token,
         "mode": args.mode,
         "repo_root": args.repo_root,
         "codex_home": args.codex_home,

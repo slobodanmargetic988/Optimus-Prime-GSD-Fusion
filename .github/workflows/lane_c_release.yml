@@ -5,13 +5,25 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (for manual runs)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
-  build-release-bundle:
+  build-and-publish:
     runs-on: ubuntu-latest
+    env:
+      REPO_ROOT: ${{ github.workspace }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -23,26 +35,103 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install pytest
 
-      - name: Run Lane B matrix guard
+      - name: Resolve tag metadata
+        id: tagmeta
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_INPUT="${{ github.event.inputs.tag || '' }}"
+          if [[ -n "$TAG_INPUT" ]]; then
+            TAG="$TAG_INPUT"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if [[ ! "$TAG" =~ ^v ]]; then
+            echo "Tag must start with v (received: $TAG)" >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          if [[ "$TAG" =~ -rc\. ]]; then
+            IS_PRERELEASE="true"
+          else
+            IS_PRERELEASE="false"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release readiness checklist contract
+        run: |
+          python3 -m scripts.release.validate_release_readiness \
+            --repo-root "$REPO_ROOT" \
+            --version "${{ steps.tagmeta.outputs.version }}" \
+            --json-pretty
+
+      - name: Run Lane B + Lane C matrix guard
         run: |
           python3 -m pytest \
             scripts/op/tests \
+            scripts/install/tests \
+            scripts/release/tests \
             skills/runtime-coordinator/tests/test_runtime_coordinator.py \
             skills/test-train-manager/tests/test_test_train_manager.py \
             skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py \
             skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py
 
       - name: Build Lane C release bundle
+        id: bundle
         run: |
           mkdir -p dist
           python3 -m scripts.release.build_lane_c_bundle \
-            --repo-root "$GITHUB_WORKSPACE" \
-            --out-dir "$GITHUB_WORKSPACE/dist" \
+            --repo-root "$REPO_ROOT" \
+            --out-dir "$REPO_ROOT/dist" \
+            --version "${{ steps.tagmeta.outputs.version }}" \
             --json-pretty
 
-      - name: Upload release bundle artifacts
+      - name: Publish GitHub release
+        id: publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tagmeta.outputs.tag }}
+          prerelease: ${{ steps.tagmeta.outputs.is_prerelease }}
+          generate_release_notes: true
+          make_latest: ${{ steps.tagmeta.outputs.is_prerelease == 'true' && 'false' || 'true' }}
+          files: |
+            dist/*.tar.gz
+            dist/*/bundle_manifest.json
+            dist/*/SHA256SUMS.json
+            dist/*/SHA256SUMS
+
+      - name: Emit release metadata
+        run: |
+          python3 - <<'PY'
+          import json, os
+          payload = {
+              "tag": os.environ["TAG"],
+              "version": os.environ["VERSION"],
+              "is_prerelease": os.environ["IS_PRERELEASE"] == "true",
+              "release_id": os.environ.get("RELEASE_ID"),
+              "release_url": os.environ.get("RELEASE_URL"),
+              "assets_pattern": [
+                  "dist/*.tar.gz",
+                  "dist/*/bundle_manifest.json",
+                  "dist/*/SHA256SUMS.json",
+                  "dist/*/SHA256SUMS",
+              ],
+          }
+          with open("dist/release_metadata.json", "w", encoding="utf-8") as fh:
+              json.dump(payload, fh, indent=2)
+              fh.write("\n")
+          PY
+        env:
+          TAG: ${{ steps.tagmeta.outputs.tag }}
+          VERSION: ${{ steps.tagmeta.outputs.version }}
+          IS_PRERELEASE: ${{ steps.tagmeta.outputs.is_prerelease }}
+          RELEASE_ID: ${{ steps.publish.outputs.id }}
+          RELEASE_URL: ${{ steps.publish.outputs.url }}
+
+      - name: Upload release metadata artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lane-c-release-bundle
-          path: dist/**
-
+          name: lane-c-release-metadata
+          path: dist/release_metadata.json

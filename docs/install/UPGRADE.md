@@ -1,17 +1,43 @@
-# Lane C Upgrade Guide
+# Lane C Upgrade Guide (Private Repo)
 
-Upgrades are explicit and manual.
+Updates are explicit/manual by design.
 
-## 1) Build or download a new verified bundle
+## Upgrade from private prerelease channel
 
-The bundle must include:
+```bash
+opctl update \
+  --repo-owner slobodanmargetic988 \
+  --repo-name Optimus-Prime-GSD-Fusion \
+  --channel prerelease \
+  --mode global \
+  --json-pretty
+```
 
-- `bundle_manifest.json`
-- `SHA256SUMS`
-- `SHA256SUMS.json`
-- `payload/`
+Version pin:
 
-## 2) Run update
+```bash
+opctl update \
+  --repo-owner slobodanmargetic988 \
+  --repo-name Optimus-Prime-GSD-Fusion \
+  --channel prerelease \
+  --version 0.3.0-rc.2 \
+  --mode global \
+  --json-pretty
+```
+
+Local mode:
+
+```bash
+opctl update \
+  --repo-owner slobodanmargetic988 \
+  --repo-name Optimus-Prime-GSD-Fusion \
+  --channel prerelease \
+  --mode local \
+  --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion \
+  --json-pretty
+```
+
+## Fallback bundle-based update
 
 ```bash
 opctl update \
@@ -20,25 +46,14 @@ opctl update \
   --json-pretty
 ```
 
-For project-local installs:
-
-```bash
-opctl update \
-  --bundle-dir /path/to/optimus-prime-<new-version> \
-  --mode local \
-  --repo-root /path/to/repo \
-  --json-pretty
-```
-
-## 3) Verify health
+## Post-update checks
 
 ```bash
 opctl doctor --json-pretty
 opctl /op-health --json-pretty
 ```
 
-If update fails, installer state stores recovery metadata:
+If update fails, inspect install state recovery:
 
 - `INSTALL_STATE.json.recovery.last_backup_path`
 - `INSTALL_STATE.json.recovery.last_recovery_reason`
-

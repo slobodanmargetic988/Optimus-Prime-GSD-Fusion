@@ -1,0 +1,181 @@
+name: lane-c-private-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional prerelease tag to test (defaults to latest prerelease)"
+        required: false
+        type: string
+  release:
+    types: [prereleased, released]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        mode: [global, local]
+    runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO_ROOT: ${{ github.workspace }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve release tag
+        id: tagmeta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [[ -n "${{ github.event.inputs.release_tag || '' }}" ]]; then
+            TAG="${{ github.event.inputs.release_tag }}"
+          else
+            TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '[.[] | select(.draft==false and .prerelease==true)][0].tag_name')"
+          fi
+          if [[ -z "$TAG" || "$TAG" == "null" ]]; then
+            echo "No prerelease tag available for smoke test." >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release_assets"
+          gh release download "${{ steps.tagmeta.outputs.tag }}" \
+            -R "${GITHUB_REPOSITORY}" \
+            --pattern "*.tar.gz" \
+            --pattern "bundle_manifest.json" \
+            --pattern "SHA256SUMS.json" \
+            --dir "$RUNNER_TEMP/release_assets"
+
+      - name: Extract bundle
+        id: extract
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAR_PATH="$(ls "$RUNNER_TEMP/release_assets"/*.tar.gz | head -n1)"
+          mkdir -p "$RUNNER_TEMP/release_extract"
+          tar -xzf "$TAR_PATH" -C "$RUNNER_TEMP/release_extract"
+          BUNDLE_DIR="$(find "$RUNNER_TEMP/release_extract" -name bundle_manifest.json -print | head -n1 | xargs dirname)"
+          if [[ -z "$BUNDLE_DIR" ]]; then
+            echo "Bundle directory not found after extraction." >&2
+            exit 1
+          fi
+          echo "bundle_dir=$BUNDLE_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Run install/update/uninstall smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          SUMMARY="$RUNNER_TEMP/lane_c_smoke_${{ matrix.os }}_${{ matrix.mode }}.json"
+          HOME_OVERRIDE="$RUNNER_TEMP/op_home_${{ matrix.mode }}"
+          CODEX_HOME_DIR="$HOME_OVERRIDE/.codex"
+          if [[ "${{ matrix.mode }}" == "global" ]]; then
+            BIN_DIR="$HOME_OVERRIDE/.local/bin"
+            REPO_ARG=()
+          else
+            BIN_DIR="$REPO_ROOT/.optimus-prime/bin"
+            REPO_ARG=(--repo-root "$REPO_ROOT")
+          fi
+
+          python3 "$REPO_ROOT/scripts/install/op_install.py" \
+            --bundle-dir "${{ steps.extract.outputs.bundle_dir }}" \
+            --mode "${{ matrix.mode }}" \
+            --home-override "$HOME_OVERRIDE" \
+            --codex-home "$CODEX_HOME_DIR" \
+            --bin-dir "$BIN_DIR" \
+            "${REPO_ARG[@]}" \
+            --json-pretty > "$RUNNER_TEMP/install_out.json"
+
+          "$BIN_DIR/opctl" doctor \
+            --mode "${{ matrix.mode }}" \
+            --home-override "$HOME_OVERRIDE" \
+            --codex-home "$CODEX_HOME_DIR" \
+            --bin-dir "$BIN_DIR" \
+            "${REPO_ARG[@]}" \
+            --json-pretty > "$RUNNER_TEMP/doctor_out.json"
+
+          set +e
+          "$BIN_DIR/opctl" /op-status --json-pretty > "$RUNNER_TEMP/op_status_out.json"
+          OP_STATUS_RC=$?
+          set -e
+
+          mkdir -p "$RUNNER_TEMP/smoke_dist"
+          python3 -m scripts.release.build_lane_c_bundle \
+            --repo-root "$REPO_ROOT" \
+            --out-dir "$RUNNER_TEMP/smoke_dist" \
+            --version "999.0.0-smoke.${GITHUB_RUN_NUMBER}" \
+            --json-pretty > "$RUNNER_TEMP/smoke_bundle_out.json"
+          UPDATE_BUNDLE_DIR="$(find "$RUNNER_TEMP/smoke_dist" -name bundle_manifest.json -print | head -n1 | xargs dirname)"
+
+          python3 "$REPO_ROOT/scripts/install/op_update.py" \
+            --bundle-dir "$UPDATE_BUNDLE_DIR" \
+            --mode "${{ matrix.mode }}" \
+            --home-override "$HOME_OVERRIDE" \
+            --codex-home "$CODEX_HOME_DIR" \
+            --bin-dir "$BIN_DIR" \
+            "${REPO_ARG[@]}" \
+            --json-pretty > "$RUNNER_TEMP/update_out.json"
+
+          python3 "$REPO_ROOT/scripts/install/op_uninstall.py" \
+            --mode "${{ matrix.mode }}" \
+            --home-override "$HOME_OVERRIDE" \
+            "${REPO_ARG[@]}" \
+            --json-pretty > "$RUNNER_TEMP/uninstall_out.json"
+
+          OP_STATUS_RC="$OP_STATUS_RC" SUMMARY_PATH="$SUMMARY" python3 - <<'PY'
+          import json
+          import os
+          summary = {
+              "os": os.environ["SMOKE_OS"],
+              "mode": os.environ["SMOKE_MODE"],
+              "release_tag": os.environ["RELEASE_TAG"],
+              "op_status_rc": int(os.environ["OP_STATUS_RC"]),
+              "files": {
+                  "install": os.environ["INSTALL_OUT"],
+                  "doctor": os.environ["DOCTOR_OUT"],
+                  "op_status": os.environ["OP_STATUS_OUT"],
+                  "update": os.environ["UPDATE_OUT"],
+                  "uninstall": os.environ["UNINSTALL_OUT"],
+              },
+          }
+          with open(os.environ["SUMMARY_PATH"], "w", encoding="utf-8") as fh:
+              json.dump(summary, fh, indent=2)
+              fh.write("\n")
+          PY
+        env:
+          SMOKE_OS: ${{ matrix.os }}
+          SMOKE_MODE: ${{ matrix.mode }}
+          RELEASE_TAG: ${{ steps.tagmeta.outputs.tag }}
+          INSTALL_OUT: ${{ runner.temp }}/install_out.json
+          DOCTOR_OUT: ${{ runner.temp }}/doctor_out.json
+          OP_STATUS_OUT: ${{ runner.temp }}/op_status_out.json
+          UPDATE_OUT: ${{ runner.temp }}/update_out.json
+          UNINSTALL_OUT: ${{ runner.temp }}/uninstall_out.json
+
+      - name: Upload smoke outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: lane-c-smoke-${{ matrix.os }}-${{ matrix.mode }}
+          path: |
+            ${{ runner.temp }}/lane_c_smoke_${{ matrix.os }}_${{ matrix.mode }}.json
+            ${{ runner.temp }}/install_out.json
+            ${{ runner.temp }}/doctor_out.json
+            ${{ runner.temp }}/op_status_out.json
+            ${{ runner.temp }}/update_out.json
+            ${{ runner.temp }}/uninstall_out.json
