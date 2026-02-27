@@ -32,7 +32,7 @@ def _print_json(payload: dict[str, Any], pretty: bool) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="OP command surface (map/new-project/plan/initialize/build)")
+    parser = argparse.ArgumentParser(description="OP command surface (map/new-project/plan/initialize/build/health/status/resume)")
     parser.add_argument("--input-json", help="JSON payload path or '-' for stdin")
     parser.add_argument("--command")
     parser.add_argument("--repo-root")

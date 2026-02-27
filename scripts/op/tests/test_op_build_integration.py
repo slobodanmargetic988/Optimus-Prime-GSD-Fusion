@@ -102,7 +102,7 @@ def test_op_build_applies_runtime_and_test_train_directives(monkeypatch: pytest.
 
         monkeypatch.setattr(MODULE, "_run_controller_cycle", fake_cycle)
         monkeypatch.setattr(MODULE, "_run_tool_json", fake_tool)
-        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build: {"ok": True, "status": "noop"})
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
 
         build_out = run_payload(
             {
@@ -161,7 +161,7 @@ def test_op_build_stops_for_manual_rerun_when_rate_reset_exceeds_two_hours(monke
 
         dispatch_calls = {"count": 0}
 
-        def fake_dispatch(req, plan, state, build):
+        def fake_dispatch(req, plan, state, build, *_):
             dispatch_calls["count"] += 1
             return {"ok": True, "status": "noop"}
 
@@ -236,7 +236,7 @@ def test_dispatch_filter_blocks_dispatch_for_cycle(monkeypatch: pytest.MonkeyPat
         )
         dispatch_calls = {"count": 0}
 
-        def fake_dispatch(req, plan, state, build):
+        def fake_dispatch(req, plan, state, build, *_):
             dispatch_calls["count"] += 1
             return {"ok": True, "status": "noop"}
 
@@ -308,7 +308,7 @@ def test_runtime_adapter_uses_state_derived_mode(monkeypatch: pytest.MonkeyPatch
             },
         )
         monkeypatch.setattr(MODULE, "_run_tool_json", fake_tool)
-        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build: {"ok": True, "status": "noop"})
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
         out = run_payload(
             {
                 "command": "/op-build",
@@ -375,7 +375,7 @@ def test_runtime_adapter_fallback_mode_when_state_malformed(monkeypatch: pytest.
             },
         )
         monkeypatch.setattr(MODULE, "_run_tool_json", fake_tool)
-        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build: {"ok": True, "status": "noop"})
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
         out = run_payload(
             {
                 "command": "/op-build",
@@ -436,7 +436,7 @@ def test_handoff_offset_truncation_recovers_with_warning(monkeypatch: pytest.Mon
                 "events_path": str(events_path),
             },
         )
-        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build: {"ok": True, "status": "noop"})
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
         out = run_payload(
             {
                 "command": "/op-build",
@@ -507,7 +507,7 @@ def test_directive_failure_queues_remediation_and_skips_dispatch(monkeypatch: py
 
         dispatch_calls = {"count": 0}
 
-        def fake_dispatch(req, plan, state, build):
+        def fake_dispatch(req, plan, state, build, *_):
             dispatch_calls["count"] += 1
             return {"ok": True, "status": "noop"}
 
@@ -572,7 +572,7 @@ def test_dispatch_cap_blocks_when_active_workers_at_limit(monkeypatch: pytest.Mo
         )
         monkeypatch.setattr(MODULE, "_active_workers_count", lambda _root: 1)
         dispatch_calls = {"count": 0}
-        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build: dispatch_calls.__setitem__("count", dispatch_calls["count"] + 1) or {"ok": True, "status": "noop"})
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: dispatch_calls.__setitem__("count", dispatch_calls["count"] + 1) or {"ok": True, "status": "noop"})
         out = run_payload(
             {
                 "command": "/op-build",
@@ -630,7 +630,7 @@ def test_dispatch_cap_allows_dispatch_when_capacity_available(monkeypatch: pytes
         monkeypatch.setattr(MODULE, "_active_workers_count", lambda _root: 1)
         dispatch_calls = {"count": 0}
 
-        def fake_dispatch(req, plan, state, build):
+        def fake_dispatch(req, plan, state, build, *_):
             dispatch_calls["count"] += 1
             return {"ok": True, "status": "noop"}
 

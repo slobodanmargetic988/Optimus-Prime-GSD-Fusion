@@ -172,7 +172,7 @@ def _read_runtime_health(cfg: DispatchInput) -> dict[str, Any]:
         )
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise ToolError(
             "validation_error",
             f"runtime health artifact unreadable for hard-gated test-train mode: {path} ({exc})",
@@ -1037,6 +1037,7 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "plan_id": cfg.plan_id,
         "requirement_ids": cfg.requirement_ids,
         "task_acceptance_refs": cfg.task_acceptance_refs,
+        "task_evidence_ref": cfg.dev_ready_evidence_ref,
         "dev_ready_evidence_ref": cfg.dev_ready_evidence_ref,
         "status": "started" if dispatch["dispatch_started"] else "failed",
     }

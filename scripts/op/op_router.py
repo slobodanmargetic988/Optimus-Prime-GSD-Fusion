@@ -12,6 +12,9 @@ SUPPORTED_COMMANDS = {
     "op-plan",
     "op-initialize",
     "op-build",
+    "op-health",
+    "op-status",
+    "op-resume",
 }
 
 ALIASES = {
@@ -25,6 +28,12 @@ ALIASES = {
     "initialize": "op-initialize",
     "op-build": "op-build",
     "build": "op-build",
+    "op-health": "op-health",
+    "health": "op-health",
+    "op-status": "op-status",
+    "status": "op-status",
+    "op-resume": "op-resume",
+    "resume": "op-resume",
 }
 
 

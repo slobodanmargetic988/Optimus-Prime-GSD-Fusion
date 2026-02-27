@@ -48,6 +48,9 @@ Updated: 2026-02-27
   - `/op-plan`
   - `/op-initialize`
   - `/op-build`
+  - `/op-health`
+  - `/op-status`
+  - `/op-resume`
 - Added shared command core:
   - `scripts/op/op_router.py`
   - `scripts/op/op_core.py`
@@ -56,8 +59,18 @@ Updated: 2026-02-27
 - Added planning artifact generator under `reports/optimus-prime/planning/`:
   - map artifacts (`MAP_CODEBASE.json`, `MAP_CODEBASE.md`, `CODEBASE_INDEX.json`, `ARCHITECTURE_NOTES.md`, `RISK_REGISTER.json`)
   - baseline artifacts (`PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `STATE.md`, `STATE.json`)
-  - plan artifacts (`PLAN_PACKETS.json`, `PLAN_CHECK.json`, `TEST_CONTRACT.md`, `PLAYWRIGHT_UAT_MATRIX.md`)
+  - plan artifacts (`PLAN_PACKETS.json`, `PLAN_CHECK.json`, `TEST_CONTRACT.md`, `PLAYWRIGHT_UAT_MATRIX.md`, `UAT.md`, `VERIFICATION.md`)
   - autonomous build/task state (`BUILD_STATE.json`, `TASK_EXECUTION_STATE.json`)
+- Added multi-phase planning model:
+  - `PLAN_PACKETS.json` includes `phases[]` DAG-layer decomposition
+  - phase-barrier execution enforced in `/op-build` (no cross-phase dispatch)
+- Added canonical artifact-first task evidence contract:
+  - per-task `reports/optimus-prime/planning/evidence/<task_id>/TASK_EVIDENCE.json`
+  - `/op-build` stage progression now consumes canonical evidence artifacts (not handoff-inline fallback)
+- Added B4 autonomous gap-closure loop:
+  - `GAPS.json` open/closed tracking
+  - `GAP_CLOSURE_PLAN_PACKETS.json` deterministic closure packet generation
+  - open gaps hard-block strict completion (no waiver path)
 - Added strict build preflight gate:
   - `/op-build` blocks when baseline artifacts are missing, `plan_ready=false`, or task-state contract is missing/invalid
   - blocked build response explicitly recommends `/op-initialize`
@@ -77,9 +90,11 @@ Updated: 2026-02-27
   - hard stops enforced for `insurmountable_blocker|all_rate_gates_blocking|operator_stop`
 - Strict done gate enforced for completion:
   - all plan tasks present and `review_done`
-  - per-task `dev_ready_evidence_ref` present
+  - per-task canonical task evidence present and valid
   - required verify commands recorded as passed
   - UAT requirement coverage recorded as passed
+  - all phases must satisfy strict exit checks
+  - open gaps must be zero
   - final-state authorization passes via `--verify-final-state`
 - Extended dispatch packet contract for OP build packets:
   - `op_build_mode`
@@ -98,7 +113,10 @@ Updated: 2026-02-27
 - `reports/optimus-prime/runtime/locks/`
 - `reports/optimus-prime/planning/TASK_EXECUTION_STATE.json`
 - `reports/optimus-prime/planning/BUILD_LOOP.lock`
-- `reports/optimus-prime/planning/BUILD_STATE.json` (`cycle_gate_decision`, `remediation_state`, `offset_recovery`)
+- `reports/optimus-prime/planning/BUILD_STATE.json` (`cycle_gate_decision`, `remediation_state`, `offset_recovery`, `current_phase_id`, `phase_exit_checks`, `open_gap_ids`)
+- `reports/optimus-prime/planning/evidence/<task_id>/TASK_EVIDENCE.json`
+- `reports/optimus-prime/planning/GAPS.json`
+- `reports/optimus-prime/planning/GAP_CLOSURE_PLAN_PACKETS.json`
 - `reports/optimus-prime/BLOCKER_ADAPTATION_CANDIDATES.md`
 - `reports/optimus-prime/BLOCKER_INDEX.json`
 - `reports/optimus-prime/BLOCKERS.jsonl`
@@ -119,7 +137,7 @@ python3 -m pytest \
   /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py
 ```
 
-## Remaining Lane B Items (Next Batch)
+## Lane B Completion Status
 
-- B3/B4 evidence producers still need deeper worker-side normalization so strict-done inputs are always emitted without manual shaping.
-- Lane C packaging/installer and polished command UX remain pending.
+- Lane B scope is complete for the new-only model (B1-B6 behavior implemented and validated).
+- Remaining roadmap work is Lane C packaging/installer and polished product command UX.

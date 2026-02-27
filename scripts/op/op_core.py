@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,11 @@ PLAN_PACKETS_JSON = PLANNING_REL / "PLAN_PACKETS.json"
 PLAN_CHECK_JSON = PLANNING_REL / "PLAN_CHECK.json"
 TEST_CONTRACT_MD = PLANNING_REL / "TEST_CONTRACT.md"
 PLAYWRIGHT_UAT_MD = PLANNING_REL / "PLAYWRIGHT_UAT_MATRIX.md"
+GAPS_JSON = PLANNING_REL / "GAPS.json"
+GAP_CLOSURE_PLAN_PACKETS_JSON = PLANNING_REL / "GAP_CLOSURE_PLAN_PACKETS.json"
+VERIFICATION_MD = PLANNING_REL / "VERIFICATION.md"
+UAT_MD = PLANNING_REL / "UAT.md"
+EVIDENCE_REL = PLANNING_REL / "evidence"
 
 BUILD_STATE_JSON = PLANNING_REL / "BUILD_STATE.json"
 TASK_EXECUTION_STATE_JSON = PLANNING_REL / "TASK_EXECUTION_STATE.json"
@@ -57,6 +63,10 @@ MANDATORY_BUILD_BASELINE = [
     PLAN_CHECK_JSON,
     TEST_CONTRACT_MD,
     PLAYWRIGHT_UAT_MD,
+    GAPS_JSON,
+    GAP_CLOSURE_PLAN_PACKETS_JSON,
+    VERIFICATION_MD,
+    UAT_MD,
     TASK_EXECUTION_STATE_JSON,
 ]
 
@@ -265,7 +275,76 @@ def _release_build_loop_lock(lock_path: Path, lock_id: str | None) -> None:
         pass
 
 
-def _task_state_from_plan(plan_packets: dict[str, Any]) -> dict[str, Any]:
+def _canonical_task_evidence_rel(task_id: str) -> Path:
+    return EVIDENCE_REL / task_id / "TASK_EVIDENCE.json"
+
+
+def _default_task_evidence(plan_id: str, phase_id: str, task_id: str, requirement_ids: list[str]) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "plan_id": plan_id,
+        "phase_id": phase_id,
+        "task_id": task_id,
+        "requirement_ids": requirement_ids,
+        "updated_at": utc_now_iso(),
+        "dev": {
+            "status": "pending",
+            "checks": [],
+            "verify_results": [],
+            "dev_ready": False,
+            "blockers": [],
+            "artifacts": [],
+        },
+        "test": {
+            "status": "pending",
+            "checks": [],
+            "verify_results": [],
+            "uat_results": [],
+            "blockers": [],
+            "artifacts": [],
+        },
+        "review": {
+            "status": "pending",
+            "decision": "pending",
+            "blockers": [],
+            "artifacts": [],
+        },
+        "gate": {
+            "ready_for_test": False,
+            "ready_for_review": False,
+            "ready_for_phase_exit": False,
+        },
+        "summary": {
+            "result": "blocked",
+            "reason_codes": ["not_started"],
+        },
+    }
+
+
+def _write_task_evidence_files(repo_root: Path, plan_packets: dict[str, Any]) -> dict[str, str]:
+    refs: dict[str, str] = {}
+    plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
+    for task in plan_packets.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        if not task_id:
+            continue
+        phase_id = _as_str(task.get("phase_id")) or "phase-1"
+        req_ids = [
+            rid
+            for rid in ((_as_str(item) for item in task.get("requirement_ids", [])))
+            if rid
+        ]
+        rel = _canonical_task_evidence_rel(task_id)
+        abs_path = _repo_path(repo_root, rel)
+        payload = _default_task_evidence(plan_id, phase_id, task_id, req_ids)
+        _atomic_write_json(abs_path, payload)
+        refs[task_id] = str(rel)
+    return refs
+
+
+def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str, str] | None = None) -> dict[str, Any]:
     tasks = plan_packets.get("tasks") if isinstance(plan_packets.get("tasks"), list) else []
     out_tasks: list[dict[str, Any]] = []
     for task in tasks:
@@ -274,20 +353,28 @@ def _task_state_from_plan(plan_packets: dict[str, Any]) -> dict[str, Any]:
         task_id = _as_str(task.get("task_id"))
         if not task_id:
             continue
+        phase_id = _as_str(task.get("phase_id")) or "phase-1"
         req_ids = []
         for rid in task.get("requirement_ids", []):
             rid_text = _as_str(rid)
             if rid_text:
                 req_ids.append(rid_text)
+        evidence_ref = (
+            evidence_refs.get(task_id)
+            if isinstance(evidence_refs, dict)
+            else str(_canonical_task_evidence_rel(task_id))
+        )
         out_tasks.append(
             {
                 "task_id": task_id,
+                "phase_id": phase_id,
                 "requirement_ids": req_ids,
                 "status": "queued",
                 "owner_slot": None,
                 "attempts": {"dev": 0, "test": 0, "review": 0},
                 "evidence": {
-                    "dev_ready_evidence_ref": None,
+                    "task_evidence_ref": evidence_ref,
+                    "dev_ready_evidence_ref": evidence_ref,
                     "verify_results": [],
                     "uat_results": [],
                 },
@@ -319,6 +406,13 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
         "blocked",
     }
     seen: set[str] = set()
+    plan_phase_ids: set[str] = set()
+    for phase in plan_packets.get("phases", []):
+        if not isinstance(phase, dict):
+            continue
+        phase_id = _as_str(phase.get("phase_id"))
+        if phase_id:
+            plan_phase_ids.add(phase_id)
     for item in tasks:
         if not isinstance(item, dict):
             errors.append({"code": "task_state_invalid", "message": "task entries must be objects"})
@@ -331,6 +425,11 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
         status = _as_str(item.get("status")) or ""
         if status not in allowed:
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} has invalid status {status}"})
+        phase_id = _as_str(item.get("phase_id"))
+        if not phase_id:
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} phase_id is required"})
+        elif plan_phase_ids and phase_id not in plan_phase_ids:
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} phase_id not found in plan phases"})
         attempts = item.get("attempts")
         if not isinstance(attempts, dict):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} attempts must be object"})
@@ -343,6 +442,9 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
         if not isinstance(evidence, dict):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} evidence must be object"})
             continue
+        task_evidence_ref = _as_str(evidence.get("task_evidence_ref"))
+        if not task_evidence_ref:
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} evidence.task_evidence_ref is required"})
         for key in ("verify_results", "uat_results"):
             val = evidence.get(key)
             if not isinstance(val, list):
@@ -425,6 +527,559 @@ def _plan_task_map(plan_packets: dict[str, Any]) -> dict[str, dict[str, Any]]:
         if task_id:
             out[task_id] = task
     return out
+
+
+def _phase_map(plan_packets: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for phase in plan_packets.get("phases", []):
+        if not isinstance(phase, dict):
+            continue
+        phase_id = _as_str(phase.get("phase_id"))
+        if phase_id:
+            out[phase_id] = phase
+    return out
+
+
+def _ordered_phase_ids(plan_packets: dict[str, Any]) -> list[str]:
+    phase_ids = [phase_id for phase_id in _phase_map(plan_packets)]
+    def _sort_key(value: str) -> tuple[int, str]:
+        tail = value.split("-")[-1]
+        return (int(tail), value) if tail.isdigit() else (10_000, value)
+    return sorted(phase_ids, key=_sort_key)
+
+
+def _task_evidence_path(repo_root: Path, task: dict[str, Any]) -> Path:
+    evidence = task.get("evidence") if isinstance(task.get("evidence"), dict) else {}
+    ref = _as_str(evidence.get("task_evidence_ref"))
+    if ref:
+        return (repo_root / ref).resolve()
+    task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
+    return _repo_path(repo_root, _canonical_task_evidence_rel(task_id))
+
+
+def _validate_task_evidence_payload(payload: dict[str, Any], task_id: str, phase_id: str) -> list[str]:
+    errors: list[str] = []
+    if _as_str(payload.get("task_id")) != task_id:
+        errors.append("task_id mismatch")
+    if _as_str(payload.get("phase_id")) != phase_id:
+        errors.append("phase_id mismatch")
+    for section in ("dev", "test", "review", "gate", "summary"):
+        if not isinstance(payload.get(section), dict):
+            errors.append(f"missing section '{section}'")
+    dev = payload.get("dev") if isinstance(payload.get("dev"), dict) else {}
+    test = payload.get("test") if isinstance(payload.get("test"), dict) else {}
+    review = payload.get("review") if isinstance(payload.get("review"), dict) else {}
+    gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    for key in ("checks", "verify_results", "blockers", "artifacts"):
+        if not isinstance(dev.get(key), list):
+            errors.append(f"dev.{key} must be list")
+    for key in ("checks", "verify_results", "uat_results", "blockers", "artifacts"):
+        if not isinstance(test.get(key), list):
+            errors.append(f"test.{key} must be list")
+    for key in ("blockers", "artifacts"):
+        if not isinstance(review.get(key), list):
+            errors.append(f"review.{key} must be list")
+    for key in ("ready_for_test", "ready_for_review", "ready_for_phase_exit"):
+        if not isinstance(gate.get(key), bool):
+            errors.append(f"gate.{key} must be bool")
+    if (_as_str(summary.get("result")) or "").lower() not in {"pass", "fail", "blocked"}:
+        errors.append("summary.result must be pass|fail|blocked")
+    if not isinstance(summary.get("reason_codes"), list):
+        errors.append("summary.reason_codes must be list")
+    return errors
+
+
+def _collect_passed_verify_commands(evidence_payload: dict[str, Any]) -> set[str]:
+    passed: set[str] = set()
+    for section in ("dev", "test"):
+        block = evidence_payload.get(section) if isinstance(evidence_payload.get(section), dict) else {}
+        rows = block.get("verify_results")
+        if not isinstance(rows, list):
+            continue
+        for item in rows:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    passed.add(text)
+                continue
+            if isinstance(item, dict) and _as_bool_field(item.get("passed")):
+                cmd = _as_str(item.get("command"))
+                if cmd:
+                    passed.add(cmd)
+    return passed
+
+
+def _collect_passed_uat_requirement_ids(evidence_payload: dict[str, Any], fallback_requirement_ids: list[str]) -> set[str]:
+    passed: set[str] = set()
+    test = evidence_payload.get("test") if isinstance(evidence_payload.get("test"), dict) else {}
+    rows = test.get("uat_results")
+    if not isinstance(rows, list):
+        return passed
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        if not _as_bool_field(item.get("passed")):
+            continue
+        requirement_id = _as_str(item.get("requirement_id"))
+        if requirement_id:
+            passed.add(requirement_id)
+        requirement_ids = item.get("requirement_ids")
+        if isinstance(requirement_ids, list):
+            for value in requirement_ids:
+                rid = _as_str(value)
+                if rid:
+                    passed.add(rid)
+        if not requirement_id:
+            for rid in fallback_requirement_ids:
+                passed.add(rid)
+    return passed
+
+
+def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any], task_state: dict[str, Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    plan_map = _plan_task_map(plan_packets)
+    for task in task_state.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        phase_id = _as_str(task.get("phase_id")) or "phase-1"
+        if not task_id:
+            continue
+        evidence_path = _task_evidence_path(repo_root, task)
+        if not evidence_path.exists():
+            task["status"] = "blocked"
+            warnings.append(
+                {
+                    "code": "task_evidence_missing",
+                    "message": f"missing TASK_EVIDENCE.json for {task_id}: {evidence_path}",
+                    "stage": "build_loop",
+                }
+            )
+            continue
+        try:
+            payload = _read_json(evidence_path)
+        except OpError as exc:
+            task["status"] = "blocked"
+            warnings.append(
+                {
+                    "code": "task_evidence_invalid",
+                    "message": f"invalid TASK_EVIDENCE.json for {task_id}: {exc.message}",
+                    "stage": "build_loop",
+                }
+            )
+            continue
+        if not isinstance(payload, dict):
+            task["status"] = "blocked"
+            warnings.append(
+                {
+                    "code": "task_evidence_invalid",
+                    "message": f"TASK_EVIDENCE.json for {task_id} must be object JSON",
+                    "stage": "build_loop",
+                }
+            )
+            continue
+        validation_errors = _validate_task_evidence_payload(payload, task_id, phase_id)
+        if validation_errors:
+            task["status"] = "blocked"
+            warnings.append(
+                {
+                    "code": "task_evidence_invalid",
+                    "message": f"TASK_EVIDENCE schema invalid for {task_id}",
+                    "stage": "build_loop",
+                    "details": validation_errors,
+                }
+            )
+            continue
+
+        evidence = task.get("evidence")
+        if not isinstance(evidence, dict):
+            evidence = {}
+            task["evidence"] = evidence
+        evidence_ref = str(evidence_path.relative_to(repo_root))
+        evidence["task_evidence_ref"] = evidence_ref
+        evidence["dev_ready_evidence_ref"] = evidence_ref
+
+        verify_results = []
+        for section in ("dev", "test"):
+            block = payload.get(section) if isinstance(payload.get(section), dict) else {}
+            rows = block.get("verify_results")
+            if isinstance(rows, list):
+                verify_results.extend(rows)
+        evidence["verify_results"] = verify_results
+        test_block = payload.get("test") if isinstance(payload.get("test"), dict) else {}
+        evidence["uat_results"] = test_block.get("uat_results") if isinstance(test_block.get("uat_results"), list) else []
+
+        gate = payload["gate"]
+        review = payload["review"]
+        summary = payload["summary"]
+        if _as_bool_field(gate.get("ready_for_review")):
+            task["status"] = "test_done"
+            task["owner_slot"] = None
+        if (_as_str(review.get("decision")) or "").lower() in {"accepted", "approved", "ready_for_merge", "pass"}:
+            task["status"] = "review_done"
+            task["owner_slot"] = None
+        if (_as_str(review.get("status")) or "").lower() in {"done", "completed", "review_done"}:
+            task["status"] = "review_done"
+            task["owner_slot"] = None
+        if _as_bool_field(gate.get("ready_for_test")) and (_as_str(task.get("status")) or "") in {"queued", "dev_in_progress", "blocked"}:
+            task["status"] = "dev_done"
+            task["owner_slot"] = None
+        summary_result = (_as_str(summary.get("result")) or "").lower()
+        reason_codes = summary.get("reason_codes") if isinstance(summary.get("reason_codes"), list) else []
+        is_not_started_placeholder = summary_result == "blocked" and any(
+            _as_str(item) == "not_started" for item in reason_codes
+        )
+        if summary_result in {"fail", "blocked"} and not is_not_started_placeholder and (_as_str(task.get("status")) or "") not in {"review_done"}:
+            if not _as_bool_field(gate.get("ready_for_test")) and not _as_bool_field(gate.get("ready_for_review")):
+                task["status"] = "blocked"
+                task["owner_slot"] = None
+
+        plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
+        if isinstance(plan_task, dict) and not task.get("requirement_ids"):
+            task["requirement_ids"] = [
+                rid
+                for rid in ((_as_str(item) for item in plan_task.get("requirement_ids", [])))
+                if rid
+            ]
+    return warnings
+
+
+def _load_gaps_payload(path: Path, plan_id: str) -> dict[str, Any]:
+    if not path.exists():
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "plan_id": plan_id,
+            "updated_at": utc_now_iso(),
+            "gaps": [],
+        }
+    payload = _read_json(path)
+    if not isinstance(payload, dict):
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "plan_id": plan_id,
+            "updated_at": utc_now_iso(),
+            "gaps": [],
+        }
+    gaps = payload.get("gaps")
+    if not isinstance(gaps, list):
+        payload["gaps"] = []
+    payload.setdefault("schema_version", SCHEMA_VERSION)
+    payload["plan_id"] = _as_str(payload.get("plan_id")) or plan_id
+    payload["updated_at"] = utc_now_iso()
+    return payload
+
+
+def _gap_id(plan_id: str, phase_id: str, task_id: str, scope_key: str, result: str) -> str:
+    digest = _sha256(f"{plan_id}|{phase_id}|{task_id}|{scope_key}|{result}")[:10]
+    return f"gap-{digest}"
+
+
+def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_state: dict[str, Any], build_state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
+    task_map = _task_by_id(task_state)
+    plan_task_map = _plan_task_map(plan_packets)
+    gaps_path = _repo_path(repo_root, GAPS_JSON)
+    existing = _load_gaps_payload(gaps_path, plan_id)
+    existing_by_id: dict[str, dict[str, Any]] = {}
+    for item in existing.get("gaps", []):
+        if not isinstance(item, dict):
+            continue
+        gap_id = _as_str(item.get("gap_id"))
+        if gap_id:
+            existing_by_id[gap_id] = dict(item)
+
+    active_gap_ids: set[str] = set()
+    active_rows: dict[str, dict[str, Any]] = {}
+    for task_id, plan_task in plan_task_map.items():
+        if not isinstance(plan_task, dict):
+            continue
+        task = task_map.get(task_id)
+        if not isinstance(task, dict):
+            continue
+        phase_id = _as_str(plan_task.get("phase_id")) or _as_str(task.get("phase_id")) or "phase-1"
+        task_status = _as_str(task.get("status")) or "queued"
+        evidence = task.get("evidence") if isinstance(task.get("evidence"), dict) else {}
+        evidence_ref = _as_str(evidence.get("task_evidence_ref")) or str(_canonical_task_evidence_rel(task_id))
+        verify_required = {
+            cmd
+            for cmd in ((_as_str(item) for item in plan_task.get("verify_commands", [])))
+            if cmd
+        }
+        verify_passed = set()
+        for item in evidence.get("verify_results", []):
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    verify_passed.add(text)
+            elif isinstance(item, dict) and _as_bool_field(item.get("passed")):
+                cmd = _as_str(item.get("command"))
+                if cmd:
+                    verify_passed.add(cmd)
+        if task_status in {"test_done", "review_done", "blocked"}:
+            for cmd in sorted(verify_required - verify_passed):
+                gap_id = _gap_id(plan_id, phase_id, task_id, f"verify:{cmd}", "fail")
+                active_gap_ids.add(gap_id)
+                active_rows[gap_id] = {
+                    "gap_id": gap_id,
+                    "phase_id": phase_id,
+                    "task_id": task_id,
+                    "requirement_id": None,
+                    "severity": "high",
+                    "result": "fail",
+                    "evidence_ref": evidence_ref,
+                    "opened_at": utc_now_iso(),
+                    "status": "open",
+                    "reason": f"verify command not passed: {cmd}",
+                }
+
+        requirement_ids = [
+            rid
+            for rid in ((_as_str(item) for item in plan_task.get("requirement_ids", [])))
+            if rid
+        ]
+        passed_uat: set[str] = set()
+        for item in evidence.get("uat_results", []):
+            if not isinstance(item, dict) or not _as_bool_field(item.get("passed")):
+                continue
+            rid = _as_str(item.get("requirement_id"))
+            if rid:
+                passed_uat.add(rid)
+            rids = item.get("requirement_ids")
+            if isinstance(rids, list):
+                for rid_item in rids:
+                    rid_text = _as_str(rid_item)
+                    if rid_text:
+                        passed_uat.add(rid_text)
+        if task_status in {"review_done", "blocked"}:
+            for rid in sorted(set(requirement_ids) - passed_uat):
+                gap_id = _gap_id(plan_id, phase_id, task_id, f"uat:{rid}", "blocked")
+                active_gap_ids.add(gap_id)
+                active_rows[gap_id] = {
+                    "gap_id": gap_id,
+                    "phase_id": phase_id,
+                    "task_id": task_id,
+                    "requirement_id": rid,
+                    "severity": "high",
+                    "result": "blocked",
+                    "evidence_ref": evidence_ref,
+                    "opened_at": utc_now_iso(),
+                    "status": "open",
+                    "reason": f"UAT requirement not passed: {rid}",
+                }
+
+        if (_as_str(task.get("status")) or "") == "blocked":
+            gap_id = _gap_id(plan_id, phase_id, task_id, "task:blocked", "blocked")
+            active_gap_ids.add(gap_id)
+            active_rows[gap_id] = {
+                "gap_id": gap_id,
+                "phase_id": phase_id,
+                "task_id": task_id,
+                "requirement_id": None,
+                "severity": "high",
+                "result": "blocked",
+                "evidence_ref": evidence_ref,
+                "opened_at": utc_now_iso(),
+                "status": "open",
+                "reason": "task state blocked",
+            }
+
+    merged_gaps: list[dict[str, Any]] = []
+    for gap_id, row in active_rows.items():
+        prior = existing_by_id.get(gap_id, {})
+        merged = dict(row)
+        merged["opened_at"] = _as_str(prior.get("opened_at")) or row["opened_at"]
+        merged["updated_at"] = utc_now_iso()
+        merged["status"] = "open"
+        merged_gaps.append(merged)
+    for gap_id, prior in existing_by_id.items():
+        if gap_id in active_gap_ids:
+            continue
+        prior = dict(prior)
+        prior["status"] = "closed"
+        prior["updated_at"] = utc_now_iso()
+        prior.setdefault("closed_at", utc_now_iso())
+        merged_gaps.append(prior)
+    merged_gaps.sort(key=lambda item: (_as_str(item.get("status")) != "open", _as_str(item.get("gap_id")) or ""))
+    gaps_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "plan_id": plan_id,
+        "updated_at": utc_now_iso(),
+        "gaps": merged_gaps,
+    }
+    _atomic_write_json(gaps_path, gaps_payload)
+
+    open_gap_rows = [item for item in merged_gaps if _as_str(item.get("status")) == "open"]
+    closure_tasks: list[dict[str, Any]] = []
+    for gap in sorted(open_gap_rows, key=lambda item: _as_str(item.get("gap_id")) or ""):
+        gap_id = _as_str(gap.get("gap_id"))
+        phase_id = _as_str(gap.get("phase_id")) or "phase-1"
+        task_id = _as_str(gap.get("task_id")) or "TASK-UNKNOWN"
+        requirement_id = _as_str(gap.get("requirement_id"))
+        if not gap_id:
+            continue
+        closure_task_id = f"GAPFIX-{_sha256(gap_id)[:8].upper()}"
+        req_ids = [requirement_id] if requirement_id else []
+        closure_tasks.append(
+            {
+                "task_id": closure_task_id,
+                "phase_id": phase_id,
+                "source_gap_id": gap_id,
+                "title": f"Close gap {gap_id}",
+                "requirement_ids": req_ids,
+                "depends_on": [task_id],
+                "must_haves": [f"Resolve {gap.get('reason') or gap_id}"],
+                "verify_commands": ["python3 -m pytest"],
+                "is_gap_closure": True,
+            }
+        )
+    closure_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "plan_id": plan_id,
+        "generated_at": utc_now_iso(),
+        "tasks": closure_tasks,
+    }
+    _atomic_write_json(_repo_path(repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON), closure_payload)
+
+    build_state["open_gap_ids"] = sorted([_as_str(item.get("gap_id")) for item in open_gap_rows if _as_str(item.get("gap_id"))])
+    build_state["last_gap_generation_at"] = utc_now_iso()
+    if open_gap_rows:
+        build_state["active_gap_closure_phase_id"] = _as_str(open_gap_rows[0].get("phase_id")) or "phase-1"
+    else:
+        build_state["active_gap_closure_phase_id"] = None
+    return gaps_payload, closure_payload
+
+
+def _merge_plan_with_gap_closure(plan_packets: dict[str, Any], gap_closure_payload: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(plan_packets)
+    base_tasks = [task for task in plan_packets.get("tasks", []) if isinstance(task, dict)]
+    gap_tasks = [task for task in gap_closure_payload.get("tasks", []) if isinstance(task, dict)]
+    task_ids = {_as_str(task.get("task_id")) for task in base_tasks if _as_str(task.get("task_id"))}
+    merged_tasks = list(base_tasks)
+    for task in gap_tasks:
+        task_id = _as_str(task.get("task_id"))
+        if not task_id or task_id in task_ids:
+            continue
+        merged_tasks.append(task)
+        task_ids.add(task_id)
+    merged["tasks"] = merged_tasks
+    return merged
+
+
+def _ensure_gap_closure_task_state(repo_root: Path, task_state: dict[str, Any], gap_closure_payload: dict[str, Any], plan_id: str) -> None:
+    existing = _task_by_id(task_state)
+    for task in gap_closure_payload.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        if not task_id or task_id in existing:
+            continue
+        phase_id = _as_str(task.get("phase_id")) or "phase-1"
+        req_ids = [
+            rid
+            for rid in ((_as_str(item) for item in task.get("requirement_ids", [])))
+            if rid
+        ]
+        rel = _canonical_task_evidence_rel(task_id)
+        _atomic_write_json(
+            _repo_path(repo_root, rel),
+            _default_task_evidence(plan_id, phase_id, task_id, req_ids),
+        )
+        task_state.setdefault("tasks", []).append(
+            {
+                "task_id": task_id,
+                "phase_id": phase_id,
+                "requirement_ids": req_ids,
+                "status": "queued",
+                "owner_slot": None,
+                "attempts": {"dev": 0, "test": 0, "review": 0},
+                "evidence": {
+                    "task_evidence_ref": str(rel),
+                    "dev_ready_evidence_ref": str(rel),
+                    "verify_results": [],
+                    "uat_results": [],
+                },
+                "blockers": [],
+                "is_gap_closure": True,
+            }
+        )
+
+
+def _phase_exit_checks(repo_root: Path, phase_id: str, plan_packets: dict[str, Any], task_state: dict[str, Any], gaps_payload: dict[str, Any]) -> dict[str, Any]:
+    plan_tasks = [task for task in plan_packets.get("tasks", []) if isinstance(task, dict) and _as_str(task.get("phase_id")) == phase_id]
+    task_map = _task_by_id(task_state)
+    all_tasks_review_done = True
+    verify_required: set[str] = set()
+    verify_passed: set[str] = set()
+    uat_required: set[str] = set()
+    uat_passed: set[str] = set()
+    for plan_task in plan_tasks:
+        task_id = _as_str(plan_task.get("task_id"))
+        if not task_id:
+            continue
+        task = task_map.get(task_id)
+        if not isinstance(task, dict):
+            all_tasks_review_done = False
+            continue
+        status = _as_str(task.get("status")) or ""
+        if status != "review_done":
+            all_tasks_review_done = False
+        for cmd in plan_task.get("verify_commands", []):
+            cmd_text = _as_str(cmd)
+            if cmd_text:
+                verify_required.add(cmd_text)
+        evidence_path = _task_evidence_path(repo_root, task)
+        if evidence_path.exists():
+            try:
+                payload = _read_json(evidence_path)
+            except OpError:
+                payload = None
+            if isinstance(payload, dict):
+                verify_passed.update(_collect_passed_verify_commands(payload))
+                req_ids = [rid for rid in ((_as_str(item) for item in plan_task.get("requirement_ids", []))) if rid]
+                uat_passed.update(_collect_passed_uat_requirement_ids(payload, req_ids))
+        for rid in plan_task.get("requirement_ids", []):
+            rid_text = _as_str(rid)
+            if rid_text:
+                uat_required.add(rid_text)
+    open_gap_ids = [
+        _as_str(item.get("gap_id"))
+        for item in gaps_payload.get("gaps", [])
+        if isinstance(item, dict)
+        and _as_str(item.get("status")) == "open"
+        and (_as_str(item.get("phase_id")) or "phase-1") == phase_id
+        and _as_str(item.get("gap_id"))
+    ]
+    verify_commands_passed = verify_required.issubset(verify_passed)
+    uat_matrix_passed = uat_required.issubset(uat_passed)
+    checks = {
+        "phase_id": phase_id,
+        "all_tasks_review_done": all_tasks_review_done,
+        "verify_commands_passed": verify_commands_passed,
+        "uat_matrix_passed": uat_matrix_passed,
+        "zero_open_gaps": len(open_gap_ids) == 0,
+        "open_gap_ids": open_gap_ids,
+    }
+    checks["all_passed"] = (
+        checks["all_tasks_review_done"]
+        and checks["verify_commands_passed"]
+        and checks["uat_matrix_passed"]
+        and checks["zero_open_gaps"]
+    )
+    return checks
+
+
+def _resolve_active_phase(plan_packets: dict[str, Any], task_state: dict[str, Any], gaps_payload: dict[str, Any], repo_root: Path) -> tuple[str | None, dict[str, Any]]:
+    ordered = _ordered_phase_ids(plan_packets)
+    if not ordered:
+        return None, {}
+    all_checks: dict[str, Any] = {}
+    for phase_id in ordered:
+        checks = _phase_exit_checks(repo_root, phase_id, plan_packets, task_state, gaps_payload)
+        all_checks[phase_id] = checks
+        if not checks.get("all_passed"):
+            return phase_id, all_checks
+    return None, all_checks
 
 
 def _read_rate_gate_window(repo_root: Path) -> dict[str, Any]:
@@ -1066,7 +1721,106 @@ def command_new_project(req: OpRequest) -> dict[str, Any]:
     )
 
 
-def _compute_plan_check(mission: str | None, scope: str | None, requirements: list[dict[str, Any]], tasks: list[dict[str, Any]]) -> dict[str, Any]:
+def _derive_phases_from_task_dag(tasks: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, str], list[dict[str, Any]]]:
+    errors: list[dict[str, Any]] = []
+    task_ids: list[str] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        if task_id:
+            task_ids.append(task_id)
+    task_set = set(task_ids)
+
+    indegree: dict[str, int] = {task_id: 0 for task_id in task_ids}
+    outgoing: dict[str, list[str]] = {task_id: [] for task_id in task_ids}
+    deps_by_task: dict[str, list[str]] = {}
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        if not task_id:
+            continue
+        deps: list[str] = []
+        raw_deps = task.get("depends_on")
+        if raw_deps is None:
+            raw_deps = []
+        if not isinstance(raw_deps, list):
+            errors.append({"code": "dependency_graph_invalid", "message": f"task {task_id} depends_on must be a list"})
+            continue
+        for dep in raw_deps:
+            dep_id = _as_str(dep)
+            if not dep_id:
+                continue
+            if dep_id not in task_set:
+                errors.append({"code": "dependency_graph_invalid", "message": f"task {task_id} depends on unknown task {dep_id}"})
+                continue
+            deps.append(dep_id)
+            indegree[task_id] += 1
+            outgoing[dep_id].append(task_id)
+        deps_by_task[task_id] = deps
+
+    if errors:
+        return [], {}, errors
+
+    phase_map: dict[str, str] = {}
+    level: list[str] = sorted([task_id for task_id, count in indegree.items() if count == 0])
+    phase_index = 1
+    processed: set[str] = set()
+    while level:
+        phase_id = f"phase-{phase_index}"
+        for task_id in level:
+            phase_map[task_id] = phase_id
+            processed.add(task_id)
+        next_level: list[str] = []
+        for task_id in level:
+            for follower in outgoing.get(task_id, []):
+                indegree[follower] -= 1
+                if indegree[follower] == 0:
+                    next_level.append(follower)
+        phase_index += 1
+        level = sorted(next_level)
+
+    if len(processed) != len(task_set):
+        errors.append({"code": "dependency_graph_invalid", "message": "cycle detected in task DAG"})
+        return [], {}, errors
+
+    phases: list[dict[str, Any]] = []
+    phase_tasks: dict[str, list[str]] = defaultdict(list)
+    for task_id in task_ids:
+        phase_tasks[phase_map[task_id]].append(task_id)
+    ordered_phase_ids = sorted(phase_tasks.keys(), key=lambda item: int(item.split("-")[-1]))
+    for phase_id in ordered_phase_ids:
+        depends_on_phase_ids: set[str] = set()
+        for task_id in phase_tasks[phase_id]:
+            for dep_id in deps_by_task.get(task_id, []):
+                dep_phase = phase_map.get(dep_id)
+                if dep_phase and dep_phase != phase_id:
+                    depends_on_phase_ids.add(dep_phase)
+        phases.append(
+            {
+                "phase_id": phase_id,
+                "task_ids": sorted(phase_tasks[phase_id]),
+                "depends_on_phase_ids": sorted(depends_on_phase_ids),
+                "entry_criteria": ["phase_dependencies_done"],
+                "exit_criteria": [
+                    "all_tasks_review_done",
+                    "verify_commands_passed",
+                    "uat_matrix_passed",
+                    "zero_open_gaps",
+                ],
+            }
+        )
+    return phases, phase_map, []
+
+
+def _compute_plan_check(
+    mission: str | None,
+    scope: str | None,
+    requirements: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    phases: list[dict[str, Any]],
+) -> dict[str, Any]:
     req_ids = [item.get("id") for item in requirements if isinstance(item, dict) and _as_str(item.get("id"))]
     covered_ids: set[str] = set()
     for task in tasks:
@@ -1136,6 +1890,45 @@ def _compute_plan_check(mission: str | None, scope: str | None, requirements: li
     if not dag_pass:
         blocking_errors.append({"code": "dependency_graph_invalid", "message": "task dependency references unknown nodes"})
 
+    phase_ids = {
+        _as_str(phase.get("phase_id"))
+        for phase in phases
+        if isinstance(phase, dict) and _as_str(phase.get("phase_id"))
+    }
+    phase_traceability_pass = True
+    for task in tasks:
+        if not isinstance(task, dict):
+            phase_traceability_pass = False
+            break
+        phase_id = _as_str(task.get("phase_id"))
+        if not phase_id or phase_id not in phase_ids:
+            phase_traceability_pass = False
+            break
+    checks.append({"id": "phase_traceability", "passed": phase_traceability_pass})
+    if not phase_traceability_pass:
+        blocking_errors.append({"code": "phase_traceability_failed", "message": "tasks must map to valid plan phases"})
+
+    phase_dag_pass = True
+    for phase in phases:
+        if not isinstance(phase, dict):
+            phase_dag_pass = False
+            break
+        phase_id = _as_str(phase.get("phase_id"))
+        deps = phase.get("depends_on_phase_ids")
+        if not phase_id or not isinstance(deps, list):
+            phase_dag_pass = False
+            break
+        for dep in deps:
+            dep_id = _as_str(dep)
+            if not dep_id or dep_id == phase_id or dep_id not in phase_ids:
+                phase_dag_pass = False
+                break
+        if not phase_dag_pass:
+            break
+    checks.append({"id": "phase_dependency_dag_sanity", "passed": phase_dag_pass})
+    if not phase_dag_pass:
+        blocking_errors.append({"code": "phase_dependency_invalid", "message": "phase dependency graph is invalid"})
+
     passed = all(item["passed"] for item in checks)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1158,6 +1951,7 @@ def _compute_plan_check(mission: str | None, scope: str | None, requirements: li
             "valid": dag_pass,
         },
         "verify_contract_completeness": verify_complete,
+        "phase_traceability": phase_traceability_pass,
         "blocking_errors": blocking_errors,
     }
 
@@ -1197,12 +1991,23 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
         tasks.append(task)
         prev_task_id = task_id
 
+    phases, phase_map, phase_errors = _derive_phases_from_task_dag(tasks)
+    if phase_errors:
+        raise OpError("validation_error", phase_errors[0]["message"], stage="plan")
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        if task_id:
+            task["phase_id"] = phase_map.get(task_id, "phase-1")
+
     plan_id = f"plan-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     plan_packets = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": utc_now_iso(),
         "plan_id": plan_id,
-        "phase": "phase-1",
+        "phase": "multi-phase",
+        "phases": phases,
         "requirements": [item.get("id") for item in requirements if isinstance(item, dict)],
         "tasks": tasks,
         "depends_on": [],
@@ -1210,7 +2015,7 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
         "verify_commands": sorted({cmd for task in tasks for cmd in task.get("verify_commands", []) if isinstance(cmd, str)}),
     }
 
-    plan_check = _compute_plan_check(mission, scope, requirements, tasks)
+    plan_check = _compute_plan_check(mission, scope, requirements, tasks, phases)
 
     test_contract_md_lines = [
         "# TEST CONTRACT",
@@ -1251,10 +2056,46 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
         title = _as_str(req_item.get("title")) or "Untitled"
         uat_md_lines.append(f"| {req_id} | Validate flow for {title} | Scenario passes without blocker |")
 
+    verification_md_lines = [
+        "# VERIFICATION",
+        "",
+        f"Plan ID: `{plan_id}`",
+        "",
+        "## Required Verify Commands",
+    ]
+    for cmd in plan_packets["verify_commands"]:
+        verification_md_lines.append(f"- `{cmd}`")
+    verification_md_lines.extend(["", "## Phase Exit Rules", "- all tasks review_done", "- verify commands passed", "- UAT requirements passed", "- open gaps = 0"])
+
+    uat_phase_md_lines = [
+        "# UAT",
+        "",
+        f"Plan ID: `{plan_id}`",
+        "",
+        "Autonomous tester-driven UAT: pass/fail results are consumed from canonical task evidence artifacts.",
+    ]
+
+    gaps_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "plan_id": plan_id,
+        "updated_at": utc_now_iso(),
+        "gaps": [],
+    }
+    gap_closure_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "plan_id": plan_id,
+        "generated_at": utc_now_iso(),
+        "tasks": [],
+    }
+
+    evidence_refs = _write_task_evidence_files(repo_root, plan_packets)
+    task_state_payload = _task_state_from_plan(plan_packets, evidence_refs=evidence_refs)
+
     state["updated_at"] = utc_now_iso()
     state["plan_id"] = plan_id
     state["plan_ready"] = bool(plan_check["passed"])
     state["build_ready"] = bool(plan_check["passed"])
+    state["phase_count"] = len(phases)
 
     state_md_lines = [
         "# STATE",
@@ -1263,6 +2104,7 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
         f"- plan_ready: {str(bool(plan_check['passed'])).lower()}",
         f"- build_ready: {str(bool(plan_check['passed'])).lower()}",
         f"- plan_id: {plan_id}",
+        f"- phase_count: {len(phases)}",
         "",
         "## Plan Checks",
     ]
@@ -1271,9 +2113,13 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
 
     _atomic_write_json(_repo_path(repo_root, PLAN_PACKETS_JSON), plan_packets)
     _atomic_write_json(_repo_path(repo_root, PLAN_CHECK_JSON), plan_check)
-    _atomic_write_json(_repo_path(repo_root, TASK_EXECUTION_STATE_JSON), _task_state_from_plan(plan_packets))
+    _atomic_write_json(_repo_path(repo_root, TASK_EXECUTION_STATE_JSON), task_state_payload)
+    _atomic_write_json(_repo_path(repo_root, GAPS_JSON), gaps_payload)
+    _atomic_write_json(_repo_path(repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON), gap_closure_payload)
     _write_text(_repo_path(repo_root, TEST_CONTRACT_MD), "\n".join(test_contract_md_lines) + "\n")
     _write_text(_repo_path(repo_root, PLAYWRIGHT_UAT_MD), "\n".join(uat_md_lines) + "\n")
+    _write_text(_repo_path(repo_root, VERIFICATION_MD), "\n".join(verification_md_lines) + "\n")
+    _write_text(_repo_path(repo_root, UAT_MD), "\n".join(uat_phase_md_lines) + "\n")
     _atomic_write_json(state_path, state)
     _write_text(_repo_path(repo_root, STATE_MD), "\n".join(state_md_lines) + "\n")
 
@@ -1290,8 +2136,12 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
             str(_repo_path(repo_root, PLAN_PACKETS_JSON)),
             str(_repo_path(repo_root, PLAN_CHECK_JSON)),
             str(_repo_path(repo_root, TASK_EXECUTION_STATE_JSON)),
+            str(_repo_path(repo_root, GAPS_JSON)),
+            str(_repo_path(repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)),
             str(_repo_path(repo_root, TEST_CONTRACT_MD)),
             str(_repo_path(repo_root, PLAYWRIGHT_UAT_MD)),
+            str(_repo_path(repo_root, VERIFICATION_MD)),
+            str(_repo_path(repo_root, UAT_MD)),
             str(state_path),
         ],
         next_action=next_action,
@@ -1380,6 +2230,11 @@ def _load_build_state(path: Path) -> dict[str, Any]:
             },
             "strict_done_checks": {},
             "current_task_pointer": None,
+            "current_phase_id": None,
+            "phase_exit_checks": {},
+            "open_gap_ids": [],
+            "active_gap_closure_phase_id": None,
+            "last_gap_generation_at": None,
             "handoff_log_offset": 0,
             "history": [],
         }
@@ -1402,6 +2257,11 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     )
     payload.setdefault("strict_done_checks", {})
     payload.setdefault("current_task_pointer", None)
+    payload.setdefault("current_phase_id", None)
+    payload.setdefault("phase_exit_checks", {})
+    payload.setdefault("open_gap_ids", [])
+    payload.setdefault("active_gap_closure_phase_id", None)
+    payload.setdefault("last_gap_generation_at", None)
     payload.setdefault("handoff_log_offset", 0)
     payload.setdefault(
         "cycle_gate_decision",
@@ -1619,30 +2479,21 @@ def _apply_handoff_updates(repo_root: Path, task_state: dict[str, Any], build_st
             continue
         evidence = task.get("evidence")
         if not isinstance(evidence, dict):
-            evidence = {"dev_ready_evidence_ref": None, "verify_results": [], "uat_results": []}
+            evidence = {
+                "task_evidence_ref": str(_canonical_task_evidence_rel(task_id)),
+                "dev_ready_evidence_ref": str(_canonical_task_evidence_rel(task_id)),
+                "verify_results": [],
+                "uat_results": [],
+            }
             task["evidence"] = evidence
-        verify_results = evidence.get("verify_results")
-        if not isinstance(verify_results, list):
-            verify_results = []
-            evidence["verify_results"] = verify_results
-        uat_results = evidence.get("uat_results")
-        if not isinstance(uat_results, list):
-            uat_results = []
-            evidence["uat_results"] = uat_results
 
-        row_verify = row.get("verify_results")
-        if isinstance(row_verify, list):
-            verify_results.extend(item for item in row_verify if isinstance(item, (str, dict)))
-        row_uat = row.get("uat_results")
-        if isinstance(row_uat, list):
-            uat_results.extend(item for item in row_uat if isinstance(item, (str, dict)))
+        task_evidence_ref = _as_str(row.get("task_evidence_ref")) or _as_str(row.get("dev_ready_evidence_ref"))
+        if task_evidence_ref:
+            evidence["task_evidence_ref"] = task_evidence_ref
+            evidence["dev_ready_evidence_ref"] = task_evidence_ref
 
-        dev_ready = _as_str(row.get("dev_ready_evidence_ref"))
-        if dev_ready:
-            evidence["dev_ready_evidence_ref"] = dev_ready
-
-        result = (_as_str(row.get("result")) or _as_str(row.get("status")) or _as_str(row.get("phase")) or "").lower()
-        if result in {"blocked", "failed", "error"}:
+        result = (_as_str(row.get("result")) or _as_str(row.get("status")) or "").lower()
+        if result in {"blocked", "failed", "error", "dispatch_failed"}:
             task["status"] = "blocked"
             task["owner_slot"] = None
             blockers = task.get("blockers")
@@ -1655,28 +2506,6 @@ def _apply_handoff_updates(repo_root: Path, task_state: dict[str, Any], build_st
                     "summary": _as_str(row.get("reason")) or _as_str(row.get("message")) or "handoff blocked",
                 }
             )
-            continue
-        if result in {"dev_done", "developer_done", "implementation_done"}:
-            task["status"] = "dev_done"
-            task["owner_slot"] = None
-            continue
-        if result in {"test_done", "tests_passed", "qa_done"}:
-            task["status"] = "test_done"
-            task["owner_slot"] = None
-            continue
-        if result in {"review_done", "accepted", "merged"}:
-            task["status"] = "review_done"
-            task["owner_slot"] = None
-            continue
-        if result in {"dev_in_progress", "developer_started"}:
-            task["status"] = "dev_in_progress"
-            continue
-        if result in {"test_in_progress", "tester_started"}:
-            task["status"] = "test_in_progress"
-            continue
-        if result in {"review_in_progress", "reviewer_started"}:
-            task["status"] = "review_in_progress"
-            continue
     build_state["handoff_log_offset"] = len(rows)
     return warnings
 
@@ -1702,10 +2531,11 @@ def _dispatch_task_packet(
     ]
     if not acceptance_refs:
         acceptance_refs = [f"{task_id} acceptance"]
-    dev_ready_ref = _as_str((task.get("evidence") or {}).get("dev_ready_evidence_ref"))
-    if not dev_ready_ref:
-        dev_ready_ref = f"reports/optimus-prime/planning/evidence/{task_id}/DEV_READY.json"
-        task.setdefault("evidence", {})["dev_ready_evidence_ref"] = dev_ready_ref
+    evidence_ref = _as_str((task.get("evidence") or {}).get("task_evidence_ref"))
+    if not evidence_ref:
+        evidence_ref = str(_canonical_task_evidence_rel(task_id))
+        task.setdefault("evidence", {})["task_evidence_ref"] = evidence_ref
+    task.setdefault("evidence", {})["dev_ready_evidence_ref"] = evidence_ref
 
     stage_cfg = {
         "dev": {"slot": "dev-1", "role": "developer", "status": "dev_in_progress", "attempt_key": "dev"},
@@ -1735,7 +2565,7 @@ def _dispatch_task_packet(
         "plan_id": plan_id,
         "requirement_ids": requirement_ids,
         "task_acceptance_refs": acceptance_refs,
-        "dev_ready_evidence_ref": dev_ready_ref,
+        "dev_ready_evidence_ref": evidence_ref,
         "dry_run": req.dry_run,
         "cycle_note": f"/op-build:{stage}:{task_id}",
     }
@@ -1765,10 +2595,20 @@ def _dispatch_task_packet(
     return {"ok": False, "task_id": task_id, "stage": stage, "dispatch": result}
 
 
-def _dispatch_next_task(req: OpRequest, plan_packets: dict[str, Any], task_state: dict[str, Any], build_state: dict[str, Any]) -> dict[str, Any]:
+def _dispatch_next_task(
+    req: OpRequest,
+    plan_packets: dict[str, Any],
+    task_state: dict[str, Any],
+    build_state: dict[str, Any],
+    active_phase_id: str | None = None,
+) -> dict[str, Any]:
     task_map = _task_by_id(task_state)
     plan_map = _plan_task_map(plan_packets)
-    ordered_ids = [task_id for task_id in plan_map.keys()]
+    ordered_ids = [
+        task_id
+        for task_id in plan_map.keys()
+        if not active_phase_id or (_as_str(plan_map.get(task_id, {}).get("phase_id")) or "phase-1") == active_phase_id
+    ]
     has_in_progress = any(
         (_as_str(task_map.get(task_id, {}).get("status")) or "").endswith("_in_progress")
         for task_id in ordered_ids
@@ -1783,20 +2623,49 @@ def _dispatch_next_task(req: OpRequest, plan_packets: dict[str, Any], task_state
         if not isinstance(task, dict):
             continue
         status = _as_str(task.get("status")) or "queued"
+        if status == "review_done":
+            continue
         build_state["current_task_pointer"] = task_id
         if status == "queued":
             return _dispatch_task_packet(req, task, plan_task, "dev", plan_id)
+        if status == "blocked" and bool(task.get("is_gap_closure")):
+            task["status"] = "queued"
+            return _dispatch_task_packet(req, task, plan_task, "dev", plan_id)
         if status == "dev_done":
-            dev_ref = _as_str((task.get("evidence") or {}).get("dev_ready_evidence_ref"))
-            if not dev_ref:
+            evidence_path = _task_evidence_path(req.repo_root, task)
+            if not evidence_path.exists():
                 return {
                     "ok": False,
                     "status": "blocked",
                     "task_id": task_id,
-                    "reason": "missing_dev_ready_evidence_ref",
+                    "reason": "missing_task_evidence",
+                }
+            payload = _read_json(evidence_path)
+            if not isinstance(payload, dict) or not _as_bool_field((payload.get("gate") or {}).get("ready_for_test")):
+                return {
+                    "ok": False,
+                    "status": "blocked",
+                    "task_id": task_id,
+                    "reason": "dev_gate_not_ready_for_test",
                 }
             return _dispatch_task_packet(req, task, plan_task, "test", plan_id)
         if status == "test_done":
+            evidence_path = _task_evidence_path(req.repo_root, task)
+            if not evidence_path.exists():
+                return {
+                    "ok": False,
+                    "status": "blocked",
+                    "task_id": task_id,
+                    "reason": "missing_task_evidence",
+                }
+            payload = _read_json(evidence_path)
+            if not isinstance(payload, dict) or not _as_bool_field((payload.get("gate") or {}).get("ready_for_review")):
+                return {
+                    "ok": False,
+                    "status": "blocked",
+                    "task_id": task_id,
+                    "reason": "test_gate_not_ready_for_review",
+                }
             return _dispatch_task_packet(req, task, plan_task, "review", plan_id)
     return {"ok": True, "status": "noop", "reason": "no dispatchable tasks"}
 
@@ -1989,6 +2858,7 @@ def _evaluate_strict_done(
     plan_packets: dict[str, Any],
     task_state: dict[str, Any],
     verification: dict[str, Any] | None,
+    gaps_payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
     plan_tasks = []
     required_verify_cmds: set[str] = set()
@@ -2019,7 +2889,7 @@ def _evaluate_strict_done(
         if status != "review_done":
             all_review_done = False
         evidence = task.get("evidence") if isinstance(task.get("evidence"), dict) else {}
-        dev_ref = _as_str(evidence.get("dev_ready_evidence_ref"))
+        dev_ref = _as_str(evidence.get("task_evidence_ref")) or _as_str(evidence.get("dev_ready_evidence_ref"))
         if not dev_ref:
             all_dev_refs = False
         verify_results = evidence.get("verify_results") if isinstance(evidence.get("verify_results"), list) else []
@@ -2052,17 +2922,30 @@ def _evaluate_strict_done(
     verify_commands_passed = required_verify_cmds.issubset(passed_verify_cmds)
     uat_passed = required_uat_ids.issubset(passed_uat_reqs)
     final_state_ok = bool(verification and verification.get("ok") is True)
+    open_gap_ids = [
+        _as_str(item.get("gap_id"))
+        for item in (gaps_payload or {}).get("gaps", [])
+        if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
+    ]
+    phase_checks: dict[str, Any] = {}
+    for phase_id in _ordered_phase_ids(plan_packets):
+        phase_checks[phase_id] = _phase_exit_checks(repo_root, phase_id, plan_packets, task_state, gaps_payload or {"gaps": []})
+    all_phases_complete = bool(phase_checks) and all(bool(item.get("all_passed")) for item in phase_checks.values())
     checks = {
         "tasks_exist_in_task_state": task_ids_present,
         "all_tasks_review_done": all_review_done,
         "all_tasks_have_dev_ready_evidence_ref": all_dev_refs,
         "verify_commands_passed": verify_commands_passed,
         "uat_matrix_passed": uat_passed,
+        "all_phases_complete": all_phases_complete,
+        "zero_open_gaps": len(open_gap_ids) == 0,
         "final_state_authorized": final_state_ok,
     }
     checks["all_passed"] = all(checks.values())
     checks["missing_verify_commands"] = sorted(required_verify_cmds - passed_verify_cmds)
     checks["missing_uat_requirement_ids"] = sorted(required_uat_ids - passed_uat_reqs)
+    checks["open_gap_ids"] = [gap_id for gap_id in open_gap_ids if gap_id]
+    checks["phase_checks"] = phase_checks
     return checks
 
 
@@ -2194,6 +3077,12 @@ def command_build(req: OpRequest) -> dict[str, Any]:
     _atomic_write_json(build_state_path, build_state)
 
     operator_stop_path = req.repo_root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
+    plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
+    gaps_payload = _load_gaps_payload(_repo_path(req.repo_root, GAPS_JSON), plan_id)
+    gap_closure_payload = _read_json(_repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)) if _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON).exists() else {"tasks": []}
+    if not isinstance(gap_closure_payload, dict):
+        gap_closure_payload = {"tasks": []}
+    resume_cmd = "/op-resume" if req.command == "op-resume" else "/op-build"
 
     cycles = 0
     history: list[dict[str, Any]] = build_state.get("history", [])
@@ -2222,9 +3111,19 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             else:
                 remediation_state["active"] = False
                 remediation_state["reason"] = None
+
             handoff_warnings = _apply_handoff_updates(req.repo_root, task_state, build_state)
             warnings.extend(handoff_warnings)
             cycle_local_warnings.extend(handoff_warnings)
+            evidence_warnings = _sync_task_state_from_evidence(req.repo_root, plan_packets, task_state)
+            warnings.extend(evidence_warnings)
+            cycle_local_warnings.extend(evidence_warnings)
+            gaps_payload, gap_closure_payload = _refresh_gap_artifacts(req.repo_root, plan_packets, task_state, build_state)
+            _ensure_gap_closure_task_state(req.repo_root, task_state, gap_closure_payload, plan_id)
+            merged_plan_packets = _merge_plan_with_gap_closure(plan_packets, gap_closure_payload)
+            active_phase_id, phase_checks = _resolve_active_phase(merged_plan_packets, task_state, gaps_payload, req.repo_root)
+            build_state["current_phase_id"] = active_phase_id
+            build_state["phase_exit_checks"] = phase_checks
 
             if operator_stop_path.exists():
                 build_state["terminal_state"] = {
@@ -2247,7 +3146,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                         }
                     ],
                     state_ref=str(build_state_path),
-                    next_action="Remove operator stop marker and rerun /op-build to resume.",
+                    next_action=f"Remove operator stop marker and rerun {resume_cmd} to continue.",
                     data={"terminal_reason": "operator_stop"},
                 )
 
@@ -2257,7 +3156,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             directives: list[dict[str, Any]] = []
             if events_path_raw and last_cycle_number > 0:
                 directives = _extract_cycle_directives(Path(events_path_raw).expanduser().resolve(), last_cycle_number)
-            directive_state = _apply_directives(req, directives, build_state, plan_packets, task_state)
+            directive_state = _apply_directives(req, directives, build_state, merged_plan_packets, task_state)
             directive_outcomes = directive_state.get("outcomes", [])
             for outcome in directive_outcomes:
                 warning_code = _as_str(outcome.get("warning_code"))
@@ -2273,6 +3172,15 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             handoff_warnings = _apply_handoff_updates(req.repo_root, task_state, build_state)
             warnings.extend(handoff_warnings)
             cycle_local_warnings.extend(handoff_warnings)
+            evidence_warnings = _sync_task_state_from_evidence(req.repo_root, merged_plan_packets, task_state)
+            warnings.extend(evidence_warnings)
+            cycle_local_warnings.extend(evidence_warnings)
+            gaps_payload, gap_closure_payload = _refresh_gap_artifacts(req.repo_root, merged_plan_packets, task_state, build_state)
+            _ensure_gap_closure_task_state(req.repo_root, task_state, gap_closure_payload, plan_id)
+            merged_plan_packets = _merge_plan_with_gap_closure(plan_packets, gap_closure_payload)
+            active_phase_id, phase_checks = _resolve_active_phase(merged_plan_packets, task_state, gaps_payload, req.repo_root)
+            build_state["current_phase_id"] = active_phase_id
+            build_state["phase_exit_checks"] = phase_checks
 
             history.append(
                 {
@@ -2281,6 +3189,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     "directives": directive_outcomes,
                     "cycle_warnings": cycle_local_warnings,
                     "strategy": build_state.get("current_strategy"),
+                    "active_phase_id": active_phase_id,
                 }
             )
             build_state["history"] = history[-200:]
@@ -2291,7 +3200,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 if terminal_reason == "project_done":
                     final_state_path = req.repo_root / "reports" / "optimus-prime" / "controller" / "FINAL_STATE.json"
                     verification = _verify_final_state(req, final_state_path)
-                    strict_checks = _evaluate_strict_done(req.repo_root, plan_packets, task_state, verification)
+                    strict_checks = _evaluate_strict_done(req.repo_root, merged_plan_packets, task_state, verification, gaps_payload)
                     build_state["strict_done_checks"] = strict_checks
                     if verification.get("ok") is True and strict_checks.get("all_passed") is True:
                         build_state["terminal_state"] = {
@@ -2416,7 +3325,20 @@ def command_build(req: OpRequest) -> dict[str, Any]:
 
             dispatch_blocked = bool(directive_state.get("dispatch_blocked"))
             dispatch_block_reason = _as_str(directive_state.get("dispatch_block_reason"))
-            if dispatch_blocked:
+            if active_phase_id is None:
+                build_state["cycle_gate_decision"] = {
+                    "dispatch_blocked": True,
+                    "reason": "phase_barrier_complete_waiting_terminal",
+                    "terminal_reason": terminal_reason,
+                }
+                warning = {
+                    "code": "dispatch_skipped_hard_gate",
+                    "message": "dispatch skipped for cycle: all phase barriers complete, awaiting terminal authorization",
+                    "stage": "build_loop",
+                }
+                warnings.append(warning)
+                cycle_local_warnings.append(warning)
+            elif dispatch_blocked:
                 build_state["cycle_gate_decision"] = {
                     "dispatch_blocked": True,
                     "reason": dispatch_block_reason or "dispatch_filter",
@@ -2449,7 +3371,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     warnings.append(warning)
                     cycle_local_warnings.append(warning)
                 else:
-                    dispatch_result = _dispatch_next_task(req, plan_packets, task_state, build_state)
+                    dispatch_result = _dispatch_next_task(req, merged_plan_packets, task_state, build_state, active_phase_id)
                     directive_outcomes.append(
                         {
                             "directive_type": "review_dispatch_queue"
@@ -2496,7 +3418,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             req,
             ok=False,
             status="running_needs_resume",
-            summary="Build loop executed bounded cycles without terminal resolution; resume with /op-build.",
+            summary=f"Build loop executed bounded cycles without terminal resolution; resume with {resume_cmd}.",
             warnings=warnings,
             errors=[
                 {
@@ -2506,10 +3428,12 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 }
             ],
             state_ref=str(build_state_path),
-            next_action="Rerun /op-build to continue from BUILD_STATE.json.",
+            next_action=f"Rerun {resume_cmd} to continue from BUILD_STATE.json.",
             data={
                 "cycles_executed": cycles,
                 "current_strategy": build_state.get("current_strategy"),
+                "current_phase_id": build_state.get("current_phase_id"),
+                "open_gap_ids": build_state.get("open_gap_ids", []),
                 "strict_done_checks": build_state.get("strict_done_checks", {}),
             },
         )
@@ -2521,6 +3445,192 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
         finally:
             _release_build_loop_lock(lock_path, lock_id)
+
+
+def command_health(req: OpRequest) -> dict[str, Any]:
+    warnings, missing, _, plan_packets, task_state = _preflight_build(req)
+    checks: list[dict[str, Any]] = []
+    checks.append(
+        {
+            "id": "baseline_artifacts",
+            "passed": len(missing) == 0,
+            "missing": missing,
+        }
+    )
+
+    build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
+    build_state_valid = True
+    if build_state_path.exists():
+        payload = _read_json(build_state_path)
+        build_state_valid = isinstance(payload, dict)
+    checks.append({"id": "build_state_integrity", "passed": build_state_valid})
+
+    validation_errors = _validate_task_execution_state(task_state, plan_packets) if task_state and plan_packets else []
+    checks.append({"id": "task_state_integrity", "passed": len(validation_errors) == 0, "errors": validation_errors})
+
+    evidence_errors: list[dict[str, Any]] = []
+    for task in task_state.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
+        phase_id = _as_str(task.get("phase_id")) or "phase-1"
+        evidence_path = _task_evidence_path(req.repo_root, task)
+        if not evidence_path.exists():
+            evidence_errors.append({"task_id": task_id, "error": "missing", "path": str(evidence_path)})
+            continue
+        try:
+            payload = _read_json(evidence_path)
+        except OpError as exc:
+            evidence_errors.append({"task_id": task_id, "error": exc.message, "path": str(evidence_path)})
+            continue
+        if not isinstance(payload, dict):
+            evidence_errors.append({"task_id": task_id, "error": "not_object", "path": str(evidence_path)})
+            continue
+        schema_errors = _validate_task_evidence_payload(payload, task_id, phase_id)
+        if schema_errors:
+            evidence_errors.append({"task_id": task_id, "error": "schema_invalid", "details": schema_errors, "path": str(evidence_path)})
+    checks.append({"id": "task_evidence_integrity", "passed": len(evidence_errors) == 0, "errors": evidence_errors})
+
+    gaps_payload = _load_gaps_payload(_repo_path(req.repo_root, GAPS_JSON), _as_str(plan_packets.get("plan_id")) or "plan-unknown")
+    open_gap_ids = [
+        _as_str(item.get("gap_id"))
+        for item in gaps_payload.get("gaps", [])
+        if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
+    ]
+    gap_closure_payload = _read_json(_repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)) if _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON).exists() else {"tasks": []}
+    if not isinstance(gap_closure_payload, dict):
+        gap_closure_payload = {"tasks": []}
+    closure_task_ids = {
+        _as_str(task.get("source_gap_id"))
+        for task in gap_closure_payload.get("tasks", [])
+        if isinstance(task, dict) and _as_str(task.get("source_gap_id"))
+    }
+    gap_closure_ready = set(open_gap_ids).issubset(closure_task_ids)
+    checks.append(
+        {
+            "id": "gap_closure_readiness",
+            "passed": gap_closure_ready,
+            "open_gap_ids": open_gap_ids,
+        }
+    )
+
+    passed = all(bool(item.get("passed")) for item in checks)
+    status = "completed" if passed else "blocked"
+    summary = "OP health checks passed." if passed else "OP health checks detected blocking issues."
+    return _response(
+        req,
+        ok=passed,
+        status=status,
+        summary=summary,
+        warnings=warnings,
+        errors=[] if passed else [{"code": "health_check_failed", "message": "one or more health checks failed", "stage": "health"}],
+        artifacts=[
+            str(_repo_path(req.repo_root, PLAN_PACKETS_JSON)),
+            str(_repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)),
+            str(_repo_path(req.repo_root, BUILD_STATE_JSON)),
+            str(_repo_path(req.repo_root, GAPS_JSON)),
+            str(_repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)),
+        ],
+        state_ref=str(_repo_path(req.repo_root, BUILD_STATE_JSON)),
+        data={
+            "checks": checks,
+            "open_gap_ids": open_gap_ids,
+        },
+    )
+
+
+def command_status(req: OpRequest) -> dict[str, Any]:
+    planning_root = _repo_path(req.repo_root, PLANNING_REL)
+    plan_packets = _read_json(_repo_path(req.repo_root, PLAN_PACKETS_JSON)) if _repo_path(req.repo_root, PLAN_PACKETS_JSON).exists() else {}
+    task_state = _read_json(_repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)) if _repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON).exists() else {"tasks": []}
+    build_state = _load_build_state(_repo_path(req.repo_root, BUILD_STATE_JSON)) if _repo_path(req.repo_root, BUILD_STATE_JSON).exists() else {"current_strategy": STRATEGY_LADDER[0]}
+    gaps_payload = _load_gaps_payload(_repo_path(req.repo_root, GAPS_JSON), _as_str((plan_packets or {}).get("plan_id")) or "plan-unknown")
+    merged_plan = _merge_plan_with_gap_closure(
+        plan_packets if isinstance(plan_packets, dict) else {},
+        _read_json(_repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON))
+        if _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON).exists()
+        else {"tasks": []},
+    )
+    active_phase_id, phase_checks = _resolve_active_phase(
+        merged_plan if isinstance(merged_plan, dict) else {"tasks": [], "phases": []},
+        task_state if isinstance(task_state, dict) else {"tasks": []},
+        gaps_payload,
+        req.repo_root,
+    )
+    task_rows = task_state.get("tasks", []) if isinstance(task_state, dict) and isinstance(task_state.get("tasks"), list) else []
+    counts_by_status: dict[str, int] = {}
+    for task in task_rows:
+        if not isinstance(task, dict):
+            continue
+        status = _as_str(task.get("status")) or "unknown"
+        counts_by_status[status] = counts_by_status.get(status, 0) + 1
+    open_gap_ids = [
+        _as_str(item.get("gap_id"))
+        for item in gaps_payload.get("gaps", [])
+        if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
+    ]
+    next_action = (
+        "/op-initialize"
+        if not _repo_path(req.repo_root, STATE_JSON).exists()
+        else "/op-resume" if _repo_path(req.repo_root, BUILD_STATE_JSON).exists() else "/op-build"
+    )
+    return _response(
+        req,
+        ok=True,
+        status="completed",
+        summary="OP status snapshot generated.",
+        artifacts=[str(planning_root)],
+        next_action=f"Use {next_action} for the next autonomous step.",
+        state_ref=str(_repo_path(req.repo_root, BUILD_STATE_JSON)),
+        data={
+            "plan_id": _as_str((plan_packets or {}).get("plan_id")),
+            "active_phase_id": active_phase_id,
+            "phase_exit_checks": phase_checks,
+            "task_counts_by_status": counts_by_status,
+            "open_gap_ids": [gap_id for gap_id in open_gap_ids if gap_id],
+            "active_workers": _active_workers_count(req.repo_root),
+            "current_strategy": _as_str((build_state or {}).get("current_strategy")) or STRATEGY_LADDER[0],
+            "next_action": next_action,
+        },
+    )
+
+
+def command_resume(req: OpRequest) -> dict[str, Any]:
+    build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
+    if not build_state_path.exists():
+        return _response(
+            req,
+            ok=False,
+            status="blocked_preflight",
+            summary="Resume blocked: no existing build state found.",
+            errors=[
+                {
+                    "code": "resume_unavailable",
+                    "message": "BUILD_STATE.json is missing; run /op-build first.",
+                    "stage": "resume",
+                }
+            ],
+            next_action="Run /op-build to initialize autonomous execution state.",
+            state_ref=str(build_state_path),
+        )
+    payload = _read_json(build_state_path)
+    if not isinstance(payload, dict) or int(payload.get("last_cycle", 0)) <= 0:
+        return _response(
+            req,
+            ok=False,
+            status="blocked_preflight",
+            summary="Resume blocked: existing build state is invalid for resume.",
+            errors=[
+                {
+                    "code": "resume_unavailable",
+                    "message": "BUILD_STATE.json has no resumable cycle history.",
+                    "stage": "resume",
+                }
+            ],
+            next_action="Run /op-build to start a fresh autonomous run.",
+            state_ref=str(build_state_path),
+        )
+    return command_build(req)
 
 
 def parse_request(payload: dict[str, Any]) -> OpRequest:
@@ -2559,7 +3669,7 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             raise OpError("input_error", "max_build_cycles must be integer", stage="input") from exc
         max_cycles_out = parsed if parsed > 0 else None
 
-    default_sleep = 5 if command == "op-build" else 0
+    default_sleep = 5 if command in {"op-build", "op-resume"} else 0
     sleep_minutes = payload.get("sleep_minutes", default_sleep)
     try:
         sleep_val = float(sleep_minutes)
@@ -2591,6 +3701,12 @@ def execute_request(req: OpRequest) -> dict[str, Any]:
         return command_initialize(req)
     if req.command == "op-build":
         return command_build(req)
+    if req.command == "op-health":
+        return command_health(req)
+    if req.command == "op-status":
+        return command_status(req)
+    if req.command == "op-resume":
+        return command_resume(req)
     raise OpError(
         "input_error",
         "unsupported command; expected one of: " + ", ".join(sorted(SUPPORTED_COMMANDS)),

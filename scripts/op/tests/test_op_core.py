@@ -60,6 +60,20 @@ def test_command_normalization_accepts_prefix_variants():
             assert req.command == "op-plan"
 
 
+def test_command_normalization_accepts_new_commands():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        cases = {
+            "/op-health": "op-health",
+            "$op-status": "op-status",
+            "op-resume": "op-resume",
+        }
+        for raw, expected in cases.items():
+            req = MODULE.parse_request({"command": raw, "repo_root": str(root)})
+            assert req.command == expected
+
+
 
 def test_map_codebase_fingerprint_stable_when_repo_unchanged():
     with tempfile.TemporaryDirectory() as tmp:
@@ -453,10 +467,28 @@ def test_build_completes_when_project_done_evidence_valid():
         task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
         for task in task_state["tasks"]:
             req_id = task["requirement_ids"][0]
+            evidence_rel = f"reports/optimus-prime/planning/evidence/{task['task_id']}/TASK_EVIDENCE.json"
+            evidence_path = root / evidence_rel
+            evidence_payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence_payload["dev"]["status"] = "done"
+            evidence_payload["dev"]["dev_ready"] = True
+            evidence_payload["dev"]["verify_results"] = [{"command": "python3 -m pytest", "passed": True}]
+            evidence_payload["test"]["status"] = "done"
+            evidence_payload["test"]["verify_results"] = [{"command": "python3 -m pytest", "passed": True}]
+            evidence_payload["test"]["uat_results"] = [{"requirement_id": req_id, "passed": True}]
+            evidence_payload["review"]["status"] = "done"
+            evidence_payload["review"]["decision"] = "accepted"
+            evidence_payload["gate"]["ready_for_test"] = True
+            evidence_payload["gate"]["ready_for_review"] = True
+            evidence_payload["gate"]["ready_for_phase_exit"] = True
+            evidence_payload["summary"]["result"] = "pass"
+            evidence_payload["summary"]["reason_codes"] = ["completed"]
+            evidence_path.write_text(json.dumps(evidence_payload, indent=2) + "\n", encoding="utf-8")
             task["status"] = "review_done"
             task["owner_slot"] = None
             task["evidence"] = {
-                "dev_ready_evidence_ref": f"reports/optimus-prime/planning/evidence/{task['task_id']}/DEV_READY.json",
+                "task_evidence_ref": evidence_rel,
+                "dev_ready_evidence_ref": evidence_rel,
                 "verify_results": [{"command": "python3 -m pytest", "passed": True}],
                 "uat_results": [{"requirement_id": req_id, "passed": True}],
             }
@@ -523,6 +555,78 @@ def test_build_resume_uses_existing_state_without_orphaning_progress():
         assert isinstance(state2.get("cycle_gate_decision"), dict)
         assert isinstance(state2.get("remediation_state"), dict)
         assert isinstance(state2.get("offset_recovery"), dict)
+
+
+def test_op_health_and_status_commands():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        health = run_payload({"command": "/op-health", "repo_root": str(root)})
+        assert health["ok"] is True
+        assert health["status"] == "completed"
+        status = run_payload({"command": "/op-status", "repo_root": str(root)})
+        assert status["ok"] is True
+        assert status["status"] == "completed"
+        assert "active_phase_id" in status["data"]
+
+
+def test_op_resume_blocks_without_existing_build_state():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        out = run_payload({"command": "/op-resume", "repo_root": str(root), "max_build_cycles": 1, "dry_run": True})
+        assert out["ok"] is False
+        assert out["status"] == "blocked_preflight"
+
+
+def test_op_resume_uses_existing_build_state():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        first = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert first["status"] == "running_needs_resume"
+        resumed = run_payload(
+            {
+                "command": "/op-resume",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert resumed["status"] == "running_needs_resume"
 
 
 if __name__ == "__main__":

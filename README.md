@@ -6,7 +6,7 @@ Current implemented lane:
 - Lane A / Phase 1: `optimus-cycle-controller` deterministic cycle loop core with terminal stop authorization guard.
 - Lane B (core): generic runtime coordination + blocker intelligence (`runtime-coordinator`, runtime-aware packets/snapshots).
 - Lane B add-on: historical thread/token audit (`THREAD_HISTORY.log` + `thread-token-audit` skill).
-- Lane B command surface: deterministic `/op-*` planning + autonomous build flow (`/op-map-codebase`, `/op-new-project`, `/op-plan`, `/op-initialize`, `/op-build`).
+- Lane B command surface: deterministic `/op-*` planning + autonomous build flow (`/op-map-codebase`, `/op-new-project`, `/op-plan`, `/op-initialize`, `/op-build`, `/op-health`, `/op-status`, `/op-resume`).
 
 See:
 - `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_PHASE1_PLAN.md`
@@ -62,12 +62,17 @@ Chat/skill aliases and CLI use the same canonical commands:
 - `/op-plan`
 - `/op-initialize`
 - `/op-build`
+- `/op-health`
+- `/op-status`
+- `/op-resume`
 
 Repo-local CLI wrapper:
 
 ```bash
 ./scripts/op/opctl.sh /op-initialize --mission \"Build MyBoard\" --scope \"Board workflows\" --json-pretty
 ./scripts/op/opctl.sh /op-build --json-pretty
+./scripts/op/opctl.sh /op-status --json-pretty
+./scripts/op/opctl.sh /op-health --json-pretty
 ```
 
 `/op-build` behavior (new-only model):
@@ -75,10 +80,13 @@ Repo-local CLI wrapper:
 - single-flight lock: `reports/optimus-prime/planning/BUILD_LOOP.lock`
 - default cadence: `sleep_minutes=5` (unless overridden)
 - canonical task state: `reports/optimus-prime/planning/TASK_EXECUTION_STATE.json`
+- canonical task evidence: `reports/optimus-prime/planning/evidence/<task_id>/TASK_EVIDENCE.json`
+- multi-phase planning: `PLAN_PACKETS.json` includes `phases[]` with strict phase barrier progression
+- autonomous gap closure: `GAPS.json` + `GAP_CLOSURE_PLAN_PACKETS.json` are generated/consumed during build
 - strict-first dispatch gating: `dispatch_filter`/hard-gated cycles skip dispatch before any packet launch
 - adapter mode source: runtime/test-train directives derive `test_train_mode` from `TEST_TRAIN_STATE.json` (fallback `off`)
 - truncation-safe handoff ingestion: stale `handoff_log_offset` is reset with deterministic warning/event
 - directive failure handling: remediation is queued and feature dispatch is skipped for that cycle
 - dispatch cap enforcement: `dispatch_window.max_running_workers` is a hard cap
-- strict done completion requires all task/evidence/verify/UAT gates plus `--verify-final-state` authorization
+- strict done completion requires all phase/task/evidence/verify/UAT gates, zero open gaps, plus `--verify-final-state` authorization
 - hard rate-gate policy: wait/resume when reset is within 2 hours, otherwise stop and require manual rerun

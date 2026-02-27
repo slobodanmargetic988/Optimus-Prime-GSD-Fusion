@@ -321,6 +321,30 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "validation_error")
             self.assertIn("invalid JSON", ctx.exception.message)
 
+    def test_test_train_mode_runtime_health_invalid_utf8_returns_validation_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            health_path = root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json"
+            health_path.parent.mkdir(parents=True, exist_ok=True)
+            health_path.write_bytes(b"\xff\xfe\xfd")
+            cfg = make_cfg(
+                root,
+                slot="test-1",
+                role="tester",
+                branch_name="codex/test-1/MYO-156",
+                test_train_mode="final-stage",
+                runtime_strategy="external_url",
+                runtime_profile_id="default-web",
+                runtime_id="rt-external-default-web-11111111",
+                runtime_base_url="https://shared.example.test",
+                runtime_lease_id="lease-xyz",
+                tester_must_not_start_runtime=True,
+            )
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(cfg)
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("unreadable", ctx.exception.message)
+
     def test_op_build_mode_requires_plan_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = make_cfg(Path(tmp), op_build_mode=True)
@@ -353,6 +377,10 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertEqual(handoff["task_acceptance_refs"], ["AC-001", "AC-002"])
             self.assertEqual(
                 handoff["dev_ready_evidence_ref"],
+                "reports/optimus-prime/planning/DEV_READY_EVIDENCE.json",
+            )
+            self.assertEqual(
+                handoff["task_evidence_ref"],
                 "reports/optimus-prime/planning/DEV_READY_EVIDENCE.json",
             )
 
