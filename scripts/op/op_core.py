@@ -133,6 +133,14 @@ def _as_bool(value: Any, *, default: bool) -> bool:
     return default
 
 
+def _coerce_nonneg_int(value: Any, *, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+
 def _as_constraints(value: Any) -> list[str]:
     if value is None:
         return []
@@ -753,7 +761,15 @@ def _load_gaps_payload(path: Path, plan_id: str) -> dict[str, Any]:
             "updated_at": utc_now_iso(),
             "gaps": [],
         }
-    payload = _read_json(path)
+    try:
+        payload = _read_json(path)
+    except OpError:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "plan_id": plan_id,
+            "updated_at": utc_now_iso(),
+            "gaps": [],
+        }
     if not isinstance(payload, dict):
         return {
             "schema_version": SCHEMA_VERSION,
@@ -795,7 +811,7 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
     if not isinstance(retry_policy, dict):
         retry_policy = {"max_attempts": 5}
         build_state["gap_retry_policy"] = retry_policy
-    max_retry_attempts = int(retry_policy.get("max_attempts") or 5)
+    max_retry_attempts = _coerce_nonneg_int(retry_policy.get("max_attempts"), default=5)
     build_state["gap_retry_policy"] = {"max_attempts": max(1, max_retry_attempts)}
     gaps_path = _repo_path(repo_root, GAPS_JSON)
     existing = _load_gaps_payload(gaps_path, plan_id)
@@ -911,7 +927,7 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
         merged["opened_at"] = _as_str(prior.get("opened_at")) or row["opened_at"]
         merged["updated_at"] = utc_now_iso()
         merged["status"] = "open"
-        retry_count = int(retry_attempts.get(gap_id, 0))
+        retry_count = _coerce_nonneg_int(retry_attempts.get(gap_id, 0), default=0)
         is_escalated = gap_id in exhausted_set
         merged["retry_count"] = max(0, retry_count)
         merged["escalated"] = is_escalated
@@ -2417,7 +2433,18 @@ def _detect_blocker_fingerprint(repo_root: Path, *, warnings_sink: list[dict[str
 
     blockers_path = repo_root / "reports" / "optimus-prime" / "BLOCKERS.jsonl"
     if blockers_path.exists():
-        lines = blockers_path.read_text(encoding="utf-8").splitlines()
+        try:
+            lines = blockers_path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as exc:
+            if isinstance(warnings_sink, list):
+                warnings_sink.append(
+                    {
+                        "code": "blockers_log_unreadable",
+                        "message": f"blockers log unreadable; falling back to unknown fingerprint: {exc}",
+                        "stage": "build_loop",
+                    }
+                )
+            lines = []
         for line in reversed(lines):
             text = line.strip()
             if not text:
@@ -2666,7 +2693,7 @@ def _dispatch_next_task(
     if not isinstance(retry_policy, dict):
         retry_policy = {"max_attempts": 5}
         build_state["gap_retry_policy"] = retry_policy
-    max_retry_attempts = max(1, int(retry_policy.get("max_attempts") or 5))
+    max_retry_attempts = max(1, _coerce_nonneg_int(retry_policy.get("max_attempts"), default=5))
     retry_attempts = build_state.get("gap_retry_attempts")
     if not isinstance(retry_attempts, dict):
         retry_attempts = {}
@@ -2705,7 +2732,7 @@ def _dispatch_next_task(
             return _dispatch_task_packet(req, task, plan_task, "dev", plan_id)
         if status == "blocked" and bool(task.get("is_gap_closure")):
             source_gap_id = _as_str(task.get("source_gap_id")) or _as_str(plan_task.get("source_gap_id")) or f"gap:{task_id}"
-            retries = int(retry_attempts.get(source_gap_id, 0))
+            retries = _coerce_nonneg_int(retry_attempts.get(source_gap_id, 0), default=0)
             if source_gap_id in exhausted_set:
                 return {
                     "ok": False,
@@ -3084,7 +3111,17 @@ def _preflight_build(req: OpRequest) -> tuple[list[dict[str, Any]], list[str], d
     state_payload: dict[str, Any] = {}
     state_path = _repo_path(req.repo_root, STATE_JSON)
     if state_path.exists():
-        parsed = _read_json(state_path)
+        try:
+            parsed = _read_json(state_path)
+        except OpError as exc:
+            warnings.append(
+                {
+                    "code": "state_payload_invalid",
+                    "message": f"STATE.json unreadable: {exc.message}",
+                    "stage": "build_preflight",
+                }
+            )
+            parsed = None
         if isinstance(parsed, dict):
             state_payload = parsed
 
@@ -3101,7 +3138,17 @@ def _preflight_build(req: OpRequest) -> tuple[list[dict[str, Any]], list[str], d
     plan_packets: dict[str, Any] = {}
     plan_packets_path = _repo_path(req.repo_root, PLAN_PACKETS_JSON)
     if plan_packets_path.exists():
-        parsed_plan = _read_json(plan_packets_path)
+        try:
+            parsed_plan = _read_json(plan_packets_path)
+        except OpError as exc:
+            warnings.append(
+                {
+                    "code": "plan_packets_invalid",
+                    "message": f"PLAN_PACKETS.json unreadable: {exc.message}",
+                    "stage": "build_preflight",
+                }
+            )
+            parsed_plan = None
         if isinstance(parsed_plan, dict):
             plan_packets = parsed_plan
         else:
@@ -3116,7 +3163,17 @@ def _preflight_build(req: OpRequest) -> tuple[list[dict[str, Any]], list[str], d
     task_state: dict[str, Any] = {}
     task_state_path = _repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)
     if task_state_path.exists():
-        parsed_task = _read_json(task_state_path)
+        try:
+            parsed_task = _read_json(task_state_path)
+        except OpError as exc:
+            warnings.append(
+                {
+                    "code": "task_state_invalid",
+                    "message": f"TASK_EXECUTION_STATE.json unreadable: {exc.message}",
+                    "stage": "build_preflight",
+                }
+            )
+            parsed_task = None
         if isinstance(parsed_task, dict):
             task_state = parsed_task
         else:
@@ -3144,7 +3201,7 @@ def _preflight_build(req: OpRequest) -> tuple[list[dict[str, Any]], list[str], d
 def command_build(req: OpRequest) -> dict[str, Any]:
     warnings, missing, _, plan_packets, task_state = _preflight_build(req)
     preflight_failed = bool(missing) or any(
-        item.get("code") in {"plan_not_ready", "task_state_invalid", "task_state_plan_mismatch", "plan_packets_invalid"}
+        item.get("code") in {"plan_not_ready", "task_state_invalid", "task_state_plan_mismatch", "plan_packets_invalid", "state_payload_invalid"}
         for item in warnings
     )
     if preflight_failed:
@@ -3166,7 +3223,32 @@ def command_build(req: OpRequest) -> dict[str, Any]:
         )
 
     build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
-    build_state = _load_build_state(build_state_path)
+    try:
+        build_state = _load_build_state(build_state_path)
+    except OpError as exc:
+        warnings.append(
+            {
+                "code": "build_state_invalid",
+                "message": exc.message,
+                "stage": "build_preflight",
+            }
+        )
+        return _response(
+            req,
+            ok=False,
+            status="blocked_preflight",
+            summary="Build blocked: strict planning baseline is incomplete.",
+            warnings=warnings,
+            errors=[
+                {
+                    "code": "build_preflight_failed",
+                    "message": "Repair BUILD_STATE.json and rerun /op-build.",
+                    "stage": "build_preflight",
+                }
+            ],
+            next_action="Fix malformed build state artifacts or rerun /op-initialize, then rerun /op-build.",
+            state_ref=str(build_state_path),
+        )
     task_state_path = _repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)
     lock_path = _repo_path(req.repo_root, BUILD_LOOP_LOCK)
     lock_ok, lock_id, active_pid = _acquire_build_loop_lock(lock_path)
@@ -3583,9 +3665,40 @@ def command_build(req: OpRequest) -> dict[str, Any]:
 
 
 def command_health(req: OpRequest) -> dict[str, Any]:
-    warnings, missing, _, plan_packets, task_state = _preflight_build(req)
+    try:
+        warnings, missing, _, plan_packets, task_state = _preflight_build(req)
+    except OpError as exc:
+        warning = {
+            "code": "build_preflight_read_error",
+            "message": exc.message,
+            "stage": "health",
+        }
+        checks = [
+            {
+                "id": "build_preflight_ready",
+                "passed": False,
+                "blockers": [warning],
+            }
+        ]
+        return _response(
+            req,
+            ok=False,
+            status="blocked",
+            summary="OP health checks detected blocking issues.",
+            warnings=[warning],
+            errors=[{"code": "health_check_failed", "message": "one or more health checks failed", "stage": "health"}],
+            artifacts=[
+                str(_repo_path(req.repo_root, PLAN_PACKETS_JSON)),
+                str(_repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)),
+                str(_repo_path(req.repo_root, BUILD_STATE_JSON)),
+                str(_repo_path(req.repo_root, GAPS_JSON)),
+                str(_repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)),
+            ],
+            state_ref=str(_repo_path(req.repo_root, BUILD_STATE_JSON)),
+            data={"checks": checks, "open_gap_ids": []},
+        )
     checks: list[dict[str, Any]] = []
-    preflight_block_codes = {"plan_not_ready", "task_state_invalid", "task_state_plan_mismatch", "plan_packets_invalid"}
+    preflight_block_codes = {"plan_not_ready", "task_state_invalid", "task_state_plan_mismatch", "plan_packets_invalid", "state_payload_invalid"}
     preflight_blockers = [item for item in warnings if _as_str(item.get("code")) in preflight_block_codes]
     checks.append(
         {
@@ -3605,8 +3718,19 @@ def command_health(req: OpRequest) -> dict[str, Any]:
     build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
     build_state_valid = True
     if build_state_path.exists():
-        payload = _read_json(build_state_path)
-        build_state_valid = isinstance(payload, dict)
+        try:
+            payload = _read_json(build_state_path)
+        except OpError as exc:
+            warnings.append(
+                {
+                    "code": "build_state_invalid",
+                    "message": f"BUILD_STATE.json unreadable: {exc.message}",
+                    "stage": "health",
+                }
+            )
+            build_state_valid = False
+            payload = None
+        build_state_valid = build_state_valid and isinstance(payload, dict)
     checks.append({"id": "build_state_integrity", "passed": build_state_valid})
 
     validation_errors = _validate_task_execution_state(task_state, plan_packets) if task_state and plan_packets else []
@@ -3641,7 +3765,20 @@ def command_health(req: OpRequest) -> dict[str, Any]:
         for item in gaps_payload.get("gaps", [])
         if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
     ]
-    gap_closure_payload = _read_json(_repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)) if _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON).exists() else {"tasks": []}
+    if _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON).exists():
+        try:
+            gap_closure_payload = _read_json(_repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON))
+        except OpError as exc:
+            warnings.append(
+                {
+                    "code": "gap_closure_packets_invalid",
+                    "message": f"GAP_CLOSURE_PLAN_PACKETS.json unreadable: {exc.message}",
+                    "stage": "health",
+                }
+            )
+            gap_closure_payload = {"tasks": []}
+    else:
+        gap_closure_payload = {"tasks": []}
     if not isinstance(gap_closure_payload, dict):
         gap_closure_payload = {"tasks": []}
     closure_task_ids = {

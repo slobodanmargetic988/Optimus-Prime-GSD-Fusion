@@ -176,6 +176,33 @@ def test_build_preflight_blocks_without_baseline():
         assert out["status"] == "blocked_preflight"
 
 
+def test_build_preflight_blocks_on_malformed_state_json():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        state_path = root / "reports" / "optimus-prime" / "planning" / "STATE.json"
+        state_path.write_text("{ invalid-json", encoding="utf-8")
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+            }
+        )
+        assert out["ok"] is False
+        assert out["status"] == "blocked_preflight"
+        assert any(item.get("code") == "state_payload_invalid" for item in out.get("warnings", []))
+
+
 def test_op_build_default_sleep_minutes_is_five():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -324,6 +351,76 @@ def test_build_invalid_runtime_health_json_degrades_with_warning():
         assert out["status"] == "running_needs_resume"
         assert any(item.get("code") == "runtime_health_invalid_json" for item in out["warnings"])
         assert not any(item.get("code") == "strategy_escalated" for item in out["warnings"])
+
+
+def test_build_invalid_blockers_log_bytes_degrades_with_warning():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        blockers = root / "reports" / "optimus-prime" / "BLOCKERS.jsonl"
+        blockers.parent.mkdir(parents=True, exist_ok=True)
+        blockers.write_bytes(b"\xff\xfe\x80")
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["ok"] is False
+        assert out["status"] == "running_needs_resume"
+        assert any(item.get("code") == "blockers_log_unreadable" for item in out["warnings"])
+
+
+def test_build_invalid_gap_retry_policy_does_not_crash():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        build_state_path = root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json"
+        build_state = json.loads(build_state_path.read_text(encoding="utf-8"))
+        build_state["gap_retry_policy"] = {"max_attempts": "not-a-number"}
+        build_state["gap_retry_attempts"] = {"gap-bad": "bad"}
+        build_state_path.write_text(json.dumps(build_state, indent=2) + "\n", encoding="utf-8")
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["ok"] is False
+        assert out["status"] == "running_needs_resume"
 
 
 def test_gap_closure_retry_exhausts_after_five_attempts():
@@ -708,6 +805,28 @@ def test_op_health_fails_when_plan_not_ready():
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state["plan_ready"] = False
         state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+        health = run_payload({"command": "/op-health", "repo_root": str(root)})
+        assert health["ok"] is False
+        assert health["status"] == "blocked"
+        checks = {item["id"]: item for item in health["data"]["checks"]}
+        assert checks["build_preflight_ready"]["passed"] is False
+
+
+def test_op_health_blocks_instead_of_crashing_on_malformed_state_json():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        state_path = root / "reports" / "optimus-prime" / "planning" / "STATE.json"
+        state_path.write_text("{ invalid-json", encoding="utf-8")
 
         health = run_payload({"command": "/op-health", "repo_root": str(root)})
         assert health["ok"] is False
