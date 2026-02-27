@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.0-rc.1 - 2026-02-27
+
 - Lane C private-first release client for install/update (`gh auth token` -> `GH_TOKEN` -> `GITHUB_TOKEN`).
 - Added remote release source flags to installer/updater:
   - `--repo-owner`
