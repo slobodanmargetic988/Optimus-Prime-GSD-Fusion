@@ -2,3 +2,14 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Generated test-train runtime state and drill artifacts
+reports/optimus-prime/runtime/DRILL_REPORT.md
+reports/optimus-prime/runtime/RUNTIME_ACTION_LOG.jsonl
+reports/optimus-prime/runtime/RUNTIME_BOOTSTRAP.json
+reports/optimus-prime/runtime/RUNTIME_HEALTH.json
+reports/optimus-prime/runtime/RUNTIME_REPAIR_TASKS.json
+reports/optimus-prime/runtime/runtime.log
+reports/optimus-prime/runtime/locks/*.lock
+reports/optimus-prime/runtime/drills/latest/*
+!reports/optimus-prime/runtime/drills/latest/.gitkeep
