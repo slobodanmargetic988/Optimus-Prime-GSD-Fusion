@@ -81,8 +81,10 @@ Updated: 2026-02-27
   - strict-first gate ordering: hard-gate/terminal decisions are evaluated before any dispatch attempt
   - dispatch gating honors `dispatch_filter` directives and enforces `dispatch_window.max_running_workers` as hard cap
   - runtime/test-train adapters resolve `test_train_mode` from `TEST_TRAIN_STATE.json` each cycle (fallback `off`)
+  - malformed `RUNTIME_HEALTH.json` no longer crashes build loop; blocker fingerprint falls back to `unknown-fingerprint` with deterministic warning
   - handoff ingestion auto-recovers from log truncation by resetting stale offsets with deterministic warning/event
   - directive tool failures queue deterministic remediation and suppress feature dispatch for that cycle
+  - gap closure is convergent: no recursive gap generation from closure tasks; retries are bounded (max 5) then escalated/suppressed
 - Added autonomous recovery state machine in `/op-build`:
   - recoverable blocker attempts tracked per `(strategy,fingerprint)`
   - strategy escalates after 5 attempts only for concrete fingerprints (no synthetic escalation on `unknown-fingerprint`)
@@ -96,6 +98,8 @@ Updated: 2026-02-27
   - all phases must satisfy strict exit checks
   - open gaps must be zero
   - final-state authorization passes via `--verify-final-state`
+- `/op-health` now enforces strict build-readiness semantics:
+  - preflight blockers (`plan_ready=false`, invalid/missing strict artifacts, invalid plan/task state) fail health checks
 - Extended dispatch packet contract for OP build packets:
   - `op_build_mode`
   - `plan_id`
@@ -137,7 +141,8 @@ python3 -m pytest \
   /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py
 ```
 
-## Lane B Completion Status
+## Lane B Status (Provisional During Hardening)
 
-- Lane B scope is complete for the new-only model (B1-B6 behavior implemented and validated).
-- Remaining roadmap work is Lane C packaging/installer and polished product command UX.
+- Lane B remains in provisional hardening status for the new-only model until the current excellence hardening batch is fully green.
+- Hardening focus: crash-safe malformed runtime health handling, bounded/non-recursive gap closure retries, and strict `/op-health` build-readiness parity.
+- Remaining roadmap work after hardening: Lane C packaging/installer and polished product command UX.

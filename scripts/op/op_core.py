@@ -779,6 +779,24 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
     plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
     task_map = _task_by_id(task_state)
     plan_task_map = _plan_task_map(plan_packets)
+    retry_attempts = build_state.get("gap_retry_attempts")
+    if not isinstance(retry_attempts, dict):
+        retry_attempts = {}
+        build_state["gap_retry_attempts"] = retry_attempts
+    exhausted_ids_raw = build_state.get("gap_retry_exhausted_ids")
+    exhausted_ids = (
+        [item for item in (_as_str(v) for v in exhausted_ids_raw) if item]
+        if isinstance(exhausted_ids_raw, list)
+        else []
+    )
+    exhausted_set = set(exhausted_ids)
+    build_state["gap_retry_exhausted_ids"] = sorted(exhausted_set)
+    retry_policy = build_state.get("gap_retry_policy")
+    if not isinstance(retry_policy, dict):
+        retry_policy = {"max_attempts": 5}
+        build_state["gap_retry_policy"] = retry_policy
+    max_retry_attempts = int(retry_policy.get("max_attempts") or 5)
+    build_state["gap_retry_policy"] = {"max_attempts": max(1, max_retry_attempts)}
     gaps_path = _repo_path(repo_root, GAPS_JSON)
     existing = _load_gaps_payload(gaps_path, plan_id)
     existing_by_id: dict[str, dict[str, Any]] = {}
@@ -796,6 +814,8 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
             continue
         task = task_map.get(task_id)
         if not isinstance(task, dict):
+            continue
+        if bool(task.get("is_gap_closure")) or bool(plan_task.get("is_gap_closure")):
             continue
         phase_id = _as_str(plan_task.get("phase_id")) or _as_str(task.get("phase_id")) or "phase-1"
         task_status = _as_str(task.get("status")) or "queued"
@@ -891,6 +911,15 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
         merged["opened_at"] = _as_str(prior.get("opened_at")) or row["opened_at"]
         merged["updated_at"] = utc_now_iso()
         merged["status"] = "open"
+        retry_count = int(retry_attempts.get(gap_id, 0))
+        is_escalated = gap_id in exhausted_set
+        merged["retry_count"] = max(0, retry_count)
+        merged["escalated"] = is_escalated
+        merged["escalated_at"] = (
+            _as_str(prior.get("escalated_at")) or utc_now_iso()
+            if is_escalated
+            else None
+        )
         merged_gaps.append(merged)
     for gap_id, prior in existing_by_id.items():
         if gap_id in active_gap_ids:
@@ -899,6 +928,9 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
         prior["status"] = "closed"
         prior["updated_at"] = utc_now_iso()
         prior.setdefault("closed_at", utc_now_iso())
+        prior.setdefault("retry_count", 0)
+        prior.setdefault("escalated", False)
+        prior.setdefault("escalated_at", None)
         merged_gaps.append(prior)
     merged_gaps.sort(key=lambda item: (_as_str(item.get("status")) != "open", _as_str(item.get("gap_id")) or ""))
     gaps_payload = {
@@ -910,6 +942,11 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
     _atomic_write_json(gaps_path, gaps_payload)
 
     open_gap_rows = [item for item in merged_gaps if _as_str(item.get("status")) == "open"]
+    active_open_gap_ids = {_as_str(item.get("gap_id")) for item in open_gap_rows if _as_str(item.get("gap_id"))}
+    for gap_id in list(retry_attempts.keys()):
+        if gap_id not in active_open_gap_ids:
+            retry_attempts.pop(gap_id, None)
+    build_state["gap_retry_exhausted_ids"] = sorted(gap_id for gap_id in exhausted_set if gap_id in active_open_gap_ids)
     closure_tasks: list[dict[str, Any]] = []
     for gap in sorted(open_gap_rows, key=lambda item: _as_str(item.get("gap_id")) or ""):
         gap_id = _as_str(gap.get("gap_id"))
@@ -989,6 +1026,7 @@ def _ensure_gap_closure_task_state(repo_root: Path, task_state: dict[str, Any], 
             {
                 "task_id": task_id,
                 "phase_id": phase_id,
+                "source_gap_id": _as_str(task.get("source_gap_id")),
                 "requirement_ids": req_ids,
                 "status": "queued",
                 "owner_slot": None,
@@ -2235,6 +2273,11 @@ def _load_build_state(path: Path) -> dict[str, Any]:
             "open_gap_ids": [],
             "active_gap_closure_phase_id": None,
             "last_gap_generation_at": None,
+            "gap_retry_attempts": {},
+            "gap_retry_exhausted_ids": [],
+            "gap_retry_policy": {
+                "max_attempts": 5,
+            },
             "handoff_log_offset": 0,
             "history": [],
         }
@@ -2262,6 +2305,9 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     payload.setdefault("open_gap_ids", [])
     payload.setdefault("active_gap_closure_phase_id", None)
     payload.setdefault("last_gap_generation_at", None)
+    payload.setdefault("gap_retry_attempts", {})
+    payload.setdefault("gap_retry_exhausted_ids", [])
+    payload.setdefault("gap_retry_policy", {"max_attempts": 5})
     payload.setdefault("handoff_log_offset", 0)
     payload.setdefault(
         "cycle_gate_decision",
@@ -2349,10 +2395,21 @@ def _verify_final_state(req: OpRequest, final_state_path: Path) -> dict[str, Any
     return parsed
 
 
-def _detect_blocker_fingerprint(repo_root: Path) -> str:
+def _detect_blocker_fingerprint(repo_root: Path, *, warnings_sink: list[dict[str, Any]] | None = None) -> str:
     runtime_health_path = repo_root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json"
     if runtime_health_path.exists():
-        payload = _read_json(runtime_health_path)
+        try:
+            payload = _read_json(runtime_health_path)
+        except OpError as exc:
+            if isinstance(warnings_sink, list):
+                warnings_sink.append(
+                    {
+                        "code": "runtime_health_invalid_json",
+                        "message": f"runtime health unreadable; falling back to unknown fingerprint: {exc.message}",
+                        "stage": "build_loop",
+                    }
+                )
+            payload = None
         if isinstance(payload, dict):
             fp = _as_str(payload.get("last_failure_fingerprint"))
             if fp:
@@ -2392,6 +2449,7 @@ def _strategy_index(state: dict[str, Any]) -> int:
 
 def _apply_strategy_action(req: OpRequest, strategy: str) -> dict[str, Any]:
     repo_root = req.repo_root
+    resolved_mode = _resolve_test_train_mode(repo_root)
     if strategy in {"self_heal", "runtime_repair"}:
         script = repo_root / "skills" / "runtime-coordinator" / "scripts" / "runtime_coordinator.py"
         if not script.exists():
@@ -2399,7 +2457,7 @@ def _apply_strategy_action(req: OpRequest, strategy: str) -> dict[str, Any]:
         payload = {
             "repo_root": str(repo_root),
             "action": "repair",
-            "test_train_mode": "final-stage",
+            "test_train_mode": resolved_mode,
             "runtime_profile_id": "default-web",
             "runtime_id": "rt-shared-default-web",
             "test_train_pipeline_path": str(repo_root / "reports" / "optimus-prime" / "config" / "TEST_TRAIN_PIPELINE.json"),
@@ -2604,6 +2662,23 @@ def _dispatch_next_task(
 ) -> dict[str, Any]:
     task_map = _task_by_id(task_state)
     plan_map = _plan_task_map(plan_packets)
+    retry_policy = build_state.get("gap_retry_policy")
+    if not isinstance(retry_policy, dict):
+        retry_policy = {"max_attempts": 5}
+        build_state["gap_retry_policy"] = retry_policy
+    max_retry_attempts = max(1, int(retry_policy.get("max_attempts") or 5))
+    retry_attempts = build_state.get("gap_retry_attempts")
+    if not isinstance(retry_attempts, dict):
+        retry_attempts = {}
+        build_state["gap_retry_attempts"] = retry_attempts
+    exhausted_ids_raw = build_state.get("gap_retry_exhausted_ids")
+    exhausted_ids = (
+        [item for item in (_as_str(v) for v in exhausted_ids_raw) if item]
+        if isinstance(exhausted_ids_raw, list)
+        else []
+    )
+    exhausted_set = set(exhausted_ids)
+    build_state["gap_retry_exhausted_ids"] = sorted(exhausted_set)
     ordered_ids = [
         task_id
         for task_id in plan_map.keys()
@@ -2629,7 +2704,47 @@ def _dispatch_next_task(
         if status == "queued":
             return _dispatch_task_packet(req, task, plan_task, "dev", plan_id)
         if status == "blocked" and bool(task.get("is_gap_closure")):
+            source_gap_id = _as_str(task.get("source_gap_id")) or _as_str(plan_task.get("source_gap_id")) or f"gap:{task_id}"
+            retries = int(retry_attempts.get(source_gap_id, 0))
+            if source_gap_id in exhausted_set:
+                return {
+                    "ok": False,
+                    "status": "blocked",
+                    "task_id": task_id,
+                    "reason": "gap_closure_retry_suppressed",
+                    "source_gap_id": source_gap_id,
+                    "retry_count": retries,
+                    "warning": {
+                        "code": "gap_closure_retry_suppressed",
+                        "message": f"gap closure retries already exhausted for {source_gap_id}; dispatch suppressed",
+                        "stage": "build_loop",
+                        "gap_id": source_gap_id,
+                        "retry_count": retries,
+                    },
+                }
+            retries += 1
+            retry_attempts[source_gap_id] = retries
+            if retries >= max_retry_attempts:
+                exhausted_set.add(source_gap_id)
+                build_state["gap_retry_exhausted_ids"] = sorted(exhausted_set)
+                return {
+                    "ok": False,
+                    "status": "blocked",
+                    "task_id": task_id,
+                    "reason": "gap_retry_exhausted",
+                    "source_gap_id": source_gap_id,
+                    "retry_count": retries,
+                    "warning": {
+                        "code": "gap_retry_exhausted",
+                        "message": f"gap closure retry limit reached for {source_gap_id} (max_attempts={max_retry_attempts})",
+                        "stage": "build_loop",
+                        "gap_id": source_gap_id,
+                        "retry_count": retries,
+                        "max_attempts": max_retry_attempts,
+                    },
+                }
             task["status"] = "queued"
+            task["owner_slot"] = None
             return _dispatch_task_packet(req, task, plan_task, "dev", plan_id)
         if status == "dev_done":
             evidence_path = _task_evidence_path(req.repo_root, task)
@@ -3372,6 +3487,23 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     cycle_local_warnings.append(warning)
                 else:
                     dispatch_result = _dispatch_next_task(req, merged_plan_packets, task_state, build_state, active_phase_id)
+                    dispatch_warning = dispatch_result.get("warning") if isinstance(dispatch_result, dict) else None
+                    if isinstance(dispatch_warning, dict):
+                        warnings.append(dispatch_warning)
+                        cycle_local_warnings.append(dispatch_warning)
+                    dispatch_reason = _as_str(dispatch_result.get("reason")) if isinstance(dispatch_result, dict) else None
+                    if dispatch_reason in {"gap_retry_exhausted", "gap_closure_retry_suppressed"}:
+                        build_state["cycle_gate_decision"] = {
+                            "dispatch_blocked": True,
+                            "reason": dispatch_reason,
+                            "terminal_reason": terminal_reason,
+                        }
+                        gaps_payload, gap_closure_payload = _refresh_gap_artifacts(
+                            req.repo_root,
+                            merged_plan_packets,
+                            task_state,
+                            build_state,
+                        )
                     directive_outcomes.append(
                         {
                             "directive_type": "review_dispatch_queue"
@@ -3385,7 +3517,10 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     warnings.extend(handoff_warnings)
                     cycle_local_warnings.extend(handoff_warnings)
 
-            fingerprint = _detect_blocker_fingerprint(req.repo_root)
+            fingerprint_warnings: list[dict[str, Any]] = []
+            fingerprint = _detect_blocker_fingerprint(req.repo_root, warnings_sink=fingerprint_warnings)
+            warnings.extend(fingerprint_warnings)
+            cycle_local_warnings.extend(fingerprint_warnings)
             if fingerprint != "unknown-fingerprint":
                 strategy = _as_str(build_state.get("current_strategy")) or STRATEGY_LADDER[0]
                 counter_key = f"{strategy}|{fingerprint}"
@@ -3450,6 +3585,15 @@ def command_build(req: OpRequest) -> dict[str, Any]:
 def command_health(req: OpRequest) -> dict[str, Any]:
     warnings, missing, _, plan_packets, task_state = _preflight_build(req)
     checks: list[dict[str, Any]] = []
+    preflight_block_codes = {"plan_not_ready", "task_state_invalid", "task_state_plan_mismatch", "plan_packets_invalid"}
+    preflight_blockers = [item for item in warnings if _as_str(item.get("code")) in preflight_block_codes]
+    checks.append(
+        {
+            "id": "build_preflight_ready",
+            "passed": len(missing) == 0 and len(preflight_blockers) == 0,
+            "blockers": preflight_blockers,
+        }
+    )
     checks.append(
         {
             "id": "baseline_artifacts",
@@ -3590,6 +3734,8 @@ def command_status(req: OpRequest) -> dict[str, Any]:
             "open_gap_ids": [gap_id for gap_id in open_gap_ids if gap_id],
             "active_workers": _active_workers_count(req.repo_root),
             "current_strategy": _as_str((build_state or {}).get("current_strategy")) or STRATEGY_LADDER[0],
+            "gap_retry_attempts": (build_state or {}).get("gap_retry_attempts", {}),
+            "gap_retry_exhausted_ids": (build_state or {}).get("gap_retry_exhausted_ids", []),
             "next_action": next_action,
         },
     )

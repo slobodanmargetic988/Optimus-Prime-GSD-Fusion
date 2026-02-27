@@ -295,6 +295,120 @@ def test_build_does_not_escalate_on_unknown_fingerprint():
         assert not any(item.get("code") == "strategy_escalated" for item in out["warnings"])
 
 
+def test_build_invalid_runtime_health_json_degrades_with_warning():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        runtime_health = root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json"
+        runtime_health.parent.mkdir(parents=True, exist_ok=True)
+        runtime_health.write_text("{ invalid-json", encoding="utf-8")
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 6,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["ok"] is False
+        assert out["status"] == "running_needs_resume"
+        assert any(item.get("code") == "runtime_health_invalid_json" for item in out["warnings"])
+        assert not any(item.get("code") == "strategy_escalated" for item in out["warnings"])
+
+
+def test_gap_closure_retry_exhausts_after_five_attempts():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+            }
+        )
+        plan_packets = json.loads((root / "reports" / "optimus-prime" / "planning" / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json")
+
+        for task in task_state["tasks"]:
+            task["status"] = "review_done"
+            task["owner_slot"] = None
+        task_state["tasks"][0]["status"] = "blocked"
+        task_state["tasks"][0]["owner_slot"] = None
+
+        _, gap_closure_payload = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
+        MODULE._ensure_gap_closure_task_state(root, task_state, gap_closure_payload, plan_packets["plan_id"])
+        merged_plan = MODULE._merge_plan_with_gap_closure(plan_packets, gap_closure_payload)
+        gap_tasks = [task for task in task_state["tasks"] if task.get("is_gap_closure")]
+        assert gap_tasks
+        closure_task = gap_tasks[0]
+        closure_task["status"] = "blocked"
+        closure_task["owner_slot"] = None
+        active_phase_id = closure_task["phase_id"]
+        for other in gap_tasks[1:]:
+            other["status"] = "review_done"
+            other["owner_slot"] = None
+        source_gap_id = closure_task.get("source_gap_id")
+        assert source_gap_id
+
+        for _ in range(4):
+            result = MODULE._dispatch_next_task(req, merged_plan, task_state, build_state, active_phase_id)
+            assert result.get("reason") != "gap_retry_exhausted"
+
+        fifth = MODULE._dispatch_next_task(req, merged_plan, task_state, build_state, active_phase_id)
+        assert fifth.get("reason") == "gap_retry_exhausted"
+        assert fifth.get("warning", {}).get("code") == "gap_retry_exhausted"
+
+        sixth = MODULE._dispatch_next_task(req, merged_plan, task_state, build_state, active_phase_id)
+        assert sixth.get("reason") == "gap_closure_retry_suppressed"
+        assert sixth.get("warning", {}).get("code") == "gap_closure_retry_suppressed"
+        assert build_state["gap_retry_attempts"][source_gap_id] == 5
+        assert source_gap_id in build_state["gap_retry_exhausted_ids"]
+
+
+def test_strategy_repair_uses_state_derived_mode(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        runtime_script = root / "skills" / "runtime-coordinator" / "scripts" / "runtime_coordinator.py"
+        runtime_script.parent.mkdir(parents=True, exist_ok=True)
+        runtime_script.write_text("print('{}')\n", encoding="utf-8")
+        state_path = root / "reports" / "optimus-prime" / "TEST_TRAIN_STATE.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps({"test_train_mode": "off"}, indent=2) + "\n", encoding="utf-8")
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+
+        seen: dict[str, str] = {}
+
+        def fake_run(cmd, *, cwd, stdin_text=None):
+            seen["test_train_mode"] = json.loads(stdin_text)["test_train_mode"]
+            return 0, json.dumps({"ok": True}), ""
+
+        monkeypatch.setattr(MODULE, "_run", fake_run)
+        result = MODULE._apply_strategy_action(req, "self_heal")
+        assert result["status"] == "applied"
+        assert seen["test_train_mode"] == "off"
+
 
 def test_build_escalates_strategy_after_five_attempts():
     with tempfile.TemporaryDirectory() as tmp:
@@ -576,6 +690,30 @@ def test_op_health_and_status_commands():
         assert status["ok"] is True
         assert status["status"] == "completed"
         assert "active_phase_id" in status["data"]
+
+
+def test_op_health_fails_when_plan_not_ready():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        state_path = root / "reports" / "optimus-prime" / "planning" / "STATE.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["plan_ready"] = False
+        state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+        health = run_payload({"command": "/op-health", "repo_root": str(root)})
+        assert health["ok"] is False
+        assert health["status"] == "blocked"
+        checks = {item["id"]: item for item in health["data"]["checks"]}
+        assert checks["build_preflight_ready"]["passed"] is False
 
 
 def test_op_resume_blocks_without_existing_build_state():

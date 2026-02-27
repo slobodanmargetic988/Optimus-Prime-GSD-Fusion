@@ -646,3 +646,41 @@ def test_dispatch_cap_allows_dispatch_when_capacity_available(monkeypatch: pytes
         )
         assert out["status"] == "running_needs_resume"
         assert dispatch_calls["count"] == 1
+
+
+def test_gap_closure_does_not_generate_recursive_gapfix_tasks():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        plan_packets = json.loads((root / "reports" / "optimus-prime" / "planning" / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json")
+
+        task_state["tasks"][0]["status"] = "blocked"
+        task_state["tasks"][0]["owner_slot"] = None
+
+        _, closure_one = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
+        MODULE._ensure_gap_closure_task_state(root, task_state, closure_one, plan_packets["plan_id"])
+        merged = MODULE._merge_plan_with_gap_closure(plan_packets, closure_one)
+
+        closure_tasks = [task for task in task_state["tasks"] if task.get("is_gap_closure")]
+        assert closure_tasks
+        closure_tasks[0]["status"] = "blocked"
+        closure_tasks[0]["owner_slot"] = None
+
+        gaps_two, closure_two = MODULE._refresh_gap_artifacts(root, merged, task_state, build_state)
+        open_gaps = [row for row in gaps_two.get("gaps", []) if row.get("status") == "open"]
+        assert all(not str(row.get("task_id", "")).startswith("GAPFIX-") for row in open_gaps)
+        assert all(
+            not any(str(dep).startswith("GAPFIX-") for dep in (task.get("depends_on") or []))
+            for task in closure_two.get("tasks", [])
+        )
