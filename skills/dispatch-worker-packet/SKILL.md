@@ -48,6 +48,11 @@ Use this skill to replace manual multi-step dispatch flow:
   "wave_id": "wave-0007",
   "deployed_test_commit": "abc1234",
   "test_lane_account": "acct-02",
+  "op_build_mode": false,
+  "plan_id": "plan-20260227T010101Z",
+  "requirement_ids": ["REQ-001"],
+  "task_acceptance_refs": ["AC-001"],
+  "dev_ready_evidence_ref": "reports/optimus-prime/planning/DEV_READY_EVIDENCE.json",
   "dry_run": false
 }
 ```
@@ -66,6 +71,11 @@ Optional:
   - `tester_must_not_start_runtime=true`
   - `runtime_strategy=external_url|shared_runtime`
   - non-empty `runtime_base_url`
+- In `op_build_mode=true`, packets must set:
+  - non-empty `plan_id`
+  - non-empty `requirement_ids[]`
+  - non-empty `task_acceptance_refs[]`
+  - non-empty `dev_ready_evidence_ref`
 
 ## Packet Requirements Included
 

@@ -1,5 +1,15 @@
 # Usage Template
 
+## OP Commands
+
+Repo-local OP command layer for bootstrap and autonomous run:
+
+```bash
+./scripts/op/opctl.sh /op-map-codebase --json-pretty
+./scripts/op/opctl.sh /op-initialize --mission "Build MyBoard" --scope "Board workflows" --json-pretty
+./scripts/op/opctl.sh /op-build --json-pretty
+```
+
 ## Blank Template
 ```text
 Agent: optimus-prime

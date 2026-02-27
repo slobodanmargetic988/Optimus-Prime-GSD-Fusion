@@ -5,7 +5,7 @@ Use this file as the single source of truth for Linear workflow status names acr
 If you change status names in Linear, update this file once and reuse it through `linear_workflow_path`.
 
 ## Default Path
-- `/Users/slobodan/Projects/Agents/agents/_shared/LINEAR_WORKFLOW.md`
+- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/agents/_shared/LINEAR_WORKFLOW.md`
 
 ## Status Map (Canonical)
 - `agent_working_status`: `Agent working`

@@ -19,6 +19,11 @@ This folder stores portable skill definitions used by agents in this repository.
 - `linear-handoff-sync`
 - `optimus-cycle-controller`
 - `orchestrator-status-snapshot`
+- `op-build`
+- `op-initialize`
+- `op-map-codebase`
+- `op-new-project`
+- `op-plan`
 - `pdf`
 - `playwright`
 - `runtime-coordinator`

@@ -19,7 +19,7 @@ It performs:
 
 ## Script
 
-`/Users/slobodan/Projects/Agents/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py`
+`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py`
 
 ## Input Contract
 
@@ -56,7 +56,7 @@ Optional:
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Agents/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py --input-json - --json-pretty
 {
   "repo_root": "/Users/slobodan/Projects/Ouroboros",
   "openapi_output": "/tmp/myboard-openapi/openapi.json",

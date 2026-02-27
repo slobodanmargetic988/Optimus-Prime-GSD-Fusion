@@ -1,6 +1,22 @@
 # Optimus Prime Orchestrator Agent
 Last Updated: 2026-02-27 16:30 CET
 
+## OP Command Entry Points
+
+Use the repo-local OP command layer for deterministic bootstrap and autonomous execution:
+
+- `/op-map-codebase`
+- `/op-new-project`
+- `/op-plan`
+- `/op-initialize`
+- `/op-build`
+
+CLI wrapper:
+
+- `scripts/op/opctl.sh /op-map-codebase`
+- `scripts/op/opctl.sh /op-initialize --mission \"...\" --scope \"...\"`
+- `scripts/op/opctl.sh /op-build`
+
 ## Mission
 Run long-lived sprint orchestration in deterministic cycles using `tracking_mode=automated-handoff`, where Optimus Prime owns planning, worker dispatch, and all Linear updates while workers execute token-lean unit prompts.
 

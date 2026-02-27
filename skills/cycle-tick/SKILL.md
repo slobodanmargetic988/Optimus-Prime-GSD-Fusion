@@ -25,7 +25,7 @@ Default state files under `reports/optimus-prime/`:
 
 ## Script
 
-`/Users/slobodan/Projects/Agents/skills/cycle-tick/scripts/cycle_tick.py`
+`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/cycle-tick/scripts/cycle_tick.py`
 
 ## Input Contract
 
@@ -57,9 +57,9 @@ Default state files under `reports/optimus-prime/`:
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Agents/skills/cycle-tick/scripts/cycle_tick.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/cycle-tick/scripts/cycle_tick.py --input-json - --json-pretty
 {
-  "repo_root": "/Users/slobodan/Projects/Agents",
+  "repo_root": "/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion",
   "cycle_number": 60,
   "status_profiles_scope": "all-configured-plus-primary",
   "rate_gate_5h_percent": 15,

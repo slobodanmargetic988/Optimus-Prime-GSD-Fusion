@@ -6,6 +6,7 @@ Current implemented lane:
 - Lane A / Phase 1: `optimus-cycle-controller` deterministic cycle loop core with terminal stop authorization guard.
 - Lane B (core): generic runtime coordination + blocker intelligence (`runtime-coordinator`, runtime-aware packets/snapshots).
 - Lane B add-on: historical thread/token audit (`THREAD_HISTORY.log` + `thread-token-audit` skill).
+- Lane B command surface: deterministic `/op-*` planning + autonomous build flow (`/op-map-codebase`, `/op-new-project`, `/op-plan`, `/op-initialize`, `/op-build`).
 
 See:
 - `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_PHASE1_PLAN.md`
@@ -50,4 +51,21 @@ make tt-health
 make tt-deploy
 make tt-health
 make tt-stop
+```
+
+## OP Command Surface
+
+Chat/skill aliases and CLI use the same canonical commands:
+
+- `/op-map-codebase`
+- `/op-new-project`
+- `/op-plan`
+- `/op-initialize`
+- `/op-build`
+
+Repo-local CLI wrapper:
+
+```bash
+./scripts/op/opctl.sh /op-initialize --mission \"Build MyBoard\" --scope \"Board workflows\" --json-pretty
+./scripts/op/opctl.sh /op-build --json-pretty
 ```

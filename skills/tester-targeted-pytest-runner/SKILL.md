@@ -20,7 +20,7 @@ Behavior:
 
 ## Script
 
-`/Users/slobodan/Projects/Agents/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py`
+`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py`
 
 ## Input Contract
 
@@ -61,7 +61,7 @@ Behavior:
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Agents/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py --input-json - --json-pretty
 {
   "worktree_root": "/Users/slobodan/Projects/Ouroboros/workstations/workstation-2",
   "task_identifier": "MYO-167",

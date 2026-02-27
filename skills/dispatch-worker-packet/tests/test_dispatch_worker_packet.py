@@ -57,6 +57,11 @@ def make_cfg(root: Path, **overrides):
         wave_id=overrides.get("wave_id"),
         deployed_test_commit=overrides.get("deployed_test_commit"),
         test_lane_account=overrides.get("test_lane_account"),
+        op_build_mode=overrides.get("op_build_mode", False),
+        plan_id=overrides.get("plan_id"),
+        requirement_ids=overrides.get("requirement_ids", []),
+        task_acceptance_refs=overrides.get("task_acceptance_refs", []),
+        dev_ready_evidence_ref=overrides.get("dev_ready_evidence_ref"),
         dry_run=overrides.get("dry_run", False),
         cycle_note=overrides.get("cycle_note", None),
     )
@@ -315,6 +320,41 @@ class DispatchWorkerPacketTests(unittest.TestCase):
                 MODULE.validate_policy(cfg)
             self.assertEqual(ctx.exception.code, "validation_error")
             self.assertIn("invalid JSON", ctx.exception.message)
+
+    def test_op_build_mode_requires_plan_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_cfg(Path(tmp), op_build_mode=True)
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(cfg)
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("plan_id", ctx.exception.message)
+
+    def test_op_build_mode_persists_plan_fields_in_handoff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = make_cfg(
+                root,
+                op_build_mode=True,
+                plan_id="plan-20260227T010101Z",
+                requirement_ids=["REQ-001", "REQ-002"],
+                task_acceptance_refs=["AC-001", "AC-002"],
+                dev_ready_evidence_ref="reports/optimus-prime/planning/DEV_READY_EVIDENCE.json",
+            )
+            out = MODULE.run_dispatch_worker_packet(cfg, dispatcher=FakeDispatcher())
+            self.assertTrue(out["ok"])
+
+            handoff_line = (
+                root / "reports" / "optimus-prime" / "HANDOFF_LOG.jsonl"
+            ).read_text(encoding="utf-8").strip().splitlines()[-1]
+            handoff = json.loads(handoff_line)
+            self.assertTrue(handoff["op_build_mode"])
+            self.assertEqual(handoff["plan_id"], "plan-20260227T010101Z")
+            self.assertEqual(handoff["requirement_ids"], ["REQ-001", "REQ-002"])
+            self.assertEqual(handoff["task_acceptance_refs"], ["AC-001", "AC-002"])
+            self.assertEqual(
+                handoff["dev_ready_evidence_ref"],
+                "reports/optimus-prime/planning/DEV_READY_EVIDENCE.json",
+            )
 
 
 if __name__ == "__main__":

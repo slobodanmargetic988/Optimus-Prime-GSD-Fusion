@@ -61,6 +61,11 @@ class DispatchInput:
     wave_id: str | None
     deployed_test_commit: str | None
     test_lane_account: str | None
+    op_build_mode: bool
+    plan_id: str | None
+    requirement_ids: list[str]
+    task_acceptance_refs: list[str]
+    dev_ready_evidence_ref: str | None
     dry_run: bool
     cycle_note: str | None
 
@@ -130,6 +135,22 @@ def _optional_bool(value: Any) -> bool | None:
         if text in {"0", "false", "no", "n", "off"}:
             return False
     raise ToolError("input_error", "tester_must_not_start_runtime must be boolean-like", stage="input")
+
+
+def _bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    raise ToolError("input_error", "boolean value expected", stage="input")
 
 
 def validate_slot_role(slot: str, role: str) -> None:
@@ -260,6 +281,32 @@ def validate_policy(cfg: DispatchInput) -> None:
     if not re.fullmatch(r"[0-9a-fA-F]{7,40}", cfg.start_from_commit):
         raise ToolError("validation_error", "start_from_commit must be a git sha (7-40 hex chars)", stage="validate")
 
+    if cfg.op_build_mode:
+        if not isinstance(cfg.plan_id, str) or not cfg.plan_id.strip():
+            raise ToolError(
+                "validation_error",
+                "op-build mode packets require plan_id",
+                stage="validate",
+            )
+        if not isinstance(cfg.requirement_ids, list) or not cfg.requirement_ids:
+            raise ToolError(
+                "validation_error",
+                "op-build mode packets require requirement_ids",
+                stage="validate",
+            )
+        if not isinstance(cfg.task_acceptance_refs, list) or not cfg.task_acceptance_refs:
+            raise ToolError(
+                "validation_error",
+                "op-build mode packets require task_acceptance_refs",
+                stage="validate",
+            )
+        if not isinstance(cfg.dev_ready_evidence_ref, str) or not cfg.dev_ready_evidence_ref.strip():
+            raise ToolError(
+                "validation_error",
+                "op-build mode packets require dev_ready_evidence_ref",
+                stage="validate",
+            )
+
 
 
 def config_from_args(args: argparse.Namespace) -> DispatchInput:
@@ -325,7 +372,7 @@ def config_from_args(args: argparse.Namespace) -> DispatchInput:
         runtime_profile_id=((args.runtime_profile_id or data.get("runtime_profile_id") or "").strip() or None),
         runtime_id=((args.runtime_id or data.get("runtime_id") or "").strip() or None),
         runtime_base_url=((args.runtime_base_url or data.get("runtime_base_url") or "").strip() or None),
-        runtime_lease_id=((args.runtime_lease_id or data.get("runtime_lease_id") or data.get("lease_id") or "").strip() or None),
+        runtime_lease_id=((args.runtime_lease_id or data.get("runtime_lease_id") or "").strip() or None),
         tester_must_not_start_runtime=(
             _optional_bool(data.get("tester_must_not_start_runtime"))
             if args.tester_must_not_start_runtime is None
@@ -335,6 +382,23 @@ def config_from_args(args: argparse.Namespace) -> DispatchInput:
         wave_id=((args.wave_id or data.get("wave_id") or "").strip() or None),
         deployed_test_commit=((args.deployed_test_commit or data.get("deployed_test_commit") or "").strip() or None),
         test_lane_account=((args.test_lane_account or data.get("test_lane_account") or "").strip() or None),
+        op_build_mode=(
+            _bool(data.get("op_build_mode"), default=False)
+            if args.op_build_mode is None
+            else bool(args.op_build_mode)
+        ),
+        plan_id=((args.plan_id or data.get("plan_id") or "").strip() or None),
+        requirement_ids=(
+            _list_of_str(data, "requirement_ids", required=False)
+            if args.requirement_ids is None
+            else [item.strip() for item in args.requirement_ids if item.strip()]
+        ),
+        task_acceptance_refs=(
+            _list_of_str(data, "task_acceptance_refs", required=False)
+            if args.task_acceptance_refs is None
+            else [item.strip() for item in args.task_acceptance_refs if item.strip()]
+        ),
+        dev_ready_evidence_ref=((args.dev_ready_evidence_ref or data.get("dev_ready_evidence_ref") or "").strip() or None),
         dry_run=bool(data.get("dry_run", False) or args.dry_run),
         cycle_note=(args.cycle_note if args.cycle_note is not None else data.get("cycle_note")),
     )
@@ -379,6 +443,11 @@ def render_packet(cfg: DispatchInput) -> str:
         if cfg.tester_must_not_start_runtime is False
         else "unset"
     )
+    op_build_mode = "true" if cfg.op_build_mode else "false"
+    requirement_ids = ", ".join(cfg.requirement_ids) if cfg.requirement_ids else "none"
+    acceptance_refs = ", ".join(cfg.task_acceptance_refs) if cfg.task_acceptance_refs else "none"
+    dev_ready_ref = cfg.dev_ready_evidence_ref or "none"
+    plan_id = cfg.plan_id or "none"
 
     return (
         f"# Worker Packet v{cfg.packet_version}\n"
@@ -406,6 +475,11 @@ def render_packet(cfg: DispatchInput) -> str:
         f"wave_id: {cfg.wave_id or 'none'}\n"
         f"deployed_test_commit: {cfg.deployed_test_commit or 'none'}\n"
         f"test_lane_account: {cfg.test_lane_account or 'none'}\n\n"
+        f"op_build_mode: {op_build_mode}\n"
+        f"plan_id: {plan_id}\n"
+        f"requirement_ids: {requirement_ids}\n"
+        f"task_acceptance_refs: {acceptance_refs}\n"
+        f"dev_ready_evidence_ref: {dev_ready_ref}\n\n"
         f"## Acceptance Criteria\n"
         f"{criteria_lines}\n\n"
         f"## Branch Fallback Policy\n"
@@ -660,6 +734,11 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "wave_id": cfg.wave_id,
         "deployed_test_commit": cfg.deployed_test_commit,
         "test_lane_account": cfg.test_lane_account,
+        "op_build_mode": cfg.op_build_mode,
+        "plan_id": cfg.plan_id,
+        "requirement_ids": cfg.requirement_ids,
+        "task_acceptance_refs": cfg.task_acceptance_refs,
+        "dev_ready_evidence_ref": cfg.dev_ready_evidence_ref,
         "worktree_root": str(cfg.worktree_root),
         "updated_at": utc_now_iso(),
     }
@@ -701,6 +780,11 @@ def update_branch_lineage(path: Path, cfg: DispatchInput, dispatch: dict[str, An
         "start_from_branch": cfg.start_from_branch,
         "start_from_commit": cfg.start_from_commit,
         "worktree_root": str(cfg.worktree_root),
+        "op_build_mode": cfg.op_build_mode,
+        "plan_id": cfg.plan_id,
+        "requirement_ids": cfg.requirement_ids,
+        "task_acceptance_refs": cfg.task_acceptance_refs,
+        "dev_ready_evidence_ref": cfg.dev_ready_evidence_ref,
         "dispatch_pid": dispatch["pid"],
         "last_dispatch_at": utc_now_iso(),
     }
@@ -949,6 +1033,11 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "wave_id": cfg.wave_id,
         "deployed_test_commit": cfg.deployed_test_commit,
         "test_lane_account": cfg.test_lane_account,
+        "op_build_mode": cfg.op_build_mode,
+        "plan_id": cfg.plan_id,
+        "requirement_ids": cfg.requirement_ids,
+        "task_acceptance_refs": cfg.task_acceptance_refs,
+        "dev_ready_evidence_ref": cfg.dev_ready_evidence_ref,
         "status": "started" if dispatch["dispatch_started"] else "failed",
     }
 
@@ -1056,6 +1145,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wave-id")
     parser.add_argument("--deployed-test-commit")
     parser.add_argument("--test-lane-account")
+    parser.add_argument("--op-build-mode", dest="op_build_mode", action="store_true")
+    parser.add_argument("--no-op-build-mode", dest="op_build_mode", action="store_false")
+    parser.set_defaults(op_build_mode=None)
+    parser.add_argument("--plan-id")
+    parser.add_argument("--requirement-ids", action="append")
+    parser.add_argument("--task-acceptance-refs", action="append")
+    parser.add_argument("--dev-ready-evidence-ref")
     parser.add_argument("--cycle-note")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json-pretty", action="store_true")

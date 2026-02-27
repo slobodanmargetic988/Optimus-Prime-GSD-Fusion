@@ -34,10 +34,11 @@ Build installation tooling for global and local modes:
 
 ### Scope
 Define stable command namespace (examples):
-- init project
-- plan phase
-- execute phase
-- verify phase/UAT
+- `/op-initialize`
+- `/op-map-codebase`
+- `/op-new-project`
+- `/op-plan`
+- `/op-build`
 - show progress/status
 - pause/resume
 - health/repair

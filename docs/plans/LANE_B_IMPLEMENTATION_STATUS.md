@@ -40,6 +40,39 @@ Updated: 2026-02-27
   - emits deterministic runtime block/repair directives when runtime is unhealthy
   - suppresses tester/promotion actions while hard-gated runtime is blocked
 
+## Implemented (OP Command Surface Batch)
+
+- Added deterministic OP command family (chat + CLI normalized):
+  - `/op-map-codebase`
+  - `/op-new-project`
+  - `/op-plan`
+  - `/op-initialize`
+  - `/op-build`
+- Added shared command core:
+  - `scripts/op/op_router.py`
+  - `scripts/op/op_core.py`
+  - `scripts/op/opctl.py`
+  - `scripts/op/opctl.sh`
+- Added planning artifact generator under `reports/optimus-prime/planning/`:
+  - map artifacts (`MAP_CODEBASE.json`, `MAP_CODEBASE.md`, `CODEBASE_INDEX.json`, `ARCHITECTURE_NOTES.md`, `RISK_REGISTER.json`)
+  - baseline artifacts (`PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `STATE.md`, `STATE.json`)
+  - plan artifacts (`PLAN_PACKETS.json`, `PLAN_CHECK.json`, `TEST_CONTRACT.md`, `PLAYWRIGHT_UAT_MATRIX.md`)
+  - autonomous build state (`BUILD_STATE.json`)
+- Added strict build preflight gate:
+  - `/op-build` blocks when baseline artifacts are missing or `plan_ready=false`
+  - blocked build response explicitly recommends `/op-initialize`
+- Added autonomous recovery state machine in `/op-build`:
+  - recoverable blocker fingerprint attempts tracked per strategy
+  - strategy escalates after 5 attempts
+  - hard stops enforced for `insurmountable_blocker|all_rate_gates_blocking|operator_stop`
+  - strict completion requires `project_done` + `--verify-final-state` authorization
+- Extended dispatch packet contract for OP build packets:
+  - `op_build_mode`
+  - `plan_id`
+  - `requirement_ids`
+  - `task_acceptance_refs`
+  - `dev_ready_evidence_ref`
+
 ## Runtime + Blocker Artifacts (Canonical)
 
 - `reports/optimus-prime/config/TEST_TRAIN_PIPELINE.json`
@@ -69,7 +102,6 @@ python3 -m pytest \
 
 ## Remaining Lane B Items (Next Batch)
 
-- B1 planning artifact generator + schema validation.
-- B2 plan-check gate (block dev/test progression on failed planning quality).
-- B3 dev-ready evidence gate before tester dispatch.
-- B4 UAT/gap-closure workflow.
+- B3 dev-ready evidence generation/validation per task before tester dispatch.
+- B4 UAT/gap-closure workflow with structured gap artifact generation.
+- B6 deeper controller integration so directives are auto-applied end-to-end (not only emitted and tracked).

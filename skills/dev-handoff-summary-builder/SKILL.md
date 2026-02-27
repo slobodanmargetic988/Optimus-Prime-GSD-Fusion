@@ -19,7 +19,7 @@ Behavior:
 
 ## Script
 
-`/Users/slobodan/Projects/Agents/skills/dev-handoff-summary-builder/scripts/dev_handoff_summary_builder.py`
+`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-handoff-summary-builder/scripts/dev_handoff_summary_builder.py`
 
 ## Input Contract
 
@@ -58,7 +58,7 @@ Optional:
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Agents/skills/dev-handoff-summary-builder/scripts/dev_handoff_summary_builder.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-handoff-summary-builder/scripts/dev_handoff_summary_builder.py --input-json - --json-pretty
 {
   "task_identifier": "MYO-164",
   "branch": "codex/dev-2/myo-164",

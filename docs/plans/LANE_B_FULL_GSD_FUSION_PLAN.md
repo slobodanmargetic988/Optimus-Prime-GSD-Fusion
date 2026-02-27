@@ -23,6 +23,13 @@ Lane A provides deterministic cycle control. Lane B adds the product workflow la
 - **Execution lane**: Optimus cycle controller + worker dispatch + deterministic state.
 - **Verification lane**: tester/reviewer + UAT + gap generation + closure planning.
 
+## OP command surface (entrypoint layer)
+- `/op-map-codebase` -> planning map artifacts
+- `/op-new-project` -> baseline planning artifacts (auto-map on stale/missing map)
+- `/op-plan` -> plan packets + strict plan-check gate
+- `/op-initialize` -> map + new-project + plan chain
+- `/op-build` -> strict preflight + autonomous execution loop
+
 ## New control artifacts
 - `reports/optimus-prime/planning/PROJECT.md`
 - `reports/optimus-prime/planning/REQUIREMENTS.md`

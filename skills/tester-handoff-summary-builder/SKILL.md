@@ -19,7 +19,7 @@ Behavior:
 
 ## Script
 
-`/Users/slobodan/Projects/Agents/skills/tester-handoff-summary-builder/scripts/tester_handoff_summary_builder.py`
+`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/tester-handoff-summary-builder/scripts/tester_handoff_summary_builder.py`
 
 ## Input Contract
 
@@ -61,7 +61,7 @@ Behavior:
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Agents/skills/tester-handoff-summary-builder/scripts/tester_handoff_summary_builder.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/tester-handoff-summary-builder/scripts/tester_handoff_summary_builder.py --input-json - --json-pretty
 {
   "task_identifier": "MYO-168",
   "resolved_branch": "codex/dev-2/myo-168",
