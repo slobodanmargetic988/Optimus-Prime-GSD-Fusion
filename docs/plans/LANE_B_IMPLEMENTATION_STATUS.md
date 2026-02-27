@@ -100,6 +100,16 @@ Updated: 2026-02-27
   - final-state authorization passes via `--verify-final-state`
 - `/op-health` now enforces strict build-readiness semantics:
   - preflight blockers (`plan_ready=false`, invalid/missing strict artifacts, invalid plan/task state) fail health checks
+- `/op-status` is crash-safe on malformed planning/build artifacts:
+  - malformed `PLAN_PACKETS.json`, `TASK_EXECUTION_STATE.json`, `BUILD_STATE.json`, `GAPS.json`, or `GAP_CLOSURE_PLAN_PACKETS.json` yields deterministic blocked snapshot (no exception)
+  - warning/error codes: `status_artifact_invalid`, `status_snapshot_degraded`
+- `/op-resume` auto-recovers malformed build state:
+  - malformed/non-object/non-numeric-cycle `BUILD_STATE.json` is backed up to `BUILD_STATE.corrupt.<timestamp>.json`
+  - canonical build state is reset with `state_recovery` metadata and build resumes autonomously
+  - warning code: `resume_state_corrupt_reset`
+- malformed rate registry handling in `all_rate_gates_blocking` branch:
+  - invalid `PROFILE_RATE_REGISTRY.json` no longer crashes or forces stop/wait
+  - cycle continues with warning code `rate_registry_invalid_ignored`
 - Extended dispatch packet contract for OP build packets:
   - `op_build_mode`
   - `plan_id`
@@ -144,5 +154,5 @@ python3 -m pytest \
 ## Lane B Status (Provisional During Hardening)
 
 - Lane B remains in provisional hardening status for the new-only model until the current excellence hardening batch is fully green.
-- Hardening focus: crash-safe malformed runtime health handling, bounded/non-recursive gap closure retries, and strict `/op-health` build-readiness parity.
+- Hardening focus: crash-safe malformed runtime/status/resume artifact handling, bounded/non-recursive gap closure retries, and strict `/op-health` build-readiness parity.
 - Remaining roadmap work after hardening: Lane C packaging/installer and polished product command UX.

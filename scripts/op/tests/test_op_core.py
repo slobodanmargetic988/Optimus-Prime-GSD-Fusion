@@ -606,6 +606,62 @@ def test_build_halts_on_hard_stop_all_rate_gates_blocking():
         assert out["data"]["terminal_reason"] == "all_rate_gates_blocking"
 
 
+def test_build_all_rate_gates_blocking_with_invalid_registry_continues_with_warning(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.parent.mkdir(parents=True, exist_ok=True)
+        rate_path.write_text("{ invalid-json", encoding="utf-8")
+
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+
+        dispatch_calls = {"count": 0}
+
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req: {
+                "ok": True,
+                "terminal_reason": "all_rate_gates_blocking",
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+
+        def fake_dispatch(req, plan, state, build, *_):
+            dispatch_calls["count"] += 1
+            return {"ok": True, "status": "noop"}
+
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", fake_dispatch)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["ok"] is False
+        assert out["status"] == "running_needs_resume"
+        assert dispatch_calls["count"] == 1
+        assert any(item.get("code") == "rate_registry_invalid_ignored" for item in out["warnings"])
+
+
 def test_build_rate_gate_under_two_hours_sleeps_and_resumes():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -789,6 +845,75 @@ def test_op_health_and_status_commands():
         assert "active_phase_id" in status["data"]
 
 
+def test_op_status_blocks_not_crashes_on_malformed_plan_packets():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        plan_packets_path = root / "reports" / "optimus-prime" / "planning" / "PLAN_PACKETS.json"
+        plan_packets_path.write_text("{ invalid-json", encoding="utf-8")
+
+        out = run_payload({"command": "/op-status", "repo_root": str(root)})
+        assert out["ok"] is False
+        assert out["status"] == "blocked"
+        assert any(item.get("code") == "status_artifact_invalid" for item in out.get("warnings", []))
+        assert any(item.get("code") == "status_snapshot_degraded" for item in out.get("warnings", []))
+        assert out.get("data", {}).get("next_action") == out.get("next_action")
+
+
+def test_op_status_blocks_not_crashes_on_malformed_build_state():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        build_state_path = root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json"
+        build_state_path.write_text("{ invalid-json", encoding="utf-8")
+
+        out = run_payload({"command": "/op-status", "repo_root": str(root)})
+        assert out["ok"] is False
+        assert out["status"] == "blocked"
+        assert any(item.get("code") == "status_artifact_invalid" for item in out.get("warnings", []))
+        assert any(item.get("code") == "status_snapshot_degraded" for item in out.get("warnings", []))
+        assert out.get("data", {}).get("next_action") == out.get("next_action")
+
+
+def test_op_status_blocks_not_crashes_on_malformed_gaps():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        gaps_path = root / "reports" / "optimus-prime" / "planning" / "GAPS.json"
+        gaps_path.write_text("{ invalid-json", encoding="utf-8")
+
+        out = run_payload({"command": "/op-status", "repo_root": str(root)})
+        assert out["ok"] is False
+        assert out["status"] == "blocked"
+        assert any(item.get("code") == "status_artifact_invalid" for item in out.get("warnings", []))
+        assert any(item.get("code") == "status_snapshot_degraded" for item in out.get("warnings", []))
+        assert out.get("data", {}).get("next_action") == out.get("next_action")
+
+
 def test_op_health_fails_when_plan_not_ready():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -884,6 +1009,99 @@ def test_op_resume_uses_existing_build_state():
             }
         )
         assert resumed["status"] == "running_needs_resume"
+
+
+def test_op_resume_malformed_build_state_backup_and_reset():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+
+        planning_root = root / "reports" / "optimus-prime" / "planning"
+        build_state_path = planning_root / "BUILD_STATE.json"
+        build_state_path.write_text("{ invalid-json", encoding="utf-8")
+
+        resumed = run_payload(
+            {
+                "command": "/op-resume",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert resumed["status"] in {"running_needs_resume", "blocked_preflight"}
+        assert any(item.get("code") == "resume_state_corrupt_reset" for item in resumed.get("warnings", []))
+
+        backups = list(planning_root.glob("BUILD_STATE.corrupt.*.json"))
+        assert backups
+        repaired_state = json.loads(build_state_path.read_text(encoding="utf-8"))
+        recovery = repaired_state.get("state_recovery", {})
+        assert recovery.get("reason") == "malformed_build_state"
+        assert recovery.get("backup_path")
+
+
+def test_op_resume_non_numeric_last_cycle_backup_and_reset():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        planning_root = root / "reports" / "optimus-prime" / "planning"
+        build_state_path = planning_root / "BUILD_STATE.json"
+        build_state = json.loads(build_state_path.read_text(encoding="utf-8"))
+        build_state["last_cycle"] = "oops"
+        build_state_path.write_text(json.dumps(build_state, indent=2) + "\n", encoding="utf-8")
+
+        resumed = run_payload(
+            {
+                "command": "/op-resume",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert resumed["status"] in {"running_needs_resume", "blocked_preflight"}
+        assert any(item.get("code") == "resume_state_corrupt_reset" for item in resumed.get("warnings", []))
+
+        backups = list(planning_root.glob("BUILD_STATE.corrupt.*.json"))
+        assert backups
+        repaired_state = json.loads(build_state_path.read_text(encoding="utf-8"))
+        recovery = repaired_state.get("state_recovery", {})
+        assert recovery.get("reason") == "malformed_build_state"
+        assert recovery.get("backup_path")
 
 
 if __name__ == "__main__":

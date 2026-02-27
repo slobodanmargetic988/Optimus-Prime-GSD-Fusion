@@ -91,4 +91,7 @@ Repo-local CLI wrapper:
 - dispatch cap enforcement: `dispatch_window.max_running_workers` is a hard cap
 - strict done completion requires all phase/task/evidence/verify/UAT gates, zero open gaps, plus `--verify-final-state` authorization
 - hard rate-gate policy: wait/resume when reset is within 2 hours, otherwise stop and require manual rerun
+- malformed rate registry handling: if `PROFILE_RATE_REGISTRY.json` is invalid during `all_rate_gates_blocking`, build continues with warning `rate_registry_invalid_ignored`
 - strict health parity: `/op-health` is build-readiness strict and fails when `/op-build` preflight would block
+- status resilience: `/op-status` degrades to deterministic blocked snapshot (no crash) with `status_artifact_invalid` and `status_snapshot_degraded`
+- resume resilience: `/op-resume` auto-backs up malformed `BUILD_STATE.json` to `BUILD_STATE.corrupt.<timestamp>.json`, resets state, and continues with warning `resume_state_corrupt_reset`

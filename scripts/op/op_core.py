@@ -187,6 +187,20 @@ def _read_json(path: Path) -> Any:
         raise OpError("state_read_error", f"unable to read {path}: {exc}", stage="state") from exc
 
 
+def _backup_corrupt_file(path: Path) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup = path.with_name(f"{path.stem}.corrupt.{stamp}{path.suffix}")
+    if backup.exists():
+        backup = path.with_name(f"{path.stem}.corrupt.{stamp}.{uuid.uuid4().hex[:8]}{path.suffix}")
+    try:
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise OpError("state_read_error", f"unable to backup corrupted artifact {path}: {exc}", stage="state") from exc
+    _ensure_parent(backup)
+    backup.write_bytes(payload)
+    return backup
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -1139,10 +1153,34 @@ def _resolve_active_phase(plan_packets: dict[str, Any], task_state: dict[str, An
 def _read_rate_gate_window(repo_root: Path) -> dict[str, Any]:
     path = repo_root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
     if not path.exists():
-        return {"hard_gated": False, "min_reset_at": None, "min_reset_hours": None, "profiles": []}
-    payload = _read_json(path)
+        return {
+            "hard_gated": False,
+            "min_reset_at": None,
+            "min_reset_hours": None,
+            "profiles": [],
+            "registry_invalid": False,
+            "registry_error": None,
+        }
+    try:
+        payload = _read_json(path)
+    except OpError as exc:
+        return {
+            "hard_gated": False,
+            "min_reset_at": None,
+            "min_reset_hours": None,
+            "profiles": [],
+            "registry_invalid": True,
+            "registry_error": exc.message,
+        }
     if not isinstance(payload, dict):
-        return {"hard_gated": False, "min_reset_at": None, "min_reset_hours": None, "profiles": []}
+        return {
+            "hard_gated": False,
+            "min_reset_at": None,
+            "min_reset_hours": None,
+            "profiles": [],
+            "registry_invalid": True,
+            "registry_error": "PROFILE_RATE_REGISTRY.json must be a JSON object",
+        }
     profiles_raw = payload.get("profiles")
     profile_items: list[tuple[str, dict[str, Any]]] = []
     if isinstance(profiles_raw, dict):
@@ -1193,6 +1231,8 @@ def _read_rate_gate_window(repo_root: Path) -> dict[str, Any]:
         "min_reset_at": min_reset_at,
         "min_reset_hours": min_reset_hours,
         "profiles": hard_gated_profiles,
+        "registry_invalid": False,
+        "registry_error": None,
     }
 
 
@@ -2242,61 +2282,70 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
     )
 
 
+def _fresh_build_state_payload() -> dict[str, Any]:
+    now = utc_now_iso()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "build_id": f"build-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+        "started_at": now,
+        "updated_at": now,
+        "last_cycle": 0,
+        "current_strategy": STRATEGY_LADDER[0],
+        "strategy_ladder": STRATEGY_LADDER,
+        "fingerprint_attempts": {},
+        "terminal_state": None,
+        "completion_evidence": {},
+        "loop_lock_id": None,
+        "dispatch_window": {
+            "max_running_workers": 6,
+            "soft_cap_active": False,
+        },
+        "rate_gate_state": {
+            "hard_gated": False,
+            "min_reset_at": None,
+            "sleep_until": None,
+            "manual_rerun_required": False,
+        },
+        "cycle_gate_decision": {
+            "dispatch_blocked": False,
+            "reason": None,
+            "terminal_reason": None,
+        },
+        "remediation_state": {
+            "active": False,
+            "reason": None,
+            "last_queued_at": None,
+            "fingerprint": None,
+        },
+        "offset_recovery": {
+            "handoff_offset_resets": 0,
+            "last_reset_at": None,
+        },
+        "strict_done_checks": {},
+        "current_task_pointer": None,
+        "current_phase_id": None,
+        "phase_exit_checks": {},
+        "open_gap_ids": [],
+        "active_gap_closure_phase_id": None,
+        "last_gap_generation_at": None,
+        "gap_retry_attempts": {},
+        "gap_retry_exhausted_ids": [],
+        "gap_retry_policy": {
+            "max_attempts": 5,
+        },
+        "state_recovery": {
+            "last_recovery_at": None,
+            "reason": None,
+            "backup_path": None,
+        },
+        "handoff_log_offset": 0,
+        "history": [],
+    }
+
+
 def _load_build_state(path: Path) -> dict[str, Any]:
     if not path.exists():
-        now = utc_now_iso()
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "build_id": f"build-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
-            "started_at": now,
-            "updated_at": now,
-            "last_cycle": 0,
-            "current_strategy": STRATEGY_LADDER[0],
-            "strategy_ladder": STRATEGY_LADDER,
-            "fingerprint_attempts": {},
-            "terminal_state": None,
-            "completion_evidence": {},
-            "loop_lock_id": None,
-            "dispatch_window": {
-                "max_running_workers": 6,
-                "soft_cap_active": False,
-            },
-            "rate_gate_state": {
-                "hard_gated": False,
-                "min_reset_at": None,
-                "sleep_until": None,
-                "manual_rerun_required": False,
-            },
-            "cycle_gate_decision": {
-                "dispatch_blocked": False,
-                "reason": None,
-                "terminal_reason": None,
-            },
-            "remediation_state": {
-                "active": False,
-                "reason": None,
-                "last_queued_at": None,
-                "fingerprint": None,
-            },
-            "offset_recovery": {
-                "handoff_offset_resets": 0,
-                "last_reset_at": None,
-            },
-            "strict_done_checks": {},
-            "current_task_pointer": None,
-            "current_phase_id": None,
-            "phase_exit_checks": {},
-            "open_gap_ids": [],
-            "active_gap_closure_phase_id": None,
-            "last_gap_generation_at": None,
-            "gap_retry_attempts": {},
-            "gap_retry_exhausted_ids": [],
-            "gap_retry_policy": {
-                "max_attempts": 5,
-            },
-            "handoff_log_offset": 0,
-            "history": [],
-        }
+        return _fresh_build_state_payload()
     payload = _read_json(path)
     if not isinstance(payload, dict):
         raise OpError("state_read_error", "BUILD_STATE.json must be a JSON object", stage="build")
@@ -2324,6 +2373,14 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     payload.setdefault("gap_retry_attempts", {})
     payload.setdefault("gap_retry_exhausted_ids", [])
     payload.setdefault("gap_retry_policy", {"max_attempts": 5})
+    payload.setdefault(
+        "state_recovery",
+        {
+            "last_recovery_at": None,
+            "reason": None,
+            "backup_path": None,
+        },
+    )
     payload.setdefault("handoff_log_offset", 0)
     payload.setdefault(
         "cycle_gate_decision",
@@ -3443,58 +3500,80 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                         "terminal_reason": terminal_reason,
                     }
                     rate_window = _read_rate_gate_window(req.repo_root)
-                    min_reset_at = _as_str(rate_window.get("min_reset_at"))
-                    min_reset_hours = rate_window.get("min_reset_hours")
-                    within_window = isinstance(min_reset_hours, (int, float)) and float(min_reset_hours) <= 2.0
-                    build_state["rate_gate_state"] = {
-                        "hard_gated": bool(rate_window.get("hard_gated")),
-                        "min_reset_at": min_reset_at,
-                        "sleep_until": min_reset_at if within_window else None,
-                        "manual_rerun_required": not within_window,
-                    }
-                    if within_window and min_reset_at:
-                        if not req.dry_run:
-                            reset_dt = _parse_iso_utc(min_reset_at)
-                            if reset_dt is not None:
-                                seconds = int(max(0, (reset_dt - datetime.now(timezone.utc)).total_seconds()))
-                                if seconds > 0:
-                                    time.sleep(seconds)
+                    if bool(rate_window.get("registry_invalid")):
+                        warning = {
+                            "code": "rate_registry_invalid_ignored",
+                            "message": "PROFILE_RATE_REGISTRY.json is invalid; ignoring all_rate_gates_blocking stop for this cycle",
+                            "stage": "build_loop",
+                        }
+                        if _as_str(rate_window.get("registry_error")):
+                            warning["details"] = {"registry_error": rate_window.get("registry_error")}
+                        warnings.append(warning)
+                        cycle_local_warnings.append(warning)
+                        build_state["cycle_gate_decision"] = {
+                            "dispatch_blocked": False,
+                            "reason": "rate_registry_invalid_ignored",
+                            "terminal_reason": terminal_reason,
+                        }
+                        build_state["rate_gate_state"] = {
+                            "hard_gated": False,
+                            "min_reset_at": None,
+                            "sleep_until": None,
+                            "manual_rerun_required": False,
+                        }
+                    else:
+                        min_reset_at = _as_str(rate_window.get("min_reset_at"))
+                        min_reset_hours = rate_window.get("min_reset_hours")
+                        within_window = isinstance(min_reset_hours, (int, float)) and float(min_reset_hours) <= 2.0
+                        build_state["rate_gate_state"] = {
+                            "hard_gated": bool(rate_window.get("hard_gated")),
+                            "min_reset_at": min_reset_at,
+                            "sleep_until": min_reset_at if within_window else None,
+                            "manual_rerun_required": not within_window,
+                        }
+                        if within_window and min_reset_at:
+                            if not req.dry_run:
+                                reset_dt = _parse_iso_utc(min_reset_at)
+                                if reset_dt is not None:
+                                    seconds = int(max(0, (reset_dt - datetime.now(timezone.utc)).total_seconds()))
+                                    if seconds > 0:
+                                        time.sleep(seconds)
+                            build_state["updated_at"] = utc_now_iso()
+                            _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
+                            _atomic_write_json(build_state_path, build_state)
+                            continue
+                        build_state["terminal_state"] = {
+                            "reason": terminal_reason,
+                            "timestamp": utc_now_iso(),
+                        }
                         build_state["updated_at"] = utc_now_iso()
                         _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
                         _atomic_write_json(build_state_path, build_state)
-                        continue
-                    build_state["terminal_state"] = {
-                        "reason": terminal_reason,
-                        "timestamp": utc_now_iso(),
-                    }
-                    build_state["updated_at"] = utc_now_iso()
-                    _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
-                    _atomic_write_json(build_state_path, build_state)
-                    return _response(
-                        req,
-                        ok=False,
-                        status="blocked_terminal",
-                        summary="Build halted: all rate gates blocking beyond auto-wait window.",
-                        warnings=warnings,
-                        errors=[
-                            {
-                                "code": "hard_terminal_condition",
-                                "message": "rate reset window exceeds 2h; rerun /op-build after reset",
-                                "stage": "build_loop",
-                            }
-                        ],
-                        state_ref=str(build_state_path),
-                        next_action=(
-                            f"Rerun /op-build after rate reset at {min_reset_at}."
-                            if min_reset_at
-                            else "Rerun /op-build after rate gates recover."
-                        ),
-                        data={
-                            "terminal_reason": terminal_reason,
-                            "cycles_executed": cycles,
-                            "rate_gate_state": build_state.get("rate_gate_state"),
-                        },
-                    )
+                        return _response(
+                            req,
+                            ok=False,
+                            status="blocked_terminal",
+                            summary="Build halted: all rate gates blocking beyond auto-wait window.",
+                            warnings=warnings,
+                            errors=[
+                                {
+                                    "code": "hard_terminal_condition",
+                                    "message": "rate reset window exceeds 2h; rerun /op-build after reset",
+                                    "stage": "build_loop",
+                                }
+                            ],
+                            state_ref=str(build_state_path),
+                            next_action=(
+                                f"Rerun /op-build after rate reset at {min_reset_at}."
+                                if min_reset_at
+                                else "Rerun /op-build after rate gates recover."
+                            ),
+                            data={
+                                "terminal_reason": terminal_reason,
+                                "cycles_executed": cycles,
+                                "rate_gate_state": build_state.get("rate_gate_state"),
+                            },
+                        )
                 elif terminal_reason in TERMINAL_HARD_STOPS:
                     build_state["terminal_state"] = {
                         "reason": terminal_reason,
@@ -3822,15 +3901,177 @@ def command_health(req: OpRequest) -> dict[str, Any]:
 
 def command_status(req: OpRequest) -> dict[str, Any]:
     planning_root = _repo_path(req.repo_root, PLANNING_REL)
-    plan_packets = _read_json(_repo_path(req.repo_root, PLAN_PACKETS_JSON)) if _repo_path(req.repo_root, PLAN_PACKETS_JSON).exists() else {}
-    task_state = _read_json(_repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)) if _repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON).exists() else {"tasks": []}
-    build_state = _load_build_state(_repo_path(req.repo_root, BUILD_STATE_JSON)) if _repo_path(req.repo_root, BUILD_STATE_JSON).exists() else {"current_strategy": STRATEGY_LADDER[0]}
-    gaps_payload = _load_gaps_payload(_repo_path(req.repo_root, GAPS_JSON), _as_str((plan_packets or {}).get("plan_id")) or "plan-unknown")
+    warnings: list[dict[str, Any]] = []
+    status_degraded = False
+
+    plan_packets_path = _repo_path(req.repo_root, PLAN_PACKETS_JSON)
+    if plan_packets_path.exists():
+        try:
+            plan_packets_raw = _read_json(plan_packets_path)
+        except OpError as exc:
+            warnings.append(
+                {
+                    "code": "status_artifact_invalid",
+                    "message": f"PLAN_PACKETS.json unreadable: {exc.message}",
+                    "stage": "status",
+                    "artifact": str(plan_packets_path),
+                }
+            )
+            plan_packets_raw = {}
+            status_degraded = True
+    else:
+        plan_packets_raw = {}
+    plan_packets = plan_packets_raw if isinstance(plan_packets_raw, dict) else {}
+    if not isinstance(plan_packets_raw, dict):
+        warnings.append(
+            {
+                "code": "status_artifact_invalid",
+                "message": "PLAN_PACKETS.json must be a JSON object",
+                "stage": "status",
+                "artifact": str(plan_packets_path),
+            }
+        )
+        status_degraded = True
+
+    task_state_path = _repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)
+    if task_state_path.exists():
+        try:
+            task_state_raw = _read_json(task_state_path)
+        except OpError as exc:
+            warnings.append(
+                {
+                    "code": "status_artifact_invalid",
+                    "message": f"TASK_EXECUTION_STATE.json unreadable: {exc.message}",
+                    "stage": "status",
+                    "artifact": str(task_state_path),
+                }
+            )
+            task_state_raw = {"tasks": []}
+            status_degraded = True
+    else:
+        task_state_raw = {"tasks": []}
+    task_state = task_state_raw if isinstance(task_state_raw, dict) else {"tasks": []}
+    if not isinstance(task_state_raw, dict):
+        warnings.append(
+            {
+                "code": "status_artifact_invalid",
+                "message": "TASK_EXECUTION_STATE.json must be a JSON object",
+                "stage": "status",
+                "artifact": str(task_state_path),
+            }
+        )
+        status_degraded = True
+
+    build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
+    if build_state_path.exists():
+        try:
+            build_state = _load_build_state(build_state_path)
+        except OpError as exc:
+            warnings.append(
+                {
+                    "code": "status_artifact_invalid",
+                    "message": f"BUILD_STATE.json unreadable: {exc.message}",
+                    "stage": "status",
+                    "artifact": str(build_state_path),
+                }
+            )
+            build_state = _fresh_build_state_payload()
+            status_degraded = True
+    else:
+        build_state = _fresh_build_state_payload()
+
+    gaps_path = _repo_path(req.repo_root, GAPS_JSON)
+    plan_id_for_gaps = _as_str((plan_packets or {}).get("plan_id")) or "plan-unknown"
+    if gaps_path.exists():
+        try:
+            gaps_raw = _read_json(gaps_path)
+        except OpError as exc:
+            warnings.append(
+                {
+                    "code": "status_artifact_invalid",
+                    "message": f"GAPS.json unreadable: {exc.message}",
+                    "stage": "status",
+                    "artifact": str(gaps_path),
+                }
+            )
+            gaps_raw = {
+                "schema_version": SCHEMA_VERSION,
+                "plan_id": plan_id_for_gaps,
+                "updated_at": utc_now_iso(),
+                "gaps": [],
+            }
+            status_degraded = True
+    else:
+        gaps_raw = {
+            "schema_version": SCHEMA_VERSION,
+            "plan_id": plan_id_for_gaps,
+            "updated_at": utc_now_iso(),
+            "gaps": [],
+        }
+    if isinstance(gaps_raw, dict):
+        gaps_payload = dict(gaps_raw)
+    else:
+        warnings.append(
+            {
+                "code": "status_artifact_invalid",
+                "message": "GAPS.json must be a JSON object",
+                "stage": "status",
+                "artifact": str(gaps_path),
+            }
+        )
+        status_degraded = True
+        gaps_payload = {
+            "schema_version": SCHEMA_VERSION,
+            "plan_id": plan_id_for_gaps,
+            "updated_at": utc_now_iso(),
+            "gaps": [],
+        }
+    if not isinstance(gaps_payload.get("gaps"), list):
+        warnings.append(
+            {
+                "code": "status_artifact_invalid",
+                "message": "GAPS.json field 'gaps' must be a list",
+                "stage": "status",
+                "artifact": str(gaps_path),
+            }
+        )
+        status_degraded = True
+        gaps_payload["gaps"] = []
+    gaps_payload.setdefault("schema_version", SCHEMA_VERSION)
+    gaps_payload["plan_id"] = _as_str(gaps_payload.get("plan_id")) or plan_id_for_gaps
+    gaps_payload["updated_at"] = utc_now_iso()
+    gap_closure_path = _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)
+    if gap_closure_path.exists():
+        try:
+            gap_closure_raw = _read_json(gap_closure_path)
+        except OpError as exc:
+            warnings.append(
+                {
+                    "code": "status_artifact_invalid",
+                    "message": f"GAP_CLOSURE_PLAN_PACKETS.json unreadable: {exc.message}",
+                    "stage": "status",
+                    "artifact": str(gap_closure_path),
+                }
+            )
+            gap_closure_raw = {"tasks": []}
+            status_degraded = True
+    else:
+        gap_closure_raw = {"tasks": []}
+    gap_closure_payload = gap_closure_raw if isinstance(gap_closure_raw, dict) else {"tasks": []}
+    if not isinstance(gap_closure_raw, dict):
+        warnings.append(
+            {
+                "code": "status_artifact_invalid",
+                "message": "GAP_CLOSURE_PLAN_PACKETS.json must be a JSON object",
+                "stage": "status",
+                "artifact": str(gap_closure_path),
+            }
+        )
+        status_degraded = True
+
     merged_plan = _merge_plan_with_gap_closure(
         plan_packets if isinstance(plan_packets, dict) else {},
-        _read_json(_repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON))
-        if _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON).exists()
-        else {"tasks": []},
+        gap_closure_payload,
     )
     active_phase_id, phase_checks = _resolve_active_phase(
         merged_plan if isinstance(merged_plan, dict) else {"tasks": [], "phases": []},
@@ -3850,18 +4091,42 @@ def command_status(req: OpRequest) -> dict[str, Any]:
         for item in gaps_payload.get("gaps", [])
         if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
     ]
-    next_action = (
+    next_command = (
         "/op-initialize"
         if not _repo_path(req.repo_root, STATE_JSON).exists()
         else "/op-resume" if _repo_path(req.repo_root, BUILD_STATE_JSON).exists() else "/op-build"
     )
+    next_action_text = (
+        "Repair malformed planning/build artifacts or rerun /op-initialize, then rerun /op-status."
+        if status_degraded
+        else f"Use {next_command} for the next autonomous step."
+    )
+    data_next_action = next_action_text if status_degraded else next_command
+    if status_degraded:
+        warnings.append(
+            {
+                "code": "status_snapshot_degraded",
+                "message": "status snapshot degraded due to malformed critical planning/build artifacts",
+                "stage": "status",
+            }
+        )
     return _response(
         req,
-        ok=True,
-        status="completed",
-        summary="OP status snapshot generated.",
+        ok=not status_degraded,
+        status="blocked" if status_degraded else "completed",
+        summary="OP status snapshot degraded by malformed artifacts." if status_degraded else "OP status snapshot generated.",
+        warnings=warnings,
+        errors=[]
+        if not status_degraded
+        else [
+            {
+                "code": "status_snapshot_degraded",
+                "message": "critical planning/build artifacts are malformed; repair required",
+                "stage": "status",
+            }
+        ],
         artifacts=[str(planning_root)],
-        next_action=f"Use {next_action} for the next autonomous step.",
+        next_action=next_action_text,
         state_ref=str(_repo_path(req.repo_root, BUILD_STATE_JSON)),
         data={
             "plan_id": _as_str((plan_packets or {}).get("plan_id")),
@@ -3873,7 +4138,7 @@ def command_status(req: OpRequest) -> dict[str, Any]:
             "current_strategy": _as_str((build_state or {}).get("current_strategy")) or STRATEGY_LADDER[0],
             "gap_retry_attempts": (build_state or {}).get("gap_retry_attempts", {}),
             "gap_retry_exhausted_ids": (build_state or {}).get("gap_retry_exhausted_ids", []),
-            "next_action": next_action,
+            "next_action": data_next_action,
         },
     )
 
@@ -3896,8 +4161,58 @@ def command_resume(req: OpRequest) -> dict[str, Any]:
             next_action="Run /op-build to initialize autonomous execution state.",
             state_ref=str(build_state_path),
         )
-    payload = _read_json(build_state_path)
-    if not isinstance(payload, dict) or int(payload.get("last_cycle", 0)) <= 0:
+    recovered_warning: dict[str, Any] | None = None
+    recover_state = False
+    payload: Any = None
+    try:
+        payload = _read_json(build_state_path)
+    except OpError:
+        recover_state = True
+
+    if not recover_state and not isinstance(payload, dict):
+        recover_state = True
+
+    last_cycle: int | None = None
+    if not recover_state and isinstance(payload, dict):
+        last_cycle_raw = payload.get("last_cycle", 0)
+        try:
+            last_cycle = int(last_cycle_raw)
+        except (TypeError, ValueError):
+            recover_state = True
+
+    if recover_state:
+        try:
+            backup_path = _backup_corrupt_file(build_state_path)
+        except OpError as exc:
+            return _response(
+                req,
+                ok=False,
+                status="blocked_preflight",
+                summary="Resume blocked: failed to recover malformed build state.",
+                errors=[
+                    {
+                        "code": "resume_state_recovery_failed",
+                        "message": exc.message,
+                        "stage": "resume",
+                    }
+                ],
+                next_action="Repair BUILD_STATE.json permissions/path and rerun /op-resume.",
+                state_ref=str(build_state_path),
+            )
+        build_state = _fresh_build_state_payload()
+        build_state["state_recovery"] = {
+            "last_recovery_at": utc_now_iso(),
+            "reason": "malformed_build_state",
+            "backup_path": str(backup_path),
+        }
+        _atomic_write_json(build_state_path, build_state)
+        recovered_warning = {
+            "code": "resume_state_corrupt_reset",
+            "message": f"BUILD_STATE.json was malformed and reset from backup {backup_path.name}",
+            "stage": "resume",
+            "backup_path": str(backup_path),
+        }
+    elif last_cycle is not None and last_cycle <= 0:
         return _response(
             req,
             ok=False,
@@ -3913,7 +4228,14 @@ def command_resume(req: OpRequest) -> dict[str, Any]:
             next_action="Run /op-build to start a fresh autonomous run.",
             state_ref=str(build_state_path),
         )
-    return command_build(req)
+    out = command_build(req)
+    if recovered_warning is not None:
+        existing = out.get("warnings")
+        if not isinstance(existing, list):
+            existing = []
+        existing.insert(0, recovered_warning)
+        out["warnings"] = existing
+    return out
 
 
 def parse_request(payload: dict[str, Any]) -> OpRequest:
