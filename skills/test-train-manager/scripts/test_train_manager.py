@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -39,6 +41,7 @@ WAVE_STATES = {
 TEST_TRAIN_MODES = {"off", "final-stage", "forced-shared-env"}
 TASK_OUTCOMES = {"passed", "failed", "pass_with_rework", "blocked"}
 CRITICAL_BLOCKER_CATEGORIES = {"env", "runtime", "test-train", "infra"}
+ENV_PLACEHOLDER_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
 
 
 class ToolError(Exception):
@@ -74,6 +77,11 @@ class TrainInput:
     blockers_path: Path
     handoff_log_path: Path
     thread_token_summary_path: Path
+    test_train_pipeline_path: Path
+    runtime_health_path: Path
+    runtime_action_log_path: Path
+    runtime_repair_tasks_path: Path
+    runtime_locks_dir: Path
 
 
 def utc_now() -> datetime:
@@ -159,6 +167,104 @@ def _parse_iso(value: Any) -> datetime | None:
         return None
 
 
+def _load_pipeline_config(inp: TrainInput) -> dict[str, Any]:
+    if not inp.test_train_pipeline_path.exists():
+        raise ToolError(
+            "config_error",
+            f"missing test-train pipeline config: {inp.test_train_pipeline_path}",
+            stage="config",
+        )
+    data = _read_json(inp.test_train_pipeline_path, {})
+    if not isinstance(data, dict):
+        raise ToolError("config_error", "invalid test-train pipeline config", stage="config")
+    return data
+
+
+def _expand_placeholders(text: str, repo_root: Path) -> str:
+    rendered = text.replace("${REPO_ROOT}", str(repo_root))
+    missing: list[str] = []
+
+    def repl(match: re.Match[str]) -> str:
+        key = match.group(1)
+        value = os.environ.get(key)
+        if value is None:
+            missing.append(key)
+            return ""
+        return value
+
+    rendered = ENV_PLACEHOLDER_RE.sub(repl, rendered)
+    if missing:
+        raise ToolError(
+            "config_error",
+            f"missing env placeholder value(s): {', '.join(sorted(set(missing)))}",
+            stage="config",
+        )
+    return rendered
+
+
+def _read_runtime_health(inp: TrainInput) -> dict[str, Any]:
+    return _read_json(
+        inp.runtime_health_path,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "gate_state": "blocked" if inp.test_train_mode != "off" else "degraded",
+            "both_sources_pass": False,
+            "consecutive_passes": 0,
+            "required_passes": 2,
+            "last_failure_fingerprint": None,
+            "next_heal_allowed_at": None,
+        },
+    )
+
+
+def _runtime_coordinator_script(inp: TrainInput) -> Path:
+    return (
+        inp.repo_root
+        / "skills"
+        / "runtime-coordinator"
+        / "scripts"
+        / "runtime_coordinator.py"
+    )
+
+
+def _run_runtime_coordinator(inp: TrainInput, payload: dict[str, Any]) -> dict[str, Any]:
+    script = _runtime_coordinator_script(inp)
+    if not script.exists():
+        raise ToolError(
+            "runtime_error",
+            f"runtime-coordinator script missing: {script}",
+            stage="runtime",
+        )
+    merged_payload = {"repo_root": str(inp.repo_root), **payload}
+    proc = subprocess.run(
+        [sys.executable, str(script), "--input-json", "-"],
+        input=json.dumps(merged_payload),
+        cwd=str(inp.repo_root),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    raw = (proc.stdout or "").strip()
+    if not raw:
+        raise ToolError(
+            "runtime_error",
+            f"runtime-coordinator produced no output (exit={proc.returncode})",
+            stage="runtime",
+        )
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ToolError(
+            "runtime_error",
+            f"runtime-coordinator output was not valid JSON: {exc}",
+            stage="runtime",
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ToolError("runtime_error", "runtime-coordinator returned non-object JSON", stage="runtime")
+    return parsed
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Optimus shared test-train manager")
     parser.add_argument("--input-json", required=True, help="Path to JSON input or '-' for stdin")
@@ -183,6 +289,21 @@ def build_input(payload: dict[str, Any]) -> TrainInput:
             f"test_train_mode must be one of {sorted(TEST_TRAIN_MODES)}",
             stage="input",
         )
+    shared_test_base_url = _str(payload.get("shared_test_base_url"))
+    deploy_test_branch_cmd = _str(payload.get("deploy_test_branch_cmd"))
+    if test_train_mode != "off":
+        if shared_test_base_url:
+            raise ToolError(
+                "input_error",
+                "shared_test_base_url is deprecated for test-train mode; use reports/optimus-prime/config/TEST_TRAIN_PIPELINE.json",
+                stage="input",
+            )
+        if deploy_test_branch_cmd:
+            raise ToolError(
+                "input_error",
+                "deploy_test_branch_cmd is deprecated for test-train mode; use reports/optimus-prime/config/TEST_TRAIN_PIPELINE.json",
+                stage="input",
+            )
 
     task_outcome = (_str(payload.get("task_outcome")) or None)
     if task_outcome and task_outcome not in TASK_OUTCOMES:
@@ -195,8 +316,8 @@ def build_input(payload: dict[str, Any]) -> TrainInput:
         test_branch=_str(payload.get("test_branch")) or "test",
         test_next_branch=_str(payload.get("test_next_branch")) or "test-next",
         test_train_mode=test_train_mode,
-        shared_test_base_url=_str(payload.get("shared_test_base_url")),
-        deploy_test_branch_cmd=_str(payload.get("deploy_test_branch_cmd")),
+        shared_test_base_url=shared_test_base_url,
+        deploy_test_branch_cmd=deploy_test_branch_cmd,
         dry_run=_bool(payload.get("dry_run"), False),
         create_branches_if_missing=_bool(payload.get("create_branches_if_missing"), True),
         force=_bool(payload.get("force"), False),
@@ -217,6 +338,26 @@ def build_input(payload: dict[str, Any]) -> TrainInput:
         thread_token_summary_path=Path(
             _str(payload.get("thread_token_summary_path"))
             or str(reports / "THREAD_TOKEN_USAGE_SUMMARY.json")
+        ).expanduser().resolve(),
+        test_train_pipeline_path=Path(
+            _str(payload.get("test_train_pipeline_path"))
+            or str(reports / "config" / "TEST_TRAIN_PIPELINE.json")
+        ).expanduser().resolve(),
+        runtime_health_path=Path(
+            _str(payload.get("runtime_health_path"))
+            or str(reports / "runtime" / "RUNTIME_HEALTH.json")
+        ).expanduser().resolve(),
+        runtime_action_log_path=Path(
+            _str(payload.get("runtime_action_log_path"))
+            or str(reports / "runtime" / "RUNTIME_ACTION_LOG.jsonl")
+        ).expanduser().resolve(),
+        runtime_repair_tasks_path=Path(
+            _str(payload.get("runtime_repair_tasks_path"))
+            or str(reports / "runtime" / "RUNTIME_REPAIR_TASKS.json")
+        ).expanduser().resolve(),
+        runtime_locks_dir=Path(
+            _str(payload.get("runtime_locks_dir"))
+            or str(reports / "runtime" / "locks")
         ).expanduser().resolve(),
     )
 
@@ -406,10 +547,28 @@ def _evaluate_gate(inp: TrainInput, state: dict[str, Any]) -> dict[str, Any]:
         reasons.append("planned_flow_pass_not_completed")
     if critical_blocked:
         reasons.append("critical_environment_blocker_active")
+    runtime_health = _read_runtime_health(inp)
+    runtime_gate_state = (_str(runtime_health.get("gate_state")) or "blocked").lower()
+    runtime_healthy = runtime_gate_state == "healthy"
+    hard_gate = False
+    if inp.test_train_mode != "off":
+        pipeline = _load_pipeline_config(inp)
+        mode_policy = pipeline.get("mode_policy") if isinstance(pipeline.get("mode_policy"), dict) else {}
+        mode_cfg = mode_policy.get(inp.test_train_mode) if isinstance(mode_policy, dict) else {}
+        hard_gate = _bool((mode_cfg or {}).get("hard_gate"), True)
+        if hard_gate and not runtime_healthy:
+            reasons.append("runtime_health_gate_blocked")
     return {
-        "eligible": planned_pass_done and not critical_blocked,
+        "eligible": planned_pass_done and not critical_blocked and not (hard_gate and not runtime_healthy),
         "reasons": reasons or ["eligible"],
         "critical_blockers": blocker_rows[-3:],
+        "runtime_health": {
+            "gate_state": runtime_gate_state,
+            "both_sources_pass": bool(runtime_health.get("both_sources_pass")),
+            "consecutive_passes": int(runtime_health.get("consecutive_passes", 0) or 0),
+            "required_passes": int(runtime_health.get("required_passes", 2) or 2),
+            "hard_gate": hard_gate,
+        },
         "evaluated_at": utc_now_iso(),
     }
 
@@ -438,6 +597,26 @@ def action_bootstrap(inp: TrainInput, state: dict[str, Any], attempts: dict[str,
         _append_wave_event(inp, wave_id, "wave_bootstrap", {"state": "WAVE_BOOTSTRAP"})
 
     _sync_commits(inp, state)
+    runtime_bootstrap: dict[str, Any] | None = None
+    if inp.test_train_mode != "off":
+        runtime_bootstrap = _run_runtime_coordinator(
+            inp,
+            {
+                "action": "bootstrap",
+                "test_train_mode": inp.test_train_mode,
+                "test_train_pipeline_path": str(inp.test_train_pipeline_path),
+                "runtime_health_path": str(inp.runtime_health_path),
+                "runtime_action_log_path": str(inp.runtime_action_log_path),
+                "runtime_repair_tasks_path": str(inp.runtime_repair_tasks_path),
+                "runtime_locks_dir": str(inp.runtime_locks_dir),
+            },
+        )
+        if not runtime_bootstrap.get("ok"):
+            raise ToolError(
+                "runtime_error",
+                f"runtime bootstrap failed: {runtime_bootstrap}",
+                stage="runtime",
+            )
     switch, reason = _auto_force_mode_if_needed(inp, state)
     if switch:
         wave_id = _str((state.get("active_wave") or {}).get("wave_id"))
@@ -453,11 +632,26 @@ def action_bootstrap(inp: TrainInput, state: dict[str, Any], attempts: dict[str,
         "test_branch": inp.test_branch,
         "test_next_branch": inp.test_next_branch,
         "active_wave": state.get("active_wave"),
+        "runtime_bootstrap": runtime_bootstrap,
     }
 
 
 def action_sync_state(inp: TrainInput, state: dict[str, Any], attempts: dict[str, Any]) -> dict[str, Any]:
     _sync_commits(inp, state)
+    runtime_health: dict[str, Any] | None = None
+    if inp.test_train_mode != "off":
+        runtime_health = _run_runtime_coordinator(
+            inp,
+            {
+                "action": "health",
+                "test_train_mode": inp.test_train_mode,
+                "test_train_pipeline_path": str(inp.test_train_pipeline_path),
+                "runtime_health_path": str(inp.runtime_health_path),
+                "runtime_action_log_path": str(inp.runtime_action_log_path),
+                "runtime_repair_tasks_path": str(inp.runtime_repair_tasks_path),
+                "runtime_locks_dir": str(inp.runtime_locks_dir),
+            },
+        )
     gate = _evaluate_gate(inp, state)
     state["promotion_eligibility"] = gate
     switch, reason = _auto_force_mode_if_needed(inp, state)
@@ -472,6 +666,7 @@ def action_sync_state(inp: TrainInput, state: dict[str, Any], attempts: dict[str
         "queued_test_next_commit": state.get("queued_test_next_commit"),
         "promotion_eligibility": gate,
         "test_train_mode": state.get("test_train_mode"),
+        "runtime_health": runtime_health,
     }
 
 
@@ -503,11 +698,30 @@ def action_evaluate_gate(inp: TrainInput, state: dict[str, Any], attempts: dict[
     if not isinstance(wave, dict):
         raise ToolError("state_error", "active_wave missing; run bootstrap first", stage="state")
     wave["state"] = "PROMOTION_EVAL"
+    runtime_health: dict[str, Any] | None = None
+    if inp.test_train_mode != "off":
+        runtime_health = _run_runtime_coordinator(
+            inp,
+            {
+                "action": "health",
+                "test_train_mode": inp.test_train_mode,
+                "test_train_pipeline_path": str(inp.test_train_pipeline_path),
+                "runtime_health_path": str(inp.runtime_health_path),
+                "runtime_action_log_path": str(inp.runtime_action_log_path),
+                "runtime_repair_tasks_path": str(inp.runtime_repair_tasks_path),
+                "runtime_locks_dir": str(inp.runtime_locks_dir),
+            },
+        )
     gate = _evaluate_gate(inp, state)
     state["promotion_eligibility"] = gate
     _append_wave_event(inp, _str(wave.get("wave_id")), "evaluate_promotion_gate", gate)
     _save_state(inp, state, attempts)
-    return {"ok": True, "action": "evaluate_promotion_gate", "promotion_eligibility": gate}
+    return {
+        "ok": True,
+        "action": "evaluate_promotion_gate",
+        "promotion_eligibility": gate,
+        "runtime_health": runtime_health,
+    }
 
 
 def _git_current_branch(inp: TrainInput) -> str:
@@ -573,8 +787,19 @@ def action_promote(inp: TrainInput, state: dict[str, Any], attempts: dict[str, A
 def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, Any]) -> dict[str, Any]:
     wave = state.get("active_wave") if isinstance(state.get("active_wave"), dict) else {}
     wave_id = _str(wave.get("wave_id"))
-    if not inp.deploy_test_branch_cmd:
-        raise ToolError("input_error", "deploy_test_branch_cmd is required for deploy_test_branch", stage="input")
+    pipeline = _load_pipeline_config(inp)
+    deploy_cfg = pipeline.get("deploy") if isinstance(pipeline.get("deploy"), dict) else {}
+    deploy_cmd_template = _str((deploy_cfg or {}).get("command"))
+    if not deploy_cmd_template:
+        raise ToolError(
+            "config_error",
+            "test-train pipeline deploy.command is required",
+            stage="config",
+        )
+    deploy_cmd = _expand_placeholders(deploy_cmd_template, inp.repo_root)
+    deploy_cwd_raw = _str((deploy_cfg or {}).get("cwd")) or "${REPO_ROOT}"
+    deploy_cwd = Path(_expand_placeholders(deploy_cwd_raw, inp.repo_root)).expanduser().resolve()
+    timeout_sec = max(1, _float((deploy_cfg or {}).get("timeout_sec"), 900))
 
     deploy = state.get("deploy_status")
     if not isinstance(deploy, dict):
@@ -582,15 +807,77 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
         state["deploy_status"] = deploy
 
     deploy["last_attempt_at"] = utc_now_iso()
+    health_payload: dict[str, Any] | None = None
+    repair_payload: dict[str, Any] | None = None
     if inp.dry_run:
         deploy["last_result"] = "dry_run"
-        _append_wave_event(inp, wave_id, "deploy_test_branch", {"status": "dry_run", "command": inp.deploy_test_branch_cmd})
+        _append_wave_event(
+            inp,
+            wave_id,
+            "deploy_test_branch",
+            {"status": "dry_run", "command_template": deploy_cmd_template, "cwd_template": deploy_cwd_raw},
+        )
         _save_state(inp, state, attempts)
-        return {"ok": True, "action": "deploy_test_branch", "status": "dry_run"}
+        return {
+            "ok": True,
+            "action": "deploy_test_branch",
+            "status": "dry_run",
+            "command_template": deploy_cmd_template,
+        }
 
-    proc = subprocess.run(inp.deploy_test_branch_cmd, cwd=str(inp.repo_root), shell=True, capture_output=True, text=True, check=False)
+    try:
+        proc = subprocess.run(
+            deploy_cmd,
+            cwd=str(deploy_cwd),
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=int(timeout_sec),
+        )
+    except subprocess.TimeoutExpired:
+        deploy["last_result"] = "failed"
+        _append_wave_event(
+            inp,
+            wave_id,
+            "deploy_test_branch",
+            {"status": "failed", "exit_code": 124, "stderr": f"deploy command timed out after {int(timeout_sec)}s"},
+        )
+        _save_state(inp, state, attempts)
+        return {
+            "ok": False,
+            "action": "deploy_test_branch",
+            "status": "failed",
+            "exit_code": 124,
+            "stderr": f"deploy command timed out after {int(timeout_sec)}s",
+            "stdout": "",
+        }
     if proc.returncode != 0:
         deploy["last_result"] = "failed"
+        health_payload = _run_runtime_coordinator(
+            inp,
+            {
+                "action": "health",
+                "test_train_mode": inp.test_train_mode,
+                "test_train_pipeline_path": str(inp.test_train_pipeline_path),
+                "runtime_health_path": str(inp.runtime_health_path),
+                "runtime_action_log_path": str(inp.runtime_action_log_path),
+                "runtime_repair_tasks_path": str(inp.runtime_repair_tasks_path),
+                "runtime_locks_dir": str(inp.runtime_locks_dir),
+            },
+        )
+        repair_payload = _run_runtime_coordinator(
+            inp,
+            {
+                "action": "repair",
+                "test_train_mode": inp.test_train_mode,
+                "test_train_pipeline_path": str(inp.test_train_pipeline_path),
+                "runtime_health_path": str(inp.runtime_health_path),
+                "runtime_action_log_path": str(inp.runtime_action_log_path),
+                "runtime_repair_tasks_path": str(inp.runtime_repair_tasks_path),
+                "runtime_locks_dir": str(inp.runtime_locks_dir),
+            },
+        )
         _append_wave_event(
             inp,
             wave_id,
@@ -599,6 +886,7 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
                 "status": "failed",
                 "exit_code": proc.returncode,
                 "stderr": (proc.stderr or "").strip()[:2000],
+                "repair_result": repair_payload.get("result") if isinstance(repair_payload, dict) else None,
             },
         )
         _save_state(inp, state, attempts)
@@ -609,13 +897,66 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
             "exit_code": proc.returncode,
             "stderr": (proc.stderr or "").strip(),
             "stdout": (proc.stdout or "").strip(),
+            "health": health_payload,
+            "repair": repair_payload,
         }
 
     deploy["last_result"] = "success"
-    deploy["last_success_at"] = utc_now_iso()
-    _append_wave_event(inp, wave_id, "deploy_test_branch", {"status": "success"})
+    health_payload = _run_runtime_coordinator(
+        inp,
+        {
+            "action": "health",
+            "test_train_mode": inp.test_train_mode,
+            "test_train_pipeline_path": str(inp.test_train_pipeline_path),
+            "runtime_health_path": str(inp.runtime_health_path),
+            "runtime_action_log_path": str(inp.runtime_action_log_path),
+            "runtime_repair_tasks_path": str(inp.runtime_repair_tasks_path),
+            "runtime_locks_dir": str(inp.runtime_locks_dir),
+        },
+    )
+    healthy = bool((health_payload or {}).get("gate_state") == "healthy")
+    if healthy:
+        deploy["last_success_at"] = utc_now_iso()
+        _append_wave_event(inp, wave_id, "deploy_test_branch", {"status": "success"})
+        _save_state(inp, state, attempts)
+        return {
+            "ok": True,
+            "action": "deploy_test_branch",
+            "status": "success",
+            "health": health_payload,
+        }
+
+    deploy["last_result"] = "failed"
+    repair_payload = _run_runtime_coordinator(
+        inp,
+        {
+            "action": "repair",
+            "test_train_mode": inp.test_train_mode,
+            "test_train_pipeline_path": str(inp.test_train_pipeline_path),
+            "runtime_health_path": str(inp.runtime_health_path),
+            "runtime_action_log_path": str(inp.runtime_action_log_path),
+            "runtime_repair_tasks_path": str(inp.runtime_repair_tasks_path),
+            "runtime_locks_dir": str(inp.runtime_locks_dir),
+        },
+    )
+    _append_wave_event(
+        inp,
+        wave_id,
+        "deploy_test_branch",
+        {
+            "status": "failed_health_gate",
+            "gate_state": health_payload.get("gate_state"),
+            "repair_result": repair_payload.get("result") if isinstance(repair_payload, dict) else None,
+        },
+    )
     _save_state(inp, state, attempts)
-    return {"ok": True, "action": "deploy_test_branch", "status": "success"}
+    return {
+        "ok": False,
+        "action": "deploy_test_branch",
+        "status": "failed_health_gate",
+        "health": health_payload,
+        "repair": repair_payload,
+    }
 
 
 def action_start_wave(inp: TrainInput, state: dict[str, Any], attempts: dict[str, Any]) -> dict[str, Any]:

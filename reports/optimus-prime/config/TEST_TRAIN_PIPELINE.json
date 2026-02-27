@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "pipeline_id": "default",
+  "mode_policy": {
+    "off": {
+      "hard_gate": false
+    },
+    "final-stage": {
+      "hard_gate": true
+    },
+    "forced-shared-env": {
+      "hard_gate": true
+    }
+  },
+  "deploy": {
+    "command": "./scripts/deploy-test.sh",
+    "cwd": "${REPO_ROOT}",
+    "timeout_sec": 900
+  },
+  "health": {
+    "require_consecutive_passes": 2,
+    "checks": [
+      {
+        "id": "shared-url",
+        "type": "url",
+        "value": "https://test.example.internal/health",
+        "timeout_sec": 10
+      }
+    ],
+    "profile_check_required": true
+  },
+  "repair": {
+    "self_heal_commands": [
+      "./scripts/runtime-heal.sh"
+    ],
+    "cooldown_sec": 300,
+    "max_attempts_per_fingerprint_window": 1,
+    "create_dev_task": true,
+    "create_blocker": true
+  },
+  "locking": {
+    "enable_single_flight": true,
+    "lock_ttl_sec": 1800
+  },
+  "lease_policy": {
+    "stale_ttl_sec": 900
+  }
+}

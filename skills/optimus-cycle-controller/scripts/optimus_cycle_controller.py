@@ -642,6 +642,14 @@ def _read_test_train_state(repo_root: Path) -> Optional[Dict[str, Any]]:
     return payload
 
 
+def _read_runtime_health(repo_root: Path) -> Optional[Dict[str, Any]]:
+    path = repo_root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json"
+    payload, err = _read_json(path)
+    if err or not isinstance(payload, dict):
+        return None
+    return payload
+
+
 def build_test_train_directives(cycle_number: int, config: ControllerConfig) -> List[Dict[str, Any]]:
     state = _read_test_train_state(config.repo_root)
     if not isinstance(state, dict):
@@ -661,9 +669,79 @@ def build_test_train_directives(cycle_number: int, config: ControllerConfig) -> 
 
     test_branch = str(state.get("test_branch") or "test")
     test_next_branch = str(state.get("test_next_branch") or "test-next")
-    shared_url = state.get("shared_test_base_url")
+    runtime_health = _read_runtime_health(config.repo_root)
+    runtime_gate_state = (
+        str(runtime_health.get("gate_state") or "unknown").strip().lower()
+        if isinstance(runtime_health, dict)
+        else "unknown"
+    )
+    runtime_healthy = runtime_gate_state == "healthy"
+    hard_gate = mode in {"final-stage", "forced-shared-env"}
 
     directives: List[Dict[str, Any]] = []
+
+    if hard_gate and not runtime_healthy:
+        directives.extend(
+            [
+                {
+                    "directive_id": f"cycle-{cycle_number:06d}-runtime-health-check-{wave_id}",
+                    "directive_type": "runtime_health_check",
+                    "recommended_tool": "runtime-coordinator",
+                    "recommended_args": {
+                        "action": "health",
+                        "test_train_mode": mode,
+                    },
+                    "reason": "test-train hard gate requires healthy runtime before tester/promotion flow",
+                    "requires_optimus_action": True,
+                },
+                {
+                    "directive_id": f"cycle-{cycle_number:06d}-runtime-repair-{wave_id}",
+                    "directive_type": "runtime_repair",
+                    "recommended_tool": "runtime-coordinator",
+                    "recommended_args": {
+                        "action": "repair",
+                        "test_train_mode": mode,
+                    },
+                    "reason": "runtime health gate is not healthy; run deterministic repair/delegation path",
+                    "requires_optimus_action": True,
+                },
+                {
+                    "directive_id": f"cycle-{cycle_number:06d}-block-tester-{wave_id}",
+                    "directive_type": "block_tester_dispatch",
+                    "recommended_tool": "cycle-tick",
+                    "recommended_args": {
+                        "blocked_roles": ["tester", "flex-tester"],
+                        "reason": f"runtime_gate_state={runtime_gate_state}",
+                    },
+                    "reason": "avoid infinite tester blocked loops while shared runtime is unhealthy",
+                    "requires_optimus_action": True,
+                },
+                {
+                    "directive_id": f"cycle-{cycle_number:06d}-hold-promotion-{wave_id}",
+                    "directive_type": "hold_test_promotion",
+                    "recommended_tool": "test-train-manager",
+                    "recommended_args": {
+                        "action": "evaluate_promotion_gate",
+                        "wave_id": wave_id,
+                        "test_branch": test_branch,
+                        "test_next_branch": test_next_branch,
+                    },
+                    "reason": "runtime hard gate unhealthy; promotion/deploy must be held",
+                    "requires_optimus_action": True,
+                },
+                {
+                    "directive_id": f"cycle-{cycle_number:06d}-reserve-runtime-repair-slot-{wave_id}",
+                    "directive_type": "reserve_runtime_repair_slot",
+                    "recommended_tool": "cycle-tick",
+                    "recommended_args": {
+                        "max_reserved_dev_slots": 1,
+                        "wait_if_busy": True,
+                    },
+                    "reason": "reserve at most one developer slot for runtime-infra repair lane",
+                    "requires_optimus_action": True,
+                },
+            ]
+        )
 
     if wave_state == "WAVE_ACTIVE" and planned_pass_done:
         directives.append(
@@ -700,7 +778,7 @@ def build_test_train_directives(cycle_number: int, config: ControllerConfig) -> 
             }
         )
 
-    if eligible:
+    if eligible and (not hard_gate or runtime_healthy):
         directives.extend(
             [
                 {
@@ -737,7 +815,6 @@ def build_test_train_directives(cycle_number: int, config: ControllerConfig) -> 
                         "action": "start_new_test_wave",
                         "test_branch": test_branch,
                         "test_next_branch": test_next_branch,
-                        "shared_test_base_url": shared_url,
                     },
                     "reason": "start next shared validation wave after promotion/deploy",
                     "requires_optimus_action": True,

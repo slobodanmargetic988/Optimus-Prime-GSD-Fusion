@@ -52,7 +52,10 @@ class DispatchInput:
     sandbox_mode: str
     sandbox_add_dirs: list[str]
     runtime_strategy: str | None
+    runtime_profile_id: str | None
+    runtime_id: str | None
     runtime_base_url: str | None
+    runtime_lease_id: str | None
     tester_must_not_start_runtime: bool | None
     test_train_mode: str
     wave_id: str | None
@@ -189,6 +192,24 @@ def validate_policy(cfg: DispatchInput) -> None:
                 "tester packets in test-train mode require runtime_base_url",
                 stage="validate",
             )
+        if not isinstance(cfg.runtime_profile_id, str) or not cfg.runtime_profile_id.strip():
+            raise ToolError(
+                "validation_error",
+                "tester packets in test-train mode require runtime_profile_id",
+                stage="validate",
+            )
+        if not isinstance(cfg.runtime_id, str) or not cfg.runtime_id.strip():
+            raise ToolError(
+                "validation_error",
+                "tester packets in test-train mode require runtime_id",
+                stage="validate",
+            )
+        if not isinstance(cfg.runtime_lease_id, str) or not cfg.runtime_lease_id.strip():
+            raise ToolError(
+                "validation_error",
+                "tester packets in test-train mode require runtime_lease_id",
+                stage="validate",
+            )
 
     expected_prefix = f"codex/{cfg.slot}/"
     if not cfg.branch_name.startswith(expected_prefix):
@@ -263,7 +284,10 @@ def config_from_args(args: argparse.Namespace) -> DispatchInput:
             else [item.strip() for item in args.sandbox_add_dirs if item.strip()]
         ),
         runtime_strategy=((args.runtime_strategy or data.get("runtime_strategy") or "").strip() or None),
+        runtime_profile_id=((args.runtime_profile_id or data.get("runtime_profile_id") or "").strip() or None),
+        runtime_id=((args.runtime_id or data.get("runtime_id") or "").strip() or None),
         runtime_base_url=((args.runtime_base_url or data.get("runtime_base_url") or "").strip() or None),
+        runtime_lease_id=((args.runtime_lease_id or data.get("runtime_lease_id") or data.get("lease_id") or "").strip() or None),
         tester_must_not_start_runtime=(
             _optional_bool(data.get("tester_must_not_start_runtime"))
             if args.tester_must_not_start_runtime is None
@@ -306,7 +330,10 @@ def render_packet(cfg: DispatchInput) -> str:
     criteria_lines = "\n".join(f"- {item}" for item in cfg.acceptance_criteria)
     sandbox_dirs = "none" if not cfg.sandbox_add_dirs else ", ".join(cfg.sandbox_add_dirs)
     runtime_strategy = cfg.runtime_strategy or "none"
+    runtime_profile_id = cfg.runtime_profile_id or "none"
+    runtime_id = cfg.runtime_id or "none"
     runtime_base_url = cfg.runtime_base_url or "none"
+    runtime_lease_id = cfg.runtime_lease_id or "none"
     tester_no_local_runtime = (
         "true"
         if cfg.tester_must_not_start_runtime is True
@@ -332,7 +359,10 @@ def render_packet(cfg: DispatchInput) -> str:
         f"sandbox_mode: {cfg.sandbox_mode}\n"
         f"sandbox_add_dirs: {sandbox_dirs}\n\n"
         f"runtime_strategy: {runtime_strategy}\n"
+        f"runtime_profile_id: {runtime_profile_id}\n"
+        f"runtime_id: {runtime_id}\n"
         f"runtime_base_url: {runtime_base_url}\n"
+        f"runtime_lease_id: {runtime_lease_id}\n"
         f"tester_must_not_start_runtime: {tester_no_local_runtime}\n"
         f"test_train_mode: {cfg.test_train_mode}\n"
         f"wave_id: {cfg.wave_id or 'none'}\n"
@@ -583,7 +613,10 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "sandbox_mode": cfg.sandbox_mode,
         "sandbox_add_dirs": cfg.sandbox_add_dirs,
         "runtime_strategy": cfg.runtime_strategy,
+        "runtime_profile_id": cfg.runtime_profile_id,
+        "runtime_id": cfg.runtime_id,
         "runtime_base_url": cfg.runtime_base_url,
+        "runtime_lease_id": cfg.runtime_lease_id,
         "tester_must_not_start_runtime": cfg.tester_must_not_start_runtime,
         "test_train_mode": cfg.test_train_mode,
         "wave_id": cfg.wave_id,
@@ -869,7 +902,10 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "sandbox_mode": cfg.sandbox_mode,
         "sandbox_add_dirs": cfg.sandbox_add_dirs,
         "runtime_strategy": cfg.runtime_strategy,
+        "runtime_profile_id": cfg.runtime_profile_id,
+        "runtime_id": cfg.runtime_id,
         "runtime_base_url": cfg.runtime_base_url,
+        "runtime_lease_id": cfg.runtime_lease_id,
         "tester_must_not_start_runtime": cfg.tester_must_not_start_runtime,
         "test_train_mode": cfg.test_train_mode,
         "wave_id": cfg.wave_id,
@@ -971,7 +1007,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sandbox-mode")
     parser.add_argument("--sandbox-add-dirs", action="append")
     parser.add_argument("--runtime-strategy")
+    parser.add_argument("--runtime-profile-id")
+    parser.add_argument("--runtime-id")
     parser.add_argument("--runtime-base-url")
+    parser.add_argument("--runtime-lease-id")
     parser.add_argument("--tester-must-not-start-runtime", dest="tester_must_not_start_runtime", action="store_true")
     parser.add_argument("--allow-tester-local-runtime", dest="tester_must_not_start_runtime", action="store_false")
     parser.set_defaults(tester_must_not_start_runtime=None)

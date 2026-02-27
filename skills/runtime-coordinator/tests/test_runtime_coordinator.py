@@ -41,9 +41,9 @@ class RuntimeCoordinatorTests(unittest.TestCase):
                     {
                         "profile_id": "default-web",
                         "kind": "web",
-                        "start_cmd": "npm run preview",
+                        "start_cmd": "true",
                         "healthcheck": {"type": "none", "value": ""},
-                        "stop_cmd": "",
+                        "stop_cmd": "true",
                         "env": {"PW_FRONTEND_MODE": "preview"},
                         "supports_shared": True,
                         "supports_isolated": True,
@@ -53,6 +53,49 @@ class RuntimeCoordinatorTests(unittest.TestCase):
                         "test_accounts": [],
                     }
                 ],
+            },
+        )
+        write_json(
+            root / "reports" / "optimus-prime" / "config" / "TEST_TRAIN_PIPELINE.json",
+            {
+                "schema_version": "1.0",
+                "pipeline_id": "default",
+                "mode_policy": {
+                    "off": {"hard_gate": False},
+                    "final-stage": {"hard_gate": True},
+                    "forced-shared-env": {"hard_gate": True},
+                },
+                "deploy": {
+                    "command": "echo deploy",
+                    "cwd": "${REPO_ROOT}",
+                    "timeout_sec": 30,
+                },
+                "health": {
+                    "require_consecutive_passes": 2,
+                    "checks": [
+                        {
+                            "id": "cmd-ok",
+                            "type": "cmd",
+                            "value": "true",
+                            "timeout_sec": 10,
+                        }
+                    ],
+                    "profile_check_required": True,
+                },
+                "repair": {
+                    "self_heal_commands": ["true"],
+                    "cooldown_sec": 300,
+                    "max_attempts_per_fingerprint_window": 1,
+                    "create_dev_task": True,
+                    "create_blocker": True,
+                },
+                "locking": {
+                    "enable_single_flight": True,
+                    "lock_ttl_sec": 1800,
+                },
+                "lease_policy": {
+                    "stale_ttl_sec": 900,
+                },
             },
         )
         return root
@@ -68,7 +111,7 @@ class RuntimeCoordinatorTests(unittest.TestCase):
             "requires_browser": overrides.get("requires_browser", True),
             "mutating_flow": overrides.get("mutating_flow", False),
             "runtime_strategy_override": overrides.get("runtime_strategy_override"),
-            "test_train_mode": overrides.get("test_train_mode"),
+            "test_train_mode": overrides.get("test_train_mode", "off"),
             "shared_test_base_url": overrides.get("shared_test_base_url"),
             "runtime_profile_id": overrides.get("runtime_profile_id"),
             "external_base_url": overrides.get("external_base_url"),
@@ -108,8 +151,10 @@ class RuntimeCoordinatorTests(unittest.TestCase):
             self.assertEqual(out["runtime_strategy"], "shared_runtime")
             payload = out["dispatch_payload"]
             self.assertEqual(payload["runtime_id"], "rt-shared-default-web")
+            self.assertEqual(payload["runtime_profile_id"], "default-web")
             self.assertTrue(payload["tester_must_not_start_runtime"])
             self.assertIsNotNone(payload["lease_id"])
+            self.assertEqual(payload["runtime_lease_id"], payload["lease_id"])
 
             registry = json.loads((root / "reports" / "optimus-prime" / "RUNTIME_REGISTRY.json").read_text(encoding="utf-8"))
             self.assertEqual(registry["instances"][0]["runtime_id"], "rt-shared-default-web")
@@ -252,22 +297,16 @@ class RuntimeCoordinatorTests(unittest.TestCase):
             self.assertFalse(row["retryable"])
             self.assertEqual(row["evidence_paths"], ["reports/optimus-prime/logs/build.log"])
 
-    def test_train_mode_prefers_external_url_when_shared_url_provided(self):
+    def test_train_mode_rejects_legacy_shared_url_input(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._make_repo(tmp)
-            inp = self._build_input(
-                root,
-                test_train_mode="final-stage",
-                shared_test_base_url="https://test.example.internal",
-                worker_role="tester",
-                requires_browser=True,
-                task_kind="ui_flow",
-            )
-            out = MODULE.run(inp)
-            self.assertTrue(out["ok"])
-            self.assertEqual(out["runtime_strategy"], "external_url")
-            self.assertEqual(out["dispatch_payload"]["base_url"], "https://test.example.internal")
-            self.assertTrue(out["dispatch_payload"]["tester_must_not_start_runtime"])
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                self._build_input(
+                    root,
+                    test_train_mode="final-stage",
+                    shared_test_base_url="https://test.example.internal",
+                )
+            self.assertEqual(ctx.exception.code, "input_error")
 
     def test_train_mode_blocks_local_runtime_override(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -287,6 +326,109 @@ class RuntimeCoordinatorTests(unittest.TestCase):
             blockers_path = root / "reports" / "optimus-prime" / "BLOCKERS.jsonl"
             row = json.loads(blockers_path.read_text(encoding="utf-8").strip().splitlines()[-1])
             self.assertEqual(row["category"], "test-train")
+
+    def test_bootstrap_creates_runtime_state_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo(tmp)
+            inp = self._build_input(root, action="bootstrap")
+            out = MODULE.run(inp)
+            self.assertTrue(out["ok"])
+            runtime_root = root / "reports" / "optimus-prime" / "runtime"
+            self.assertTrue((runtime_root / "RUNTIME_HEALTH.json").exists())
+            self.assertTrue((runtime_root / "RUNTIME_REPAIR_TASKS.json").exists())
+            self.assertTrue((runtime_root / "RUNTIME_ACTION_LOG.jsonl").exists())
+
+    def test_health_requires_two_consecutive_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo(tmp)
+            resolve_out = MODULE.run(self._build_input(root, action="resolve"))
+            self.assertTrue(resolve_out["ok"])
+            runtime_id = resolve_out["dispatch_payload"]["runtime_id"]
+
+            # Mark runtime healthy so profile check can pass.
+            MODULE.run(
+                self._build_input(
+                    root,
+                    action="upsert_runtime",
+                    runtime_id=runtime_id,
+                    runtime_profile_id="default-web",
+                    requested_status="healthy",
+                )
+            )
+
+            first = MODULE.run(
+                self._build_input(
+                    root,
+                    action="health",
+                    runtime_id=runtime_id,
+                )
+            )
+            self.assertTrue(first["ok"])
+            self.assertEqual(first["gate_state"], "degraded")
+            second = MODULE.run(
+                self._build_input(
+                    root,
+                    action="health",
+                    runtime_id=runtime_id,
+                )
+            )
+            self.assertTrue(second["ok"])
+            self.assertEqual(second["gate_state"], "healthy")
+
+    def test_health_sweeps_stale_leases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo(tmp)
+            leases_path = root / "reports" / "optimus-prime" / "TEST_RUNTIME_LEASES.json"
+            write_json(
+                leases_path,
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-02-27T00:00:00Z",
+                    "leases": [
+                        {
+                            "lease_id": "lease-old-1",
+                            "runtime_id": "rt-shared-default-web",
+                            "status": "active",
+                            "created_at": "2026-01-01T00:00:00Z",
+                            "updated_at": "2026-01-01T00:00:00Z",
+                        }
+                    ],
+                },
+            )
+            out = MODULE.run(self._build_input(root, action="health"))
+            self.assertTrue(out["ok"])
+            self.assertIn("lease-old-1", out["released_lease_ids"])
+            leases = json.loads(leases_path.read_text(encoding="utf-8"))
+            self.assertEqual(leases["leases"][0]["status"], "released")
+
+    def test_repair_delegates_when_heal_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo(tmp)
+            pipeline_path = root / "reports" / "optimus-prime" / "config" / "TEST_TRAIN_PIPELINE.json"
+            pipeline = json.loads(pipeline_path.read_text(encoding="utf-8"))
+            pipeline["health"]["checks"] = [{"id": "always-fail", "type": "cmd", "value": "false", "timeout_sec": 5}]
+            pipeline["repair"]["self_heal_commands"] = ["false"]
+            write_json(pipeline_path, pipeline)
+
+            MODULE.run(self._build_input(root, action="health", test_train_mode="final-stage"))
+            out = MODULE.run(self._build_input(root, action="repair", test_train_mode="final-stage"))
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["result"], "delegated")
+            self.assertEqual(out["repair_task"]["lane"], "runtime-infra")
+            self.assertEqual(out["repair_task"]["quality_flow"], "dev_only")
+
+            blockers_path = root / "reports" / "optimus-prime" / "BLOCKERS.jsonl"
+            row = json.loads(blockers_path.read_text(encoding="utf-8").strip().splitlines()[-1])
+            self.assertEqual(row["blocker_code"], "runtime_repair_required")
+
+    def test_health_lock_conflict_raises_locked_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo(tmp)
+            lock_path = root / "reports" / "optimus-prime" / "runtime" / "locks" / "health-default.lock"
+            write_json(lock_path, {"created_at": MODULE.utc_now_iso(), "lock_name": "health-default"})
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.run(self._build_input(root, action="health"))
+            self.assertEqual(ctx.exception.code, "locked")
 
 
 if __name__ == "__main__":

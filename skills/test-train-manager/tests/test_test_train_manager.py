@@ -7,6 +7,9 @@ import unittest
 from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "test_train_manager.py"
+RUNTIME_COORDINATOR_SOURCE = (
+    Path(__file__).resolve().parents[2] / "runtime-coordinator" / "scripts" / "runtime_coordinator.py"
+)
 SPEC = importlib.util.spec_from_file_location("test_train_manager", SCRIPT_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
@@ -46,6 +49,68 @@ def build_repo(root: Path) -> None:
     git(root, "branch", "test")
     git(root, "branch", "test-next", "test")
 
+    runtime_target = root / "skills" / "runtime-coordinator" / "scripts" / "runtime_coordinator.py"
+    runtime_target.parent.mkdir(parents=True, exist_ok=True)
+    runtime_target.write_text(RUNTIME_COORDINATOR_SOURCE.read_text(encoding="utf-8"), encoding="utf-8")
+
+    write_text(
+        root / "reports" / "optimus-prime" / "config" / "RUNTIME_PROFILES.json",
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "profiles": [
+                    {
+                        "profile_id": "default-web",
+                        "kind": "web",
+                        "start_cmd": "true",
+                        "healthcheck": {"type": "none", "value": ""},
+                        "stop_cmd": "true",
+                        "env": {},
+                        "supports_shared": True,
+                        "supports_isolated": True,
+                        "default_for_playwright": True,
+                        "default_base_url": "http://127.0.0.1:4173",
+                        "mutating_flow_policy": "serialized",
+                        "test_accounts": [],
+                    }
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+    )
+    write_text(
+        root / "reports" / "optimus-prime" / "config" / "TEST_TRAIN_PIPELINE.json",
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "pipeline_id": "default",
+                "mode_policy": {
+                    "off": {"hard_gate": False},
+                    "final-stage": {"hard_gate": True},
+                    "forced-shared-env": {"hard_gate": True},
+                },
+                "deploy": {"command": "true", "cwd": "${REPO_ROOT}", "timeout_sec": 60},
+                "health": {
+                    "require_consecutive_passes": 2,
+                    "checks": [{"id": "cmd-ok", "type": "cmd", "value": "true", "timeout_sec": 5}],
+                    "profile_check_required": False,
+                },
+                "repair": {
+                    "self_heal_commands": ["true"],
+                    "cooldown_sec": 300,
+                    "max_attempts_per_fingerprint_window": 1,
+                    "create_dev_task": True,
+                    "create_blocker": True,
+                },
+                "locking": {"enable_single_flight": True, "lock_ttl_sec": 1800},
+                "lease_policy": {"stale_ttl_sec": 900},
+            },
+            indent=2,
+        )
+        + "\n",
+    )
+
 
 def run_action(repo_root: Path, **overrides):
     payload = {
@@ -53,7 +118,7 @@ def run_action(repo_root: Path, **overrides):
         "action": overrides.get("action", "sync_state"),
         "test_branch": overrides.get("test_branch", "test"),
         "test_next_branch": overrides.get("test_next_branch", "test-next"),
-        "test_train_mode": overrides.get("test_train_mode", "final-stage"),
+        "test_train_mode": overrides.get("test_train_mode", "off"),
         "shared_test_base_url": overrides.get("shared_test_base_url"),
         "deploy_test_branch_cmd": overrides.get("deploy_test_branch_cmd"),
         "dry_run": overrides.get("dry_run", False),
@@ -170,6 +235,75 @@ class TestTrainManagerTests(unittest.TestCase):
             out = run_action(root, action="sync_state", test_train_mode="final-stage")
             self.assertTrue(out["ok"])
             self.assertEqual(out["test_train_mode"], "forced-shared-env")
+
+    def test_hard_cutover_rejects_legacy_fields_in_train_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                run_action(
+                    root,
+                    action="bootstrap",
+                    test_train_mode="final-stage",
+                    deploy_test_branch_cmd="./scripts/deploy-test.sh",
+                )
+            self.assertEqual(ctx.exception.code, "input_error")
+
+    def test_gate_blocked_by_runtime_health_when_hard_gated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            run_action(root, action="start_new_test_wave", test_train_mode="final-stage")
+            run_action(
+                root,
+                action="close_test_wave",
+                test_train_mode="final-stage",
+                planned_flow_pass_completed=True,
+            )
+
+            write_text(
+                root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json",
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "gate_state": "blocked",
+                        "both_sources_pass": False,
+                        "consecutive_passes": 0,
+                        "required_passes": 2,
+                        "last_failure_fingerprint": "pipeline|cmd|failed",
+                    }
+                )
+                + "\n",
+            )
+            out = run_action(root, action="evaluate_promotion_gate", test_train_mode="final-stage")
+            self.assertTrue(out["ok"])
+            self.assertFalse(out["promotion_eligibility"]["eligible"])
+            self.assertIn("runtime_health_gate_blocked", out["promotion_eligibility"]["reasons"])
+
+    def test_deploy_uses_pipeline_config_and_marks_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            write_text(
+                root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json",
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "gate_state": "degraded",
+                        "both_sources_pass": True,
+                        "consecutive_passes": 1,
+                        "required_passes": 2,
+                        "last_failure_fingerprint": None,
+                        "next_heal_allowed_at": None,
+                    }
+                )
+                + "\n",
+            )
+            out = run_action(root, action="deploy_test_branch", test_train_mode="final-stage")
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["status"], "success")
 
 
 if __name__ == "__main__":

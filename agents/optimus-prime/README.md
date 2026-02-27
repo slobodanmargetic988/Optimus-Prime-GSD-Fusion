@@ -1,5 +1,5 @@
 # Optimus Prime Orchestrator Agent
-Last Updated: 2026-02-24 20:03 CET
+Last Updated: 2026-02-27 16:30 CET
 
 ## Mission
 Run long-lived sprint orchestration in deterministic cycles using `tracking_mode=automated-handoff`, where Optimus Prime owns planning, worker dispatch, and all Linear updates while workers execute token-lean unit prompts.
@@ -135,8 +135,7 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - `test_train_mode` (default: `off`; allowed: `off|final-stage|forced-shared-env`)
   - `test_branch` (default: `test`)
   - `test_next_branch` (default: `test-next`)
-  - `shared_test_base_url` (required when `test_train_mode != off`)
-  - `deploy_test_branch_cmd` (required to automate deploy step)
+  - `test_train_pipeline_config_path` (default: `reports/optimus-prime/config/TEST_TRAIN_PIPELINE.json`; required when `test_train_mode != off`)
   - `test_train_state_path` (default: `reports/optimus-prime/TEST_TRAIN_STATE.json`)
   - `test_task_attempts_path` (default: `reports/optimus-prime/TEST_TASK_ATTEMPTS.json`)
   - `test_wave_log_path` (default: `reports/optimus-prime/TEST_WAVE_LOG.jsonl`)
@@ -213,10 +212,25 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - `reports/optimus-prime/TEST_TASK_ATTEMPTS.json`
   - `reports/optimus-prime/TEST_WAVE_LOG.jsonl`
   - `reports/optimus-prime/TEST_WAVE_SUMMARY.md`
+- Runtime pipeline artifacts:
+  - `reports/optimus-prime/config/TEST_TRAIN_PIPELINE.json`
+  - `reports/optimus-prime/runtime/RUNTIME_HEALTH.json`
+  - `reports/optimus-prime/runtime/RUNTIME_ACTION_LOG.jsonl`
+  - `reports/optimus-prime/runtime/RUNTIME_REPAIR_TASKS.json`
+  - `reports/optimus-prime/runtime/locks/`
+- Runtime/deploy tooling locations:
+  - deploy + heal commands are configured in `TEST_TRAIN_PIPELINE.json` (`deploy.command`, `repair.self_heal_commands`)
+  - start/stop/profile health commands are configured in `reports/optimus-prime/config/RUNTIME_PROFILES.json`
+  - keep scripts repo-local (default examples: `scripts/deploy-test.sh`, `scripts/runtime-heal.sh`)
 - Promotion gate:
   - requires one planned flow pass for current wave
-  - blocks only on critical env/runtime/test-train blockers
+  - blocks on unhealthy shared runtime in `final-stage|forced-shared-env`
   - task-level failures/rework are logged and routed back to dev; they do not block promotion
+- Runtime hard-gate policy (`final-stage|forced-shared-env`):
+  - runtime is healthy only when both pipeline checks and runtime-profile checks pass
+  - healthy state requires configured consecutive passes (`2` by default)
+  - on failure, run one self-heal attempt per fingerprint per cooldown window (`300s` default)
+  - if still unhealthy, create runtime repair task and block tester dispatch + promotion
 - Adaptive switch:
   - auto-set `test_train_mode=forced-shared-env` when env/runtime tester blockers repeat (recent-window recurrence or repeated fingerprint)
 
@@ -578,6 +592,8 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
 - Cycle log is appended every cycle with timestamped summary.
 - Identity checkpoint entry appears at configured cadence.
 - Mission completion count matches requested target before stop.
+- Final stop authorization must pass:
+  - `python3 skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py --verify-final-state reports/optimus-prime/controller/FINAL_STATE.json`
 
 ## Failure Handling
 - Workstation preparation failed:

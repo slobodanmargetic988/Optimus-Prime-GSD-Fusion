@@ -6,10 +6,10 @@
       "kind": "web",
       "start_cmd": "npm run preview",
       "healthcheck": {
-        "type": "none",
-        "value": ""
+        "type": "url",
+        "value": "http://127.0.0.1:4173/health"
       },
-      "stop_cmd": "",
+      "stop_cmd": "pkill -f 'npm run preview'",
       "env": {
         "PW_FRONTEND_MODE": "preview"
       },

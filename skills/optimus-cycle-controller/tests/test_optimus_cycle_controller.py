@@ -287,6 +287,15 @@ def test_emits_test_train_wave_directives(controller_module, tmp_path):
             "promotion_eligibility": {"eligible": True, "reasons": ["eligible"]},
         },
     )
+    write_json(
+        tmp_path / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json",
+        {
+            "gate_state": "healthy",
+            "both_sources_pass": True,
+            "consecutive_passes": 2,
+            "required_passes": 2,
+        },
+    )
 
     config = make_config(controller_module, tmp_path, max_cycles=1)
     controller_module.run_controller(config)
@@ -301,6 +310,44 @@ def test_emits_test_train_wave_directives(controller_module, tmp_path):
     assert "promote_test_next_to_test" in action_codes
     assert "deploy_test_branch" in action_codes
     assert "start_new_test_wave" in action_codes
+
+
+def test_test_train_unhealthy_runtime_emits_block_and_repair_directives(controller_module, tmp_path):
+    write_json(
+        tmp_path / "reports" / "optimus-prime" / "TEST_TRAIN_STATE.json",
+        {
+            "test_train_mode": "final-stage",
+            "test_branch": "test",
+            "test_next_branch": "test-next",
+            "active_wave": {
+                "wave_id": "wave-0099",
+                "state": "PROMOTION_EVAL",
+                "planned_flow_pass_completed": True,
+            },
+            "promotion_eligibility": {"eligible": True, "reasons": ["eligible"]},
+        },
+    )
+    write_json(
+        tmp_path / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json",
+        {
+            "gate_state": "blocked",
+            "both_sources_pass": False,
+            "consecutive_passes": 0,
+            "required_passes": 2,
+        },
+    )
+    config = make_config(controller_module, tmp_path, max_cycles=1)
+    controller_module.run_controller(config)
+    events = read_jsonl(config.events_path)
+    action_codes = {
+        e.get("action_code")
+        for e in events
+        if e.get("event_type") == "directive"
+    }
+    assert "runtime_health_check" in action_codes
+    assert "runtime_repair" in action_codes
+    assert "block_tester_dispatch" in action_codes
+    assert "hold_test_promotion" in action_codes
 
 
 def test_optimus_cannot_end_without_valid_final_state_terminal_payload(controller_module, tmp_path):

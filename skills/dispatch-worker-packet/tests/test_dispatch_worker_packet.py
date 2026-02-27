@@ -48,7 +48,10 @@ def make_cfg(root: Path, **overrides):
         sandbox_mode=overrides.get("sandbox_mode", "danger-full-access"),
         sandbox_add_dirs=overrides.get("sandbox_add_dirs", []),
         runtime_strategy=overrides.get("runtime_strategy"),
+        runtime_profile_id=overrides.get("runtime_profile_id"),
+        runtime_id=overrides.get("runtime_id"),
         runtime_base_url=overrides.get("runtime_base_url"),
+        runtime_lease_id=overrides.get("runtime_lease_id"),
         tester_must_not_start_runtime=overrides.get("tester_must_not_start_runtime"),
         test_train_mode=overrides.get("test_train_mode", "off"),
         wave_id=overrides.get("wave_id"),
@@ -182,8 +185,27 @@ class DispatchWorkerPacketTests(unittest.TestCase):
                 branch_name="codex/test-1/MYO-156",
                 test_train_mode="final-stage",
                 runtime_strategy="external_url",
+                runtime_profile_id="default-web",
+                runtime_id="rt-external-default-web-11111111",
                 runtime_base_url="https://shared.example.test",
+                runtime_lease_id="lease-123",
                 tester_must_not_start_runtime=False,
+            )
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(cfg)
+            self.assertEqual(ctx.exception.code, "validation_error")
+
+    def test_test_train_mode_requires_runtime_identity_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_cfg(
+                Path(tmp),
+                slot="test-1",
+                role="tester",
+                branch_name="codex/test-1/MYO-156",
+                test_train_mode="final-stage",
+                runtime_strategy="shared_runtime",
+                runtime_base_url="https://shared.example.test",
+                tester_must_not_start_runtime=True,
             )
             with self.assertRaises(MODULE.ToolError) as ctx:
                 MODULE.validate_policy(cfg)
@@ -199,7 +221,10 @@ class DispatchWorkerPacketTests(unittest.TestCase):
                 branch_name="codex/test-1/MYO-156",
                 test_train_mode="forced-shared-env",
                 runtime_strategy="external_url",
+                runtime_profile_id="default-web",
+                runtime_id="rt-external-default-web-11111111",
                 runtime_base_url="https://shared.example.test",
+                runtime_lease_id="lease-xyz",
                 tester_must_not_start_runtime=True,
                 wave_id="wave-0007",
                 deployed_test_commit="abc1234",
@@ -216,6 +241,8 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertEqual(handoff["deployed_test_commit"], "abc1234")
             self.assertEqual(handoff["test_lane_account"], "acct-02")
             self.assertTrue(handoff["tester_must_not_start_runtime"])
+            self.assertEqual(handoff["runtime_profile_id"], "default-web")
+            self.assertEqual(handoff["runtime_lease_id"], "lease-xyz")
 
 
 if __name__ == "__main__":

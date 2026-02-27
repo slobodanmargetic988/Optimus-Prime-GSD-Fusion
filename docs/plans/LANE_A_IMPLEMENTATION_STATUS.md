@@ -1,6 +1,6 @@
 # Lane A Implementation Status (Cycle Controller Core)
 
-Updated: 2026-02-26
+Updated: 2026-02-27
 
 ## Scope Completion
 
@@ -22,6 +22,7 @@ Updated: 2026-02-26
   - `optimus_cycle_controller.py --verify-final-state <FINAL_STATE.json>`
 - [x] Added handoff-aware directive emission (`sync_linear_phase`) to reduce prompt-logic condition handling in Optimus.
 - [x] Updated Optimus Prime agent docs and usage templates to require controller-governed stop authorization.
+- [x] Explicitly require `--verify-final-state` validation before final completion output in orchestrator docs/templates.
 
 ## Test Coverage (Lane A)
 
