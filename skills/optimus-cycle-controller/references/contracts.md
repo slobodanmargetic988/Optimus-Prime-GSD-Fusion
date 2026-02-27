@@ -52,6 +52,11 @@ Directive payload may include:
 - `runtime_strategy_resolve`
 - `refresh_blocker_index`
 - `sync_linear_phase` (when latest handoff state maps to a deterministic Linear phase transition)
+- `close_test_wave`
+- `evaluate_promotion_gate`
+- `promote_test_next_to_test`
+- `deploy_test_branch`
+- `start_new_test_wave`
 
 ## 3) Heartbeat Contract (`HEARTBEAT.json`)
 

@@ -27,6 +27,7 @@
 - `infra`
 - `runtime`
 - `env`
+- `test-train`
 - `dependency`
 - `code`
 - `test`
@@ -38,6 +39,7 @@
 ## Deterministic requirements
 - Runtime strategy must be machine-readable and packet-ready.
 - Shared mutating flows must not collide: lease conflict returns blocked result.
+- In test-train mode (`final-stage|forced-shared-env`), tester flows must resolve to hosted/shared runtime only and return `tester_must_not_start_runtime=true`.
 - Every runtime-blocked state should append a blocker event.
 - `log_blocker` action should be used by orchestrator for any non-runtime blocked state so blocker tracking remains complete.
 - Blocker index must aggregate by `fingerprint` with first/last seen + count.

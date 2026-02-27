@@ -7,9 +7,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT_PATH = Path(
-    "/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "optimus_cycle_controller.py"
 
 
 @pytest.fixture
@@ -270,6 +268,39 @@ def test_emits_blocker_refresh_directive_when_handoff_is_blocked(controller_modu
     assert blocker_directives
     payload = blocker_directives[0]["payload"]
     assert payload["recommended_tool"] == "runtime-coordinator"
+
+
+def test_emits_test_train_wave_directives(controller_module, tmp_path):
+    state_path = tmp_path / "reports" / "optimus-prime" / "TEST_TRAIN_STATE.json"
+    write_json(
+        state_path,
+        {
+            "test_train_mode": "final-stage",
+            "test_branch": "test",
+            "test_next_branch": "test-next",
+            "shared_test_base_url": "https://test.example.internal",
+            "active_wave": {
+                "wave_id": "wave-0012",
+                "state": "PROMOTION_EVAL",
+                "planned_flow_pass_completed": True,
+            },
+            "promotion_eligibility": {"eligible": True, "reasons": ["eligible"]},
+        },
+    )
+
+    config = make_config(controller_module, tmp_path, max_cycles=1)
+    controller_module.run_controller(config)
+
+    events = read_jsonl(config.events_path)
+    action_codes = {
+        e.get("action_code")
+        for e in events
+        if e.get("event_type") == "directive"
+    }
+    assert "evaluate_promotion_gate" in action_codes
+    assert "promote_test_next_to_test" in action_codes
+    assert "deploy_test_branch" in action_codes
+    assert "start_new_test_wave" in action_codes
 
 
 def test_optimus_cannot_end_without_valid_final_state_terminal_payload(controller_module, tmp_path):

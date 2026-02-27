@@ -9,7 +9,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,14 +17,13 @@ from typing import Any, Protocol
 TOOL = "dispatch-worker-packet"
 TOOL_VERSION = "0.1.0"
 SCHEMA_VERSION = "1.0"
-SESSION_ID_REGEX = re.compile(r"session id:\s*([0-9a-fA-F-]{36})", re.IGNORECASE)
 
 SLOTS = ["dev-1", "dev-2", "dev-3", "test-1", "test-2", "review-1"]
 ROLES = {"developer", "tester", "reviewer", "flex-tester"}
 MCP_MODES = {"disable-all", "enable-only"}
 FORBIDDEN_WORKER_MCPS = {"linear", "linear_sse"}
 SANDBOX_MODES = {"workspace-write", "danger-full-access"}
-RUNTIME_STRATEGIES = {"none", "external_url", "shared_runtime", "isolated_runtime"}
+TEST_TRAIN_MODES = {"off", "final-stage", "forced-shared-env"}
 
 
 class ToolError(Exception):
@@ -53,12 +51,13 @@ class DispatchInput:
     mcp_allowlist: list[str]
     sandbox_mode: str
     sandbox_add_dirs: list[str]
-    runtime_strategy: str
-    runtime_profile_id: str | None
-    runtime_id: str | None
+    runtime_strategy: str | None
     runtime_base_url: str | None
-    runtime_lease_id: str | None
-    tester_must_not_start_runtime: bool
+    tester_must_not_start_runtime: bool | None
+    test_train_mode: str
+    wave_id: str | None
+    deployed_test_commit: str | None
+    test_lane_account: str | None
     dry_run: bool
     cycle_note: str | None
 
@@ -114,16 +113,20 @@ def _list_of_str(data: dict[str, Any], key: str, *, required: bool = False) -> l
     return out
 
 
-def _bool(value: Any, default: bool = False) -> bool:
+def _optional_bool(value: Any) -> bool | None:
     if value is None:
-        return default
+        return None
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
         return bool(value)
     if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-    return default
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    raise ToolError("input_error", "tester_must_not_start_runtime must be boolean-like", stage="input")
 
 
 def validate_slot_role(slot: str, role: str) -> None:
@@ -160,21 +163,32 @@ def validate_policy(cfg: DispatchInput) -> None:
     if cfg.sandbox_mode not in SANDBOX_MODES:
         raise ToolError("validation_error", f"invalid sandbox_mode '{cfg.sandbox_mode}'", stage="validate")
 
-    if cfg.runtime_strategy not in RUNTIME_STRATEGIES:
+    if cfg.test_train_mode not in TEST_TRAIN_MODES:
         raise ToolError(
             "validation_error",
-            f"invalid runtime_strategy '{cfg.runtime_strategy}'",
+            f"test_train_mode must be one of: {', '.join(sorted(TEST_TRAIN_MODES))}",
             stage="validate",
         )
 
-    if cfg.runtime_strategy in {"external_url", "shared_runtime", "isolated_runtime"} and (
-        not isinstance(cfg.runtime_base_url, str) or not cfg.runtime_base_url.strip()
-    ):
-        raise ToolError(
-            "validation_error",
-            f"runtime_base_url is required when runtime_strategy={cfg.runtime_strategy}",
-            stage="validate",
-        )
+    if cfg.role in {"tester", "flex-tester"} and cfg.test_train_mode != "off":
+        if cfg.tester_must_not_start_runtime is not True:
+            raise ToolError(
+                "validation_error",
+                "tester packets in test-train mode must set tester_must_not_start_runtime=true",
+                stage="validate",
+            )
+        if cfg.runtime_strategy not in {"external_url", "shared_runtime"}:
+            raise ToolError(
+                "validation_error",
+                "tester packets in test-train mode require runtime_strategy=external_url|shared_runtime",
+                stage="validate",
+            )
+        if not isinstance(cfg.runtime_base_url, str) or not cfg.runtime_base_url.strip():
+            raise ToolError(
+                "validation_error",
+                "tester packets in test-train mode require runtime_base_url",
+                stage="validate",
+            )
 
     expected_prefix = f"codex/{cfg.slot}/"
     if not cfg.branch_name.startswith(expected_prefix):
@@ -248,32 +262,17 @@ def config_from_args(args: argparse.Namespace) -> DispatchInput:
             if args.sandbox_add_dirs is None
             else [item.strip() for item in args.sandbox_add_dirs if item.strip()]
         ),
-        runtime_strategy=(args.runtime_strategy or str(data.get("runtime_strategy", "none"))).strip(),
-        runtime_profile_id=(
-            args.runtime_profile_id
-            if args.runtime_profile_id is not None
-            else (str(data.get("runtime_profile_id")).strip() if data.get("runtime_profile_id") is not None else None)
-        ),
-        runtime_id=(
-            args.runtime_id
-            if args.runtime_id is not None
-            else (str(data.get("runtime_id")).strip() if data.get("runtime_id") is not None else None)
-        ),
-        runtime_base_url=(
-            args.runtime_base_url
-            if args.runtime_base_url is not None
-            else (str(data.get("runtime_base_url")).strip() if data.get("runtime_base_url") is not None else None)
-        ),
-        runtime_lease_id=(
-            args.runtime_lease_id
-            if args.runtime_lease_id is not None
-            else (str(data.get("runtime_lease_id")).strip() if data.get("runtime_lease_id") is not None else None)
-        ),
+        runtime_strategy=((args.runtime_strategy or data.get("runtime_strategy") or "").strip() or None),
+        runtime_base_url=((args.runtime_base_url or data.get("runtime_base_url") or "").strip() or None),
         tester_must_not_start_runtime=(
-            _bool(data.get("tester_must_not_start_runtime"), False)
+            _optional_bool(data.get("tester_must_not_start_runtime"))
             if args.tester_must_not_start_runtime is None
-            else _bool(args.tester_must_not_start_runtime, False)
+            else bool(args.tester_must_not_start_runtime)
         ),
+        test_train_mode=((args.test_train_mode or data.get("test_train_mode") or "off").strip() or "off"),
+        wave_id=((args.wave_id or data.get("wave_id") or "").strip() or None),
+        deployed_test_commit=((args.deployed_test_commit or data.get("deployed_test_commit") or "").strip() or None),
+        test_lane_account=((args.test_lane_account or data.get("test_lane_account") or "").strip() or None),
         dry_run=bool(data.get("dry_run", False) or args.dry_run),
         cycle_note=(args.cycle_note if args.cycle_note is not None else data.get("cycle_note")),
     )
@@ -306,15 +305,14 @@ def render_packet(cfg: DispatchInput) -> str:
     mcp_line = "none" if cfg.mcp_mode == "disable-all" else ", ".join(cfg.mcp_allowlist)
     criteria_lines = "\n".join(f"- {item}" for item in cfg.acceptance_criteria)
     sandbox_dirs = "none" if not cfg.sandbox_add_dirs else ", ".join(cfg.sandbox_add_dirs)
-    runtime_profile_id = cfg.runtime_profile_id or "none"
-    runtime_id = cfg.runtime_id or "none"
+    runtime_strategy = cfg.runtime_strategy or "none"
     runtime_base_url = cfg.runtime_base_url or "none"
-    runtime_lease_id = cfg.runtime_lease_id or "none"
-    runtime_guard = "yes" if cfg.tester_must_not_start_runtime else "no"
-    runtime_guard_note = (
-        "Tester must consume orchestrator-provided runtime and MUST NOT start local frontend/runtime process."
-        if cfg.tester_must_not_start_runtime
-        else "Tester may start task-scoped runtime only if required by strategy/instructions."
+    tester_no_local_runtime = (
+        "true"
+        if cfg.tester_must_not_start_runtime is True
+        else "false"
+        if cfg.tester_must_not_start_runtime is False
+        else "unset"
     )
 
     return (
@@ -333,14 +331,13 @@ def render_packet(cfg: DispatchInput) -> str:
         f"mcp_allowlist: {mcp_line}\n"
         f"sandbox_mode: {cfg.sandbox_mode}\n"
         f"sandbox_add_dirs: {sandbox_dirs}\n\n"
-        f"## Runtime Contract\n"
-        f"runtime_strategy: {cfg.runtime_strategy}\n"
-        f"runtime_profile_id: {runtime_profile_id}\n"
-        f"runtime_id: {runtime_id}\n"
+        f"runtime_strategy: {runtime_strategy}\n"
         f"runtime_base_url: {runtime_base_url}\n"
-        f"runtime_lease_id: {runtime_lease_id}\n"
-        f"tester_must_not_start_runtime: {runtime_guard}\n"
-        f"- {runtime_guard_note}\n\n"
+        f"tester_must_not_start_runtime: {tester_no_local_runtime}\n"
+        f"test_train_mode: {cfg.test_train_mode}\n"
+        f"wave_id: {cfg.wave_id or 'none'}\n"
+        f"deployed_test_commit: {cfg.deployed_test_commit or 'none'}\n"
+        f"test_lane_account: {cfg.test_lane_account or 'none'}\n\n"
         f"## Acceptance Criteria\n"
         f"{criteria_lines}\n\n"
         f"## Branch Fallback Policy\n"
@@ -357,6 +354,51 @@ def render_packet(cfg: DispatchInput) -> str:
         f"- checks\n"
         f"- blockers\n"
     )
+
+
+def ensure_worktree_runtime_prereqs(cfg: DispatchInput) -> dict[str, Any]:
+    """Ensure standard runtime prerequisites exist in the worker worktree.
+
+    This keeps workstation setup deterministic even after force-reset cycles.
+    Missing links are created as symlinks to the canonical repo-root artifacts.
+    Existing files/directories are never replaced.
+    """
+
+    mappings: list[tuple[str, Path]] = [
+        (".venv", cfg.repo_root / ".venv"),
+        (".env", cfg.repo_root / ".env"),
+        ("node_modules", cfg.repo_root / "node_modules"),
+        ("web/nuxt-app/node_modules", cfg.repo_root / "web/nuxt-app/node_modules"),
+        ("output/playwright/auth", cfg.repo_root / "output/playwright/auth"),
+    ]
+
+    out: dict[str, Any] = {
+        "linked": [],
+        "skipped_existing": [],
+        "missing_target": [],
+        "errors": [],
+    }
+
+    for rel_path, source in mappings:
+        target = (cfg.worktree_root / rel_path).resolve(strict=False)
+        source_resolved = source.resolve(strict=False)
+
+        if target.exists() or target.is_symlink():
+            out["skipped_existing"].append(rel_path)
+            continue
+
+        if not source_resolved.exists():
+            out["missing_target"].append(rel_path)
+            continue
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(source_resolved)
+            out["linked"].append(rel_path)
+        except OSError as exc:
+            out["errors"].append({"path": rel_path, "message": str(exc)})
+
+    return out
 
 
 def packet_path(cfg: DispatchInput) -> Path:
@@ -385,21 +427,6 @@ def parse_dispatch_json(raw: str) -> dict[str, Any]:
             except json.JSONDecodeError as exc:
                 raise ToolError("dispatch_failed", f"dispatcher output is not valid JSON: {exc}", stage="dispatch") from exc
         raise ToolError("dispatch_failed", "dispatcher output is not valid JSON", stage="dispatch")
-
-
-def wait_for_session_id_from_log(log_path: Path, timeout_seconds: float = 8.0) -> str | None:
-    deadline = time.time() + max(0.0, timeout_seconds)
-    while time.time() <= deadline:
-        try:
-            if log_path.exists():
-                text = log_path.read_text(encoding="utf-8", errors="ignore")
-                match = SESSION_ID_REGEX.search(text)
-                if match:
-                    return match.group(1)
-        except OSError:
-            pass
-        time.sleep(0.2)
-    return None
 
 
 class ThreadDispatchRunner:
@@ -476,17 +503,10 @@ class ThreadDispatchRunner:
         if not isinstance(log_path, str) or not log_path.strip():
             raise ToolError("dispatch_failed", "dispatcher payload missing log_file", stage="dispatch")
 
-        resolved_log = Path(log_path).expanduser().resolve()
-        session_id_raw = payload.get("session_id")
-        session_id = session_id_raw.strip() if isinstance(session_id_raw, str) and session_id_raw.strip() else None
-        if session_id is None:
-            session_id = wait_for_session_id_from_log(resolved_log)
-
         return {
             "dispatch_started": bool(payload.get("status") == "started" or pid > 0),
             "pid": pid,
-            "dispatch_log": str(resolved_log),
-            "session_id": session_id,
+            "dispatch_log": str(Path(log_path).expanduser().resolve()),
             "raw": payload,
         }
 
@@ -517,13 +537,26 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         fh.write("\n")
 
 
-def append_thread_history(path: Path, *, slot: str, worker_type: str, thread_id: str) -> None:
+def append_thread_history(path: Path, cfg: DispatchInput, dispatch: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    raw = dispatch.get("raw")
+    thread_id = None
+    if isinstance(raw, dict):
+        for key in ("thread_id", "session_id", "conversation_id", "thread"):
+            value = raw.get(key)
+            if isinstance(value, str) and value.strip():
+                thread_id = value.strip()
+                break
+    if not thread_id:
+        thread_id = "unknown"
+
     header = "slot | worker type | thread-id\n"
-    line = f"{slot} | {worker_type} | {thread_id}\n"
+    line = f"{cfg.slot} | {cfg.role} | {thread_id}\n"
+
     if not path.exists():
         path.write_text(header + line, encoding="utf-8")
         return
+
     with path.open("a", encoding="utf-8") as fh:
         fh.write(line)
 
@@ -539,7 +572,6 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "active_task": cfg.task_identifier,
         "branch": cfg.branch_name,
         "dispatch_pid": dispatch["pid"],
-        "session_id": dispatch.get("session_id"),
         "dispatch_log": dispatch["dispatch_log"],
         "packet_path": str(packet),
         "packet_version": cfg.packet_version,
@@ -551,11 +583,12 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "sandbox_mode": cfg.sandbox_mode,
         "sandbox_add_dirs": cfg.sandbox_add_dirs,
         "runtime_strategy": cfg.runtime_strategy,
-        "runtime_profile_id": cfg.runtime_profile_id,
-        "runtime_id": cfg.runtime_id,
         "runtime_base_url": cfg.runtime_base_url,
-        "runtime_lease_id": cfg.runtime_lease_id,
         "tester_must_not_start_runtime": cfg.tester_must_not_start_runtime,
+        "test_train_mode": cfg.test_train_mode,
+        "wave_id": cfg.wave_id,
+        "deployed_test_commit": cfg.deployed_test_commit,
+        "test_lane_account": cfg.test_lane_account,
         "worktree_root": str(cfg.worktree_root),
         "updated_at": utc_now_iso(),
     }
@@ -596,11 +629,6 @@ def update_branch_lineage(path: Path, cfg: DispatchInput, dispatch: dict[str, An
         "branch": cfg.branch_name,
         "start_from_branch": cfg.start_from_branch,
         "start_from_commit": cfg.start_from_commit,
-        "runtime_strategy": cfg.runtime_strategy,
-        "runtime_profile_id": cfg.runtime_profile_id,
-        "runtime_id": cfg.runtime_id,
-        "runtime_base_url": cfg.runtime_base_url,
-        "runtime_lease_id": cfg.runtime_lease_id,
         "worktree_root": str(cfg.worktree_root),
         "dispatch_pid": dispatch["pid"],
         "last_dispatch_at": utc_now_iso(),
@@ -663,16 +691,21 @@ def build_result(cfg: DispatchInput, packet: Path) -> dict[str, Any]:
         "packet_path": str(packet),
         "dispatch_started": False,
         "pid": None,
-        "session_id": None,
         "dispatch_log": None,
         "dispatch": {
             "attempted": False,
             "status": "not_started",
             "pid": None,
-            "session_id": None,
             "dispatch_log": None,
         },
+        "worktree_prereq_sync": {
+            "linked": [],
+            "skipped_existing": [],
+            "missing_target": [],
+            "errors": [],
+        },
         "state_updates": {
+            "worktree_prereqs": "not_started",
             "worker_registry": "not_started",
             "handoff_log": "not_started",
             "branch_lineage": "not_started",
@@ -683,14 +716,6 @@ def build_result(cfg: DispatchInput, packet: Path) -> dict[str, Any]:
         "start_anchor": {
             "start_from_branch": cfg.start_from_branch,
             "start_from_commit": cfg.start_from_commit,
-        },
-        "runtime": {
-            "runtime_strategy": cfg.runtime_strategy,
-            "runtime_profile_id": cfg.runtime_profile_id,
-            "runtime_id": cfg.runtime_id,
-            "runtime_base_url": cfg.runtime_base_url,
-            "runtime_lease_id": cfg.runtime_lease_id,
-            "tester_must_not_start_runtime": cfg.tester_must_not_start_runtime,
         },
         "registry_updated": False,
         "handoff_logged": False,
@@ -714,10 +739,10 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
             "attempted": False,
             "status": "skipped_dry_run",
             "pid": None,
-            "session_id": None,
             "dispatch_log": None,
         }
         result["state_updates"] = {
+            "worktree_prereqs": "skipped_dry_run",
             "worker_registry": "skipped_dry_run",
             "handoff_log": "skipped_dry_run",
             "branch_lineage": "skipped_dry_run",
@@ -739,6 +764,30 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
             }
         )
         return result
+
+    prereq_sync = ensure_worktree_runtime_prereqs(cfg)
+    result["worktree_prereq_sync"] = prereq_sync
+    if prereq_sync.get("errors"):
+        result["state_updates"]["worktree_prereqs"] = "failed_warning"
+        result["warnings"].append(
+            {
+                "code": "worktree_prereq_sync_failed",
+                "message": "One or more worktree prerequisite symlinks could not be created",
+                "stage": "worktree_prereq_sync",
+                "details": prereq_sync,
+            }
+        )
+    else:
+        result["state_updates"]["worktree_prereqs"] = "applied"
+        if prereq_sync.get("missing_target"):
+            result["warnings"].append(
+                {
+                    "code": "worktree_prereq_source_missing",
+                    "message": "Some prerequisite sources were missing in repo_root; dispatch continued",
+                    "stage": "worktree_prereq_sync",
+                    "details": prereq_sync,
+                }
+            )
 
     try:
         write_text_file(packet, packet_content)
@@ -765,13 +814,11 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
 
     result["dispatch_started"] = bool(dispatch["dispatch_started"])
     result["pid"] = int(dispatch["pid"])
-    result["session_id"] = dispatch.get("session_id")
     result["dispatch_log"] = str(dispatch["dispatch_log"])
     result["dispatch"] = {
         "attempted": True,
         "status": "started" if dispatch["dispatch_started"] else "failed",
         "pid": int(dispatch["pid"]),
-        "session_id": dispatch.get("session_id"),
         "dispatch_log": str(dispatch["dispatch_log"]),
     }
     result["status"] = "dispatch_started" if dispatch["dispatch_started"] else "dispatch_failed"
@@ -780,8 +827,8 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
     registry_path = reports_root / "WORKER_REGISTRY.json"
     handoff_path = reports_root / "HANDOFF_LOG.jsonl"
     lineage_path = reports_root / "BRANCH_LINEAGE.json"
-    cycle_path = reports_root / "CYCLE_LOG.jsonl"
     thread_history_path = reports_root / "THREAD_HISTORY.log"
+    cycle_path = reports_root / "CYCLE_LOG.jsonl"
 
     try:
         update_worker_registry(registry_path, cfg, packet, dispatch)
@@ -815,7 +862,6 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "packet_path": str(packet),
         "packet_version": cfg.packet_version,
         "dispatch_pid": dispatch["pid"],
-        "session_id": dispatch.get("session_id"),
         "dispatch_log": dispatch["dispatch_log"],
         "codex_profile_alias": cfg.codex_profile_alias,
         "mcp_mode": cfg.mcp_mode,
@@ -823,11 +869,12 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "sandbox_mode": cfg.sandbox_mode,
         "sandbox_add_dirs": cfg.sandbox_add_dirs,
         "runtime_strategy": cfg.runtime_strategy,
-        "runtime_profile_id": cfg.runtime_profile_id,
-        "runtime_id": cfg.runtime_id,
         "runtime_base_url": cfg.runtime_base_url,
-        "runtime_lease_id": cfg.runtime_lease_id,
         "tester_must_not_start_runtime": cfg.tester_must_not_start_runtime,
+        "test_train_mode": cfg.test_train_mode,
+        "wave_id": cfg.wave_id,
+        "deployed_test_commit": cfg.deployed_test_commit,
+        "test_lane_account": cfg.test_lane_account,
         "status": "started" if dispatch["dispatch_started"] else "failed",
     }
 
@@ -864,18 +911,13 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         )
 
     try:
-        append_thread_history(
-            thread_history_path,
-            slot=cfg.slot,
-            worker_type=cfg.role,
-            thread_id=str(dispatch.get("session_id") or "unknown"),
-        )
+        append_thread_history(thread_history_path, cfg, dispatch)
         result["state_updates"]["thread_history"] = "applied"
     except OSError as exc:
         result["state_updates"]["thread_history"] = "failed_warning"
         result["warnings"].append(
             {
-                "code": "thread_history_write_failed",
+                "code": "thread_history_append_failed",
                 "message": f"Failed to append thread history: {exc}",
                 "stage": "thread_history",
                 "path": str(thread_history_path),
@@ -929,15 +971,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sandbox-mode")
     parser.add_argument("--sandbox-add-dirs", action="append")
     parser.add_argument("--runtime-strategy")
-    parser.add_argument("--runtime-profile-id")
-    parser.add_argument("--runtime-id")
     parser.add_argument("--runtime-base-url")
-    parser.add_argument("--runtime-lease-id")
-    parser.add_argument(
-        "--tester-must-not-start-runtime",
-        choices=["true", "false"],
-        help="Override tester runtime startup guard",
-    )
+    parser.add_argument("--tester-must-not-start-runtime", dest="tester_must_not_start_runtime", action="store_true")
+    parser.add_argument("--allow-tester-local-runtime", dest="tester_must_not_start_runtime", action="store_false")
+    parser.set_defaults(tester_must_not_start_runtime=None)
+    parser.add_argument("--test-train-mode")
+    parser.add_argument("--wave-id")
+    parser.add_argument("--deployed-test-commit")
+    parser.add_argument("--test-lane-account")
     parser.add_argument("--cycle-note")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json-pretty", action="store_true")

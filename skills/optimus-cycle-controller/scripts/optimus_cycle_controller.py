@@ -634,10 +634,125 @@ def _build_handoff_sync_directive(
     }
 
 
+def _read_test_train_state(repo_root: Path) -> Optional[Dict[str, Any]]:
+    path = repo_root / "reports" / "optimus-prime" / "TEST_TRAIN_STATE.json"
+    payload, err = _read_json(path)
+    if err or not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def build_test_train_directives(cycle_number: int, config: ControllerConfig) -> List[Dict[str, Any]]:
+    state = _read_test_train_state(config.repo_root)
+    if not isinstance(state, dict):
+        return []
+
+    mode = str(state.get("test_train_mode") or "off").strip().lower()
+    if mode == "off":
+        return []
+
+    wave = state.get("active_wave") if isinstance(state.get("active_wave"), dict) else {}
+    wave_id = str(wave.get("wave_id") or "wave-unknown")
+    wave_state = str(wave.get("state") or "WAVE_ACTIVE")
+    planned_pass_done = bool(wave.get("planned_flow_pass_completed"))
+
+    eligibility = state.get("promotion_eligibility")
+    eligible = bool(eligibility.get("eligible")) if isinstance(eligibility, dict) else False
+
+    test_branch = str(state.get("test_branch") or "test")
+    test_next_branch = str(state.get("test_next_branch") or "test-next")
+    shared_url = state.get("shared_test_base_url")
+
+    directives: List[Dict[str, Any]] = []
+
+    if wave_state == "WAVE_ACTIVE" and planned_pass_done:
+        directives.append(
+            {
+                "directive_id": f"cycle-{cycle_number:06d}-wave-close-{wave_id}",
+                "directive_type": "close_test_wave",
+                "recommended_tool": "test-train-manager",
+                "recommended_args": {
+                    "action": "close_test_wave",
+                    "wave_id": wave_id,
+                    "planned_flow_pass_completed": True,
+                    "test_branch": test_branch,
+                    "test_next_branch": test_next_branch,
+                },
+                "reason": "planned flow pass completed; wave should close before promotion evaluation",
+                "requires_optimus_action": True,
+            }
+        )
+
+    if wave_state in {"WAVE_CLOSING", "PROMOTION_EVAL"} or planned_pass_done:
+        directives.append(
+            {
+                "directive_id": f"cycle-{cycle_number:06d}-wave-gate-{wave_id}",
+                "directive_type": "evaluate_promotion_gate",
+                "recommended_tool": "test-train-manager",
+                "recommended_args": {
+                    "action": "evaluate_promotion_gate",
+                    "wave_id": wave_id,
+                    "test_branch": test_branch,
+                    "test_next_branch": test_next_branch,
+                },
+                "reason": "evaluate promotion gate for shared test train",
+                "requires_optimus_action": True,
+            }
+        )
+
+    if eligible:
+        directives.extend(
+            [
+                {
+                    "directive_id": f"cycle-{cycle_number:06d}-wave-promote-{wave_id}",
+                    "directive_type": "promote_test_next_to_test",
+                    "recommended_tool": "test-train-manager",
+                    "recommended_args": {
+                        "action": "promote_test_next_to_test",
+                        "wave_id": wave_id,
+                        "test_branch": test_branch,
+                        "test_next_branch": test_next_branch,
+                    },
+                    "reason": "promotion gate eligible; promote queued integration branch",
+                    "requires_optimus_action": True,
+                },
+                {
+                    "directive_id": f"cycle-{cycle_number:06d}-wave-deploy-{wave_id}",
+                    "directive_type": "deploy_test_branch",
+                    "recommended_tool": "test-train-manager",
+                    "recommended_args": {
+                        "action": "deploy_test_branch",
+                        "wave_id": wave_id,
+                        "test_branch": test_branch,
+                        "test_next_branch": test_next_branch,
+                    },
+                    "reason": "promotion eligible; deploy test branch for shared runtime validation",
+                    "requires_optimus_action": True,
+                },
+                {
+                    "directive_id": f"cycle-{cycle_number:06d}-wave-start-{wave_id}",
+                    "directive_type": "start_new_test_wave",
+                    "recommended_tool": "test-train-manager",
+                    "recommended_args": {
+                        "action": "start_new_test_wave",
+                        "test_branch": test_branch,
+                        "test_next_branch": test_next_branch,
+                        "shared_test_base_url": shared_url,
+                    },
+                    "reason": "start next shared validation wave after promotion/deploy",
+                    "requires_optimus_action": True,
+                },
+            ]
+        )
+
+    return directives
+
+
 def build_directives(
     cycle_number: int,
     snapshot: Dict[str, Any],
     rate_state: Dict[str, Any],
+    config: ControllerConfig,
 ) -> List[Dict[str, Any]]:
     directives: List[Dict[str, Any]] = []
 
@@ -766,6 +881,8 @@ def build_directives(
         handoff_directive = _build_handoff_sync_directive(cycle_number, latest_handoff)
         if handoff_directive:
             directives.append(handoff_directive)
+
+    directives.extend(build_test_train_directives(cycle_number, config))
 
     return directives
 
@@ -968,7 +1085,7 @@ def run_controller(config: ControllerConfig) -> Dict[str, Any]:
                     },
                 )
 
-            directives = build_directives(cycle_number, snapshot, rate_state)
+            directives = build_directives(cycle_number, snapshot, rate_state, config)
             pending_directives = directives
 
             for directive in directives:

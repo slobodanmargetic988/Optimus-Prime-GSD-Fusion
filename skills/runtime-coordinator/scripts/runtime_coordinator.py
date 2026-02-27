@@ -13,16 +13,18 @@ from pathlib import Path
 from typing import Any
 
 TOOL = "runtime-coordinator"
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.3.0"
 SCHEMA_VERSION = "1.0"
 
 STRATEGIES = {"none", "external_url", "shared_runtime", "isolated_runtime"}
 ACTIONS = {"resolve", "release_lease", "upsert_runtime", "refresh_blocker_index", "log_blocker"}
 RUNTIME_STATUSES = {"starting", "healthy", "degraded", "failed", "stopped"}
+TEST_TRAIN_MODES = {"off", "final-stage", "forced-shared-env"}
 BLOCKER_CATEGORIES = {
     "infra",
     "runtime",
     "env",
+    "test-train",
     "dependency",
     "code",
     "test",
@@ -52,6 +54,8 @@ class RuntimeInput:
     requires_browser: bool
     mutating_flow: bool
     runtime_strategy_override: str | None
+    test_train_mode: str
+    shared_test_base_url: str | None
     runtime_profile_id: str | None
     external_base_url: str | None
     runtime_id: str | None
@@ -220,6 +224,14 @@ def build_input(payload: dict[str, Any]) -> RuntimeInput:
             stage="input",
         )
 
+    test_train_mode = (_str(payload.get("test_train_mode")) or "off").lower()
+    if test_train_mode not in TEST_TRAIN_MODES:
+        raise ToolError(
+            "input_error",
+            f"test_train_mode must be one of {sorted(TEST_TRAIN_MODES)}",
+            stage="input",
+        )
+
     requested_status = _str(payload.get("requested_status"))
     if requested_status and requested_status not in RUNTIME_STATUSES:
         raise ToolError(
@@ -238,6 +250,8 @@ def build_input(payload: dict[str, Any]) -> RuntimeInput:
         requires_browser=_bool(payload.get("requires_browser"), False),
         mutating_flow=_bool(payload.get("mutating_flow"), False),
         runtime_strategy_override=runtime_strategy_override,
+        test_train_mode=test_train_mode,
+        shared_test_base_url=_str(payload.get("shared_test_base_url")),
         runtime_profile_id=_str(payload.get("runtime_profile_id")),
         external_base_url=_str(payload.get("external_base_url")),
         runtime_id=_str(payload.get("runtime_id")),
@@ -283,7 +297,19 @@ def choose_profile(inp: RuntimeInput, profiles: list[dict[str, Any]]) -> dict[st
     return defaults[0] if defaults else profiles[0]
 
 
+def is_shared_test_train_flow(inp: RuntimeInput) -> bool:
+    if inp.test_train_mode not in {"final-stage", "forced-shared-env"}:
+        return False
+    role = (inp.worker_role or "").lower()
+    if role in {"tester", "flex-tester"}:
+        return True
+    return bool(inp.requires_browser and inp.task_kind in {"ui_flow", "browser", "e2e"})
+
+
 def resolve_strategy(inp: RuntimeInput, profile: dict[str, Any] | None) -> str:
+    if is_shared_test_train_flow(inp) and inp.shared_test_base_url and not inp.runtime_strategy_override:
+        return "external_url"
+
     if inp.runtime_strategy_override:
         return inp.runtime_strategy_override
 
@@ -571,6 +597,7 @@ def resolve(inp: RuntimeInput) -> dict[str, Any]:
     profiles = load_profiles(inp.runtime_profiles_path)
     profile = choose_profile(inp, profiles)
     strategy = resolve_strategy(inp, profile)
+    shared_train_mode = is_shared_test_train_flow(inp)
 
     registry = load_registry(inp.runtime_registry_path)
     leases_state = load_leases(inp.runtime_leases_path)
@@ -579,9 +606,18 @@ def resolve(inp: RuntimeInput) -> dict[str, Any]:
     lease: dict[str, Any] | None = None
     blocked: dict[str, Any] | None = None
     tester_must_not_start_runtime = False
-    base_url = inp.external_base_url
+    base_url = inp.shared_test_base_url or inp.external_base_url
 
-    if strategy == "none":
+    if shared_train_mode and strategy not in {"external_url", "shared_runtime"}:
+        blocked = {
+            "code": "test_train_local_runtime_denied",
+            "message": "test-train mode requires tester runtime_strategy=external_url|shared_runtime",
+            "stage": "resolve",
+        }
+
+    if blocked:
+        pass
+    elif strategy == "none":
         pass
     elif strategy == "external_url":
         tester_must_not_start_runtime = True
@@ -602,7 +638,7 @@ def resolve(inp: RuntimeInput) -> dict[str, Any]:
     elif strategy == "shared_runtime":
         assert profile is not None
         runtime = ensure_shared_runtime(inp, profile, registry)
-        base_url = _str(runtime.get("base_url")) or _str(profile.get("default_base_url"))
+        base_url = base_url or _str(runtime.get("base_url")) or _str(profile.get("default_base_url"))
         tester_must_not_start_runtime = True
         lease, blocked = allocate_lease(inp, runtime=runtime, profile=profile, leases_state=leases_state)
         _attach_worker_to_runtime(runtime, inp.worker_slot)
@@ -619,6 +655,15 @@ def resolve(inp: RuntimeInput) -> dict[str, Any]:
             "stage": "resolve",
         }
 
+    if shared_train_mode:
+        tester_must_not_start_runtime = True
+        if blocked is None and not base_url:
+            blocked = {
+                "code": "shared_test_base_url_missing",
+                "message": "test-train mode requires shared_test_base_url or runtime profile default_base_url",
+                "stage": "resolve",
+            }
+
     registry["updated_at"] = utc_now_iso()
     leases_state["updated_at"] = utc_now_iso()
     _write_json(inp.runtime_registry_path, registry)
@@ -630,7 +675,7 @@ def resolve(inp: RuntimeInput) -> dict[str, Any]:
             inp,
             stage=str(blocked.get("stage") or "resolve"),
             blocker_code=str(blocked.get("code") or "runtime_blocked"),
-            category="runtime",
+            category="test-train" if shared_train_mode else "runtime",
             summary=str(blocked.get("message") or "runtime coordination blocked"),
             signature=signature,
             retryable=True,
@@ -654,6 +699,7 @@ def resolve(inp: RuntimeInput) -> dict[str, Any]:
         "base_url": base_url,
         "lease_id": _str(lease.get("lease_id") if lease else None),
         "tester_must_not_start_runtime": tester_must_not_start_runtime,
+        "test_train_mode": inp.test_train_mode,
     }
 
     return {

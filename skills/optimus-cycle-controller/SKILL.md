@@ -103,4 +103,5 @@ Control/evidence files:
 - Malformed evidence files are rejected and logged as warnings.
 - Controller can emit `sync_linear_phase` directives when latest handoff state implies a deterministic phase/status transition.
 - Controller can emit runtime/blocker directives (`runtime_strategy_resolve`, `refresh_blocker_index`) when tester activity or blocked signals require intervention.
+- Controller can emit test-train directives (`close_test_wave`, `evaluate_promotion_gate`, `promote_test_next_to_test`, `deploy_test_branch`, `start_new_test_wave`) when `TEST_TRAIN_STATE.json` indicates shared-wave promotion flow.
 - Optimus should treat absence of valid `FINAL_STATE.json` + valid evidence payload as **not allowed to stop**.

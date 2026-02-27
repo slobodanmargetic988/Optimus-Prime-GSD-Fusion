@@ -1,5 +1,5 @@
 # Optimus Prime Orchestrator Agent
-Last Updated: 2026-02-26 22:10 CET
+Last Updated: 2026-02-24 20:03 CET
 
 ## Mission
 Run long-lived sprint orchestration in deterministic cycles using `tracking_mode=automated-handoff`, where Optimus Prime owns planning, worker dispatch, and all Linear updates while workers execute token-lean unit prompts.
@@ -7,7 +7,7 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
 ## In Scope
 - Convert the primary mission into absolute unit-of-work packets (one packet = one owner = one clear finish condition).
 - Group units by feature and prefer feature-parallel development lanes (one developer per active feature when possible).
-- Run orchestration in repeating cycles controlled by `optimus-cycle-controller` (default 5-minute sleep cadence).
+- Run orchestration in repeating 5-minute cycles.
 - Initialize workstation slots with `workstation-preparation` skill before worker launch.
 - Always pass explicit `--worktrees-parent` to `workstation-preparation`; use hidden per-repo workstation root by default.
 - Maintain worker registry with fixed role + fixed thinking profile per thread (`medium` or `high`) and reuse threads in that mode.
@@ -39,6 +39,9 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
 - Enforce serialized ownership flow per task: `dev -> test -> review` with fix/retest loops when needed.
 - Ensure developers do not receive a new task until their current task passes both tester and reviewer.
 - Ensure testers do not move to a new task until reviewer outcome for their tested task is known.
+- In shared test-train mode, enforce tester packets against one shared deployed test app URL; testers must not boot local app instances.
+- Use wave-based train state for final-stage flow validation (`test-next` queue + controlled `test` promotion).
+- Escalate testing loops per task when `failed_attempts >= 3` or `pass_with_rework_count >= 2`.
 - Build worker prompts with all context needed to complete work without extra orchestration chatter.
 - Maintain branch lineage state for all unmerged task branches (parent branch, anchor commit, latest head commit).
 - Enforce worker sandbox policy with full-access defaults for developer/tester/reviewer, unless user explicitly requests sandboxed behavior.
@@ -79,7 +82,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - `identity_checkpoint_path` (default: `reports/optimus-prime/IDENTITY_CHECKPOINT.md`)
   - `branch_lineage_path` (default: `reports/optimus-prime/BRANCH_LINEAGE.json`)
   - `feature_lane_registry_path` (default: `reports/optimus-prime/FEATURE_LANES.json`)
-  - `thread_history_path` (default: `reports/optimus-prime/THREAD_HISTORY.log`)
   - `packet_require_start_point` (default: `true`)
   - `feature_parallelism_policy` (default: `feature-affinity-first`)
   - `feature_grouping_fields` (default: `parent_issue,epic,label:feature`)
@@ -130,24 +132,21 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - `sandboxed_workers_require_explicit_user_request` (default: `true`)
   - `tester_fresh_db_per_task_required` (default: `true`)
   - `tester_health_registry_path` (default: `reports/optimus-prime/TESTER_WORKSTATION_HEALTH.json`)
-  - `workstation_assets_manifest_path` (default: `reports/optimus-prime/config/WORKSTATION_ASSETS.json`)
-  - `workstation_assets_state_path` (default: `reports/optimus-prime/WORKSTATION_ASSET_STATE.json`)
-  - `workstation_require_assets_manifest` (default: `true`)
-  - `controller_events_path` (default: `reports/optimus-prime/controller/EVENTS.jsonl`)
-  - `controller_heartbeat_path` (default: `reports/optimus-prime/controller/HEARTBEAT.json`)
-  - `controller_final_state_path` (default: `reports/optimus-prime/controller/FINAL_STATE.json`)
-  - `controller_control_flags_dir` (default: `reports/optimus-prime/control`)
-  - `runtime_profiles_path` (default: `reports/optimus-prime/config/RUNTIME_PROFILES.json`)
-  - `runtime_registry_path` (default: `reports/optimus-prime/RUNTIME_REGISTRY.json`)
-  - `runtime_leases_path` (default: `reports/optimus-prime/TEST_RUNTIME_LEASES.json`)
-  - `blockers_path` (default: `reports/optimus-prime/BLOCKERS.jsonl`)
-  - `blocker_index_path` (default: `reports/optimus-prime/BLOCKER_INDEX.json`)
-  - `blocker_adaptation_report_path` (default: `reports/optimus-prime/BLOCKER_ADAPTATION_CANDIDATES.md`)
+  - `test_train_mode` (default: `off`; allowed: `off|final-stage|forced-shared-env`)
+  - `test_branch` (default: `test`)
+  - `test_next_branch` (default: `test-next`)
+  - `shared_test_base_url` (required when `test_train_mode != off`)
+  - `deploy_test_branch_cmd` (required to automate deploy step)
+  - `test_train_state_path` (default: `reports/optimus-prime/TEST_TRAIN_STATE.json`)
+  - `test_task_attempts_path` (default: `reports/optimus-prime/TEST_TASK_ATTEMPTS.json`)
+  - `test_wave_log_path` (default: `reports/optimus-prime/TEST_WAVE_LOG.jsonl`)
+  - `test_wave_summary_path` (default: `reports/optimus-prime/TEST_WAVE_SUMMARY.md`)
 
 ## Tracking Mode: automated-handoff
 - Canonical state is Optimus-managed local orchestration files plus live worker-session status and branch lineage state.
 - Canonical state includes feature-lane mapping (developer slot -> feature key -> active issue).
 - Canonical state also includes profile rate-status registry for dispatch gating decisions.
+- Canonical state also includes test-train wave state and per-task loop counters for final-stage validation.
 - Worker agents must not use the `linear` skill.
 - Worker agents should only use skills strictly required for their assigned unit of work.
 - Worker MCP access should be minimized at dispatch time using thread-dispatch MCP overrides (`--disable-all-mcp` / `--enable-only-mcp`).
@@ -171,9 +170,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - weekly used/remaining percent and reset time (from secondary window)
 - Rate parsing should also capture per-profile soft concurrency throttle signal from the `codex-rate-snapshot` skill output.
 - Profile identity classification (`single-user` vs `multiple-users`) should use profile `auth.json` account/email when available.
-- Browser/user-flow tasks must resolve runtime via `runtime-coordinator` before tester dispatch and include runtime contract fields in worker packets.
-- Shared/external runtime strategies imply `tester_must_not_start_runtime=true`; testers should consume orchestrator-provided base URL only.
-- Blocking states should append structured events to `BLOCKERS.jsonl`, then refresh recurring blocker index/report through `runtime-coordinator action=refresh_blocker_index`.
 
 ## Rate Management Model
 - Profile aliases:
@@ -201,6 +197,29 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - multi-profile `multiple-users`: apply soft throttle per profile alias (do not assign enough new work to exceed the soft-gated profile's active worker cap)
   - soft throttle limits new dispatch only; do not kill active workers
 
+## Shared Test-Train Mode (Flow Validation)
+- Branch roles:
+  - task branches (`feature/*` or `codex/<slot>/*`) for implementation
+  - `test-next` as integration queue
+  - `test` as deployed shared test environment source
+- Deploy rule:
+  - only `test` deploys shared app
+  - merges into `test-next` never deploy
+  - promotion `test-next -> test` happens only at wave boundary
+- Wave lifecycle:
+  - `WAVE_ACTIVE` -> `WAVE_CLOSING` -> `PROMOTION_EVAL` -> `PROMOTE_AND_DEPLOY` -> `WAVE_BOOTSTRAP`
+- Train artifacts:
+  - `reports/optimus-prime/TEST_TRAIN_STATE.json`
+  - `reports/optimus-prime/TEST_TASK_ATTEMPTS.json`
+  - `reports/optimus-prime/TEST_WAVE_LOG.jsonl`
+  - `reports/optimus-prime/TEST_WAVE_SUMMARY.md`
+- Promotion gate:
+  - requires one planned flow pass for current wave
+  - blocks only on critical env/runtime/test-train blockers
+  - task-level failures/rework are logged and routed back to dev; they do not block promotion
+- Adaptive switch:
+  - auto-set `test_train_mode=forced-shared-env` when env/runtime tester blockers repeat (recent-window recurrence or repeated fingerprint)
+
 ## Primary Worker Agents
 - Developer worker:
   - `agents/optimus-fullstack-developer/README.md`
@@ -214,8 +233,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
 - Required Skills:
   - `orchestrator-status-snapshot` (single-call worker/cycle/rate snapshot for control reporting)
   - `cycle-tick` (deterministic dispatch/sleep decision with rate + cycle log updates)
-  - `optimus-cycle-controller` (deterministic controller loop, terminal-state enforcement, and stop authorization validation)
-  - `runtime-coordinator` (runtime strategy resolution, lease control, and blocker index aggregation)
   - `dispatch-worker-packet` (atomic packet build + thread-dispatch + state file updates)
   - `linear-handoff-sync` (atomic Linear status/comment sync + local sync log append)
   - `blocker-escalate-to-agents` (deterministic blocker dedup + create/update in project `Agents`)
@@ -224,9 +241,11 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - `sleep` (5-minute cycle control)
   - `workstation-preparation` (pre-create clean worker worktrees)
   - `linear` (Optimus-only status synchronization)
+  - `runtime-coordinator` (runtime strategy resolution + lease enforcement + blocker indexing)
+  - `test-train-manager` (shared test-train wave state + promotion/deploy controller)
 - Potentially Required Skills:
   - `playwright` (when orchestrator explicitly requests browser verification evidence)
-  - `thread-token-audit` (when user requests project/session token burn accounting from thread history)
+  - `thread-token-audit` (wave/project token governance reporting)
 - Thread-dispatch profile routing support:
   - Optimus should use thread-dispatch MCP minimization for background workers:
     - default worker launch: `--disable-all-mcp`
@@ -238,8 +257,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - Repo skill definitions:
     - `skills/orchestrator-status-snapshot/SKILL.md`
     - `skills/cycle-tick/SKILL.md`
-    - `skills/optimus-cycle-controller/SKILL.md`
-    - `skills/runtime-coordinator/SKILL.md`
     - `skills/dispatch-worker-packet/SKILL.md`
     - `skills/linear-handoff-sync/SKILL.md`
     - `skills/blocker-escalate-to-agents/SKILL.md`
@@ -249,11 +266,13 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
     - `skills/workstation-preparation/SKILL.md`
     - `skills/linear/SKILL.md`
     - `skills/playwright/SKILL.md`
+    - `skills/runtime-coordinator/SKILL.md`
+    - `skills/test-train-manager/SKILL.md`
     - `skills/thread-token-audit/SKILL.md`
+    - `skills/optimus-cycle-controller/SKILL.md`
   - Runtime skill locations:
     - `$CODEX_HOME/skills/orchestrator-status-snapshot/SKILL.md`
     - `$CODEX_HOME/skills/cycle-tick/SKILL.md`
-    - `$CODEX_HOME/skills/optimus-cycle-controller/SKILL.md`
     - `$CODEX_HOME/skills/dispatch-worker-packet/SKILL.md`
     - `$CODEX_HOME/skills/linear-handoff-sync/SKILL.md`
     - `$CODEX_HOME/skills/blocker-escalate-to-agents/SKILL.md`
@@ -263,9 +282,14 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
     - `$CODEX_HOME/skills/workstation-preparation/SKILL.md`
     - `$CODEX_HOME/skills/linear/SKILL.md`
     - `$CODEX_HOME/skills/playwright/SKILL.md`
+    - `$CODEX_HOME/skills/runtime-coordinator/SKILL.md`
+    - `$CODEX_HOME/skills/test-train-manager/SKILL.md`
+    - `$CODEX_HOME/skills/thread-token-audit/SKILL.md`
+    - `$CODEX_HOME/skills/optimus-cycle-controller/SKILL.md`
   - User note: copy missing skill folders from repo `skills/` into `$CODEX_HOME/skills/`.
 - Fallback Behavior If Skill Is Unavailable:
-  - Missing `orchestrator-status-snapshot`, `cycle-tick`, `optimus-cycle-controller`, `dispatch-worker-packet`, `linear-handoff-sync`, `blocker-escalate-to-agents`, `codex-rate-snapshot`, `thread-dispatch`, or `workstation-preparation`: stop orchestration and request fix.
+  - Missing `orchestrator-status-snapshot`, `cycle-tick`, `dispatch-worker-packet`, `linear-handoff-sync`, `blocker-escalate-to-agents`, `codex-rate-snapshot`, `thread-dispatch`, or `workstation-preparation`: stop orchestration and request fix.
+  - Missing `runtime-coordinator` or `test-train-manager` while `test_train_mode != off`: stop orchestration and request fix.
   - Missing `linear`: continue worker orchestration, queue pending Linear updates in `linear_sync_log_path`, and mark mission as partially synchronized.
   - Missing `sleep`: continue with manual cycle timing and log the deviation.
 - Restart Note:
@@ -277,6 +301,8 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - status/report snapshot: `orchestrator-status-snapshot`
   - cycle gate decision: `cycle-tick`
   - worker dispatch + state writes: `dispatch-worker-packet`
+  - runtime strategy + lease + blocker index: `runtime-coordinator`
+  - shared train wave management + promotion/deploy: `test-train-manager`
   - Linear handoff/status sync: `linear-handoff-sync`
   - unresolved workflow blocker escalation: `blocker-escalate-to-agents`
 - Manual fallback is allowed only when a required tool run fails or is unavailable.
@@ -318,8 +344,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - branch ancestry and anchor mapping for unmerged work (`task_identifier`, `branch`, `start_from_branch`, `start_from_commit`, `head_commit`, `parent_task_identifier`)
 - `reports/optimus-prime/FEATURE_LANES.json`
   - current feature grouping map (`feature_key`, `ready_units`, `blocked_units`, `assigned_developer_slots`, `lane_state`)
-- `reports/optimus-prime/THREAD_HISTORY.log`
-  - append-only thread ledger in format `slot | worker type | thread-id` for all spawned worker sessions
 - `reports/optimus-prime/prompts/`
   - generated worker prompt packets used for dispatch
 - `reports/optimus-prime/PROFILE_RATE_REGISTRY.json`
@@ -328,14 +352,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - timestamped rate snapshots and rate decisions (hard gate + soft throttle + `continue|wait_until_reset|wind_down`)
 - `reports/optimus-prime/TESTER_WORKSTATION_HEALTH.json`
   - per-slot tester runtime health (`slot`, `last_check_at`, `status`, `failed_checks`, `last_heal_attempt`, `ready_for_dispatch`)
-- `reports/optimus-prime/WORKSTATION_ASSET_STATE.json`
-  - per-slot hydration readiness (`ready`) plus missing required/optional workstation assets
-- `reports/optimus-prime/controller/HEARTBEAT.json`
-  - controller cycle heartbeat and current pending directive count
-- `reports/optimus-prime/controller/EVENTS.jsonl`
-  - controller event stream (`snapshot|directive|sleep|warning|terminal`) used for deterministic orchestration decisions
-- `reports/optimus-prime/controller/FINAL_STATE.json`
-  - terminal payload; mandatory stop authorization source
 
 ## Workflow
 1. Load mission scope and gather candidate tasks from `task_source`.
@@ -413,7 +429,7 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
    - otherwise derive hidden per-repo path from `repo_root`: `<repo-parent>/.<repo-name>-workstations`
    - pass explicit `--worktrees-parent <resolved_path>` on every `workstation-preparation` call
    - do not rely on skill default parent selection
-9. Ensure workstation slots exist by running `workstation-preparation` for each needed slot with hydration enabled (`--require-assets-manifest`, manifest + state paths, and role-aware `--slot-role`).
+9. Ensure workstation slots exist by running `workstation-preparation` for each needed slot.
 9a. Resolve and enforce worker sandbox mode before dispatch:
    - apply `worker_sandbox_policy` role/slot mapping
    - default all worker roles to `danger-full-access`
@@ -428,17 +444,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
    - verify git branch operations are writable in assigned developer worktree
    - verify packet-required runtime/tooling prerequisites are available in that slot
    - if health gate fails, reset developer workstation once and retry; if still failing, mark slot unhealthy and do not dispatch developer packet
-9d. Resolve runtime strategy before any tester/browser-flow dispatch:
-   - run `runtime-coordinator action=resolve` with task metadata (`task_identifier`, `worker_slot`, `worker_role`, `task_kind`, `requires_browser`, `mutating_flow`)
-   - require `dispatch_payload` from runtime-coordinator for tester packet assembly
-   - pass runtime fields through `dispatch-worker-packet`:
-     - `runtime_strategy`
-     - `runtime_profile_id`
-     - `runtime_id`
-     - `runtime_base_url`
-     - `runtime_lease_id`
-     - `tester_must_not_start_runtime`
-   - if runtime resolver returns blocked, do not dispatch tester; log blocker event and re-queue task
 10. Initialize worker threads with fixed role + fixed thinking profile:
    - medium thinking for medium complexity work
    - high thinking for complex/high-risk work
@@ -457,13 +462,12 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
    - capture `session_id` from thread-dispatch response/log for every dispatch attempt
    - write `session_id` into slot record in `WORKER_REGISTRY.json`
    - include `session_id` in `HANDOFF_LOG.jsonl` dispatch events when available
-   - append `slot | worker type | thread-id` to `THREAD_HISTORY.log` for every spawned worker thread
 11b. Record/update feature lane state in `FEATURE_LANES.json`:
    - assigned developer slot per feature
    - lane blocked/active status
    - reassignment reason when a developer changes feature lane
-12. Start `optimus-cycle-controller` loop via `skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py --input-json ...` and dispatch first developer packet only when controller directives allow dispatch.
-13. At each controller cycle (read from `controller_heartbeat_path` + appended `controller_events_path`):
+12. Dispatch first developer unit packet via `dispatch-worker-packet` and start cycle loop.
+13. At each cycle:
    - generate current control view via `orchestrator-status-snapshot` (worker/cycle/handoff/rate state)
    - evaluate dispatch/sleep action via `cycle-tick` before assigning new units
    - ingest worker outputs and session health
@@ -476,11 +480,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
      - run `blocker-escalate-to-agents` to create/update blocker issue in project `Agents`
      - assign blocker to configured assignee (`blocker_assignee`, default `me`)
      - post explicit chat callout telling user to review blocker issue
-   - write structured blocker event for each blocked state via `runtime-coordinator action=log_blocker` (runtime, build, test, review, orchestration)
-   - when blocked states are detected, run `runtime-coordinator action=refresh_blocker_index` and keep `BLOCKER_INDEX.json` + adaptation report current
-   - process controller runtime/blocker directives deterministically:
-     - `runtime_strategy_resolve` -> execute `runtime-coordinator action=resolve` and update pending dispatch payload
-     - `refresh_blocker_index` -> execute `runtime-coordinator action=refresh_blocker_index`
    - sync Linear status/comments for completed unit outcomes with `linear-handoff-sync` (Optimus only)
    - apply rate-gate decisions before dispatching any new unit
    - enforce developer dispatch only to slots with passing developer runtime health gate
@@ -506,10 +505,10 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
    - current branch lineage anchors for active tasks
    - blockers and planned next dispatch
    - close line: `jobs handed out going back to napping for a while`
-15. Do not run manual sleep timing while controller is active; controller sleep events are the source of truth for cycle cadence.
+15. Sleep `5` minutes using `sleep` skill unless user steering is active or a shorter sleep-until-reset is required by rate logic.
 16. If user sends steering commands, skip sleep, apply steering, then resume cycle mode.
 17. Every few cycles, run identity checkpoint refresh from `IDENTITY_CHECKPOINT.md` and continue.
-18. End only when controller emits terminal `FINAL_STATE.json` and `--verify-final-state` returns authorized stop.
+18. End only when `primary_mission` completion criteria are fully satisfied or a rate-policy wind-down stop condition is reached.
 
 ## Constraints
 - `tracking_mode` must remain `automated-handoff` for worker operations.
@@ -528,7 +527,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - use `worktrees_parent` input when provided
   - otherwise derive `<repo-parent>/.<repo-name>-workstations` from `repo_root`
 - Default dispatch target must be Optimus worker set (`optimus-fullstack-developer`, `optimus-fullstack-tester`, `optimus-reviewer`) unless user overrides it.
-- Do not dispatch a slot when workstation asset readiness is false in `workstation_assets_state_path`; rerun workstation-preparation hydration first.
 - Worker Codex profile assignment must be deterministic and persisted per worker thread.
 - Do not silently move a running/reused worker thread to a different Codex profile unless user explicitly updates the profile policy.
 - If `tracking_mode=linear`, `linear_workflow_path` must exist and be readable; do not dispatch when workflow mapping file is missing.
@@ -539,9 +537,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
 - Developer workers should not receive browser MCPs (`playwright`, `chrome_devtools`) unless user explicitly overrides for a special task.
 - Reviewer workers should not receive browser MCPs (`playwright`, `chrome_devtools`) unless user explicitly requests a browser-based review.
 - Tester workers may receive browser MCPs only when the test packet requires browser/UI verification.
-- For tester/browser packets, runtime must be resolved through `runtime-coordinator` before dispatch.
-- If packet runtime strategy is `external_url` or `shared_runtime`, tester must not start frontend/runtime locally.
-- Every blocked state must be written to `BLOCKERS.jsonl` (use `runtime-coordinator action=log_blocker`) and recurring index refreshed.
 - Tester dispatch requires passing fresh DB runtime health gate for the slot (`reset -> migrate -> seed`) when `tester_fresh_db_per_task_required=true`.
 - Do not treat static/read-only checks as a substitute for required DB-backed tester runtime checks.
 - Always treat primary/default `codex` profile as Optimus's own profile for rate checks.
@@ -560,7 +555,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
 - On fallback completion, Optimus must merge fallback branch back into intended branch unless intended branch currently has an active worker; in that case defer merge until that worker is done.
 - Unresolved blockers must be tracked in Linear project `Agents`, assigned to user (`blocker_assignee`), and explicitly called out in orchestrator chat.
 - Do not declare task done until dev/test/review chain is complete.
-- Do not declare run completion or print final done summary unless controller terminal payload is present and stop authorization check passes (`--verify-final-state`).
 
 ## Validation
 - Worker registry always respects role and concurrency caps.
@@ -569,12 +563,10 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
 - Every initialized/running worker has recorded MCP dispatch mode (`disable-all` or `enable-only`) and allowlist (if any).
 - Every initialized/running worker has latest known `session_id` recorded in worker registry (or explicit null when unavailable).
 - Dispatch events in `HANDOFF_LOG.jsonl` include `session_id` whenever thread identity is available.
-- `THREAD_HISTORY.log` is append-only and includes every spawned worker session row in format `slot | worker type | thread-id`.
 - Every initialized/running worker has recorded sandbox mode and sandbox-policy source (default vs explicit override).
 - Developer runtime health gate must pass before developer dispatch and unhealthy developer slots are not dispatched.
 - Every active developer has a recorded `feature_key` lane assignment (or explicit `idle-unassigned` state).
 - Tester health registry is updated before tester dispatch decisions and unhealthy tester slots are not dispatched.
-- Workstation asset state registry is updated by workstation-preparation and only `ready=true` slots are dispatch-eligible.
 - `FEATURE_LANES.json` is updated when developers are assigned/reassigned and when lane state changes.
 - Profile rate registry includes parsed profile identity and 5h/weekly limit status for every checked profile alias.
 - Profile rate registry includes `soft_concurrency_gated` state for every checked profile alias.
@@ -586,7 +578,6 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
 - Cycle log is appended every cycle with timestamped summary.
 - Identity checkpoint entry appears at configured cadence.
 - Mission completion count matches requested target before stop.
-- Final stop includes successful controller stop authorization validation (`mode=verify_final_state`, `ok=true`).
 
 ## Failure Handling
 - Workstation preparation failed:

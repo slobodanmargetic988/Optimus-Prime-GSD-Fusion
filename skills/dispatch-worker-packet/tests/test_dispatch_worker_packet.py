@@ -25,7 +25,6 @@ class FakeDispatcher:
         return {
             "dispatch_started": True,
             "pid": 4242,
-            "session_id": "019caaaa-0000-7000-8000-aaaaaaaaaaaa",
             "dispatch_log": "/tmp/dispatch.log",
             "raw": {"status": "started"},
         }
@@ -48,12 +47,13 @@ def make_cfg(root: Path, **overrides):
         mcp_allowlist=overrides.get("mcp_allowlist", []),
         sandbox_mode=overrides.get("sandbox_mode", "danger-full-access"),
         sandbox_add_dirs=overrides.get("sandbox_add_dirs", []),
-        runtime_strategy=overrides.get("runtime_strategy", "none"),
-        runtime_profile_id=overrides.get("runtime_profile_id", None),
-        runtime_id=overrides.get("runtime_id", None),
-        runtime_base_url=overrides.get("runtime_base_url", None),
-        runtime_lease_id=overrides.get("runtime_lease_id", None),
-        tester_must_not_start_runtime=overrides.get("tester_must_not_start_runtime", False),
+        runtime_strategy=overrides.get("runtime_strategy"),
+        runtime_base_url=overrides.get("runtime_base_url"),
+        tester_must_not_start_runtime=overrides.get("tester_must_not_start_runtime"),
+        test_train_mode=overrides.get("test_train_mode", "off"),
+        wave_id=overrides.get("wave_id"),
+        deployed_test_commit=overrides.get("deployed_test_commit"),
+        test_lane_account=overrides.get("test_lane_account"),
         dry_run=overrides.get("dry_run", False),
         cycle_note=overrides.get("cycle_note", None),
     )
@@ -73,18 +73,7 @@ class DispatchWorkerPacketTests(unittest.TestCase):
 
     def test_packet_render_contains_required_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
-            cfg = make_cfg(
-                Path(tmp),
-                role="tester",
-                slot="test-1",
-                branch_name="codex/test-1/MYO-156",
-                runtime_strategy="shared_runtime",
-                runtime_profile_id="default-web",
-                runtime_id="rt-shared-default-web",
-                runtime_base_url="http://127.0.0.1:4173",
-                runtime_lease_id="lease-123",
-                tester_must_not_start_runtime=True,
-            )
+            cfg = make_cfg(Path(tmp), role="tester", slot="test-1", branch_name="codex/test-1/MYO-156")
             content = MODULE.render_packet(cfg)
             self.assertIn("start_from_branch", content)
             self.assertIn("start_from_commit", content)
@@ -93,9 +82,6 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("intended_branch", content)
             self.assertIn("fallback_branch", content)
             self.assertIn("fallback_reason", content)
-            self.assertIn("Runtime Contract", content)
-            self.assertIn("runtime_strategy: shared_runtime", content)
-            self.assertIn("tester_must_not_start_runtime: yes", content)
 
     def test_dry_run_returns_no_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -116,12 +102,7 @@ class DispatchWorkerPacketTests(unittest.TestCase):
     def test_success_flow_updates_registry_handoff_lineage(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            cfg = make_cfg(
-                root,
-                runtime_strategy="external_url",
-                runtime_base_url="http://127.0.0.1:4173",
-                tester_must_not_start_runtime=True,
-            )
+            cfg = make_cfg(root)
             out = MODULE.run_dispatch_worker_packet(cfg, dispatcher=FakeDispatcher())
 
             self.assertTrue(out["ok"])
@@ -129,31 +110,24 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertTrue(out["registry_updated"])
             self.assertTrue(out["handoff_logged"])
             self.assertEqual(out["pid"], 4242)
-            self.assertEqual(out["session_id"], "019caaaa-0000-7000-8000-aaaaaaaaaaaa")
             self.assertTrue(Path(out["packet_path"]).exists())
 
             registry = json.loads((root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json").read_text(encoding="utf-8"))
             self.assertEqual(registry["workers"][0]["slot"], "dev-1")
             self.assertEqual(registry["workers"][0]["active_task"], "MYO-156")
-            self.assertEqual(registry["workers"][0]["session_id"], "019caaaa-0000-7000-8000-aaaaaaaaaaaa")
-            self.assertEqual(registry["workers"][0]["runtime_strategy"], "external_url")
-            self.assertTrue(registry["workers"][0]["tester_must_not_start_runtime"])
 
             handoff_lines = (root / "reports" / "optimus-prime" / "HANDOFF_LOG.jsonl").read_text(encoding="utf-8").strip().splitlines()
             self.assertEqual(len(handoff_lines), 1)
             handoff = json.loads(handoff_lines[0])
             self.assertEqual(handoff["event"], "dispatch_attempt")
             self.assertEqual(handoff["task_identifier"], "MYO-156")
-            self.assertEqual(handoff["session_id"], "019caaaa-0000-7000-8000-aaaaaaaaaaaa")
 
             lineage = json.loads((root / "reports" / "optimus-prime" / "BRANCH_LINEAGE.json").read_text(encoding="utf-8"))
             self.assertTrue(len(lineage["entries"]) >= 1)
 
-            history_path = root / "reports" / "optimus-prime" / "THREAD_HISTORY.log"
-            history_lines = history_path.read_text(encoding="utf-8").splitlines()
-            self.assertGreaterEqual(len(history_lines), 2)
-            self.assertEqual(history_lines[0], "slot | worker type | thread-id")
-            self.assertEqual(history_lines[1], "dev-1 | developer | 019caaaa-0000-7000-8000-aaaaaaaaaaaa")
+            thread_history = (root / "reports" / "optimus-prime" / "THREAD_HISTORY.log").read_text(encoding="utf-8")
+            self.assertIn("slot | worker type | thread-id", thread_history)
+            self.assertIn("dev-1 | developer | unknown", thread_history)
 
     def test_dispatch_failure_keeps_registry_non_running(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -199,12 +173,49 @@ class DispatchWorkerPacketTests(unittest.TestCase):
                 MODULE.validate_policy(cfg)
             self.assertEqual(ctx.exception.code, "validation_error")
 
-    def test_validation_runtime_url_required_when_runtime_used(self):
+    def test_test_train_mode_requires_hosted_runtime_for_tester(self):
         with tempfile.TemporaryDirectory() as tmp:
-            cfg = make_cfg(Path(tmp), runtime_strategy="shared_runtime", runtime_base_url=None)
+            cfg = make_cfg(
+                Path(tmp),
+                slot="test-1",
+                role="tester",
+                branch_name="codex/test-1/MYO-156",
+                test_train_mode="final-stage",
+                runtime_strategy="external_url",
+                runtime_base_url="https://shared.example.test",
+                tester_must_not_start_runtime=False,
+            )
             with self.assertRaises(MODULE.ToolError) as ctx:
                 MODULE.validate_policy(cfg)
             self.assertEqual(ctx.exception.code, "validation_error")
+
+    def test_train_mode_dispatch_writes_wave_fields_to_handoff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = make_cfg(
+                root,
+                slot="test-1",
+                role="tester",
+                branch_name="codex/test-1/MYO-156",
+                test_train_mode="forced-shared-env",
+                runtime_strategy="external_url",
+                runtime_base_url="https://shared.example.test",
+                tester_must_not_start_runtime=True,
+                wave_id="wave-0007",
+                deployed_test_commit="abc1234",
+                test_lane_account="acct-02",
+            )
+            out = MODULE.run_dispatch_worker_packet(cfg, dispatcher=FakeDispatcher())
+            self.assertTrue(out["ok"])
+
+            handoff_line = (
+                root / "reports" / "optimus-prime" / "HANDOFF_LOG.jsonl"
+            ).read_text(encoding="utf-8").strip().splitlines()[-1]
+            handoff = json.loads(handoff_line)
+            self.assertEqual(handoff["wave_id"], "wave-0007")
+            self.assertEqual(handoff["deployed_test_commit"], "abc1234")
+            self.assertEqual(handoff["test_lane_account"], "acct-02")
+            self.assertTrue(handoff["tester_must_not_start_runtime"])
 
 
 if __name__ == "__main__":
