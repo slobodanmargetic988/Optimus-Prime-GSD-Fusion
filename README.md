@@ -5,6 +5,7 @@ Standalone experimental project for Optimus V2 fusion work.
 Current implemented lane:
 - Lane A / Phase 1: `optimus-cycle-controller` deterministic cycle loop core with terminal stop authorization guard.
 - Lane B (core): generic runtime coordination + blocker intelligence (`runtime-coordinator`, runtime-aware packets/snapshots).
+- Lane B add-on: historical thread/token audit (`THREAD_HISTORY.log` + `thread-token-audit` skill).
 
 See:
 - `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_PHASE1_PLAN.md`

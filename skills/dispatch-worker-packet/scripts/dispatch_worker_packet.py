@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any, Protocol
 TOOL = "dispatch-worker-packet"
 TOOL_VERSION = "0.1.0"
 SCHEMA_VERSION = "1.0"
+SESSION_ID_REGEX = re.compile(r"session id:\s*([0-9a-fA-F-]{36})", re.IGNORECASE)
 
 SLOTS = ["dev-1", "dev-2", "dev-3", "test-1", "test-2", "review-1"]
 ROLES = {"developer", "tester", "reviewer", "flex-tester"}
@@ -385,6 +387,21 @@ def parse_dispatch_json(raw: str) -> dict[str, Any]:
         raise ToolError("dispatch_failed", "dispatcher output is not valid JSON", stage="dispatch")
 
 
+def wait_for_session_id_from_log(log_path: Path, timeout_seconds: float = 8.0) -> str | None:
+    deadline = time.time() + max(0.0, timeout_seconds)
+    while time.time() <= deadline:
+        try:
+            if log_path.exists():
+                text = log_path.read_text(encoding="utf-8", errors="ignore")
+                match = SESSION_ID_REGEX.search(text)
+                if match:
+                    return match.group(1)
+        except OSError:
+            pass
+        time.sleep(0.2)
+    return None
+
+
 class ThreadDispatchRunner:
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
@@ -459,10 +476,17 @@ class ThreadDispatchRunner:
         if not isinstance(log_path, str) or not log_path.strip():
             raise ToolError("dispatch_failed", "dispatcher payload missing log_file", stage="dispatch")
 
+        resolved_log = Path(log_path).expanduser().resolve()
+        session_id_raw = payload.get("session_id")
+        session_id = session_id_raw.strip() if isinstance(session_id_raw, str) and session_id_raw.strip() else None
+        if session_id is None:
+            session_id = wait_for_session_id_from_log(resolved_log)
+
         return {
             "dispatch_started": bool(payload.get("status") == "started" or pid > 0),
             "pid": pid,
-            "dispatch_log": str(Path(log_path).expanduser().resolve()),
+            "dispatch_log": str(resolved_log),
+            "session_id": session_id,
             "raw": payload,
         }
 
@@ -493,6 +517,17 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         fh.write("\n")
 
 
+def append_thread_history(path: Path, *, slot: str, worker_type: str, thread_id: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = "slot | worker type | thread-id\n"
+    line = f"{slot} | {worker_type} | {thread_id}\n"
+    if not path.exists():
+        path.write_text(header + line, encoding="utf-8")
+        return
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(line)
+
+
 def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatch: dict[str, Any]) -> None:
     default_registry = {"workers": []}
     data = read_json_or_default(path, default_registry)
@@ -504,6 +539,7 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "active_task": cfg.task_identifier,
         "branch": cfg.branch_name,
         "dispatch_pid": dispatch["pid"],
+        "session_id": dispatch.get("session_id"),
         "dispatch_log": dispatch["dispatch_log"],
         "packet_path": str(packet),
         "packet_version": cfg.packet_version,
@@ -627,17 +663,20 @@ def build_result(cfg: DispatchInput, packet: Path) -> dict[str, Any]:
         "packet_path": str(packet),
         "dispatch_started": False,
         "pid": None,
+        "session_id": None,
         "dispatch_log": None,
         "dispatch": {
             "attempted": False,
             "status": "not_started",
             "pid": None,
+            "session_id": None,
             "dispatch_log": None,
         },
         "state_updates": {
             "worker_registry": "not_started",
             "handoff_log": "not_started",
             "branch_lineage": "not_started",
+            "thread_history": "not_started",
             "cycle_log_note": cycle_note_state,
         },
         "branch": cfg.branch_name,
@@ -675,12 +714,14 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
             "attempted": False,
             "status": "skipped_dry_run",
             "pid": None,
+            "session_id": None,
             "dispatch_log": None,
         }
         result["state_updates"] = {
             "worker_registry": "skipped_dry_run",
             "handoff_log": "skipped_dry_run",
             "branch_lineage": "skipped_dry_run",
+            "thread_history": "skipped_dry_run",
             "cycle_log_note": "skipped_dry_run" if cfg.cycle_note else "not_requested",
         }
         result["warnings"].append(
@@ -724,11 +765,13 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
 
     result["dispatch_started"] = bool(dispatch["dispatch_started"])
     result["pid"] = int(dispatch["pid"])
+    result["session_id"] = dispatch.get("session_id")
     result["dispatch_log"] = str(dispatch["dispatch_log"])
     result["dispatch"] = {
         "attempted": True,
         "status": "started" if dispatch["dispatch_started"] else "failed",
         "pid": int(dispatch["pid"]),
+        "session_id": dispatch.get("session_id"),
         "dispatch_log": str(dispatch["dispatch_log"]),
     }
     result["status"] = "dispatch_started" if dispatch["dispatch_started"] else "dispatch_failed"
@@ -738,6 +781,7 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
     handoff_path = reports_root / "HANDOFF_LOG.jsonl"
     lineage_path = reports_root / "BRANCH_LINEAGE.json"
     cycle_path = reports_root / "CYCLE_LOG.jsonl"
+    thread_history_path = reports_root / "THREAD_HISTORY.log"
 
     try:
         update_worker_registry(registry_path, cfg, packet, dispatch)
@@ -771,6 +815,7 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "packet_path": str(packet),
         "packet_version": cfg.packet_version,
         "dispatch_pid": dispatch["pid"],
+        "session_id": dispatch.get("session_id"),
         "dispatch_log": dispatch["dispatch_log"],
         "codex_profile_alias": cfg.codex_profile_alias,
         "mcp_mode": cfg.mcp_mode,
@@ -815,6 +860,25 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
                 "message": msg,
                 "stage": "branch_lineage",
                 "path": str(lineage_path),
+            }
+        )
+
+    try:
+        append_thread_history(
+            thread_history_path,
+            slot=cfg.slot,
+            worker_type=cfg.role,
+            thread_id=str(dispatch.get("session_id") or "unknown"),
+        )
+        result["state_updates"]["thread_history"] = "applied"
+    except OSError as exc:
+        result["state_updates"]["thread_history"] = "failed_warning"
+        result["warnings"].append(
+            {
+                "code": "thread_history_write_failed",
+                "message": f"Failed to append thread history: {exc}",
+                "stage": "thread_history",
+                "path": str(thread_history_path),
             }
         )
 

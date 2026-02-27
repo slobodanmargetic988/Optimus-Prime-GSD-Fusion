@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,8 @@ try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover
     tomllib = None  # type: ignore[assignment]
+
+SESSION_ID_REGEX = re.compile(r"session id:\s*([0-9a-fA-F-]{36})", re.IGNORECASE)
 
 
 def parse_args() -> argparse.Namespace:
@@ -213,6 +217,21 @@ def build_env(args: argparse.Namespace) -> dict[str, str]:
     return env
 
 
+def wait_for_session_id(log_file: Path, timeout_seconds: float = 8.0) -> str | None:
+    deadline = time.time() + max(0.0, timeout_seconds)
+    while time.time() <= deadline:
+        try:
+            if log_file.exists():
+                content = log_file.read_text(encoding="utf-8", errors="ignore")
+                match = SESSION_ID_REGEX.search(content)
+                if match:
+                    return match.group(1)
+        except OSError:
+            pass
+        time.sleep(0.2)
+    return None
+
+
 def main() -> int:
     args = parse_args()
     cwd = Path(args.cwd).expanduser().resolve()
@@ -276,6 +295,7 @@ def main() -> int:
                 env=env,
             )
         payload["pid"] = proc.pid
+        payload["session_id"] = wait_for_session_id(log_file)
         payload["status"] = "started"
         print(json.dumps(payload, ensure_ascii=True, indent=2))
         return 0

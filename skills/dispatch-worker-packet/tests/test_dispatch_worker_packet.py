@@ -25,6 +25,7 @@ class FakeDispatcher:
         return {
             "dispatch_started": True,
             "pid": 4242,
+            "session_id": "019caaaa-0000-7000-8000-aaaaaaaaaaaa",
             "dispatch_log": "/tmp/dispatch.log",
             "raw": {"status": "started"},
         }
@@ -128,11 +129,13 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertTrue(out["registry_updated"])
             self.assertTrue(out["handoff_logged"])
             self.assertEqual(out["pid"], 4242)
+            self.assertEqual(out["session_id"], "019caaaa-0000-7000-8000-aaaaaaaaaaaa")
             self.assertTrue(Path(out["packet_path"]).exists())
 
             registry = json.loads((root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json").read_text(encoding="utf-8"))
             self.assertEqual(registry["workers"][0]["slot"], "dev-1")
             self.assertEqual(registry["workers"][0]["active_task"], "MYO-156")
+            self.assertEqual(registry["workers"][0]["session_id"], "019caaaa-0000-7000-8000-aaaaaaaaaaaa")
             self.assertEqual(registry["workers"][0]["runtime_strategy"], "external_url")
             self.assertTrue(registry["workers"][0]["tester_must_not_start_runtime"])
 
@@ -141,9 +144,16 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             handoff = json.loads(handoff_lines[0])
             self.assertEqual(handoff["event"], "dispatch_attempt")
             self.assertEqual(handoff["task_identifier"], "MYO-156")
+            self.assertEqual(handoff["session_id"], "019caaaa-0000-7000-8000-aaaaaaaaaaaa")
 
             lineage = json.loads((root / "reports" / "optimus-prime" / "BRANCH_LINEAGE.json").read_text(encoding="utf-8"))
             self.assertTrue(len(lineage["entries"]) >= 1)
+
+            history_path = root / "reports" / "optimus-prime" / "THREAD_HISTORY.log"
+            history_lines = history_path.read_text(encoding="utf-8").splitlines()
+            self.assertGreaterEqual(len(history_lines), 2)
+            self.assertEqual(history_lines[0], "slot | worker type | thread-id")
+            self.assertEqual(history_lines[1], "dev-1 | developer | 019caaaa-0000-7000-8000-aaaaaaaaaaaa")
 
     def test_dispatch_failure_keeps_registry_non_running(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -15,7 +15,8 @@ Use this skill to replace manual multi-step dispatch flow:
 3. update `WORKER_REGISTRY.json`
 4. append `HANDOFF_LOG.jsonl`
 5. update `BRANCH_LINEAGE.json`
-6. optional cycle note append
+6. append `THREAD_HISTORY.log` (`slot | worker type | thread-id`)
+7. optional cycle note append
 
 ## Script
 
@@ -105,3 +106,4 @@ JSON
 - Packet creation failure -> dispatch not attempted.
 - Dispatch failure -> registry remains non-running.
 - Registry update failure after dispatch -> critical error with remediation block (`pid`, `task_identifier`, `slot`, manual steps).
+- Thread history append failure -> warning only (dispatch succeeds, state warning emitted).

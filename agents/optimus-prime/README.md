@@ -79,6 +79,7 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - `identity_checkpoint_path` (default: `reports/optimus-prime/IDENTITY_CHECKPOINT.md`)
   - `branch_lineage_path` (default: `reports/optimus-prime/BRANCH_LINEAGE.json`)
   - `feature_lane_registry_path` (default: `reports/optimus-prime/FEATURE_LANES.json`)
+  - `thread_history_path` (default: `reports/optimus-prime/THREAD_HISTORY.log`)
   - `packet_require_start_point` (default: `true`)
   - `feature_parallelism_policy` (default: `feature-affinity-first`)
   - `feature_grouping_fields` (default: `parent_issue,epic,label:feature`)
@@ -225,6 +226,7 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - `linear` (Optimus-only status synchronization)
 - Potentially Required Skills:
   - `playwright` (when orchestrator explicitly requests browser verification evidence)
+  - `thread-token-audit` (when user requests project/session token burn accounting from thread history)
 - Thread-dispatch profile routing support:
   - Optimus should use thread-dispatch MCP minimization for background workers:
     - default worker launch: `--disable-all-mcp`
@@ -247,6 +249,7 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
     - `skills/workstation-preparation/SKILL.md`
     - `skills/linear/SKILL.md`
     - `skills/playwright/SKILL.md`
+    - `skills/thread-token-audit/SKILL.md`
   - Runtime skill locations:
     - `$CODEX_HOME/skills/orchestrator-status-snapshot/SKILL.md`
     - `$CODEX_HOME/skills/cycle-tick/SKILL.md`
@@ -315,6 +318,8 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - branch ancestry and anchor mapping for unmerged work (`task_identifier`, `branch`, `start_from_branch`, `start_from_commit`, `head_commit`, `parent_task_identifier`)
 - `reports/optimus-prime/FEATURE_LANES.json`
   - current feature grouping map (`feature_key`, `ready_units`, `blocked_units`, `assigned_developer_slots`, `lane_state`)
+- `reports/optimus-prime/THREAD_HISTORY.log`
+  - append-only thread ledger in format `slot | worker type | thread-id` for all spawned worker sessions
 - `reports/optimus-prime/prompts/`
   - generated worker prompt packets used for dispatch
 - `reports/optimus-prime/PROFILE_RATE_REGISTRY.json`
@@ -452,6 +457,7 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
    - capture `session_id` from thread-dispatch response/log for every dispatch attempt
    - write `session_id` into slot record in `WORKER_REGISTRY.json`
    - include `session_id` in `HANDOFF_LOG.jsonl` dispatch events when available
+   - append `slot | worker type | thread-id` to `THREAD_HISTORY.log` for every spawned worker thread
 11b. Record/update feature lane state in `FEATURE_LANES.json`:
    - assigned developer slot per feature
    - lane blocked/active status
@@ -563,6 +569,7 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
 - Every initialized/running worker has recorded MCP dispatch mode (`disable-all` or `enable-only`) and allowlist (if any).
 - Every initialized/running worker has latest known `session_id` recorded in worker registry (or explicit null when unavailable).
 - Dispatch events in `HANDOFF_LOG.jsonl` include `session_id` whenever thread identity is available.
+- `THREAD_HISTORY.log` is append-only and includes every spawned worker session row in format `slot | worker type | thread-id`.
 - Every initialized/running worker has recorded sandbox mode and sandbox-policy source (default vs explicit override).
 - Developer runtime health gate must pass before developer dispatch and unhealthy developer slots are not dispatched.
 - Every active developer has a recorded `feature_key` lane assignment (or explicit `idle-unassigned` state).

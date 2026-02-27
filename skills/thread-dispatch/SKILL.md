@@ -133,6 +133,7 @@ python3 "$DISPATCH_SCRIPT" \
 
 - Default mode is detached/background.
 - Detached runs write logs into `<cwd>/.codex-dispatch/`.
+- Background JSON output includes `pid`, `log_file`, and best-effort `session_id` (parsed from startup log when available).
 - Use `--full-auto` by default. Add `--no-full-auto` to disable.
 - Use `--dry-run` to print the exact command without starting it.
 - The script inherits environment variables from the current shell, so `CODEX_HOME=...` prefixes are passed to the spawned `codex exec`.
