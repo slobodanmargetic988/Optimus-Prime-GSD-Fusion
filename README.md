@@ -84,6 +84,8 @@ Repo-local CLI wrapper:
 - multi-phase planning: `PLAN_PACKETS.json` includes `phases[]` with strict phase barrier progression
 - autonomous gap closure: `GAPS.json` + `GAP_CLOSURE_PLAN_PACKETS.json` are generated/consumed during build
 - gap closure convergence: no recursive closure-task gap generation; retries are bounded (max 5) then escalated/suppressed
+- sticky explicit closure: open gaps are not auto-closed by recomputation drift; closure requires explicit `GAPFIX-*` review-done evidence
+- gap artifact resilience: `/op-build` auto-heals malformed `GAPS.json` or `GAP_CLOSURE_PLAN_PACKETS.json` with deterministic backup + recovery metadata
 - strict-first dispatch gating: `dispatch_filter`/hard-gated cycles skip dispatch before any packet launch
 - adapter mode source: runtime/test-train directives derive `test_train_mode` from `TEST_TRAIN_STATE.json` (fallback `off`)
 - truncation-safe handoff ingestion: stale `handoff_log_offset` is reset with deterministic warning/event
@@ -93,5 +95,6 @@ Repo-local CLI wrapper:
 - hard rate-gate policy: wait/resume when reset is within 2 hours, otherwise stop and require manual rerun
 - malformed rate registry handling: if `PROFILE_RATE_REGISTRY.json` is invalid during `all_rate_gates_blocking`, build continues with warning `rate_registry_invalid_ignored`
 - strict health parity: `/op-health` is build-readiness strict and fails when `/op-build` preflight would block
+- health gap-artifact parity: malformed `GAPS.json` or `GAP_CLOSURE_PLAN_PACKETS.json` blocks `/op-health` with `gap_artifact_integrity_blocked`
 - status resilience: `/op-status` degrades to deterministic blocked snapshot (no crash) with `status_artifact_invalid` and `status_snapshot_degraded`
 - resume resilience: `/op-resume` auto-backs up malformed `BUILD_STATE.json` to `BUILD_STATE.corrupt.<timestamp>.json`, resets state, and continues with warning `resume_state_corrupt_reset`

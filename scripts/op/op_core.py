@@ -800,6 +800,243 @@ def _load_gaps_payload(path: Path, plan_id: str) -> dict[str, Any]:
     return payload
 
 
+def _default_gap_row(*, plan_id: str, phase_id: str, task_id: str, requirement_id: str | None, result: str, evidence_ref: str, reason: str, gap_id: str, severity: str = "high") -> dict[str, Any]:
+    closure_task_id = f"GAPFIX-{_sha256(gap_id)[:8].upper()}"
+    now = utc_now_iso()
+    return {
+        "gap_id": gap_id,
+        "phase_id": phase_id,
+        "task_id": task_id,
+        "requirement_id": requirement_id,
+        "severity": severity,
+        "result": result,
+        "evidence_ref": evidence_ref,
+        "opened_at": now,
+        "status": "open",
+        "reason": reason,
+        "retry_count": 0,
+        "escalated": False,
+        "escalated_at": None,
+        "closure_task_id": closure_task_id,
+        "last_seen_open_at": now,
+        "closure_required": True,
+        "closure_evidence_ref": None,
+        "closed_by_task_id": None,
+        "closed_at": None,
+        "resolution_candidate_at": None,
+    }
+
+
+def _default_gaps_payload(plan_id: str) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "plan_id": plan_id,
+        "updated_at": utc_now_iso(),
+        "gaps": [],
+    }
+
+
+def _default_gap_closure_payload(plan_id: str) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "plan_id": plan_id,
+        "generated_at": utc_now_iso(),
+        "tasks": [],
+    }
+
+
+def _load_gaps_payload_strict(path: Path, plan_id: str, *, code: str, stage: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    warnings: list[dict[str, Any]] = []
+    payload = _default_gaps_payload(plan_id)
+    if not path.exists():
+        warnings.append(
+            {
+                "code": code,
+                "message": "GAPS.json is missing",
+                "stage": stage,
+                "artifact": str(path),
+            }
+        )
+        return payload, warnings
+    try:
+        parsed = _read_json(path)
+    except OpError as exc:
+        warnings.append(
+            {
+                "code": code,
+                "message": f"GAPS.json unreadable: {exc.message}",
+                "stage": stage,
+                "artifact": str(path),
+            }
+        )
+        return payload, warnings
+    if not isinstance(parsed, dict):
+        warnings.append(
+            {
+                "code": code,
+                "message": "GAPS.json must be a JSON object",
+                "stage": stage,
+                "artifact": str(path),
+            }
+        )
+        return payload, warnings
+    payload = dict(parsed)
+    if not isinstance(payload.get("gaps"), list):
+        warnings.append(
+            {
+                "code": code,
+                "message": "GAPS.json field 'gaps' must be a list",
+                "stage": stage,
+                "artifact": str(path),
+            }
+        )
+        payload["gaps"] = []
+    payload.setdefault("schema_version", SCHEMA_VERSION)
+    payload["plan_id"] = _as_str(payload.get("plan_id")) or plan_id
+    payload["updated_at"] = utc_now_iso()
+    return payload, warnings
+
+
+def _load_gap_closure_payload_strict(path: Path, plan_id: str, *, code: str, stage: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    warnings: list[dict[str, Any]] = []
+    payload = _default_gap_closure_payload(plan_id)
+    if not path.exists():
+        warnings.append(
+            {
+                "code": code,
+                "message": "GAP_CLOSURE_PLAN_PACKETS.json is missing",
+                "stage": stage,
+                "artifact": str(path),
+            }
+        )
+        return payload, warnings
+    try:
+        parsed = _read_json(path)
+    except OpError as exc:
+        warnings.append(
+            {
+                "code": code,
+                "message": f"GAP_CLOSURE_PLAN_PACKETS.json unreadable: {exc.message}",
+                "stage": stage,
+                "artifact": str(path),
+            }
+        )
+        return payload, warnings
+    if not isinstance(parsed, dict):
+        warnings.append(
+            {
+                "code": code,
+                "message": "GAP_CLOSURE_PLAN_PACKETS.json must be a JSON object",
+                "stage": stage,
+                "artifact": str(path),
+            }
+        )
+        return payload, warnings
+    payload = dict(parsed)
+    if not isinstance(payload.get("tasks"), list):
+        warnings.append(
+            {
+                "code": code,
+                "message": "GAP_CLOSURE_PLAN_PACKETS.json field 'tasks' must be a list",
+                "stage": stage,
+                "artifact": str(path),
+            }
+        )
+        payload["tasks"] = []
+    payload.setdefault("schema_version", SCHEMA_VERSION)
+    payload["plan_id"] = _as_str(payload.get("plan_id")) or plan_id
+    payload["generated_at"] = utc_now_iso()
+    return payload, warnings
+
+
+def _closure_task_resolved(repo_root: Path, task: dict[str, Any]) -> tuple[bool, str | None]:
+    status = (_as_str(task.get("status")) or "").lower()
+    if status != "review_done":
+        return False, None
+    evidence_path = _task_evidence_path(repo_root, task)
+    if not evidence_path.exists():
+        return False, None
+    try:
+        payload = _read_json(evidence_path)
+    except OpError:
+        return False, None
+    if not isinstance(payload, dict):
+        return False, None
+    task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
+    phase_id = _as_str(task.get("phase_id")) or "phase-1"
+    if _validate_task_evidence_payload(payload, task_id, phase_id):
+        return False, None
+    review = payload.get("review") if isinstance(payload.get("review"), dict) else {}
+    gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    decision = (_as_str(review.get("decision")) or "").lower()
+    result = (_as_str(summary.get("result")) or "").lower()
+    ready = _as_bool_field(gate.get("ready_for_phase_exit"))
+    if decision not in {"accepted", "approved", "ready_for_merge", "pass"}:
+        return False, None
+    if result != "pass" or not ready:
+        return False, None
+    return True, os.path.relpath(str(evidence_path), str(repo_root))
+
+
+def _recover_gap_artifacts_for_build(
+    repo_root: Path,
+    plan_packets: dict[str, Any],
+    task_state: dict[str, Any],
+    build_state: dict[str, Any],
+    plan_id: str,
+    gaps_invalid: bool,
+    gap_closure_invalid: bool,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    warnings: list[dict[str, Any]] = []
+    recovered_files: list[str] = []
+    backup_paths: list[str] = []
+    try:
+        gaps_path = _repo_path(repo_root, GAPS_JSON)
+        gap_closure_path = _repo_path(repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)
+        if gaps_invalid:
+            recovered_files.append(str(gaps_path))
+            if gaps_path.exists():
+                backup = _backup_corrupt_file(gaps_path)
+                backup_paths.append(str(backup))
+            warnings.append(
+                {
+                    "code": "gaps_artifact_recovered",
+                    "message": "Recovered malformed GAPS.json via deterministic rebuild",
+                    "stage": "build_preflight",
+                    "artifact": str(gaps_path),
+                }
+            )
+        if gap_closure_invalid:
+            recovered_files.append(str(gap_closure_path))
+            if gap_closure_path.exists():
+                backup = _backup_corrupt_file(gap_closure_path)
+                backup_paths.append(str(backup))
+            warnings.append(
+                {
+                    "code": "gap_closure_artifact_recovered",
+                    "message": "Recovered malformed GAP_CLOSURE_PLAN_PACKETS.json via deterministic rebuild",
+                    "stage": "build_preflight",
+                    "artifact": str(gap_closure_path),
+                }
+            )
+        gaps_payload, gap_closure_payload = _refresh_gap_artifacts(repo_root, plan_packets, task_state, build_state)
+        _ensure_gap_closure_task_state(repo_root, task_state, gap_closure_payload, plan_id)
+        build_state["gap_artifact_recovery"] = {
+            "last_recovery_at": utc_now_iso(),
+            "recovered_files": recovered_files,
+            "backup_paths": backup_paths,
+            "reason": "malformed_gap_artifacts",
+        }
+        return gaps_payload, gap_closure_payload, warnings
+    except Exception as exc:  # noqa: BLE001
+        raise OpError(
+            "gap_artifact_recovery_failed",
+            f"failed to recover gap artifacts: {exc}",
+            stage="build_preflight",
+        ) from exc
+
+
 def _gap_id(plan_id: str, phase_id: str, task_id: str, scope_key: str, result: str) -> str:
     digest = _sha256(f"{plan_id}|{phase_id}|{task_id}|{scope_key}|{result}")[:10]
     return f"gap-{digest}"
@@ -835,9 +1072,22 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
             continue
         gap_id = _as_str(item.get("gap_id"))
         if gap_id:
+            task_id = _as_str(item.get("task_id")) or ""
+            # Never allow recursive gapfix-origin rows to participate in closure generation.
+            if task_id.startswith("GAPFIX-"):
+                continue
             existing_by_id[gap_id] = dict(item)
 
-    active_gap_ids: set[str] = set()
+    closure_task_by_gap: dict[str, dict[str, Any]] = {}
+    for task in task_map.values():
+        if not isinstance(task, dict):
+            continue
+        if not bool(task.get("is_gap_closure")):
+            continue
+        source_gap_id = _as_str(task.get("source_gap_id"))
+        if source_gap_id:
+            closure_task_by_gap[source_gap_id] = task
+
     active_rows: dict[str, dict[str, Any]] = {}
     for task_id, plan_task in plan_task_map.items():
         if not isinstance(plan_task, dict):
@@ -869,19 +1119,16 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
         if task_status in {"test_done", "review_done", "blocked"}:
             for cmd in sorted(verify_required - verify_passed):
                 gap_id = _gap_id(plan_id, phase_id, task_id, f"verify:{cmd}", "fail")
-                active_gap_ids.add(gap_id)
-                active_rows[gap_id] = {
-                    "gap_id": gap_id,
-                    "phase_id": phase_id,
-                    "task_id": task_id,
-                    "requirement_id": None,
-                    "severity": "high",
-                    "result": "fail",
-                    "evidence_ref": evidence_ref,
-                    "opened_at": utc_now_iso(),
-                    "status": "open",
-                    "reason": f"verify command not passed: {cmd}",
-                }
+                active_rows[gap_id] = _default_gap_row(
+                    plan_id=plan_id,
+                    phase_id=phase_id,
+                    task_id=task_id,
+                    requirement_id=None,
+                    result="fail",
+                    evidence_ref=evidence_ref,
+                    reason=f"verify command not passed: {cmd}",
+                    gap_id=gap_id,
+                )
 
         requirement_ids = [
             rid
@@ -904,71 +1151,105 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
         if task_status in {"review_done", "blocked"}:
             for rid in sorted(set(requirement_ids) - passed_uat):
                 gap_id = _gap_id(plan_id, phase_id, task_id, f"uat:{rid}", "blocked")
-                active_gap_ids.add(gap_id)
-                active_rows[gap_id] = {
-                    "gap_id": gap_id,
-                    "phase_id": phase_id,
-                    "task_id": task_id,
-                    "requirement_id": rid,
-                    "severity": "high",
-                    "result": "blocked",
-                    "evidence_ref": evidence_ref,
-                    "opened_at": utc_now_iso(),
-                    "status": "open",
-                    "reason": f"UAT requirement not passed: {rid}",
-                }
+                active_rows[gap_id] = _default_gap_row(
+                    plan_id=plan_id,
+                    phase_id=phase_id,
+                    task_id=task_id,
+                    requirement_id=rid,
+                    result="blocked",
+                    evidence_ref=evidence_ref,
+                    reason=f"UAT requirement not passed: {rid}",
+                    gap_id=gap_id,
+                )
 
         if (_as_str(task.get("status")) or "") == "blocked":
             gap_id = _gap_id(plan_id, phase_id, task_id, "task:blocked", "blocked")
-            active_gap_ids.add(gap_id)
-            active_rows[gap_id] = {
-                "gap_id": gap_id,
-                "phase_id": phase_id,
-                "task_id": task_id,
-                "requirement_id": None,
-                "severity": "high",
-                "result": "blocked",
-                "evidence_ref": evidence_ref,
-                "opened_at": utc_now_iso(),
-                "status": "open",
-                "reason": "task state blocked",
-            }
+            active_rows[gap_id] = _default_gap_row(
+                plan_id=plan_id,
+                phase_id=phase_id,
+                task_id=task_id,
+                requirement_id=None,
+                result="blocked",
+                evidence_ref=evidence_ref,
+                reason="task state blocked",
+                gap_id=gap_id,
+            )
 
-    merged_gaps: list[dict[str, Any]] = []
+    now = utc_now_iso()
+    merged_by_id: dict[str, dict[str, Any]] = {}
     for gap_id, row in active_rows.items():
         prior = existing_by_id.get(gap_id, {})
         merged = dict(row)
         merged["opened_at"] = _as_str(prior.get("opened_at")) or row["opened_at"]
-        merged["updated_at"] = utc_now_iso()
+        merged["updated_at"] = now
         merged["status"] = "open"
+        merged["closure_task_id"] = _as_str(prior.get("closure_task_id")) or _as_str(merged.get("closure_task_id")) or f"GAPFIX-{_sha256(gap_id)[:8].upper()}"
+        merged["last_seen_open_at"] = now
+        merged["closure_required"] = True
+        merged["closure_evidence_ref"] = None
+        merged["closed_by_task_id"] = None
+        merged["closed_at"] = None
+        merged["resolution_candidate_at"] = None
         retry_count = _coerce_nonneg_int(retry_attempts.get(gap_id, 0), default=0)
         is_escalated = gap_id in exhausted_set
         merged["retry_count"] = max(0, retry_count)
         merged["escalated"] = is_escalated
-        merged["escalated_at"] = (
-            _as_str(prior.get("escalated_at")) or utc_now_iso()
-            if is_escalated
-            else None
-        )
-        merged_gaps.append(merged)
+        merged["escalated_at"] = (_as_str(prior.get("escalated_at")) or now) if is_escalated else None
+        merged_by_id[gap_id] = merged
+
     for gap_id, prior in existing_by_id.items():
-        if gap_id in active_gap_ids:
+        if gap_id in merged_by_id:
             continue
-        prior = dict(prior)
-        prior["status"] = "closed"
-        prior["updated_at"] = utc_now_iso()
-        prior.setdefault("closed_at", utc_now_iso())
-        prior.setdefault("retry_count", 0)
-        prior.setdefault("escalated", False)
-        prior.setdefault("escalated_at", None)
-        merged_gaps.append(prior)
+        row = dict(prior)
+        row["gap_id"] = gap_id
+        row["updated_at"] = now
+        row["plan_id"] = plan_id
+        row["closure_task_id"] = _as_str(row.get("closure_task_id")) or f"GAPFIX-{_sha256(gap_id)[:8].upper()}"
+        row["closure_required"] = True
+        row["last_seen_open_at"] = (
+            _as_str(row.get("last_seen_open_at"))
+            or _as_str(row.get("updated_at"))
+            or _as_str(row.get("opened_at"))
+            or now
+        )
+        retry_count = _coerce_nonneg_int(retry_attempts.get(gap_id, 0), default=0)
+        is_escalated = gap_id in exhausted_set
+        row["retry_count"] = max(0, retry_count)
+        row["escalated"] = is_escalated
+        row["escalated_at"] = (_as_str(row.get("escalated_at")) or now) if is_escalated else None
+        status = (_as_str(row.get("status")) or "open").lower()
+        if status == "open":
+            closure_task = closure_task_by_gap.get(gap_id)
+            resolved = False
+            closure_ref: str | None = None
+            if isinstance(closure_task, dict):
+                resolved, closure_ref = _closure_task_resolved(repo_root, closure_task)
+            if resolved:
+                row["status"] = "closed"
+                row["closed_at"] = _as_str(row.get("closed_at")) or now
+                row["closed_by_task_id"] = _as_str(closure_task.get("task_id")) if isinstance(closure_task, dict) else None
+                row["closure_evidence_ref"] = closure_ref
+                row["resolution_candidate_at"] = now
+                row["escalated"] = False
+                row["escalated_at"] = None
+            else:
+                row["status"] = "open"
+                row["closed_at"] = None
+                row["closed_by_task_id"] = None
+                row["closure_evidence_ref"] = None
+                row["resolution_candidate_at"] = now
+        else:
+            row["status"] = "closed"
+            row["closed_at"] = _as_str(row.get("closed_at")) or now
+            row["closed_by_task_id"] = _as_str(row.get("closed_by_task_id"))
+            row["closure_evidence_ref"] = _as_str(row.get("closure_evidence_ref"))
+            row["resolution_candidate_at"] = _as_str(row.get("resolution_candidate_at"))
+        merged_by_id[gap_id] = row
+
+    merged_gaps = list(merged_by_id.values())
     merged_gaps.sort(key=lambda item: (_as_str(item.get("status")) != "open", _as_str(item.get("gap_id")) or ""))
-    gaps_payload = {
-        "schema_version": SCHEMA_VERSION,
-        "plan_id": plan_id,
-        "updated_at": utc_now_iso(),
-        "gaps": merged_gaps,
-    }
+    gaps_payload = _default_gaps_payload(plan_id)
+    gaps_payload["gaps"] = merged_gaps
     _atomic_write_json(gaps_path, gaps_payload)
 
     open_gap_rows = [item for item in merged_gaps if _as_str(item.get("status")) == "open"]
@@ -985,8 +1266,9 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
         requirement_id = _as_str(gap.get("requirement_id"))
         if not gap_id:
             continue
-        closure_task_id = f"GAPFIX-{_sha256(gap_id)[:8].upper()}"
+        closure_task_id = _as_str(gap.get("closure_task_id")) or f"GAPFIX-{_sha256(gap_id)[:8].upper()}"
         req_ids = [requirement_id] if requirement_id else []
+        depends_on = [task_id] if task_id and not task_id.startswith("GAPFIX-") else []
         closure_tasks.append(
             {
                 "task_id": closure_task_id,
@@ -994,18 +1276,14 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
                 "source_gap_id": gap_id,
                 "title": f"Close gap {gap_id}",
                 "requirement_ids": req_ids,
-                "depends_on": [task_id],
+                "depends_on": depends_on,
                 "must_haves": [f"Resolve {gap.get('reason') or gap_id}"],
                 "verify_commands": ["python3 -m pytest"],
                 "is_gap_closure": True,
             }
         )
-    closure_payload = {
-        "schema_version": SCHEMA_VERSION,
-        "plan_id": plan_id,
-        "generated_at": utc_now_iso(),
-        "tasks": closure_tasks,
-    }
+    closure_payload = _default_gap_closure_payload(plan_id)
+    closure_payload["tasks"] = closure_tasks
     _atomic_write_json(_repo_path(repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON), closure_payload)
 
     build_state["open_gap_ids"] = sorted([_as_str(item.get("gap_id")) for item in open_gap_rows if _as_str(item.get("gap_id"))])
@@ -2333,6 +2611,12 @@ def _fresh_build_state_payload() -> dict[str, Any]:
         "gap_retry_policy": {
             "max_attempts": 5,
         },
+        "gap_artifact_recovery": {
+            "last_recovery_at": None,
+            "recovered_files": [],
+            "backup_paths": [],
+            "reason": None,
+        },
         "state_recovery": {
             "last_recovery_at": None,
             "reason": None,
@@ -2373,6 +2657,15 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     payload.setdefault("gap_retry_attempts", {})
     payload.setdefault("gap_retry_exhausted_ids", [])
     payload.setdefault("gap_retry_policy", {"max_attempts": 5})
+    payload.setdefault(
+        "gap_artifact_recovery",
+        {
+            "last_recovery_at": None,
+            "recovered_files": [],
+            "backup_paths": [],
+            "reason": None,
+        },
+    )
     payload.setdefault(
         "state_recovery",
         {
@@ -3330,19 +3623,69 @@ def command_build(req: OpRequest) -> dict[str, Any]:
     build_state["updated_at"] = utc_now_iso()
     _atomic_write_json(build_state_path, build_state)
 
-    operator_stop_path = req.repo_root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
-    plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
-    gaps_payload = _load_gaps_payload(_repo_path(req.repo_root, GAPS_JSON), plan_id)
-    gap_closure_payload = _read_json(_repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)) if _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON).exists() else {"tasks": []}
-    if not isinstance(gap_closure_payload, dict):
-        gap_closure_payload = {"tasks": []}
-    resume_cmd = "/op-resume" if req.command == "op-resume" else "/op-build"
-
-    cycles = 0
-    history: list[dict[str, Any]] = build_state.get("history", [])
-    if not isinstance(history, list):
-        history = []
     try:
+        operator_stop_path = req.repo_root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
+        plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
+        resume_cmd = "/op-resume" if req.command == "op-resume" else "/op-build"
+
+        gaps_path = _repo_path(req.repo_root, GAPS_JSON)
+        gap_closure_path = _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)
+        gaps_payload, gaps_read_warnings = _load_gaps_payload_strict(
+            gaps_path,
+            plan_id,
+            code="gaps_artifact_invalid",
+            stage="build_preflight",
+        )
+        gap_closure_payload, gap_closure_read_warnings = _load_gap_closure_payload_strict(
+            gap_closure_path,
+            plan_id,
+            code="gap_closure_artifact_invalid",
+            stage="build_preflight",
+        )
+        gap_artifact_invalid = bool(gaps_read_warnings) or bool(gap_closure_read_warnings)
+        warnings.extend(gaps_read_warnings)
+        warnings.extend(gap_closure_read_warnings)
+        if gap_artifact_invalid:
+            try:
+                gaps_payload, gap_closure_payload, recovery_warnings = _recover_gap_artifacts_for_build(
+                    req.repo_root,
+                    plan_packets,
+                    task_state,
+                    build_state,
+                    plan_id,
+                    bool(gaps_read_warnings),
+                    bool(gap_closure_read_warnings),
+                )
+            except OpError as exc:
+                warnings.append(
+                    {
+                        "code": "gap_artifact_recovery_failed",
+                        "message": exc.message,
+                        "stage": "build_preflight",
+                    }
+                )
+                return _response(
+                    req,
+                    ok=False,
+                    status="blocked_preflight",
+                    summary="Build blocked: failed to recover malformed gap artifacts.",
+                    warnings=warnings,
+                    errors=[
+                        {
+                            "code": "gap_artifact_recovery_failed",
+                            "message": exc.message,
+                            "stage": "build_preflight",
+                        }
+                    ],
+                    next_action="Repair malformed gap artifacts or rerun /op-initialize, then rerun /op-build.",
+                    state_ref=str(build_state_path),
+                )
+            warnings.extend(recovery_warnings)
+
+        cycles = 0
+        history: list[dict[str, Any]] = build_state.get("history", [])
+        if not isinstance(history, list):
+            history = []
         while req.max_build_cycles is None or cycles < req.max_build_cycles:
             cycles += 1
             cycle_local_warnings: list[dict[str, Any]] = []
@@ -3838,34 +4181,40 @@ def command_health(req: OpRequest) -> dict[str, Any]:
             evidence_errors.append({"task_id": task_id, "error": "schema_invalid", "details": schema_errors, "path": str(evidence_path)})
     checks.append({"id": "task_evidence_integrity", "passed": len(evidence_errors) == 0, "errors": evidence_errors})
 
-    gaps_payload = _load_gaps_payload(_repo_path(req.repo_root, GAPS_JSON), _as_str(plan_packets.get("plan_id")) or "plan-unknown")
+    plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
+    gaps_payload, gaps_integrity_warnings = _load_gaps_payload_strict(
+        _repo_path(req.repo_root, GAPS_JSON),
+        plan_id,
+        code="gaps_artifact_invalid",
+        stage="health",
+    )
+    gap_closure_payload, gap_closure_integrity_warnings = _load_gap_closure_payload_strict(
+        _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON),
+        plan_id,
+        code="gap_closure_artifact_invalid",
+        stage="health",
+    )
+    warnings.extend(gaps_integrity_warnings)
+    warnings.extend(gap_closure_integrity_warnings)
+    gap_artifact_integrity_passed = len(gaps_integrity_warnings) == 0 and len(gap_closure_integrity_warnings) == 0
+    checks.append(
+        {
+            "id": "gap_artifact_integrity",
+            "passed": gap_artifact_integrity_passed,
+            "errors": gaps_integrity_warnings + gap_closure_integrity_warnings,
+        }
+    )
     open_gap_ids = [
         _as_str(item.get("gap_id"))
         for item in gaps_payload.get("gaps", [])
         if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
     ]
-    if _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON).exists():
-        try:
-            gap_closure_payload = _read_json(_repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON))
-        except OpError as exc:
-            warnings.append(
-                {
-                    "code": "gap_closure_packets_invalid",
-                    "message": f"GAP_CLOSURE_PLAN_PACKETS.json unreadable: {exc.message}",
-                    "stage": "health",
-                }
-            )
-            gap_closure_payload = {"tasks": []}
-    else:
-        gap_closure_payload = {"tasks": []}
-    if not isinstance(gap_closure_payload, dict):
-        gap_closure_payload = {"tasks": []}
     closure_task_ids = {
         _as_str(task.get("source_gap_id"))
         for task in gap_closure_payload.get("tasks", [])
         if isinstance(task, dict) and _as_str(task.get("source_gap_id"))
     }
-    gap_closure_ready = set(open_gap_ids).issubset(closure_task_ids)
+    gap_closure_ready = gap_artifact_integrity_passed and set(open_gap_ids).issubset(closure_task_ids)
     checks.append(
         {
             "id": "gap_closure_readiness",
@@ -3877,13 +4226,24 @@ def command_health(req: OpRequest) -> dict[str, Any]:
     passed = all(bool(item.get("passed")) for item in checks)
     status = "completed" if passed else "blocked"
     summary = "OP health checks passed." if passed else "OP health checks detected blocking issues."
+    errors: list[dict[str, Any]] = []
+    if not passed:
+        if not gap_artifact_integrity_passed:
+            errors.append(
+                {
+                    "code": "gap_artifact_integrity_blocked",
+                    "message": "gap artifacts are malformed or missing; run /op-build to auto-heal then rerun /op-health",
+                    "stage": "health",
+                }
+            )
+        errors.append({"code": "health_check_failed", "message": "one or more health checks failed", "stage": "health"})
     return _response(
         req,
         ok=passed,
         status=status,
         summary=summary,
         warnings=warnings,
-        errors=[] if passed else [{"code": "health_check_failed", "message": "one or more health checks failed", "stage": "health"}],
+        errors=errors,
         artifacts=[
             str(_repo_path(req.repo_root, PLAN_PACKETS_JSON)),
             str(_repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)),

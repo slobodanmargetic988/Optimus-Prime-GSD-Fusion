@@ -684,3 +684,135 @@ def test_gap_closure_does_not_generate_recursive_gapfix_tasks():
             not any(str(dep).startswith("GAPFIX-") for dep in (task.get("depends_on") or []))
             for task in closure_two.get("tasks", [])
         )
+
+
+def test_sticky_gap_does_not_auto_close_without_explicit_closure_evidence():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        plan_packets = json.loads((root / "reports" / "optimus-prime" / "planning" / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json")
+
+        for task in task_state["tasks"]:
+            task["status"] = "review_done"
+            task["owner_slot"] = None
+
+        gaps_path = root / "reports" / "optimus-prime" / "planning" / "GAPS.json"
+        gaps_payload = {
+            "schema_version": "1.0",
+            "plan_id": plan_packets["plan_id"],
+            "updated_at": "2026-01-01T00:00:00Z",
+            "gaps": [
+                {
+                    "gap_id": "gap-sticky-open-1",
+                    "phase_id": "phase-1",
+                    "task_id": "TASK-001",
+                    "requirement_id": None,
+                    "severity": "high",
+                    "result": "fail",
+                    "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+                    "opened_at": "2026-01-01T00:00:00Z",
+                    "status": "open",
+                    "reason": "sticky gap",
+                    "closure_task_id": "GAPFIX-ABCDEF01",
+                    "last_seen_open_at": "2026-01-01T00:00:00Z",
+                    "closure_required": True,
+                    "closure_evidence_ref": None,
+                    "closed_by_task_id": None,
+                    "closed_at": None,
+                    "resolution_candidate_at": None,
+                }
+            ],
+        }
+        gaps_path.write_text(json.dumps(gaps_payload, indent=2) + "\n", encoding="utf-8")
+
+        gaps_after, _ = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
+        row = next(item for item in gaps_after["gaps"] if item.get("gap_id") == "gap-sticky-open-1")
+        assert row["status"] == "open"
+
+
+def test_sticky_gap_closes_only_after_explicit_closure_evidence():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        plan_packets = json.loads((root / "reports" / "optimus-prime" / "planning" / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json")
+
+        for task in task_state["tasks"]:
+            task["status"] = "review_done"
+            task["owner_slot"] = None
+
+        gaps_path = root / "reports" / "optimus-prime" / "planning" / "GAPS.json"
+        gap_id = "gap-sticky-close-1"
+        gaps_payload = {
+            "schema_version": "1.0",
+            "plan_id": plan_packets["plan_id"],
+            "updated_at": "2026-01-01T00:00:00Z",
+            "gaps": [
+                {
+                    "gap_id": gap_id,
+                    "phase_id": "phase-1",
+                    "task_id": "TASK-001",
+                    "requirement_id": None,
+                    "severity": "high",
+                    "result": "fail",
+                    "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+                    "opened_at": "2026-01-01T00:00:00Z",
+                    "status": "open",
+                    "reason": "sticky gap",
+                    "closure_task_id": f"GAPFIX-{MODULE._sha256(gap_id)[:8].upper()}",
+                    "last_seen_open_at": "2026-01-01T00:00:00Z",
+                    "closure_required": True,
+                    "closure_evidence_ref": None,
+                    "closed_by_task_id": None,
+                    "closed_at": None,
+                    "resolution_candidate_at": None,
+                }
+            ],
+        }
+        gaps_path.write_text(json.dumps(gaps_payload, indent=2) + "\n", encoding="utf-8")
+
+        _, closure = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
+        MODULE._ensure_gap_closure_task_state(root, task_state, closure, plan_packets["plan_id"])
+        closure_task = next(task for task in task_state["tasks"] if task.get("is_gap_closure") and task.get("source_gap_id") == gap_id)
+        closure_task["status"] = "review_done"
+        closure_task["owner_slot"] = None
+        evidence_path = MODULE._task_evidence_path(root, closure_task)
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["dev"]["status"] = "done"
+        payload["dev"]["dev_ready"] = True
+        payload["test"]["status"] = "done"
+        payload["review"]["status"] = "done"
+        payload["review"]["decision"] = "accepted"
+        payload["gate"]["ready_for_test"] = True
+        payload["gate"]["ready_for_review"] = True
+        payload["gate"]["ready_for_phase_exit"] = True
+        payload["summary"]["result"] = "pass"
+        payload["summary"]["reason_codes"] = ["closed_gap"]
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        gaps_after, _ = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
+        row = next(item for item in gaps_after["gaps"] if item.get("gap_id") == gap_id)
+        assert row["status"] == "closed"
+        assert row.get("closed_by_task_id") == closure_task["task_id"]
+        assert row.get("closure_evidence_ref")

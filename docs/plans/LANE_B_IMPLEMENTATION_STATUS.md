@@ -85,6 +85,9 @@ Updated: 2026-02-27
   - handoff ingestion auto-recovers from log truncation by resetting stale offsets with deterministic warning/event
   - directive tool failures queue deterministic remediation and suppress feature dispatch for that cycle
   - gap closure is convergent: no recursive gap generation from closure tasks; retries are bounded (max 5) then escalated/suppressed
+  - sticky explicit closure semantics: open gaps never auto-close from recomputation drift; explicit `GAPFIX-*` closure evidence is required
+  - lock-safe pre-loop: malformed gap artifacts no longer leave orphan `BUILD_LOOP.lock`
+  - malformed `GAPS.json` / `GAP_CLOSURE_PLAN_PACKETS.json` in `/op-build` auto-heals via deterministic backup + rebuild and records recovery metadata in `BUILD_STATE.json`
 - Added autonomous recovery state machine in `/op-build`:
   - recoverable blocker attempts tracked per `(strategy,fingerprint)`
   - strategy escalates after 5 attempts only for concrete fingerprints (no synthetic escalation on `unknown-fingerprint`)
@@ -100,6 +103,7 @@ Updated: 2026-02-27
   - final-state authorization passes via `--verify-final-state`
 - `/op-health` now enforces strict build-readiness semantics:
   - preflight blockers (`plan_ready=false`, invalid/missing strict artifacts, invalid plan/task state) fail health checks
+  - malformed `GAPS.json` / `GAP_CLOSURE_PLAN_PACKETS.json` blocks health with deterministic `gap_artifact_integrity_blocked`
 - `/op-status` is crash-safe on malformed planning/build artifacts:
   - malformed `PLAN_PACKETS.json`, `TASK_EXECUTION_STATE.json`, `BUILD_STATE.json`, `GAPS.json`, or `GAP_CLOSURE_PLAN_PACKETS.json` yields deterministic blocked snapshot (no exception)
   - warning/error codes: `status_artifact_invalid`, `status_snapshot_degraded`
@@ -110,6 +114,13 @@ Updated: 2026-02-27
 - malformed rate registry handling in `all_rate_gates_blocking` branch:
   - invalid `PROFILE_RATE_REGISTRY.json` no longer crashes or forces stop/wait
   - cycle continues with warning code `rate_registry_invalid_ignored`
+- new gap artifact integrity/recovery codes:
+  - `gaps_artifact_invalid`
+  - `gap_closure_artifact_invalid`
+  - `gaps_artifact_recovered`
+  - `gap_closure_artifact_recovered`
+  - `gap_artifact_recovery_failed`
+  - `gap_artifact_integrity_blocked`
 - Extended dispatch packet contract for OP build packets:
   - `op_build_mode`
   - `plan_id`
@@ -151,8 +162,7 @@ python3 -m pytest \
   /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py
 ```
 
-## Lane B Status (Provisional During Hardening)
+## Lane B Status (Hardening Complete)
 
-- Lane B remains in provisional hardening status for the new-only model until the current excellence hardening batch is fully green.
-- Hardening focus: crash-safe malformed runtime/status/resume artifact handling, bounded/non-recursive gap closure retries, and strict `/op-health` build-readiness parity.
-- Remaining roadmap work after hardening: Lane C packaging/installer and polished product command UX.
+- Lane B hardening matrix is green for the new-only model, including corruption drills for status/health/build/resume and gap artifact recovery paths.
+- Remaining roadmap work is Lane C packaging/installer and polished product command UX.
