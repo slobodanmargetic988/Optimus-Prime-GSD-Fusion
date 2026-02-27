@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import tarfile
 from datetime import datetime, timezone
@@ -59,16 +60,35 @@ def _copy_file(src: Path, dst: Path) -> None:
 
 
 def _collect_payload_files(repo_root: Path) -> list[str]:
+    run = subprocess.run(
+        ["git", "ls-files", "-z", "--", *PAYLOAD_PATHS],
+        cwd=str(repo_root),
+        text=False,
+        capture_output=True,
+        check=False,
+    )
+    if run.returncode == 0:
+        tracked = [item.decode("utf-8") for item in run.stdout.split(b"\x00") if item]
+        out = [item for item in tracked if (repo_root / item).is_file()]
+        return sorted(set(out))
+
     out: list[str] = []
     for rel in PAYLOAD_PATHS:
         path = (repo_root / rel).resolve()
         if not path.exists():
             continue
         if path.is_file():
+            if path.suffix in {".pyc", ".pyo"}:
+                continue
             out.append(rel)
             continue
         for child in sorted(path.rglob("*")):
             if not child.is_file():
+                continue
+            rel_child = child.relative_to(repo_root)
+            if "__pycache__" in rel_child.parts:
+                continue
+            if child.suffix in {".pyc", ".pyo"}:
                 continue
             out.append(str(child.relative_to(repo_root)))
     return sorted(set(out))

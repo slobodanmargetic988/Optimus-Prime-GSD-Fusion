@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.3.0-rc.2 - 2026-02-27
+
+- Fixed release bundle file selection to avoid runtime cache artifacts (`__pycache__`, `*.pyc`) in managed payload/checksum contracts.
+- Added regression coverage for cache-artifact exclusion in bundle manifests.
+- Fixed private smoke workflow command argument handling under `set -u` and improved step output visibility.
+
 ## 0.3.0-rc.1 - 2026-02-27
 
 - Lane C private-first release client for install/update (`gh auth token` -> `GH_TOKEN` -> `GITHUB_TOKEN`).

@@ -46,3 +46,20 @@ def test_bundle_manifest_has_required_contract_fields():
         assert isinstance(manifest["managed_files"], list)
         assert manifest["managed_files"]
 
+
+def test_build_bundle_excludes_runtime_cache_artifacts():
+    repo_root = Path(__file__).resolve().parents[3]
+    pycache_dir = repo_root / "scripts" / "op" / "__pycache__"
+    pycache_dir.mkdir(parents=True, exist_ok=True)
+    probe = pycache_dir / "temporary_probe.cpython-311.pyc"
+    probe.write_bytes(b"probe")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = MODULE.build_bundle(repo_root, Path(tmp), "9.9.11-test")
+            manifest = json.loads((Path(out["bundle_dir"]) / "bundle_manifest.json").read_text(encoding="utf-8"))
+            managed = manifest["managed_files"]
+            assert all("__pycache__" not in item for item in managed)
+            assert all(not item.endswith(".pyc") for item in managed)
+    finally:
+        if probe.exists():
+            probe.unlink()
