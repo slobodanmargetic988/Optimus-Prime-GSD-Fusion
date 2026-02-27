@@ -23,7 +23,7 @@
       {
         "id": "shared-url",
         "type": "url",
-        "value": "https://test.example.internal/health",
+        "value": "http://127.0.0.1:43173/health",
         "timeout_sec": 10
       }
     ],

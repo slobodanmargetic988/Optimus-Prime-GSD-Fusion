@@ -15,3 +15,39 @@ See:
 - `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_B_IMPLEMENTATION_STATUS.md`
 - `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/SKILL.md`
 - `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/runtime-coordinator/SKILL.md`
+
+## Shared Runtime Pipeline Commands
+
+The shared test-train runtime lifecycle is repo-local and script-driven:
+
+- deploy: `scripts/deploy-test.sh`
+- heal: `scripts/runtime-heal.sh`
+- start: `scripts/runtime/start.sh`
+- health: `scripts/runtime/health.sh`
+- stop: `scripts/runtime/stop.sh`
+
+Pipeline policy and health/repair gating config:
+
+- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/config/TEST_TRAIN_PIPELINE.json`
+- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/config/RUNTIME_PROFILES.json`
+
+Operator entrypoints:
+
+- `make tt-bootstrap`
+- `make tt-start`
+- `make tt-health`
+- `make tt-deploy`
+- `make tt-stop`
+- `make tt-flow`
+- `make tt-gate-drills`
+
+Deterministic local lifecycle sequence:
+
+```bash
+make tt-bootstrap
+make tt-start
+make tt-health
+make tt-deploy
+make tt-health
+make tt-stop
+```

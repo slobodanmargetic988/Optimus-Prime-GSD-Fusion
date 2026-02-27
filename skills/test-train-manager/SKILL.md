@@ -15,7 +15,7 @@ Use this skill to run the shared-environment testing train model:
 - log wave lifecycle events (`TEST_WAVE_LOG.jsonl`)
 - generate human summary (`TEST_WAVE_SUMMARY.md`)
 - evaluate promotion gate and perform `test-next -> test` promotion
-- execute test deploy command
+- execute pipeline-configured test deploy command
 
 ## Script
 
@@ -42,10 +42,12 @@ Use this skill to run the shared-environment testing train model:
   "test_branch": "test",
   "test_next_branch": "test-next",
   "test_train_mode": "final-stage",
-  "shared_test_base_url": "https://test.example.internal",
+  "test_train_pipeline_path": "reports/optimus-prime/config/TEST_TRAIN_PIPELINE.json",
   "dry_run": false
 }
 ```
+
+Legacy `shared_test_base_url` and `deploy_test_branch_cmd` inputs are rejected in test-train mode.
 
 ## Promotion Gate Logic
 

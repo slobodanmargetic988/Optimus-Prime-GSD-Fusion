@@ -9,7 +9,6 @@
   "test_train_mode": "off|final-stage|forced-shared-env",
   "test_branch": "test",
   "test_next_branch": "test-next",
-  "shared_test_base_url": "https://test.example.internal",
   "active_wave": {
     "wave_id": "wave-0007",
     "state": "WAVE_ACTIVE|WAVE_CLOSING|PROMOTION_EVAL|PROMOTE_AND_DEPLOY|WAVE_BOOTSTRAP",

@@ -12,6 +12,11 @@ metadata:
 Use this skill to keep runtime handling generic across projects and centralize blocker intelligence.
 
 Core actions:
+- `bootstrap` — initialize runtime health/action/repair artifacts.
+- `start` — execute profile start command.
+- `health` — evaluate pipeline + profile health gate.
+- `stop` — execute profile stop command.
+- `repair` — run self-heal once, then delegate repair task when still unhealthy.
 - `resolve` — choose runtime strategy and return dispatch payload.
 - `release_lease` — release shared-runtime tester lease.
 - `upsert_runtime` — update runtime instance status.
@@ -27,7 +32,7 @@ Core actions:
 ```json
 {
   "repo_root": "string",
-  "action": "resolve|release_lease|upsert_runtime|refresh_blocker_index",
+  "action": "bootstrap|start|health|stop|repair|resolve|release_lease|upsert_runtime|refresh_blocker_index",
   "task_identifier": "MYO-123",
   "worker_slot": "test-1",
   "worker_role": "tester",
@@ -36,7 +41,7 @@ Core actions:
   "mutating_flow": false,
   "runtime_strategy_override": "shared_runtime",
   "test_train_mode": "off|final-stage|forced-shared-env",
-  "shared_test_base_url": "https://test.example.internal",
+  "test_train_pipeline_path": "reports/optimus-prime/config/TEST_TRAIN_PIPELINE.json",
   "runtime_profile_id": "default-web",
   "external_base_url": "http://127.0.0.1:4173",
   "runtime_id": "rt-shared-default-web",

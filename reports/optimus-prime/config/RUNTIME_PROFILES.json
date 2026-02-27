@@ -4,19 +4,21 @@
     {
       "profile_id": "default-web",
       "kind": "web",
-      "start_cmd": "npm run preview",
+      "start_cmd": "./scripts/runtime/start.sh",
+      "start_timeout_sec": 120,
       "healthcheck": {
-        "type": "url",
-        "value": "http://127.0.0.1:4173/health"
+        "type": "cmd",
+        "value": "./scripts/runtime/health.sh"
       },
-      "stop_cmd": "pkill -f 'npm run preview'",
+      "stop_cmd": "./scripts/runtime/stop.sh",
+      "stop_timeout_sec": 60,
       "env": {
-        "PW_FRONTEND_MODE": "preview"
+        "PW_FRONTEND_MODE": "runtime-scripted"
       },
       "supports_shared": true,
       "supports_isolated": true,
       "default_for_playwright": true,
-      "default_base_url": "http://127.0.0.1:4173",
+      "default_base_url": "http://127.0.0.1:43173",
       "mutating_flow_policy": "serialized",
       "test_accounts": []
     }
