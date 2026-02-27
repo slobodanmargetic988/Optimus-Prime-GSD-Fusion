@@ -87,10 +87,8 @@ jobs:
           CODEX_HOME_DIR="$HOME_OVERRIDE/.codex"
           if [[ "${{ matrix.mode }}" == "global" ]]; then
             BIN_DIR="$HOME_OVERRIDE/.local/bin"
-            REPO_ARG=()
           else
             BIN_DIR="$REPO_ROOT/.optimus-prime/bin"
-            REPO_ARG=(--repo-root "$REPO_ROOT")
           fi
 
           python3 "$REPO_ROOT/scripts/install/op_install.py" \
@@ -99,19 +97,19 @@ jobs:
             --home-override "$HOME_OVERRIDE" \
             --codex-home "$CODEX_HOME_DIR" \
             --bin-dir "$BIN_DIR" \
-            "${REPO_ARG[@]}" \
-            --json-pretty > "$RUNNER_TEMP/install_out.json"
+            --repo-root "$REPO_ROOT" \
+            --json-pretty | tee "$RUNNER_TEMP/install_out.json"
 
           "$BIN_DIR/opctl" doctor \
             --mode "${{ matrix.mode }}" \
             --home-override "$HOME_OVERRIDE" \
             --codex-home "$CODEX_HOME_DIR" \
             --bin-dir "$BIN_DIR" \
-            "${REPO_ARG[@]}" \
-            --json-pretty > "$RUNNER_TEMP/doctor_out.json"
+            --repo-root "$REPO_ROOT" \
+            --json-pretty | tee "$RUNNER_TEMP/doctor_out.json"
 
           set +e
-          "$BIN_DIR/opctl" /op-status --json-pretty > "$RUNNER_TEMP/op_status_out.json"
+          "$BIN_DIR/opctl" /op-status --json-pretty | tee "$RUNNER_TEMP/op_status_out.json"
           OP_STATUS_RC=$?
           set -e
 
@@ -129,14 +127,14 @@ jobs:
             --home-override "$HOME_OVERRIDE" \
             --codex-home "$CODEX_HOME_DIR" \
             --bin-dir "$BIN_DIR" \
-            "${REPO_ARG[@]}" \
-            --json-pretty > "$RUNNER_TEMP/update_out.json"
+            --repo-root "$REPO_ROOT" \
+            --json-pretty | tee "$RUNNER_TEMP/update_out.json"
 
           python3 "$REPO_ROOT/scripts/install/op_uninstall.py" \
             --mode "${{ matrix.mode }}" \
             --home-override "$HOME_OVERRIDE" \
-            "${REPO_ARG[@]}" \
-            --json-pretty > "$RUNNER_TEMP/uninstall_out.json"
+            --repo-root "$REPO_ROOT" \
+            --json-pretty | tee "$RUNNER_TEMP/uninstall_out.json"
 
           OP_STATUS_RC="$OP_STATUS_RC" SUMMARY_PATH="$SUMMARY" python3 - <<'PY'
           import json
