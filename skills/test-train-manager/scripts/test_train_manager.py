@@ -853,6 +853,84 @@ def _run_deploy_command(command: str, cwd: Path, timeout_sec: float) -> dict[str
         }
 
 
+def _commit_matches(expected: str, actual: str) -> bool:
+    left = expected.strip().lower()
+    right = actual.strip().lower()
+    if not left or not right:
+        return False
+    return left.startswith(right) or right.startswith(left)
+
+
+def _verify_deploy_target(
+    inp: TrainInput,
+    deploy_cfg: dict[str, Any],
+    *,
+    expected_commit: str | None,
+) -> dict[str, Any]:
+    verify_target_commit = _bool((deploy_cfg or {}).get("verify_target_commit"), inp.test_train_mode != "off")
+    if not verify_target_commit:
+        return {"ok": True, "reason": "target_verification_disabled"}
+
+    expected = _str(expected_commit)
+    if not expected:
+        return {"ok": False, "reason": "expected_commit_missing"}
+
+    deploy_state_path_raw = _str((deploy_cfg or {}).get("deploy_state_path")) or str(
+        inp.runtime_health_path.parent / "DEPLOY_STATE.json"
+    )
+    deploy_state_path = Path(_expand_placeholders(deploy_state_path_raw, inp.repo_root)).expanduser().resolve()
+    if not deploy_state_path.exists():
+        return {
+            "ok": False,
+            "reason": "deploy_state_missing",
+            "path": str(deploy_state_path),
+            "expected_commit": expected,
+        }
+    try:
+        deploy_state = json.loads(deploy_state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "ok": False,
+            "reason": "deploy_state_invalid_json",
+            "path": str(deploy_state_path),
+            "error": str(exc),
+            "expected_commit": expected,
+        }
+    if not isinstance(deploy_state, dict):
+        return {
+            "ok": False,
+            "reason": "deploy_state_not_object",
+            "path": str(deploy_state_path),
+            "expected_commit": expected,
+        }
+
+    actual_commit = _str(deploy_state.get("commit"))
+    if not actual_commit:
+        return {
+            "ok": False,
+            "reason": "deploy_state_commit_missing",
+            "path": str(deploy_state_path),
+            "expected_commit": expected,
+        }
+    if not _commit_matches(expected, actual_commit):
+        return {
+            "ok": False,
+            "reason": "deploy_target_mismatch",
+            "path": str(deploy_state_path),
+            "expected_commit": expected,
+            "actual_commit": actual_commit,
+            "actual_branch": _str(deploy_state.get("branch")),
+        }
+
+    return {
+        "ok": True,
+        "path": str(deploy_state_path),
+        "expected_commit": expected,
+        "actual_commit": actual_commit,
+        "actual_branch": _str(deploy_state.get("branch")),
+    }
+
+
 def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, Any]) -> dict[str, Any]:
     wave = state.get("active_wave") if isinstance(state.get("active_wave"), dict) else {}
     wave_id = _str(wave.get("wave_id"))
@@ -869,6 +947,7 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
     deploy_cwd_raw = _str((deploy_cfg or {}).get("cwd")) or "${REPO_ROOT}"
     deploy_cwd = Path(_expand_placeholders(deploy_cwd_raw, inp.repo_root)).expanduser().resolve()
     timeout_sec = max(1, _float((deploy_cfg or {}).get("timeout_sec"), 900))
+    expected_deploy_commit = _branch_commit(inp, inp.test_branch) or _str(state.get("deployed_test_commit"))
 
     lock_path = _acquire_single_flight_lock(inp, pipeline, "deploy-test-branch")
     try:
@@ -943,14 +1022,23 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
                             "runtime_locks_dir": str(inp.runtime_locks_dir),
                         },
                     )
-                    if bool((health_payload or {}).get("gate_state") == "healthy"):
+                    verify_payload = _verify_deploy_target(
+                        inp,
+                        deploy_cfg if isinstance(deploy_cfg, dict) else {},
+                        expected_commit=expected_deploy_commit,
+                    )
+                    if bool((health_payload or {}).get("gate_state") == "healthy") and bool(verify_payload.get("ok")):
                         deploy["last_result"] = "success"
                         deploy["last_success_at"] = utc_now_iso()
                         _append_wave_event(
                             inp,
                             wave_id,
                             "deploy_test_branch",
-                            {"status": "success_after_retry", "initial_exit_code": first_attempt.get("returncode")},
+                            {
+                                "status": "success_after_retry",
+                                "initial_exit_code": first_attempt.get("returncode"),
+                                "target_verification": verify_payload,
+                            },
                         )
                         _save_state(inp, state, attempts)
                         return {
@@ -958,6 +1046,7 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
                             "action": "deploy_test_branch",
                             "status": "success_after_retry",
                             "health": health_payload,
+                            "target_verification": verify_payload,
                         }
 
                 repair_payload = _run_runtime_coordinator(
@@ -1013,37 +1102,60 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
             },
         )
         healthy = bool((health_payload or {}).get("gate_state") == "healthy")
-        if healthy:
+        verify_payload = _verify_deploy_target(
+            inp,
+            deploy_cfg if isinstance(deploy_cfg, dict) else {},
+            expected_commit=expected_deploy_commit,
+        )
+        verification_failed = healthy and not bool(verify_payload.get("ok"))
+        if healthy and bool(verify_payload.get("ok")):
             deploy["last_success_at"] = utc_now_iso()
-            _append_wave_event(inp, wave_id, "deploy_test_branch", {"status": "success"})
+            _append_wave_event(
+                inp,
+                wave_id,
+                "deploy_test_branch",
+                {
+                    "status": "success",
+                    "target_verification": verify_payload,
+                },
+            )
             _save_state(inp, state, attempts)
             return {
                 "ok": True,
                 "action": "deploy_test_branch",
                 "status": "success",
                 "health": health_payload,
+                "target_verification": verify_payload,
             }
 
         deploy["last_result"] = "failed"
+        repair_request: dict[str, Any] = {
+            "action": "repair",
+            "test_train_mode": inp.test_train_mode,
+            "test_train_pipeline_path": str(inp.test_train_pipeline_path),
+            "runtime_health_path": str(inp.runtime_health_path),
+            "runtime_action_log_path": str(inp.runtime_action_log_path),
+            "runtime_repair_tasks_path": str(inp.runtime_repair_tasks_path),
+            "runtime_locks_dir": str(inp.runtime_locks_dir),
+        }
+        if verification_failed:
+            expected = _str(verify_payload.get("expected_commit")) or _str(expected_deploy_commit) or "unknown"
+            actual = _str(verify_payload.get("actual_commit")) or "unknown"
+            reason = _str(verify_payload.get("reason")) or "target_verification_failed"
+            repair_request["repair_force_fingerprint"] = f"deploy|{reason}|expected={expected}|actual={actual}"
+            repair_request["repair_force_delegate"] = True
         repair_payload = _run_runtime_coordinator(
             inp,
-            {
-                "action": "repair",
-                "test_train_mode": inp.test_train_mode,
-                "test_train_pipeline_path": str(inp.test_train_pipeline_path),
-                "runtime_health_path": str(inp.runtime_health_path),
-                "runtime_action_log_path": str(inp.runtime_action_log_path),
-                "runtime_repair_tasks_path": str(inp.runtime_repair_tasks_path),
-                "runtime_locks_dir": str(inp.runtime_locks_dir),
-            },
+            repair_request,
         )
         _append_wave_event(
             inp,
             wave_id,
             "deploy_test_branch",
             {
-                "status": "failed_health_gate",
+                "status": "failed_health_gate" if not healthy else "failed_target_verification",
                 "gate_state": health_payload.get("gate_state"),
+                "target_verification": verify_payload,
                 "repair_result": repair_payload.get("result") if isinstance(repair_payload, dict) else None,
             },
         )
@@ -1051,8 +1163,9 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
         return {
             "ok": False,
             "action": "deploy_test_branch",
-            "status": "failed_health_gate",
+            "status": "failed_health_gate" if not healthy else "failed_target_verification",
             "health": health_payload,
+            "target_verification": verify_payload,
             "repair": repair_payload,
         }
     finally:

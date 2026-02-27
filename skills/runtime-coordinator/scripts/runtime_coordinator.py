@@ -403,7 +403,7 @@ def _write_repair_tasks(inp: RuntimeInput, payload: dict[str, Any]) -> None:
     _write_json(inp.runtime_repair_tasks_path, payload)
 
 
-def _count_heal_attempts(inp: RuntimeInput, fingerprint: str) -> int:
+def _count_heal_attempts(inp: RuntimeInput, fingerprint: str, *, since: datetime | None = None) -> int:
     if not inp.runtime_action_log_path.exists():
         return 0
     count = 0
@@ -421,6 +421,10 @@ def _count_heal_attempts(inp: RuntimeInput, fingerprint: str) -> int:
             continue
         if (_str(row.get("fingerprint")) or "") != fingerprint:
             continue
+        if since is not None:
+            event_at = _parse_iso_dt(row.get("timestamp"))
+            if event_at is not None and event_at < since:
+                continue
         count += 1
     return count
 
@@ -1622,6 +1626,10 @@ def repair_runtime(inp: RuntimeInput) -> dict[str, Any]:
         self_heal_commands = [c for c in commands_raw if isinstance(c, str) and c.strip()] if isinstance(commands_raw, list) else []
         cooldown_sec = max(1, _int((repair_cfg or {}).get("cooldown_sec"), 300))
         max_attempts = max(1, _int((repair_cfg or {}).get("max_attempts_per_fingerprint_window"), 1))
+        attempt_window_sec = max(
+            cooldown_sec,
+            _int((repair_cfg or {}).get("attempt_window_sec"), cooldown_sec * max_attempts),
+        )
         create_dev_task = _bool((repair_cfg or {}).get("create_dev_task"), True)
         create_blocker = _bool((repair_cfg or {}).get("create_blocker"), True)
 
@@ -1630,7 +1638,8 @@ def repair_runtime(inp: RuntimeInput) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         cooldown_blocked = next_heal_allowed_at is not None and now < next_heal_allowed_at
 
-        attempted_recent = _count_heal_attempts(inp, fingerprint)
+        attempt_window_start = now - timedelta(seconds=attempt_window_sec)
+        attempted_recent = _count_heal_attempts(inp, fingerprint, since=attempt_window_start)
 
         can_attempt = (not force_delegate) and (not cooldown_blocked) and attempted_recent < max_attempts and bool(self_heal_commands)
         heal_results: list[dict[str, Any]] = []
@@ -1698,6 +1707,7 @@ def repair_runtime(inp: RuntimeInput) -> dict[str, Any]:
                 "cooldown_blocked": cooldown_blocked,
                 "attempted_recent": attempted_recent,
                 "max_attempts_per_fingerprint_window": max_attempts,
+                "attempt_window_sec": attempt_window_sec,
                 "repair_task_id": _str(repair_task.get("repair_id")) if isinstance(repair_task, dict) else None,
                 "force_delegate": force_delegate,
                 "force_fingerprint": force_fingerprint,

@@ -487,6 +487,42 @@ class RuntimeCoordinatorTests(unittest.TestCase):
             self.assertEqual(out["result"], "delegated")
             self.assertIsNotNone(out.get("repair_task"))
 
+    def test_repair_attempt_counter_expires_outside_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo(tmp)
+            pipeline_path = root / "reports" / "optimus-prime" / "config" / "TEST_TRAIN_PIPELINE.json"
+            pipeline = json.loads(pipeline_path.read_text(encoding="utf-8"))
+            pipeline["health"]["checks"] = [{"id": "always-fail", "type": "cmd", "value": "false", "timeout_sec": 5}]
+            pipeline["repair"]["self_heal_commands"] = ["true"]
+            pipeline["repair"]["cooldown_sec"] = 60
+            pipeline["repair"]["max_attempts_per_fingerprint_window"] = 1
+            pipeline["repair"]["attempt_window_sec"] = 60
+            write_json(pipeline_path, pipeline)
+
+            MODULE.run(self._build_input(root, action="health", test_train_mode="final-stage"))
+            health_path = root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json"
+            health = json.loads(health_path.read_text(encoding="utf-8"))
+            fingerprint = health["last_failure_fingerprint"]
+            append_jsonl(
+                root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_ACTION_LOG.jsonl",
+                [
+                    {
+                        "timestamp": "2020-01-01T00:00:00Z",
+                        "action": "heal",
+                        "result": "ok",
+                        "runtime_id": None,
+                        "fingerprint": fingerprint,
+                        "details": {"source": "old-window"},
+                    }
+                ],
+            )
+
+            out = MODULE.run(self._build_input(root, action="repair", test_train_mode="final-stage"))
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["result"], "delegated")
+            refreshed = json.loads(health_path.read_text(encoding="utf-8"))
+            self.assertIsNotNone(refreshed.get("next_heal_allowed_at"))
+
     def test_health_lock_conflict_raises_locked_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._make_repo(tmp)

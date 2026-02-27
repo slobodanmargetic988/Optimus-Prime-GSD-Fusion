@@ -149,7 +149,22 @@ def _read_runtime_health(cfg: DispatchInput) -> dict[str, Any]:
             f"runtime health artifact missing for hard-gated test-train mode: {path}",
             stage="validate",
         )
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ToolError(
+            "validation_error",
+            f"runtime health artifact unreadable for hard-gated test-train mode: {path} ({exc})",
+            stage="validate",
+        ) from exc
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ToolError(
+            "validation_error",
+            f"runtime health artifact is invalid JSON for hard-gated test-train mode: {path} ({exc})",
+            stage="validate",
+        ) from exc
     if not isinstance(payload, dict):
         raise ToolError("validation_error", "runtime health payload must be a JSON object", stage="validate")
     return payload

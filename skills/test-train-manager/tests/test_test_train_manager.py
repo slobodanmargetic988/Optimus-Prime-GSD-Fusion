@@ -52,6 +52,27 @@ def build_repo(root: Path) -> None:
     runtime_target = root / "skills" / "runtime-coordinator" / "scripts" / "runtime_coordinator.py"
     runtime_target.parent.mkdir(parents=True, exist_ok=True)
     runtime_target.write_text(RUNTIME_COORDINATOR_SOURCE.read_text(encoding="utf-8"), encoding="utf-8")
+    write_text(
+        root / "scripts" / "deploy-test.sh",
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                "runtime_dir=\"reports/optimus-prime/runtime\"",
+                "mkdir -p \"$runtime_dir\"",
+                "branch=\"$(git branch --show-current 2>/dev/null || true)\"",
+                "commit=\"$(git rev-parse --short HEAD 2>/dev/null || true)\"",
+                "cat > \"$runtime_dir/DEPLOY_STATE.json\" <<JSON",
+                "{",
+                "  \"branch\": \"${branch:-unknown}\",",
+                "  \"commit\": \"${commit:-unknown}\",",
+                "  \"status\": \"deployed\"",
+                "}",
+                "JSON",
+            ]
+        )
+        + "\n",
+    )
 
     write_text(
         root / "reports" / "optimus-prime" / "config" / "RUNTIME_PROFILES.json",
@@ -90,7 +111,7 @@ def build_repo(root: Path) -> None:
                     "final-stage": {"hard_gate": True},
                     "forced-shared-env": {"hard_gate": True},
                 },
-                "deploy": {"command": "true", "cwd": "${REPO_ROOT}", "timeout_sec": 60},
+                "deploy": {"command": "bash ./scripts/deploy-test.sh", "cwd": "${REPO_ROOT}", "timeout_sec": 60},
                 "health": {
                     "require_consecutive_passes": 2,
                     "checks": [{"id": "cmd-ok", "type": "cmd", "value": "true", "timeout_sec": 5}],
@@ -323,6 +344,46 @@ class TestTrainManagerTests(unittest.TestCase):
             repair = out.get("repair") or {}
             self.assertEqual(repair.get("result"), "delegated")
             self.assertIsNotNone((repair.get("repair_task") or {}).get("repair_id"))
+
+    def test_deploy_target_mismatch_is_failure_even_when_runtime_healthy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            pipeline_path = root / "reports" / "optimus-prime" / "config" / "TEST_TRAIN_PIPELINE.json"
+            pipeline = json.loads(pipeline_path.read_text(encoding="utf-8"))
+            pipeline["deploy"]["command"] = (
+                "mkdir -p reports/optimus-prime/runtime && "
+                "cat > reports/optimus-prime/runtime/DEPLOY_STATE.json <<'JSON'\n"
+                "{\n"
+                "  \"branch\": \"main\",\n"
+                "  \"commit\": \"deadbee\",\n"
+                "  \"status\": \"deployed\"\n"
+                "}\n"
+                "JSON"
+            )
+            write_text(pipeline_path, json.dumps(pipeline, indent=2) + "\n")
+
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            write_text(
+                root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json",
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "gate_state": "degraded",
+                        "both_sources_pass": True,
+                        "consecutive_passes": 1,
+                        "required_passes": 2,
+                        "last_failure_fingerprint": None,
+                        "next_heal_allowed_at": None,
+                    }
+                )
+                + "\n",
+            )
+            out = run_action(root, action="deploy_test_branch", test_train_mode="final-stage")
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["status"], "failed_target_verification")
+            self.assertEqual((out.get("target_verification") or {}).get("reason"), "deploy_target_mismatch")
+            self.assertEqual((out.get("repair") or {}).get("result"), "delegated")
 
     def test_deploy_single_flight_lock_conflict(self):
         with tempfile.TemporaryDirectory() as tmp:
