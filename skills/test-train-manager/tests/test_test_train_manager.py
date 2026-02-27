@@ -1,9 +1,11 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "test_train_manager.py"
@@ -73,6 +75,69 @@ def build_repo(root: Path) -> None:
         )
         + "\n",
     )
+    write_text(
+        root / "scripts" / "db-impact-detector.sh",
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                "mode=\"${TEST_DB_DETECTOR_MODE:-optional}\"",
+                "if [[ \"$mode\" == \"error_exit\" ]]; then",
+                "  echo \"detector failed\" >&2",
+                "  exit 42",
+                "fi",
+                "if [[ \"$mode\" == \"invalid_json\" ]]; then",
+                "  echo \"{ invalid-json\"",
+                "  exit 0",
+                "fi",
+                "requires=\"false\"",
+                "reason=\"no_db_impact_paths_changed\"",
+                "confidence=\"medium\"",
+                "if [[ \"$mode\" == \"required\" ]]; then",
+                "  requires=\"true\"",
+                "  reason=\"db_impact_paths_changed\"",
+                "  confidence=\"high\"",
+                "fi",
+                "python3 - \"$TT_DB_FROM_COMMIT\" \"$TT_DB_TO_COMMIT\" \"$requires\" \"$reason\" \"$confidence\" <<'PY'",
+                "import json",
+                "import sys",
+                "from_commit = sys.argv[1] or None",
+                "to_commit = sys.argv[2]",
+                "requires = sys.argv[3].lower() == 'true'",
+                "reason = sys.argv[4]",
+                "confidence = sys.argv[5]",
+                "print(json.dumps({",
+                "  'schema_version': '1.0',",
+                "  'requires_reset_seed': requires,",
+                "  'reason': reason,",
+                "  'from_commit': from_commit,",
+                "  'to_commit': to_commit,",
+                "  'signals': ['db/migrations/001.sql'] if requires else [],",
+                "  'confidence': confidence,",
+                "}))",
+                "PY",
+            ]
+        )
+        + "\n",
+    )
+    write_text(
+        root / "scripts" / "db-reset-migrate-seed.sh",
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                "if [[ \"${TEST_DB_RESET_FAIL:-0}\" == \"1\" ]]; then",
+                "  echo \"db reset failed\" >&2",
+                "  exit 27",
+                "fi",
+                "marker=\"${TEST_DB_MARKER_PATH:-reports/optimus-prime/runtime/DB_RESET_SEED_RAN}\"",
+                "mkdir -p \"$(dirname \"$marker\")\"",
+                "date -u +\"%Y-%m-%dT%H:%M:%SZ\" > \"$marker\"",
+                "echo \"db reset/migrate/seed ok\"",
+            ]
+        )
+        + "\n",
+    )
 
     write_text(
         root / "reports" / "optimus-prime" / "config" / "RUNTIME_PROFILES.json",
@@ -112,6 +177,28 @@ def build_repo(root: Path) -> None:
                     "forced-shared-env": {"hard_gate": True},
                 },
                 "deploy": {"command": "bash ./scripts/deploy-test.sh", "cwd": "${REPO_ROOT}", "timeout_sec": 60},
+                "database": {
+                    "enabled": True,
+                    "scope": "deploy_only",
+                    "detector": {
+                        "command": "bash ./scripts/db-impact-detector.sh",
+                        "cwd": "${REPO_ROOT}",
+                        "timeout_sec": 30,
+                        "on_error": "block_deploy_delegate",
+                    },
+                    "reset_seed": {
+                        "command": "bash ./scripts/db-reset-migrate-seed.sh",
+                        "cwd": "${REPO_ROOT}",
+                        "timeout_sec": 60,
+                    },
+                    "policy": {
+                        "default_action": "reset_seed",
+                        "skip_mode": "optimus_explicit_approval",
+                        "require_skip_reason": True,
+                        "allow_unsafe_skip": False,
+                        "periodic_reseed": "disabled",
+                    },
+                },
                 "health": {
                     "require_consecutive_passes": 2,
                     "checks": [{"id": "cmd-ok", "type": "cmd", "value": "true", "timeout_sec": 5}],
@@ -147,6 +234,8 @@ def run_action(repo_root: Path, **overrides):
         "task_identifier": overrides.get("task_identifier"),
         "task_outcome": overrides.get("task_outcome"),
         "force": overrides.get("force", False),
+        "db_reset_seed_override": overrides.get("db_reset_seed_override", "none"),
+        "db_reset_seed_override_reason": overrides.get("db_reset_seed_override_reason"),
     }
     inp = MODULE.build_input(payload)
     return MODULE.run(inp)
@@ -306,6 +395,7 @@ class TestTrainManagerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             build_repo(root)
+            marker_path = root / "reports" / "optimus-prime" / "runtime" / "DB_RESET_SEED_RAN"
             run_action(root, action="bootstrap", test_train_mode="final-stage")
             write_text(
                 root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json",
@@ -322,9 +412,134 @@ class TestTrainManagerTests(unittest.TestCase):
                 )
                 + "\n",
             )
-            out = run_action(root, action="deploy_test_branch", test_train_mode="final-stage")
+            with mock.patch.dict(os.environ, {"TEST_DB_DETECTOR_MODE": "required"}, clear=False):
+                out = run_action(root, action="deploy_test_branch", test_train_mode="final-stage")
             self.assertTrue(out["ok"])
             self.assertEqual(out["status"], "success")
+            self.assertTrue(marker_path.exists())
+            self.assertEqual((out.get("db_policy") or {}).get("decision"), "reset_seed")
+
+    def test_deploy_detector_safe_skip_still_resets_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            marker_path = root / "reports" / "optimus-prime" / "runtime" / "DB_RESET_SEED_RAN"
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            write_text(
+                root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json",
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "gate_state": "degraded",
+                        "both_sources_pass": True,
+                        "consecutive_passes": 1,
+                        "required_passes": 2,
+                        "last_failure_fingerprint": None,
+                        "next_heal_allowed_at": None,
+                    }
+                )
+                + "\n",
+            )
+            with mock.patch.dict(os.environ, {"TEST_DB_DETECTOR_MODE": "optional"}, clear=False):
+                out = run_action(root, action="deploy_test_branch", test_train_mode="final-stage")
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["status"], "success")
+            self.assertTrue(marker_path.exists())
+            self.assertFalse(bool((out.get("db_policy") or {}).get("detector", {}).get("requires_reset_seed")))
+            self.assertEqual((out.get("db_policy") or {}).get("decision"), "reset_seed")
+
+    def test_deploy_detector_safe_skip_requires_explicit_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            marker_path = root / "reports" / "optimus-prime" / "runtime" / "DB_RESET_SEED_RAN"
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            write_text(
+                root / "reports" / "optimus-prime" / "runtime" / "RUNTIME_HEALTH.json",
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "gate_state": "degraded",
+                        "both_sources_pass": True,
+                        "consecutive_passes": 1,
+                        "required_passes": 2,
+                        "last_failure_fingerprint": None,
+                        "next_heal_allowed_at": None,
+                    }
+                )
+                + "\n",
+            )
+            with mock.patch.dict(os.environ, {"TEST_DB_DETECTOR_MODE": "optional"}, clear=False):
+                out = run_action(
+                    root,
+                    action="deploy_test_branch",
+                    test_train_mode="final-stage",
+                    db_reset_seed_override="force_skip_reset_seed",
+                    db_reset_seed_override_reason="human parallel testing active",
+                )
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["status"], "success")
+            self.assertFalse(marker_path.exists())
+            self.assertEqual((out.get("db_policy") or {}).get("decision"), "skip_reset_seed")
+
+    def test_deploy_skip_override_requires_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                run_action(
+                    root,
+                    action="deploy_test_branch",
+                    test_train_mode="final-stage",
+                    db_reset_seed_override="force_skip_reset_seed",
+                )
+            self.assertEqual(ctx.exception.code, "input_error")
+
+    def test_deploy_skip_override_blocked_when_detector_requires_reset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            with mock.patch.dict(os.environ, {"TEST_DB_DETECTOR_MODE": "required"}, clear=False):
+                out = run_action(
+                    root,
+                    action="deploy_test_branch",
+                    test_train_mode="final-stage",
+                    db_reset_seed_override="force_skip_reset_seed",
+                    db_reset_seed_override_reason="manual skip request",
+                )
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["status"], "failed_db_policy")
+            self.assertEqual((out.get("repair") or {}).get("result"), "delegated")
+
+    def test_deploy_detector_invalid_json_blocks_and_delegates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            with mock.patch.dict(os.environ, {"TEST_DB_DETECTOR_MODE": "invalid_json"}, clear=False):
+                out = run_action(root, action="deploy_test_branch", test_train_mode="final-stage")
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["status"], "failed_db_policy")
+            self.assertEqual((out.get("repair") or {}).get("result"), "delegated")
+
+    def test_deploy_db_reset_failure_blocks_and_delegates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_repo(root)
+            run_action(root, action="bootstrap", test_train_mode="final-stage")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "TEST_DB_DETECTOR_MODE": "optional",
+                    "TEST_DB_RESET_FAIL": "1",
+                },
+                clear=False,
+            ):
+                out = run_action(root, action="deploy_test_branch", test_train_mode="final-stage")
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["status"], "failed_db_policy")
+            self.assertEqual((out.get("repair") or {}).get("result"), "delegated")
 
     def test_deploy_failure_forces_repair_delegation(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -22,6 +22,9 @@ Updated: 2026-02-27
   - on persistent failure, deterministic repair task + blocker event logging
 - Extended `test-train-manager`:
   - deploy command sourced only from `TEST_TRAIN_PIPELINE.json`
+  - deploy pipeline now includes deterministic DB policy stage (detector + reset/seed decision + audit log)
+  - default remains conservative: run reset/migrate/seed unless explicit Optimus skip override is provided
+  - detector or DB-prep failures block deploy as `failed_db_policy` and route remediation/delegation
   - failed deploy uses fix-and-retry flow (no rollback)
   - unhealthy runtime blocks tester dispatch and `test-next -> test` promotion
 - Extended `dispatch-worker-packet` contract/persistence:
@@ -43,6 +46,7 @@ Updated: 2026-02-27
 - `reports/optimus-prime/runtime/RUNTIME_HEALTH.json`
 - `reports/optimus-prime/runtime/RUNTIME_ACTION_LOG.jsonl`
 - `reports/optimus-prime/runtime/RUNTIME_REPAIR_TASKS.json`
+- `reports/optimus-prime/runtime/DB_DEPLOY_DECISIONS.jsonl`
 - `reports/optimus-prime/runtime/locks/`
 - `reports/optimus-prime/BLOCKER_ADAPTATION_CANDIDATES.md`
 - `reports/optimus-prime/BLOCKER_INDEX.json`

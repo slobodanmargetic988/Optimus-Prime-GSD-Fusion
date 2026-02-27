@@ -41,6 +41,7 @@ WAVE_STATES = {
 TEST_TRAIN_MODES = {"off", "final-stage", "forced-shared-env"}
 TASK_OUTCOMES = {"passed", "failed", "pass_with_rework", "blocked"}
 CRITICAL_BLOCKER_CATEGORIES = {"env", "runtime", "test-train", "infra"}
+DB_RESET_SEED_OVERRIDES = {"none", "force_reset_seed", "force_skip_reset_seed"}
 ENV_PLACEHOLDER_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
 LOCK_NAME_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
@@ -65,6 +66,8 @@ class TrainInput:
     dry_run: bool
     create_branches_if_missing: bool
     force: bool
+    db_reset_seed_override: str
+    db_reset_seed_override_reason: str | None
     wave_id: str | None
     planned_flow_pass_completed: bool | None
     task_identifier: str | None
@@ -83,6 +86,7 @@ class TrainInput:
     runtime_action_log_path: Path
     runtime_repair_tasks_path: Path
     runtime_locks_dir: Path
+    db_deploy_decisions_path: Path
 
 
 def utc_now() -> datetime:
@@ -352,6 +356,21 @@ def build_input(payload: dict[str, Any]) -> TrainInput:
     if task_outcome and task_outcome not in TASK_OUTCOMES:
         raise ToolError("input_error", f"task_outcome must be one of {sorted(TASK_OUTCOMES)}", stage="input")
 
+    db_reset_seed_override = (_str(payload.get("db_reset_seed_override")) or "none").lower()
+    if db_reset_seed_override not in DB_RESET_SEED_OVERRIDES:
+        raise ToolError(
+            "input_error",
+            f"db_reset_seed_override must be one of {sorted(DB_RESET_SEED_OVERRIDES)}",
+            stage="input",
+        )
+    db_reset_seed_override_reason = _str(payload.get("db_reset_seed_override_reason"))
+    if db_reset_seed_override == "force_skip_reset_seed" and not db_reset_seed_override_reason:
+        raise ToolError(
+            "input_error",
+            "db_reset_seed_override_reason is required when db_reset_seed_override=force_skip_reset_seed",
+            stage="input",
+        )
+
     reports = repo_root / "reports" / "optimus-prime"
     return TrainInput(
         repo_root=repo_root,
@@ -364,6 +383,8 @@ def build_input(payload: dict[str, Any]) -> TrainInput:
         dry_run=_bool(payload.get("dry_run"), False),
         create_branches_if_missing=_bool(payload.get("create_branches_if_missing"), True),
         force=_bool(payload.get("force"), False),
+        db_reset_seed_override=db_reset_seed_override,
+        db_reset_seed_override_reason=db_reset_seed_override_reason,
         wave_id=_str(payload.get("wave_id")),
         planned_flow_pass_completed=(
             None if payload.get("planned_flow_pass_completed") is None else _bool(payload.get("planned_flow_pass_completed"), False)
@@ -401,6 +422,10 @@ def build_input(payload: dict[str, Any]) -> TrainInput:
         runtime_locks_dir=Path(
             _str(payload.get("runtime_locks_dir"))
             or str(reports / "runtime" / "locks")
+        ).expanduser().resolve(),
+        db_deploy_decisions_path=Path(
+            _str(payload.get("db_deploy_decisions_path"))
+            or str(reports / "runtime" / "DB_DEPLOY_DECISIONS.jsonl")
         ).expanduser().resolve(),
     )
 
@@ -827,12 +852,23 @@ def action_promote(inp: TrainInput, state: dict[str, Any], attempts: dict[str, A
     }
 
 
-def _run_deploy_command(command: str, cwd: Path, timeout_sec: float) -> dict[str, Any]:
+def _run_shell_command(
+    command: str,
+    *,
+    cwd: Path,
+    timeout_sec: float,
+    env: dict[str, str] | None = None,
+    timeout_label: str,
+) -> dict[str, Any]:
+    merged_env = dict(os.environ)
+    if isinstance(env, dict):
+        merged_env.update({k: v for k, v in env.items() if isinstance(k, str) and isinstance(v, str)})
     try:
         proc = subprocess.run(
             command,
             cwd=str(cwd),
             shell=True,
+            env=merged_env,
             capture_output=True,
             text=True,
             check=False,
@@ -848,9 +884,493 @@ def _run_deploy_command(command: str, cwd: Path, timeout_sec: float) -> dict[str
         return {
             "returncode": 124,
             "stdout": "",
-            "stderr": f"deploy command timed out after {int(timeout_sec)}s",
+            "stderr": f"{timeout_label} timed out after {int(timeout_sec)}s",
             "timed_out": True,
         }
+
+
+def _run_deploy_command(command: str, cwd: Path, timeout_sec: float) -> dict[str, Any]:
+    return _run_shell_command(command, cwd=cwd, timeout_sec=timeout_sec, timeout_label="deploy command")
+
+
+def _run_detector_command(
+    command: str,
+    *,
+    cwd: Path,
+    timeout_sec: float,
+    env: dict[str, str],
+) -> dict[str, Any]:
+    return _run_shell_command(
+        command,
+        cwd=cwd,
+        timeout_sec=timeout_sec,
+        env=env,
+        timeout_label="database impact detector",
+    )
+
+
+def _run_db_reset_seed_command(command: str, *, cwd: Path, timeout_sec: float) -> dict[str, Any]:
+    return _run_shell_command(
+        command,
+        cwd=cwd,
+        timeout_sec=timeout_sec,
+        timeout_label="database reset/seed command",
+    )
+
+
+def _deploy_state_path(inp: TrainInput, deploy_cfg: dict[str, Any]) -> Path:
+    deploy_state_path_raw = _str((deploy_cfg or {}).get("deploy_state_path")) or str(
+        inp.runtime_health_path.parent / "DEPLOY_STATE.json"
+    )
+    return Path(_expand_placeholders(deploy_state_path_raw, inp.repo_root)).expanduser().resolve()
+
+
+def _last_deployed_commit(inp: TrainInput, state: dict[str, Any], deploy_cfg: dict[str, Any]) -> str | None:
+    deploy_state_path = _deploy_state_path(inp, deploy_cfg)
+    if deploy_state_path.exists():
+        try:
+            deploy_state = json.loads(deploy_state_path.read_text(encoding="utf-8"))
+            if isinstance(deploy_state, dict):
+                commit = _str(deploy_state.get("commit"))
+                if commit:
+                    return commit
+        except (OSError, json.JSONDecodeError):
+            pass
+    return _str(state.get("deployed_test_commit"))
+
+
+def _database_policy_config(inp: TrainInput, pipeline: dict[str, Any]) -> dict[str, Any]:
+    if inp.test_train_mode == "off":
+        return {"enabled": False}
+    database = pipeline.get("database")
+    if not isinstance(database, dict):
+        raise ToolError("config_error", "test-train pipeline database config is required", stage="config")
+
+    enabled = _bool(database.get("enabled"), True)
+    if not enabled:
+        return {"enabled": False}
+
+    scope = _str(database.get("scope")) or "deploy_only"
+    if scope != "deploy_only":
+        raise ToolError("config_error", "database.scope must be 'deploy_only'", stage="config")
+
+    detector = database.get("detector")
+    if not isinstance(detector, dict):
+        raise ToolError("config_error", "database.detector is required", stage="config")
+    detector_command = _str(detector.get("command"))
+    if not detector_command:
+        raise ToolError("config_error", "database.detector.command is required", stage="config")
+    detector_cwd = _str(detector.get("cwd")) or "${REPO_ROOT}"
+    detector_timeout_sec = max(1, _float(detector.get("timeout_sec"), 60))
+    detector_on_error = (_str(detector.get("on_error")) or "block_deploy_delegate").lower()
+    if detector_on_error != "block_deploy_delegate":
+        raise ToolError("config_error", "database.detector.on_error must be 'block_deploy_delegate'", stage="config")
+
+    reset_seed = database.get("reset_seed")
+    if not isinstance(reset_seed, dict):
+        raise ToolError("config_error", "database.reset_seed is required", stage="config")
+    reset_seed_command = _str(reset_seed.get("command"))
+    if not reset_seed_command:
+        raise ToolError("config_error", "database.reset_seed.command is required", stage="config")
+    reset_seed_cwd = _str(reset_seed.get("cwd")) or "${REPO_ROOT}"
+    reset_seed_timeout_sec = max(1, _float(reset_seed.get("timeout_sec"), 1200))
+
+    policy = database.get("policy")
+    if not isinstance(policy, dict):
+        raise ToolError("config_error", "database.policy is required", stage="config")
+    default_action = (_str(policy.get("default_action")) or "reset_seed").lower()
+    if default_action != "reset_seed":
+        raise ToolError("config_error", "database.policy.default_action must be 'reset_seed'", stage="config")
+    skip_mode = (_str(policy.get("skip_mode")) or "optimus_explicit_approval").lower()
+    if skip_mode != "optimus_explicit_approval":
+        raise ToolError("config_error", "database.policy.skip_mode must be 'optimus_explicit_approval'", stage="config")
+    require_skip_reason = _bool(policy.get("require_skip_reason"), True)
+    allow_unsafe_skip = _bool(policy.get("allow_unsafe_skip"), False)
+    periodic_reseed = (_str(policy.get("periodic_reseed")) or "disabled").lower()
+    if periodic_reseed != "disabled":
+        raise ToolError("config_error", "database.policy.periodic_reseed must be 'disabled'", stage="config")
+
+    return {
+        "enabled": True,
+        "scope": scope,
+        "detector": {
+            "command": detector_command,
+            "cwd": detector_cwd,
+            "timeout_sec": detector_timeout_sec,
+            "on_error": detector_on_error,
+        },
+        "reset_seed": {
+            "command": reset_seed_command,
+            "cwd": reset_seed_cwd,
+            "timeout_sec": reset_seed_timeout_sec,
+        },
+        "policy": {
+            "default_action": default_action,
+            "skip_mode": skip_mode,
+            "require_skip_reason": require_skip_reason,
+            "allow_unsafe_skip": allow_unsafe_skip,
+            "periodic_reseed": periodic_reseed,
+        },
+    }
+
+
+def _append_db_deploy_decision(
+    inp: TrainInput,
+    *,
+    wave_id: str | None,
+    from_commit: str | None,
+    to_commit: str | None,
+    detector_requires_reset_seed: bool,
+    detector_reason: str,
+    decision: str,
+    decision_source: str,
+    decision_reason: str,
+    db_command_exit_code: int | None,
+    result: str,
+) -> None:
+    row = {
+        "timestamp": utc_now_iso(),
+        "wave_id": wave_id,
+        "from_commit": from_commit,
+        "to_commit": to_commit,
+        "detector_requires_reset_seed": bool(detector_requires_reset_seed),
+        "detector_reason": detector_reason,
+        "decision": decision,
+        "decision_source": decision_source,
+        "decision_reason": decision_reason,
+        "db_command_exit_code": db_command_exit_code,
+        "result": result,
+    }
+    _append_jsonl(inp.db_deploy_decisions_path, row)
+
+
+def _parse_detector_payload(raw: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ToolError("config_error", f"database detector output invalid JSON: {exc}", stage="config") from exc
+    if not isinstance(payload, dict):
+        raise ToolError("config_error", "database detector output must be a JSON object", stage="config")
+    schema_version = _str(payload.get("schema_version"))
+    if schema_version != "1.0":
+        raise ToolError("config_error", "database detector schema_version must be '1.0'", stage="config")
+    requires_reset_seed = payload.get("requires_reset_seed")
+    if not isinstance(requires_reset_seed, bool):
+        raise ToolError("config_error", "database detector requires_reset_seed must be boolean", stage="config")
+    reason = _str(payload.get("reason"))
+    if not reason:
+        raise ToolError("config_error", "database detector reason is required", stage="config")
+    from_commit = payload.get("from_commit")
+    if from_commit is not None and not isinstance(from_commit, str):
+        raise ToolError("config_error", "database detector from_commit must be string|null", stage="config")
+    to_commit = _str(payload.get("to_commit"))
+    if not to_commit:
+        raise ToolError("config_error", "database detector to_commit is required", stage="config")
+    signals = payload.get("signals")
+    if signals is not None:
+        if not isinstance(signals, list) or any(not isinstance(item, str) for item in signals):
+            raise ToolError("config_error", "database detector signals must be array<string>", stage="config")
+    confidence = payload.get("confidence")
+    if confidence is not None:
+        confidence_text = _str(confidence)
+        if confidence_text not in {"low", "medium", "high"}:
+            raise ToolError("config_error", "database detector confidence must be low|medium|high", stage="config")
+    return payload
+
+
+def _execute_db_policy(
+    inp: TrainInput,
+    state: dict[str, Any],
+    *,
+    pipeline: dict[str, Any],
+    deploy_cfg: dict[str, Any],
+    wave_id: str | None,
+    to_commit: str,
+) -> dict[str, Any]:
+    cfg = _database_policy_config(inp, pipeline)
+    if not _bool(cfg.get("enabled"), False):
+        db_policy = {
+            "enabled": False,
+            "decision": "skip_reset_seed",
+            "decision_source": "default_policy",
+            "decision_reason": "database_policy_disabled",
+            "from_commit": _last_deployed_commit(inp, state, deploy_cfg),
+            "to_commit": to_commit,
+            "detector": {
+                "schema_version": "1.0",
+                "requires_reset_seed": False,
+                "reason": "database_policy_disabled",
+                "from_commit": _last_deployed_commit(inp, state, deploy_cfg),
+                "to_commit": to_commit,
+                "signals": [],
+                "confidence": "high",
+            },
+        }
+        _append_db_deploy_decision(
+            inp,
+            wave_id=wave_id,
+            from_commit=db_policy["from_commit"],
+            to_commit=to_commit,
+            detector_requires_reset_seed=False,
+            detector_reason="database_policy_disabled",
+            decision="skip_reset_seed",
+            decision_source="default_policy",
+            decision_reason="database_policy_disabled",
+            db_command_exit_code=None,
+            result="ok",
+        )
+        return {"ok": True, "db_policy": db_policy, "db_execution": None}
+
+    from_commit = _last_deployed_commit(inp, state, deploy_cfg)
+    detector_cfg = cfg["detector"]
+    detector_command = _expand_placeholders(_str(detector_cfg.get("command")) or "", inp.repo_root)
+    detector_cwd = Path(_expand_placeholders(_str(detector_cfg.get("cwd")) or "${REPO_ROOT}", inp.repo_root)).expanduser().resolve()
+    detector_timeout_sec = max(1, _float(detector_cfg.get("timeout_sec"), 60))
+    detector_env = {
+        "TT_DB_FROM_COMMIT": from_commit or "",
+        "TT_DB_TO_COMMIT": to_commit,
+        "TT_WAVE_ID": wave_id or "",
+        "TT_MODE": inp.test_train_mode,
+    }
+
+    detector_run = _run_detector_command(
+        detector_command,
+        cwd=detector_cwd,
+        timeout_sec=detector_timeout_sec,
+        env=detector_env,
+    )
+    if int(detector_run.get("returncode", 1)) != 0:
+        reason = f"detector_command_failed_exit_code={int(detector_run.get('returncode', 1))}"
+        db_policy = {
+            "enabled": True,
+            "scope": cfg.get("scope"),
+            "from_commit": from_commit,
+            "to_commit": to_commit,
+            "detector": {
+                "command": detector_command,
+                "cwd": str(detector_cwd),
+                "returncode": int(detector_run.get("returncode", 1)),
+                "stderr": _str(detector_run.get("stderr")) or "",
+                "timed_out": bool(detector_run.get("timed_out")),
+            },
+            "decision": "reset_seed",
+            "decision_source": "optimus_policy",
+            "decision_reason": reason,
+            "failure_reason": reason,
+            "failure_stage": "detector",
+            "failure_fingerprint": f"deploy|db_policy|{reason}",
+        }
+        _append_db_deploy_decision(
+            inp,
+            wave_id=wave_id,
+            from_commit=from_commit,
+            to_commit=to_commit,
+            detector_requires_reset_seed=True,
+            detector_reason=reason,
+            decision="reset_seed",
+            decision_source="optimus_policy",
+            decision_reason=reason,
+            db_command_exit_code=None,
+            result="blocked",
+        )
+        return {"ok": False, "db_policy": db_policy, "db_execution": None}
+
+    try:
+        detector_payload = _parse_detector_payload(_str(detector_run.get("stdout")) or "")
+    except ToolError as exc:
+        reason = f"detector_contract_error:{exc.message}"
+        db_policy = {
+            "enabled": True,
+            "scope": cfg.get("scope"),
+            "from_commit": from_commit,
+            "to_commit": to_commit,
+            "detector": {
+                "command": detector_command,
+                "cwd": str(detector_cwd),
+                "stderr": _str(detector_run.get("stderr")) or "",
+                "stdout": _str(detector_run.get("stdout")) or "",
+                "returncode": int(detector_run.get("returncode", 1)),
+            },
+            "decision": "reset_seed",
+            "decision_source": "optimus_policy",
+            "decision_reason": reason,
+            "failure_reason": reason,
+            "failure_stage": "detector",
+            "failure_fingerprint": "deploy|db_policy|detector_contract_error",
+        }
+        _append_db_deploy_decision(
+            inp,
+            wave_id=wave_id,
+            from_commit=from_commit,
+            to_commit=to_commit,
+            detector_requires_reset_seed=True,
+            detector_reason=reason,
+            decision="reset_seed",
+            decision_source="optimus_policy",
+            decision_reason=reason,
+            db_command_exit_code=None,
+            result="blocked",
+        )
+        return {"ok": False, "db_policy": db_policy, "db_execution": None}
+
+    detector_requires = bool(detector_payload.get("requires_reset_seed"))
+    detector_reason = _str(detector_payload.get("reason")) or "detector_reason_missing"
+    detector_signals = detector_payload.get("signals") if isinstance(detector_payload.get("signals"), list) else []
+    detector_confidence = _str(detector_payload.get("confidence")) or "medium"
+    if not from_commit:
+        detector_requires = True
+        detector_reason = "from_commit_missing_conservative_reset_seed"
+        detector_signals = [*detector_signals, "from_commit_missing"]
+        detector_confidence = "high"
+
+    decision = "reset_seed"
+    decision_source = "optimus_policy" if detector_requires else "default_policy"
+    decision_reason = (
+        "detector_requires_reset_seed"
+        if detector_requires
+        else "default_reset_seed_policy_detector_safe_skip_not_auto"
+    )
+
+    policy_cfg = cfg["policy"]
+    allow_unsafe_skip = _bool(policy_cfg.get("allow_unsafe_skip"), False)
+    require_skip_reason = _bool(policy_cfg.get("require_skip_reason"), True)
+    override = inp.db_reset_seed_override
+    override_reason = _str(inp.db_reset_seed_override_reason)
+    if override == "force_reset_seed":
+        decision = "reset_seed"
+        decision_source = "override"
+        decision_reason = f"override_force_reset_seed:{override_reason or 'none'}"
+    elif override == "force_skip_reset_seed":
+        if require_skip_reason and not override_reason:
+            raise ToolError(
+                "input_error",
+                "db_reset_seed_override_reason is required when forcing skip reset/seed",
+                stage="input",
+            )
+        if detector_requires and not allow_unsafe_skip:
+            reason = "unsafe_skip_denied_detector_requires_reset_seed"
+            db_policy = {
+                "enabled": True,
+                "scope": cfg.get("scope"),
+                "from_commit": from_commit,
+                "to_commit": to_commit,
+                "detector": {
+                    "schema_version": "1.0",
+                    "requires_reset_seed": detector_requires,
+                    "reason": detector_reason,
+                    "from_commit": from_commit,
+                    "to_commit": to_commit,
+                    "signals": detector_signals,
+                    "confidence": detector_confidence,
+                },
+                "decision": "skip_reset_seed",
+                "decision_source": "override",
+                "decision_reason": f"override_force_skip_reset_seed:{override_reason or 'none'}",
+                "failure_reason": reason,
+                "failure_stage": "policy",
+                "failure_fingerprint": f"deploy|db_policy|{reason}",
+            }
+            _append_db_deploy_decision(
+                inp,
+                wave_id=wave_id,
+                from_commit=from_commit,
+                to_commit=to_commit,
+                detector_requires_reset_seed=detector_requires,
+                detector_reason=detector_reason,
+                decision="skip_reset_seed",
+                decision_source="override",
+                decision_reason=f"override_force_skip_reset_seed:{override_reason or 'none'}",
+                db_command_exit_code=None,
+                result="blocked",
+            )
+            return {"ok": False, "db_policy": db_policy, "db_execution": None}
+        decision = "skip_reset_seed"
+        decision_source = "override"
+        decision_reason = f"override_force_skip_reset_seed:{override_reason or 'none'}"
+
+    db_execution: dict[str, Any] | None = None
+    if decision == "reset_seed":
+        reset_seed_cfg = cfg["reset_seed"]
+        reset_seed_command = _expand_placeholders(_str(reset_seed_cfg.get("command")) or "", inp.repo_root)
+        reset_seed_cwd = Path(
+            _expand_placeholders(_str(reset_seed_cfg.get("cwd")) or "${REPO_ROOT}", inp.repo_root)
+        ).expanduser().resolve()
+        reset_seed_timeout_sec = max(1, _float(reset_seed_cfg.get("timeout_sec"), 1200))
+        db_execution = _run_db_reset_seed_command(
+            reset_seed_command,
+            cwd=reset_seed_cwd,
+            timeout_sec=reset_seed_timeout_sec,
+        )
+        if int(db_execution.get("returncode", 1)) != 0:
+            reason = f"db_reset_seed_failed_exit_code={int(db_execution.get('returncode', 1))}"
+            db_policy = {
+                "enabled": True,
+                "scope": cfg.get("scope"),
+                "from_commit": from_commit,
+                "to_commit": to_commit,
+                "detector": {
+                    "schema_version": "1.0",
+                    "requires_reset_seed": detector_requires,
+                    "reason": detector_reason,
+                    "from_commit": from_commit,
+                    "to_commit": to_commit,
+                    "signals": detector_signals,
+                    "confidence": detector_confidence,
+                },
+                "decision": decision,
+                "decision_source": decision_source,
+                "decision_reason": decision_reason,
+                "failure_reason": reason,
+                "failure_stage": "db_execution",
+                "failure_fingerprint": f"deploy|db_policy|{reason}",
+            }
+            _append_db_deploy_decision(
+                inp,
+                wave_id=wave_id,
+                from_commit=from_commit,
+                to_commit=to_commit,
+                detector_requires_reset_seed=detector_requires,
+                detector_reason=detector_reason,
+                decision=decision,
+                decision_source=decision_source,
+                decision_reason=decision_reason,
+                db_command_exit_code=int(db_execution.get("returncode", 1)),
+                result="failed",
+            )
+            return {"ok": False, "db_policy": db_policy, "db_execution": db_execution}
+
+    db_policy = {
+        "enabled": True,
+        "scope": cfg.get("scope"),
+        "from_commit": from_commit,
+        "to_commit": to_commit,
+        "detector": {
+            "schema_version": "1.0",
+            "requires_reset_seed": detector_requires,
+            "reason": detector_reason,
+            "from_commit": from_commit,
+            "to_commit": to_commit,
+            "signals": detector_signals,
+            "confidence": detector_confidence,
+        },
+        "decision": decision,
+        "decision_source": decision_source,
+        "decision_reason": decision_reason,
+    }
+    _append_db_deploy_decision(
+        inp,
+        wave_id=wave_id,
+        from_commit=from_commit,
+        to_commit=to_commit,
+        detector_requires_reset_seed=detector_requires,
+        detector_reason=detector_reason,
+        decision=decision,
+        decision_source=decision_source,
+        decision_reason=decision_reason,
+        db_command_exit_code=int(db_execution.get("returncode", 0)) if isinstance(db_execution, dict) else None,
+        result="ok",
+    )
+    return {"ok": True, "db_policy": db_policy, "db_execution": db_execution}
 
 
 def _commit_matches(expected: str, actual: str) -> bool:
@@ -875,10 +1395,7 @@ def _verify_deploy_target(
     if not expected:
         return {"ok": False, "reason": "expected_commit_missing"}
 
-    deploy_state_path_raw = _str((deploy_cfg or {}).get("deploy_state_path")) or str(
-        inp.runtime_health_path.parent / "DEPLOY_STATE.json"
-    )
-    deploy_state_path = Path(_expand_placeholders(deploy_state_path_raw, inp.repo_root)).expanduser().resolve()
+    deploy_state_path = _deploy_state_path(inp, deploy_cfg)
     if not deploy_state_path.exists():
         return {
             "ok": False,
@@ -948,6 +1465,9 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
     deploy_cwd = Path(_expand_placeholders(deploy_cwd_raw, inp.repo_root)).expanduser().resolve()
     timeout_sec = max(1, _float((deploy_cfg or {}).get("timeout_sec"), 900))
     expected_deploy_commit = _branch_commit(inp, inp.test_branch) or _str(state.get("deployed_test_commit"))
+    target_deploy_commit = expected_deploy_commit or _branch_commit(inp, "HEAD")
+    if not target_deploy_commit:
+        raise ToolError("git_error", "cannot resolve target deploy commit", stage="git")
 
     lock_path = _acquire_single_flight_lock(inp, pipeline, "deploy-test-branch")
     try:
@@ -959,6 +1479,8 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
         deploy["last_attempt_at"] = utc_now_iso()
         health_payload: dict[str, Any] | None = None
         repair_payload: dict[str, Any] | None = None
+        db_policy_payload: dict[str, Any] | None = None
+        db_execution_payload: dict[str, Any] | None = None
         if inp.dry_run:
             deploy["last_result"] = "dry_run"
             _append_wave_event(
@@ -973,6 +1495,67 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
                 "action": "deploy_test_branch",
                 "status": "dry_run",
                 "command_template": deploy_cmd_template,
+            }
+
+        db_policy_result = _execute_db_policy(
+            inp,
+            state,
+            pipeline=pipeline,
+            deploy_cfg=deploy_cfg if isinstance(deploy_cfg, dict) else {},
+            wave_id=wave_id,
+            to_commit=target_deploy_commit,
+        )
+        db_policy_payload = db_policy_result.get("db_policy") if isinstance(db_policy_result, dict) else None
+        db_execution_payload = db_policy_result.get("db_execution") if isinstance(db_policy_result, dict) else None
+        if not bool(db_policy_result.get("ok")):
+            deploy["last_result"] = "failed"
+            failure_fingerprint = _str((db_policy_payload or {}).get("failure_fingerprint")) or "deploy|db_policy|failed"
+            health_payload = _run_runtime_coordinator(
+                inp,
+                {
+                    "action": "health",
+                    "test_train_mode": inp.test_train_mode,
+                    "test_train_pipeline_path": str(inp.test_train_pipeline_path),
+                    "runtime_health_path": str(inp.runtime_health_path),
+                    "runtime_action_log_path": str(inp.runtime_action_log_path),
+                    "runtime_repair_tasks_path": str(inp.runtime_repair_tasks_path),
+                    "runtime_locks_dir": str(inp.runtime_locks_dir),
+                },
+            )
+            repair_payload = _run_runtime_coordinator(
+                inp,
+                {
+                    "action": "repair",
+                    "test_train_mode": inp.test_train_mode,
+                    "test_train_pipeline_path": str(inp.test_train_pipeline_path),
+                    "runtime_health_path": str(inp.runtime_health_path),
+                    "runtime_action_log_path": str(inp.runtime_action_log_path),
+                    "runtime_repair_tasks_path": str(inp.runtime_repair_tasks_path),
+                    "runtime_locks_dir": str(inp.runtime_locks_dir),
+                    "repair_force_fingerprint": failure_fingerprint,
+                    "repair_force_delegate": True,
+                },
+            )
+            _append_wave_event(
+                inp,
+                wave_id,
+                "deploy_test_branch",
+                {
+                    "status": "failed_db_policy",
+                    "db_policy": db_policy_payload,
+                    "db_execution": db_execution_payload,
+                    "repair_result": repair_payload.get("result") if isinstance(repair_payload, dict) else None,
+                },
+            )
+            _save_state(inp, state, attempts)
+            return {
+                "ok": False,
+                "action": "deploy_test_branch",
+                "status": "failed_db_policy",
+                "health": health_payload,
+                "db_policy": db_policy_payload,
+                "db_execution": db_execution_payload,
+                "repair": repair_payload,
             }
 
         first_attempt = _run_deploy_command(deploy_cmd, deploy_cwd, timeout_sec)
@@ -1038,6 +1621,7 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
                                 "status": "success_after_retry",
                                 "initial_exit_code": first_attempt.get("returncode"),
                                 "target_verification": verify_payload,
+                                "db_policy": db_policy_payload,
                             },
                         )
                         _save_state(inp, state, attempts)
@@ -1047,6 +1631,8 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
                             "status": "success_after_retry",
                             "health": health_payload,
                             "target_verification": verify_payload,
+                            "db_policy": db_policy_payload,
+                            "db_execution": db_execution_payload,
                         }
 
                 repair_payload = _run_runtime_coordinator(
@@ -1073,6 +1659,7 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
                     "exit_code": int(first_attempt.get("returncode", 1)),
                     "stderr": _str(first_attempt.get("stderr")) or "",
                     "retry_exit_code": int(retry_attempt.get("returncode", 1)) if isinstance(retry_attempt, dict) else None,
+                    "db_policy": db_policy_payload,
                     "repair_result": repair_payload.get("result") if isinstance(repair_payload, dict) else None,
                 },
             )
@@ -1085,6 +1672,8 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
                 "stderr": _str(first_attempt.get("stderr")) or "",
                 "stdout": _str(first_attempt.get("stdout")) or "",
                 "health": health_payload,
+                "db_policy": db_policy_payload,
+                "db_execution": db_execution_payload,
                 "repair": repair_payload,
             }
 
@@ -1117,6 +1706,7 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
                 {
                     "status": "success",
                     "target_verification": verify_payload,
+                    "db_policy": db_policy_payload,
                 },
             )
             _save_state(inp, state, attempts)
@@ -1126,6 +1716,8 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
                 "status": "success",
                 "health": health_payload,
                 "target_verification": verify_payload,
+                "db_policy": db_policy_payload,
+                "db_execution": db_execution_payload,
             }
 
         deploy["last_result"] = "failed"
@@ -1156,6 +1748,7 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
                 "status": "failed_health_gate" if not healthy else "failed_target_verification",
                 "gate_state": health_payload.get("gate_state"),
                 "target_verification": verify_payload,
+                "db_policy": db_policy_payload,
                 "repair_result": repair_payload.get("result") if isinstance(repair_payload, dict) else None,
             },
         )
@@ -1163,11 +1756,13 @@ def action_deploy(inp: TrainInput, state: dict[str, Any], attempts: dict[str, An
         return {
             "ok": False,
             "action": "deploy_test_branch",
-            "status": "failed_health_gate" if not healthy else "failed_target_verification",
-            "health": health_payload,
-            "target_verification": verify_payload,
-            "repair": repair_payload,
-        }
+                "status": "failed_health_gate" if not healthy else "failed_target_verification",
+                "health": health_payload,
+                "target_verification": verify_payload,
+                "db_policy": db_policy_payload,
+                "db_execution": db_execution_payload,
+                "repair": repair_payload,
+            }
     finally:
         _release_single_flight_lock(lock_path)
 

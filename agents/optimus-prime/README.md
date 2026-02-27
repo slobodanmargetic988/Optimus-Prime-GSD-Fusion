@@ -217,11 +217,14 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
   - `reports/optimus-prime/runtime/RUNTIME_HEALTH.json`
   - `reports/optimus-prime/runtime/RUNTIME_ACTION_LOG.jsonl`
   - `reports/optimus-prime/runtime/RUNTIME_REPAIR_TASKS.json`
+  - `reports/optimus-prime/runtime/DB_DEPLOY_DECISIONS.jsonl`
   - `reports/optimus-prime/runtime/locks/`
 - Runtime/deploy tooling locations:
   - deploy + heal commands are configured in `TEST_TRAIN_PIPELINE.json` (`deploy.command`, `repair.self_heal_commands`)
+  - deploy DB policy is configured in `TEST_TRAIN_PIPELINE.json` (`database.detector`, `database.reset_seed`, `database.policy`)
+  - DB reset/migrate/seed is a dedicated lifecycle hook and must not be embedded in `deploy.command`
   - start/stop/profile health commands are configured in `reports/optimus-prime/config/RUNTIME_PROFILES.json`
-  - keep scripts repo-local (default examples: `scripts/deploy-test.sh`, `scripts/runtime-heal.sh`)
+  - keep scripts repo-local (default examples: `scripts/deploy-test.sh`, `scripts/runtime-heal.sh`, `scripts/db-impact-detector.sh`, `scripts/db-reset-migrate-seed.sh`)
 - Promotion gate:
   - requires one planned flow pass for current wave
   - blocks on unhealthy shared runtime in `final-stage|forced-shared-env`

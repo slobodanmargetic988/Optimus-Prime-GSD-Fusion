@@ -17,6 +17,28 @@
     "cwd": "${REPO_ROOT}",
     "timeout_sec": 900
   },
+  "database": {
+    "enabled": true,
+    "scope": "deploy_only",
+    "detector": {
+      "command": "./scripts/db-impact-detector.sh",
+      "cwd": "${REPO_ROOT}",
+      "timeout_sec": 60,
+      "on_error": "block_deploy_delegate"
+    },
+    "reset_seed": {
+      "command": "./scripts/db-reset-migrate-seed.sh",
+      "cwd": "${REPO_ROOT}",
+      "timeout_sec": 1200
+    },
+    "policy": {
+      "default_action": "reset_seed",
+      "skip_mode": "optimus_explicit_approval",
+      "require_skip_reason": true,
+      "allow_unsafe_skip": false,
+      "periodic_reseed": "disabled"
+    }
+  },
   "health": {
     "require_consecutive_passes": 2,
     "checks": [

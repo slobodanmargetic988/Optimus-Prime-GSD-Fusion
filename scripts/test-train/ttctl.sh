@@ -11,6 +11,8 @@ TT_MODE="${TT_MODE:-final-stage}"
 TT_RUNTIME_PROFILE_ID="${TT_RUNTIME_PROFILE_ID:-default-web}"
 TT_RUNTIME_ID="${TT_RUNTIME_ID:-rt-shared-$TT_RUNTIME_PROFILE_ID}"
 TT_PIPELINE_CONFIG_PATH="${TT_PIPELINE_CONFIG_PATH:-$REPO_ROOT/reports/optimus-prime/config/TEST_TRAIN_PIPELINE.json}"
+TT_DB_RESET_SEED_OVERRIDE="${TT_DB_RESET_SEED_OVERRIDE:-none}"
+TT_DB_RESET_SEED_OVERRIDE_REASON="${TT_DB_RESET_SEED_OVERRIDE_REASON:-}"
 
 RUNTIME_HEALTH_PATH="$REPO_ROOT/reports/optimus-prime/runtime/RUNTIME_HEALTH.json"
 RUNTIME_ACTION_LOG_PATH="$REPO_ROOT/reports/optimus-prime/runtime/RUNTIME_ACTION_LOG.jsonl"
@@ -47,6 +49,8 @@ run_train_action() {
   "runtime_action_log_path": "$RUNTIME_ACTION_LOG_PATH",
   "runtime_repair_tasks_path": "$RUNTIME_REPAIR_TASKS_PATH",
   "runtime_locks_dir": "$RUNTIME_LOCKS_DIR",
+  "db_reset_seed_override": "$TT_DB_RESET_SEED_OVERRIDE",
+  "db_reset_seed_override_reason": "$TT_DB_RESET_SEED_OVERRIDE_REASON",
   "runtime_profile_id": "$TT_RUNTIME_PROFILE_ID",
   "runtime_id": "$TT_RUNTIME_ID"
 }
@@ -62,6 +66,8 @@ Environment overrides:
   TT_RUNTIME_PROFILE_ID   default: default-web
   TT_RUNTIME_ID           default: rt-shared-<profile-id>
   TT_PIPELINE_CONFIG_PATH default: reports/optimus-prime/config/TEST_TRAIN_PIPELINE.json
+  TT_DB_RESET_SEED_OVERRIDE        default: none
+  TT_DB_RESET_SEED_OVERRIDE_REASON default: (empty)
 USAGE
 }
 

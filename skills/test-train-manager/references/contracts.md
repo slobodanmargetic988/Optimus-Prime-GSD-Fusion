@@ -65,3 +65,43 @@ One JSON object per line:
   "tool_version": "0.1.0"
 }
 ```
+
+## Deploy DB Policy Inputs
+
+Optional deploy-only inputs:
+
+- `db_reset_seed_override`: `none|force_reset_seed|force_skip_reset_seed`
+- `db_reset_seed_override_reason`: required when `db_reset_seed_override=force_skip_reset_seed`
+
+`deploy_test_branch` responses include:
+
+- `db_policy`: detector verdict + commit range + chosen decision
+- `db_execution`: reset/seed command result when execution was required
+
+`deploy_test_branch` may now return:
+
+- `status=failed_db_policy` for detector/policy/DB-prep failures before app deploy.
+
+## DB Deploy Decisions (`DB_DEPLOY_DECISIONS.jsonl`)
+
+Generated artifact path:
+
+- `reports/optimus-prime/runtime/DB_DEPLOY_DECISIONS.jsonl`
+
+One JSON row per deploy attempt:
+
+```json
+{
+  "timestamp": "ISO-8601",
+  "wave_id": "wave-0007",
+  "from_commit": "abc1234",
+  "to_commit": "def5678",
+  "detector_requires_reset_seed": true,
+  "detector_reason": "db_impact_paths_changed",
+  "decision": "reset_seed|skip_reset_seed",
+  "decision_source": "default_policy|optimus_policy|override",
+  "decision_reason": "string",
+  "db_command_exit_code": 0,
+  "result": "ok|failed|blocked"
+}
+```
