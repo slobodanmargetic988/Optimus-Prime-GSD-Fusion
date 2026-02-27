@@ -17,10 +17,14 @@ Full GSD fusion capabilities: planning lifecycle, plan gates, test-first contrac
 - Spec: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_B_FULL_GSD_FUSION_PLAN.md`
 - Status: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_B_IMPLEMENTATION_STATUS.md`
 
-## Lane C (planned)
-Installable product packaging, command UX, diagnostics, docs, release framework.
+## Lane C (in progress)
+Installable product packaging, command UX, diagnostics, docs, and release framework.
+
+- Implemented now (start): deterministic GitHub-first release bundle builder + checksum artifacts, install/update/uninstall/doctor commands, and product `opctl` wrapper.
+- Pending next: complete config/profile resolution depth, release checklist automation, and full install smoke matrix across target platforms.
 
 - Spec: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_C_INSTALLABLE_PRODUCT_PLAN.md`
+- Status: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_C_IMPLEMENTATION_STATUS.md`
 
 ## Sequencing Rule
 Lane A -> Lane B -> Lane C.

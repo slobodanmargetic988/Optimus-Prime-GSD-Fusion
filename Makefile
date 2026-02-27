@@ -1,4 +1,4 @@
-.PHONY: tt-bootstrap tt-start tt-health tt-deploy tt-stop tt-repair tt-flow tt-gate-drills op-map op-new op-plan op-initialize op-build
+.PHONY: tt-bootstrap tt-start tt-health tt-deploy tt-stop tt-repair tt-flow tt-gate-drills op-map op-new op-plan op-initialize op-build lane-c-bundle lane-c-install-global lane-c-doctor
 
 tt-bootstrap:
 	./scripts/test-train/ttctl.sh bootstrap
@@ -38,3 +38,12 @@ op-initialize:
 
 op-build:
 	./scripts/op/opctl.sh /op-build --json-pretty
+
+lane-c-bundle:
+	python3 -m scripts.release.build_lane_c_bundle --repo-root $(PWD) --out-dir $(PWD)/dist --json-pretty
+
+lane-c-install-global:
+	python3 ./scripts/install/op_install.py --bundle-dir $(PWD)/dist/optimus-prime-$$(cat VERSION) --mode global --json-pretty
+
+lane-c-doctor:
+	python3 ./scripts/install/op_doctor.py --mode global --json-pretty

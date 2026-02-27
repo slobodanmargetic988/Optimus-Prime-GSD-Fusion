@@ -7,6 +7,7 @@ Current implemented lane:
 - Lane B (core): generic runtime coordination + blocker intelligence (`runtime-coordinator`, runtime-aware packets/snapshots).
 - Lane B add-on: historical thread/token audit (`THREAD_HISTORY.log` + `thread-token-audit` skill).
 - Lane B command surface: deterministic `/op-*` planning + autonomous build flow (`/op-map-codebase`, `/op-new-project`, `/op-plan`, `/op-initialize`, `/op-build`, `/op-health`, `/op-status`, `/op-resume`) in provisional hardening.
+- Lane C (start): GitHub-first installable product foundation (bundle builder + install/update/uninstall/doctor + product CLI wrapper).
 
 See:
 - `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_PHASE1_PLAN.md`
@@ -114,3 +115,35 @@ Gate contract:
 - hard-blocks when full matrix fails
 - records module coverage snapshot for core Lane B modules
 - returns `status=passed|blocked` with deterministic `next_action`
+
+## Lane C Installable Product
+
+Lane C command/tooling added:
+
+- release bundle builder: `python3 -m scripts.release.build_lane_c_bundle`
+- install command: `python3 scripts/install/op_install.py`
+- update command: `python3 scripts/install/op_update.py`
+- uninstall command: `python3 scripts/install/op_uninstall.py`
+- doctor command: `python3 scripts/install/op_doctor.py`
+- product wrapper: `python3 scripts/op/opctl_product.py`
+
+Product CLI behavior:
+
+- `opctl /op-*` delegates to the existing Lane B workflow contract unchanged.
+- `opctl doctor` returns deterministic readiness report.
+- `opctl update` performs manual explicit bundle update with checksum enforcement.
+- `opctl uninstall` removes only managed install paths.
+- `opctl version` returns `version/build/commit`.
+
+Config/profile model:
+
+- deterministic precedence: CLI args -> project config (`<repo>/.optimus-prime/config.json`) -> global config (`$XDG_CONFIG_HOME/optimus-prime/config.json` or `~/.optimus-prime/config/config.json`) -> defaults
+- profiles: `quality`, `balanced`, `budget`
+- config validation returns field-level fix guidance via deterministic `config_error` details
+
+Primary docs:
+
+- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/install/QUICKSTART.md`
+- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/install/UPGRADE.md`
+- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/install/TROUBLESHOOTING.md`
+- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/release/LANE_C_RELEASE_CHECKLIST.md`

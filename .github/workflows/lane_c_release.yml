@@ -1,0 +1,48 @@
+name: lane-c-release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-release-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pytest
+
+      - name: Run Lane B matrix guard
+        run: |
+          python3 -m pytest \
+            scripts/op/tests \
+            skills/runtime-coordinator/tests/test_runtime_coordinator.py \
+            skills/test-train-manager/tests/test_test_train_manager.py \
+            skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py \
+            skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py
+
+      - name: Build Lane C release bundle
+        run: |
+          mkdir -p dist
+          python3 -m scripts.release.build_lane_c_bundle \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --out-dir "$GITHUB_WORKSPACE/dist" \
+            --json-pretty
+
+      - name: Upload release bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lane-c-release-bundle
+          path: dist/**
+
