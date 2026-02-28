@@ -25,6 +25,34 @@ def test_version_command_returns_contract(monkeypatch: pytest.MonkeyPatch, capsy
     assert "version" in payload["data"]
 
 
+def test_resolve_version_uses_install_state_when_running_from_installed_payload(monkeypatch: pytest.MonkeyPatch):
+    fake_root = Path("/tmp/fake/.optimus-prime/install/current")
+    monkeypatch.setattr(MODULE, "REPO_ROOT", fake_root)
+    monkeypatch.setattr(MODULE, "_is_installed_payload_root", lambda _path: True)
+    monkeypatch.setattr(
+        MODULE,
+        "_read_json_silent",
+        lambda path: {"installed_version": "9.9.9-rc.1"} if path.name == "INSTALL_STATE.json" else None,
+    )
+    assert MODULE._resolve_version() == "9.9.9-rc.1"
+
+
+def test_resolve_version_falls_back_to_manifest_when_install_state_missing(monkeypatch: pytest.MonkeyPatch):
+    fake_root = Path("/tmp/fake/.optimus-prime/install/current")
+    monkeypatch.setattr(MODULE, "REPO_ROOT", fake_root)
+    monkeypatch.setattr(MODULE, "_is_installed_payload_root", lambda _path: True)
+
+    def fake_read(path: Path):
+        if path.name == "INSTALL_STATE.json":
+            return None
+        if path.name == "bundle_manifest.json":
+            return {"product_version": "8.8.8-rc.2"}
+        return None
+
+    monkeypatch.setattr(MODULE, "_read_json_silent", fake_read)
+    assert MODULE._resolve_version() == "8.8.8-rc.2"
+
+
 def test_unknown_command_returns_structured_error(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
     monkeypatch.setattr(sys, "argv", ["opctl_product.py", "unknown-cmd"])
     rc = MODULE.main()

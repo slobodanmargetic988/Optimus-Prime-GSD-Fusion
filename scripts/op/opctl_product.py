@@ -31,7 +31,31 @@ def _print(payload: dict[str, Any], pretty: bool) -> None:
         print(json.dumps(payload, separators=(",", ":"), sort_keys=False))
 
 
+def _read_json_silent(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _is_installed_payload_root(path: Path) -> bool:
+    return path.name == "current" and path.parent.name == "install"
+
+
 def _resolve_version() -> str:
+    if _is_installed_payload_root(REPO_ROOT):
+        state_path = REPO_ROOT.parent / "INSTALL_STATE.json"
+        state = _read_json_silent(state_path)
+        if isinstance(state, dict):
+            installed = str(state.get("installed_version") or "").strip()
+            if installed:
+                return installed
+        manifest = _read_json_silent(REPO_ROOT / ".manifest" / "bundle_manifest.json")
+        if isinstance(manifest, dict):
+            product_version = str(manifest.get("product_version") or "").strip()
+            if product_version:
+                return product_version
     path = REPO_ROOT / "VERSION"
     if not path.exists():
         return "0.0.0"
