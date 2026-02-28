@@ -1370,7 +1370,7 @@ def test_build_all_rate_gates_blocking_with_invalid_registry_continues_with_warn
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": True,
                 "terminal_reason": "all_rate_gates_blocking",
                 "last_cycle_number": 1,
@@ -1457,7 +1457,7 @@ def test_build_seeds_rate_registry_before_controller_cycle(monkeypatch: pytest.M
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: (
+            lambda _req, **_kwargs: (
                 call_order.append("controller")
                 or {
                     "ok": True,
@@ -1540,7 +1540,7 @@ def test_build_refreshes_rate_registry_each_cycle_even_when_registry_exists(monk
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": True,
                 "terminal_reason": None,
                 "last_cycle_number": 1,
@@ -2558,7 +2558,7 @@ def test_op_resume_requeues_all_dead_stop_affected_in_progress_tasks(monkeypatch
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,
@@ -2693,7 +2693,7 @@ def test_op_resume_continues_task_when_worker_alive_and_evidence_progressing(mon
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,

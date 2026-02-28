@@ -1211,11 +1211,11 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
     return errors
 
 
-def _extract_cycle_directives(events_path: Path, cycle_number: int) -> list[dict[str, Any]]:
+def _extract_cycle_directives(events_path: Path, control_number: int) -> list[dict[str, Any]]:
     rows = _read_jsonl(events_path)
     out: list[dict[str, Any]] = []
     for row in rows:
-        if int(row.get("cycle_number") or 0) != int(cycle_number):
+        if int(row.get("control_number") or 0) != int(control_number):
             continue
         if _as_str(row.get("event_type")) != "directive":
             continue
@@ -3702,11 +3702,12 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _run_controller_cycle(req: OpRequest) -> dict[str, Any]:
+def _run_controller_cycle(req: OpRequest, *, control_number: int) -> dict[str, Any]:
     script = _resolve_skill_script("optimus-cycle-controller", "optimus_cycle_controller.py")
 
     payload = {
         "repo_root": str(req.repo_root),
+        "control_number": int(control_number),
         "sleep_minutes": req.sleep_minutes,
         "allow_autonomous_ops": True,
         "max_cycles": 1,
@@ -3731,6 +3732,16 @@ def _run_controller_cycle(req: OpRequest) -> dict[str, Any]:
         )
     if not isinstance(parsed, dict):
         raise OpError("runtime_error", "controller output must be object JSON", stage="build")
+    returned_control_number = _coerce_nonneg_int(parsed.get("control_number"), default=0)
+    if returned_control_number != int(control_number):
+        raise OpError(
+            "runtime_error",
+            (
+                "controller control_number mismatch: "
+                f"expected {int(control_number)} got {returned_control_number}"
+            ),
+            stage="build",
+        )
     return parsed
 
 
@@ -4791,12 +4802,15 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     data={"terminal_reason": "operator_stop", "operator_stop": stop_summary},
                 )
 
-            cycle_result = _run_controller_cycle(req)
-            last_cycle_number = int(cycle_result.get("last_cycle_number") or 0)
+            cycle_control_number = int(build_state.get("last_cycle") or 0)
+            cycle_result = _run_controller_cycle(req, control_number=cycle_control_number)
             events_path_raw = _as_str(cycle_result.get("events_path"))
             directives: list[dict[str, Any]] = []
-            if events_path_raw and last_cycle_number > 0:
-                directives = _extract_cycle_directives(Path(events_path_raw).expanduser().resolve(), last_cycle_number)
+            if events_path_raw and cycle_control_number > 0:
+                directives = _extract_cycle_directives(
+                    Path(events_path_raw).expanduser().resolve(),
+                    cycle_control_number,
+                )
             directive_state = _apply_directives(req, directives, build_state, merged_plan_packets, task_state)
             directive_outcomes = directive_state.get("outcomes", [])
             for outcome in directive_outcomes:

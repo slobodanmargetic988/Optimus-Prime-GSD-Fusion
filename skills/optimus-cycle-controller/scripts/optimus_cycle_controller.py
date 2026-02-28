@@ -74,6 +74,7 @@ STATUS_TO_PHASE_HINT = {
 @dataclass
 class ControllerConfig:
     repo_root: Path
+    control_number: Optional[int]
     sleep_minutes: float
     profile_aliases: List[str]
     rate_gate_5h_percent: float
@@ -203,8 +204,16 @@ def normalize_config(payload: Dict[str, Any]) -> ControllerConfig:
     else:
         max_cycles_normalized = max_cycles_int
 
+    control_number_raw = payload.get("control_number")
+    control_number_normalized: Optional[int] = None
+    if control_number_raw is not None:
+        control_number_int = _as_int(control_number_raw, 0)
+        if control_number_int > 0:
+            control_number_normalized = control_number_int
+
     return ControllerConfig(
         repo_root=repo_root,
+        control_number=control_number_normalized,
         sleep_minutes=max(0.0, _as_float(payload.get("sleep_minutes"), 5.0)),
         profile_aliases=profile_aliases,
         rate_gate_5h_percent=max(0.0, _as_float(payload.get("rate_gate_5h_percent"), 15.0)),
@@ -1097,6 +1106,7 @@ def run_controller(config: ControllerConfig) -> Dict[str, Any]:
             snapshot_event = {
                 "timestamp": timestamp,
                 "cycle_number": cycle_number,
+                "control_number": config.control_number,
                 "event_type": "snapshot",
                 "action_code": "snapshot_state",
                 "payload": {
@@ -1133,6 +1143,7 @@ def run_controller(config: ControllerConfig) -> Dict[str, Any]:
                     {
                         "timestamp": timestamp,
                         "cycle_number": cycle_number,
+                        "control_number": config.control_number,
                         "event_type": "warning",
                         "action_code": "warning",
                         "payload": {"message": warning},
@@ -1171,6 +1182,7 @@ def run_controller(config: ControllerConfig) -> Dict[str, Any]:
                     {
                         "timestamp": timestamp,
                         "cycle_number": cycle_number,
+                        "control_number": config.control_number,
                         "event_type": "directive",
                         "action_code": directive["directive_type"],
                         "payload": directive,
@@ -1181,6 +1193,7 @@ def run_controller(config: ControllerConfig) -> Dict[str, Any]:
             heartbeat_payload = {
                 "timestamp": timestamp,
                 "cycle_number": cycle_number,
+                "control_number": config.control_number,
                 "status": "terminal" if terminal_reason else "running",
                 "active_workers_summary": snapshot.get("active_workers_summary", {}),
                 "profiles_state": rate_state.get("profiles", []),
@@ -1204,6 +1217,7 @@ def run_controller(config: ControllerConfig) -> Dict[str, Any]:
                     "terminal_reason": terminal_reason,
                     "evidence_file": evidence_file,
                     "last_cycle_number": cycle_number,
+                    "control_number": config.control_number,
                     "profiles_state": rate_state.get("profiles", []),
                     "active_workers_summary": snapshot.get("active_workers_summary", {}),
                     "pending_directives": pending_directives,
@@ -1216,6 +1230,7 @@ def run_controller(config: ControllerConfig) -> Dict[str, Any]:
                     {
                         "timestamp": timestamp,
                         "cycle_number": cycle_number,
+                        "control_number": config.control_number,
                         "event_type": "terminal",
                         "action_code": terminal_reason,
                         "payload": final_state,
@@ -1232,6 +1247,7 @@ def run_controller(config: ControllerConfig) -> Dict[str, Any]:
                     "events_path": str(config.events_path),
                     "heartbeat_path": str(config.heartbeat_path),
                     "last_cycle_number": cycle_number,
+                    "control_number": config.control_number,
                 }
 
             if config.max_cycles is not None and cycle_number >= config.max_cycles:
@@ -1242,6 +1258,7 @@ def run_controller(config: ControllerConfig) -> Dict[str, Any]:
                     "terminal_reason": None,
                     "reason": "max_cycles_reached_without_terminal",
                     "last_cycle_number": cycle_number,
+                    "control_number": config.control_number,
                     "events_path": str(config.events_path),
                     "heartbeat_path": str(config.heartbeat_path),
                 }
@@ -1252,6 +1269,7 @@ def run_controller(config: ControllerConfig) -> Dict[str, Any]:
                 {
                     "timestamp": timestamp,
                     "cycle_number": cycle_number,
+                    "control_number": config.control_number,
                     "event_type": "sleep",
                     "action_code": "sleep_interval",
                     "payload": {

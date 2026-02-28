@@ -77,6 +77,7 @@ def test_op_build_applies_runtime_and_test_train_directives(monkeypatch: pytest.
             {
                 "timestamp": "2026-01-01T00:00:00Z",
                 "cycle_number": 1,
+                "control_number": 1,
                 "event_type": "directive",
                 "action_code": "runtime_health_check",
                 "payload": {
@@ -88,6 +89,7 @@ def test_op_build_applies_runtime_and_test_train_directives(monkeypatch: pytest.
             {
                 "timestamp": "2026-01-01T00:00:01Z",
                 "cycle_number": 1,
+                "control_number": 1,
                 "event_type": "directive",
                 "action_code": "evaluate_promotion_gate",
                 "payload": {
@@ -99,7 +101,7 @@ def test_op_build_applies_runtime_and_test_train_directives(monkeypatch: pytest.
         ]
         events_path.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
 
-        def fake_cycle(_req):
+        def fake_cycle(_req, **_kwargs):
             return {
                 "ok": False,
                 "status": "running",
@@ -132,6 +134,83 @@ def test_op_build_applies_runtime_and_test_train_directives(monkeypatch: pytest.
         actions = [c["payload"].get("action") for c in calls]
         assert "health" in actions
         assert "evaluate_promotion_gate" in actions
+
+
+def test_op_build_uses_control_number_for_directive_selection(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        init = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        assert init["ok"] is True
+
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events = [
+            {
+                "timestamp": "2026-01-01T00:00:00Z",
+                "cycle_number": 1,
+                "control_number": 1,
+                "event_type": "directive",
+                "action_code": "review_dispatch_queue",
+                "payload": {
+                    "directive_type": "review_dispatch_queue",
+                    "requires_optimus_action": True,
+                },
+            },
+            {
+                "timestamp": "2026-01-01T00:00:01Z",
+                "cycle_number": 1,
+                "control_number": 2,
+                "event_type": "directive",
+                "action_code": "dispatch_filter",
+                "payload": {
+                    "directive_type": "dispatch_filter",
+                    "requires_optimus_action": True,
+                    "recommended_args": {"reason": "hard-gate"},
+                },
+            },
+        ]
+        events_path.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        dispatch_calls = {"count": 0}
+
+        def fake_dispatch(req, plan, state, build, *_):
+            dispatch_calls["count"] += 1
+            return {"ok": True, "status": "noop"}
+
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", fake_dispatch)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        assert dispatch_calls["count"] == 1
+        warning_codes = {item.get("code") for item in out.get("warnings", [])}
+        assert "dispatch_skipped_hard_gate" not in warning_codes
 
 
 def test_operator_stop_integration_consumes_marker_and_records_stop_state(monkeypatch: pytest.MonkeyPatch):
@@ -295,7 +374,7 @@ def test_op_build_stops_for_manual_rerun_when_rate_reset_exceeds_two_hours(monke
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": True,
                 "terminal_reason": "all_rate_gates_blocking",
                 "last_cycle_number": 1,
@@ -338,6 +417,7 @@ def test_dispatch_filter_blocks_dispatch_for_cycle(monkeypatch: pytest.MonkeyPat
                 {
                     "timestamp": "2026-01-01T00:00:00Z",
                     "cycle_number": 1,
+                    "control_number": 1,
                     "event_type": "directive",
                     "action_code": "dispatch_filter",
                     "payload": {
@@ -353,7 +433,7 @@ def test_dispatch_filter_blocks_dispatch_for_cycle(monkeypatch: pytest.MonkeyPat
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,
@@ -404,6 +484,7 @@ def test_runtime_adapter_uses_state_derived_mode(monkeypatch: pytest.MonkeyPatch
                 {
                     "timestamp": "2026-01-01T00:00:00Z",
                     "cycle_number": 1,
+                    "control_number": 1,
                     "event_type": "directive",
                     "action_code": "runtime_health_check",
                     "payload": {
@@ -426,7 +507,7 @@ def test_runtime_adapter_uses_state_derived_mode(monkeypatch: pytest.MonkeyPatch
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,
@@ -471,6 +552,7 @@ def test_runtime_adapter_fallback_mode_when_state_malformed(monkeypatch: pytest.
                 {
                     "timestamp": "2026-01-01T00:00:00Z",
                     "cycle_number": 1,
+                    "control_number": 1,
                     "event_type": "directive",
                     "action_code": "runtime_health_check",
                     "payload": {
@@ -493,7 +575,7 @@ def test_runtime_adapter_fallback_mode_when_state_malformed(monkeypatch: pytest.
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,
@@ -555,7 +637,7 @@ def test_handoff_offset_truncation_recovers_with_warning(monkeypatch: pytest.Mon
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,
@@ -598,6 +680,7 @@ def test_directive_failure_queues_remediation_and_skips_dispatch(monkeypatch: py
                 {
                     "timestamp": "2026-01-01T00:00:00Z",
                     "cycle_number": 1,
+                    "control_number": 1,
                     "event_type": "directive",
                     "action_code": "runtime_health_check",
                     "payload": {
@@ -613,7 +696,7 @@ def test_directive_failure_queues_remediation_and_skips_dispatch(monkeypatch: py
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,
@@ -689,7 +772,7 @@ def test_dispatch_cap_blocks_when_active_workers_at_limit(monkeypatch: pytest.Mo
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,
@@ -746,7 +829,7 @@ def test_dispatch_cap_allows_dispatch_when_capacity_available(monkeypatch: pytes
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,
@@ -794,7 +877,7 @@ def test_build_does_not_silently_stall_on_stale_dev_in_progress(monkeypatch: pyt
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,
@@ -843,7 +926,7 @@ def test_build_stale_in_progress_recovery_allows_next_dispatch(monkeypatch: pyte
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,
@@ -892,7 +975,7 @@ def test_stale_in_progress_blocked_then_recovers_when_slot_clears(monkeypatch: p
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,
@@ -958,7 +1041,7 @@ def test_stale_recovery_advances_state_and_enables_dispatch(monkeypatch: pytest.
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
-            lambda _req: {
+            lambda _req, **_kwargs: {
                 "ok": False,
                 "status": "running",
                 "terminal_reason": None,

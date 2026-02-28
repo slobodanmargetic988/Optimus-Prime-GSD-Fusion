@@ -162,6 +162,21 @@ def test_emits_heartbeat_each_cycle(controller_module, tmp_path):
     assert heartbeat["status"] == "running"
 
 
+def test_control_number_is_echoed_in_result_and_events(controller_module, tmp_path):
+    config = make_config(controller_module, tmp_path, max_cycles=1, control_number=77)
+    result = controller_module.run_controller(config)
+
+    assert result["ok"] is False
+    assert result["control_number"] == 77
+
+    heartbeat = json.loads(config.heartbeat_path.read_text(encoding="utf-8"))
+    assert heartbeat["control_number"] == 77
+
+    events = read_jsonl(config.events_path)
+    assert events
+    for event in events:
+        assert event.get("control_number") == 77
+
 
 def test_emits_directives_for_optimus_action(controller_module, tmp_path):
     config = make_config(controller_module, tmp_path, max_cycles=1)

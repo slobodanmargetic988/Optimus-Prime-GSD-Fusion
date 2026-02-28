@@ -14,6 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from op_core import OpError, run_from_payload
+from op_router import normalize_command
 
 
 def _parse_json_input(path: str) -> dict[str, Any]:
@@ -29,6 +30,28 @@ def _print_json(payload: dict[str, Any], pretty: bool) -> None:
         print(json.dumps(payload, indent=2, sort_keys=False))
     else:
         print(json.dumps(payload, separators=(",", ":"), sort_keys=False))
+
+
+def _emit_build_start_banner(payload: dict[str, Any]) -> None:
+    command_raw = str(payload.get("command") or "").strip()
+    try:
+        normalized = normalize_command(command_raw)
+    except ValueError:
+        return
+    if str(getattr(normalized, "canonical", "")) != "op-build":
+        return
+    if not sys.stdout.isatty():
+        return
+    repo_root = str(payload.get("repo_root") or Path.cwd().resolve())
+    print(f"[opctl] /op-build started for {repo_root}.", flush=True)
+    print(
+        f"[opctl] While waiting, run: opctl /op-report --repo-root {repo_root} --json-pretty",
+        flush=True,
+    )
+    print(
+        f"[opctl] Detailed state: opctl /op-status --repo-root {repo_root} --json-pretty",
+        flush=True,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,6 +107,7 @@ def main() -> int:
     args = parse_args()
     try:
         payload = merge_payload(args)
+        _emit_build_start_banner(payload)
         result = run_from_payload(payload)
         _print_json(result, args.json_pretty)
         return 0 if result.get("ok") else 1
