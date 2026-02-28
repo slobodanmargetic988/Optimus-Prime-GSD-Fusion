@@ -1,170 +1,225 @@
 # Optimus Prime GSD Fusion
 
-Standalone experimental project for Optimus V2 fusion work.
+A deterministic, plan-driven autonomous builder built around the `/op-*` workflow.
 
-Current implemented lane:
-- Lane A / Phase 1: `optimus-cycle-controller` deterministic cycle loop core with terminal stop authorization guard.
-- Lane B (core): generic runtime coordination + blocker intelligence (`runtime-coordinator`, runtime-aware packets/snapshots).
-- Lane B add-on: historical thread/token audit (`THREAD_HISTORY.log` + `thread-token-audit` skill).
-- Lane B command surface: deterministic `/op-*` planning + autonomous build flow (`/op-map-codebase`, `/op-new-project`, `/op-plan`, `/op-initialize`, `/op-build`, `/op-health`, `/op-status`, `/op-resume`) in provisional hardening.
-- Lane C (in progress): private-first installable product flow (release fetch/auth + install/update/uninstall/doctor + product CLI wrapper + release/smoke workflows).
+This repository currently ships:
+- Lane A core cycle control
+- Lane B autonomous planning/build execution
+- Lane C private-first install/update/release pipeline
 
-See:
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_PHASE1_PLAN.md`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_IMPLEMENTATION_STATUS.md`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_WORKSTATION_HYDRATION_ADDENDUM.md`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_B_GENERIC_RUNTIME_AND_BLOCKER_INTELLIGENCE_PLAN.md`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_B_IMPLEMENTATION_STATUS.md`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/SKILL.md`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/runtime-coordinator/SKILL.md`
+Current distribution mode: **private GitHub Releases** (prerelease channel first).
 
-## Shared Runtime Pipeline Commands
+## What You Get
 
-The shared test-train runtime lifecycle is repo-local and script-driven:
+- Deterministic 2-step flow: **plan first, then autonomous build**
+- Strict gates for quality, runtime health, and completion evidence
+- Install/update/uninstall/doctor commands for local or global usage
+- Repo-local and machine-readable artifacts for traceability
 
-- deploy: `scripts/deploy-test.sh`
-- heal: `scripts/runtime-heal.sh`
-- start: `scripts/runtime/start.sh`
-- health: `scripts/runtime/health.sh`
-- stop: `scripts/runtime/stop.sh`
+## Requirements
 
-Pipeline policy and health/repair gating config:
+- macOS or Linux
+- Python 3.11+
+- `git`, `bash`
+- GitHub access to this private repository
+- Auth via one of:
+  1. `gh auth login`
+  2. `GH_TOKEN`
+  3. `GITHUB_TOKEN`
 
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/config/TEST_TRAIN_PIPELINE.json`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/config/RUNTIME_PROFILES.json`
+## Install (Private Release)
 
-Operator entrypoints:
-
-- `make tt-bootstrap`
-- `make tt-start`
-- `make tt-health`
-- `make tt-deploy`
-- `make tt-stop`
-- `make tt-flow`
-- `make tt-gate-drills`
-
-Deterministic local lifecycle sequence:
+### 1) Authenticate
 
 ```bash
-make tt-bootstrap
-make tt-start
-make tt-health
-make tt-deploy
-make tt-health
-make tt-stop
+gh auth login
 ```
 
-## OP Command Surface
-
-Chat/skill aliases and CLI use the same canonical commands:
-
-- `/op-map-codebase`
-- `/op-new-project`
-- `/op-plan`
-- `/op-initialize`
-- `/op-build`
-- `/op-health`
-- `/op-status`
-- `/op-resume`
-
-Repo-local CLI wrapper:
+### 2) Install Global
 
 ```bash
-./scripts/op/opctl.sh /op-initialize --mission \"Build MyBoard\" --scope \"Board workflows\" --json-pretty
-./scripts/op/opctl.sh /op-build --json-pretty
-./scripts/op/opctl.sh /op-status --json-pretty
-./scripts/op/opctl.sh /op-health --json-pretty
+python3 scripts/install/op_install.py \
+  --repo-owner slobodanmargetic988 \
+  --repo-name Optimus-Prime-GSD-Fusion \
+  --channel prerelease \
+  --mode global \
+  --json-pretty
 ```
 
-`/op-build` behavior (new-only model):
+### 3) Validate
 
-- single-flight lock: `reports/optimus-prime/planning/BUILD_LOOP.lock`
-- default cadence: `sleep_minutes=5` (unless overridden)
-- canonical task state: `reports/optimus-prime/planning/TASK_EXECUTION_STATE.json`
-- canonical task evidence: `reports/optimus-prime/planning/evidence/<task_id>/TASK_EVIDENCE.json`
-- multi-phase planning: `PLAN_PACKETS.json` includes `phases[]` with strict phase barrier progression
-- autonomous gap closure: `GAPS.json` + `GAP_CLOSURE_PLAN_PACKETS.json` are generated/consumed during build
-- gap closure convergence: no recursive closure-task gap generation; retries are bounded (max 5) then escalated/suppressed
-- sticky explicit closure: open gaps are not auto-closed by recomputation drift; closure requires explicit `GAPFIX-*` review-done evidence
-- gap artifact resilience: `/op-build` auto-heals malformed `GAPS.json` or `GAP_CLOSURE_PLAN_PACKETS.json` with deterministic backup + recovery metadata
-- strict-first dispatch gating: `dispatch_filter`/hard-gated cycles skip dispatch before any packet launch
-- adapter mode source: runtime/test-train directives derive `test_train_mode` from `TEST_TRAIN_STATE.json` (fallback `off`)
-- truncation-safe handoff ingestion: stale `handoff_log_offset` is reset with deterministic warning/event
-- directive failure handling: remediation is queued and feature dispatch is skipped for that cycle
-- dispatch cap enforcement: `dispatch_window.max_running_workers` is a hard cap
-- strict done completion requires all phase/task/evidence/verify/UAT gates, zero open gaps, plus `--verify-final-state` authorization
-- hard rate-gate policy: wait/resume when reset is within 2 hours, otherwise stop and require manual rerun
-- malformed rate registry handling: if `PROFILE_RATE_REGISTRY.json` is invalid during `all_rate_gates_blocking`, build continues with warning `rate_registry_invalid_ignored`
-- strict health parity: `/op-health` is build-readiness strict and fails when `/op-build` preflight would block
-- health gap-artifact parity: malformed `GAPS.json` or `GAP_CLOSURE_PLAN_PACKETS.json` blocks `/op-health` with `gap_artifact_integrity_blocked`
-- status resilience: `/op-status` degrades to deterministic blocked snapshot (no crash) with `status_artifact_invalid` and `status_snapshot_degraded`
-- resume resilience: `/op-resume` auto-backs up malformed `BUILD_STATE.json` to `BUILD_STATE.corrupt.<timestamp>.json`, resets state, and continues with warning `resume_state_corrupt_reset`
+```bash
+~/.local/bin/opctl doctor --json-pretty
+~/.local/bin/opctl version --json-pretty
+```
 
-## Lane B Quality Gate
+### 4) Install Local (project-scoped)
 
-Deterministic reliability-first release gate:
+```bash
+python3 scripts/install/op_install.py \
+  --repo-owner slobodanmargetic988 \
+  --repo-name Optimus-Prime-GSD-Fusion \
+  --channel prerelease \
+  --mode local \
+  --repo-root /absolute/path/to/project \
+  --json-pretty
+```
 
-- command: `python3 -m scripts.quality.lane_b_quality_gate --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion`
-- runbook wrapper: `scripts/quality/run_lane_b_quality.sh`
-- required risk tests manifest: `scripts/quality/lane_b_required_tests.json`
-- quality artifact: `reports/optimus-prime/planning/LANE_B_QUALITY_GATE.json`
+Local install creates launchers under:
+- `<repo>/.optimus-prime/bin/opctl`
+- `<repo>/.optimus-prime/bin/op`
 
-Gate contract:
+### 5) Version-Pinned Install
 
-- hard-blocks when any required risk-test is failing/missing
-- hard-blocks when full matrix fails
-- records module coverage snapshot for core Lane B modules
-- returns `status=passed|blocked` with deterministic `next_action`
+```bash
+python3 scripts/install/op_install.py \
+  --repo-owner slobodanmargetic988 \
+  --repo-name Optimus-Prime-GSD-Fusion \
+  --channel prerelease \
+  --version 0.3.0-rc.2 \
+  --mode global \
+  --json-pretty
+```
 
-## Lane C Installable Product (Private-First)
+## How to Use (Core Workflow)
 
-Lane C command/tooling:
+## 1) Planning Bootstrap
 
-- release bundle builder: `python3 -m scripts.release.build_lane_c_bundle`
-- release readiness validator: `python3 -m scripts.release.validate_release_readiness`
-- install command: `python3 scripts/install/op_install.py`
-- update command: `python3 scripts/install/op_update.py`
-- uninstall command: `python3 scripts/install/op_uninstall.py`
-- doctor command: `python3 scripts/install/op_doctor.py`
-- product wrapper: `python3 scripts/op/opctl_product.py`
+Run one command to prepare planning artifacts:
 
-Installer/update source modes:
+```bash
+opctl /op-initialize --mission "Build X" --scope "Y" --json-pretty
+```
 
-- local bundle: `--bundle-dir`
-- private GitHub release: `--repo-owner --repo-name --channel [--version]`
+`/op-initialize` runs:
+1. `/op-map-codebase`
+2. `/op-new-project`
+3. `/op-plan`
 
-Private release auth resolution:
+It does **not** start implementation. It prepares decision-complete planning state.
 
-1. `gh auth token`
-2. `GH_TOKEN`
-3. `GITHUB_TOKEN`
+## 2) Autonomous Build
 
-Product CLI behavior:
+```bash
+opctl /op-build --json-pretty
+```
 
-- `opctl /op-*` delegates to the existing Lane B workflow contract unchanged.
-- `opctl doctor` returns deterministic readiness report with manifest + checksum integrity checks.
-- `opctl update` performs manual explicit update with checksum enforcement.
-- `opctl uninstall` removes only managed install paths.
-- `opctl version` returns `version/build/commit`.
+This runs autonomous execution with strict gates until:
+- done with full evidence, or
+- deterministic hard stop condition is reached.
 
-Config/profile model:
+### Monitor / Recover
 
-- deterministic precedence: CLI args -> project config (`<repo>/.optimus-prime/config.json`) -> global config (`$XDG_CONFIG_HOME/optimus-prime/config.json` or `~/.optimus-prime/config/config.json`) -> defaults
-- profiles: `quality`, `balanced`, `budget`
-- config validation returns field-level fix guidance via deterministic `config_error` details
+```bash
+opctl /op-status --json-pretty
+opctl /op-health --json-pretty
+opctl /op-resume --json-pretty
+```
 
-Deterministic install/update error codes:
+Operator stop behavior:
+- Create `reports/optimus-prime/control/OPERATOR_STOP.json` to stop current `/op-build`.
+- `/op-build` now applies stop to active worker PIDs (`SIGTERM` then `SIGKILL` fallback), writes `OPERATOR_STOP_STATE.json`, archives the marker, and exits with `stopped_operator`.
+- `/op-resume` auto-reconciles stop-affected in-progress tasks (continue when worker/evidence is valid, requeue otherwise).
 
-- `auth_error`
-- `release_not_found`
-- `asset_missing`
-- `download_error`
-- `checksum_mismatch`
-- `doctor_blocked`
+## Command Reference
 
-Primary docs:
+Workflow commands:
+- `/op-map-codebase` — map current codebase and generate planning context artifacts
+- `/op-new-project` — initialize baseline project artifacts
+- `/op-plan` — generate plan packets and run plan checks
+- `/op-initialize` — map + new-project + plan chain
+- `/op-build` — autonomous execution loop
+- `/op-status` — deterministic status snapshot
+- `/op-health` — strict readiness/integrity check
+- `/op-resume` — resume build state safely
 
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/install/QUICKSTART.md`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/install/UPGRADE.md`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/install/TROUBLESHOOTING.md`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/release/LANE_C_RELEASE_CHECKLIST.md`
+Lifecycle commands:
+- `opctl doctor`
+- `opctl update`
+- `opctl uninstall`
+- `opctl version`
+
+## Update
+
+```bash
+opctl update \
+  --repo-owner slobodanmargetic988 \
+  --repo-name Optimus-Prime-GSD-Fusion \
+  --channel prerelease \
+  --mode global \
+  --json-pretty
+```
+
+Or pin version:
+
+```bash
+opctl update \
+  --repo-owner slobodanmargetic988 \
+  --repo-name Optimus-Prime-GSD-Fusion \
+  --channel prerelease \
+  --version 0.3.0-rc.2 \
+  --mode global \
+  --json-pretty
+```
+
+## Uninstall
+
+Global:
+
+```bash
+opctl uninstall --mode global --json-pretty
+```
+
+Local:
+
+```bash
+opctl uninstall --mode local --repo-root /absolute/path/to/project --json-pretty
+```
+
+## Fallback: Install from Local Bundle Directory
+
+If you already downloaded and extracted a release bundle:
+
+```bash
+python3 scripts/install/op_install.py \
+  --bundle-dir /absolute/path/to/optimus-prime-<version> \
+  --mode global \
+  --json-pretty
+```
+
+## Troubleshooting (Deterministic Error Codes)
+
+- `auth_error`: no valid GitHub auth token found
+- `release_not_found`: no matching release for channel/version
+- `asset_missing`: release is missing required assets
+- `download_error`: release metadata or asset download failed
+- `checksum_mismatch`: downloaded release integrity mismatch
+- `doctor_blocked`: readiness/integrity checks failed
+- `managed_checksum_mismatch`: installed files differ from manifest checksums
+
+Detailed guides:
+- [QUICKSTART](docs/install/QUICKSTART.md)
+- [UPGRADE](docs/install/UPGRADE.md)
+- [TROUBLESHOOTING](docs/install/TROUBLESHOOTING.md)
+
+## Key Paths
+
+Planning/build artifacts:
+- `reports/optimus-prime/planning/`
+
+Runtime artifacts:
+- `reports/optimus-prime/runtime/`
+
+Install state:
+- global: `~/.optimus-prime/install/INSTALL_STATE.json`
+- local: `<repo>/.optimus-prime/install/INSTALL_STATE.json`
+
+## Release / Maintainer Notes
+
+Release checklist:
+- `docs/release/LANE_C_RELEASE_CHECKLIST.md`
+
+Lane status docs:
+- `docs/plans/LANE_B_IMPLEMENTATION_STATUS.md`
+- `docs/plans/LANE_C_IMPLEMENTATION_STATUS.md`
+- `docs/plans/PROGRAM_LANES_OVERVIEW.md`
