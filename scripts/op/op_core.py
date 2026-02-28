@@ -2265,6 +2265,65 @@ def _active_workers_count(repo_root: Path) -> int | None:
     return active
 
 
+def _load_build_lock_snapshot(repo_root: Path) -> dict[str, Any]:
+    lock_path = _repo_path(repo_root, BUILD_LOOP_LOCK)
+    snapshot: dict[str, Any] = {
+        "exists": False,
+        "pid": None,
+        "pid_alive": False,
+        "lock_id": None,
+    }
+    if not lock_path.exists():
+        return snapshot
+    snapshot["exists"] = True
+    try:
+        payload = _read_json(lock_path)
+    except OpError:
+        return snapshot
+    if not isinstance(payload, dict):
+        return snapshot
+    pid = payload.get("pid")
+    if isinstance(pid, int):
+        snapshot["pid"] = pid
+        snapshot["pid_alive"] = _pid_is_running(pid)
+    snapshot["lock_id"] = _as_str(payload.get("lock_id"))
+    return snapshot
+
+
+def _age_from_iso(value: Any) -> str:
+    dt = _parse_iso_utc(value)
+    if dt is None:
+        return "n/a"
+    delta = datetime.now(timezone.utc) - dt
+    seconds = max(0, int(delta.total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    return f"{days}d ago"
+
+
+def _open_blockers_count(repo_root: Path) -> int:
+    index_path = repo_root / "reports" / "optimus-prime" / "BLOCKER_INDEX.json"
+    if not index_path.exists():
+        return 0
+    try:
+        payload = _read_json(index_path)
+    except OpError:
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        return 0
+    return len([entry for entry in entries if isinstance(entry, dict)])
+
+
 def _active_worker_slots(repo_root: Path) -> set[str]:
     reports = repo_root / "reports" / "optimus-prime"
     registry_path = reports / "WORKER_REGISTRY.json"
@@ -5390,6 +5449,134 @@ def command_status(req: OpRequest) -> dict[str, Any]:
     )
 
 
+def command_report(req: OpRequest) -> dict[str, Any]:
+    status_out = command_status(req)
+    health_out = command_health(req)
+
+    status_data = status_out.get("data") if isinstance(status_out, dict) and isinstance(status_out.get("data"), dict) else {}
+    status_ok = bool(status_out.get("ok")) if isinstance(status_out, dict) else False
+    health_ok = bool(health_out.get("ok")) if isinstance(health_out, dict) else False
+
+    build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
+    build_state: dict[str, Any] = {}
+    if build_state_path.exists():
+        try:
+            payload = _read_json(build_state_path)
+            if isinstance(payload, dict):
+                build_state = payload
+        except OpError:
+            build_state = {}
+
+    lock_snapshot = _load_build_lock_snapshot(req.repo_root)
+    rate_gate = build_state.get("rate_gate_state") if isinstance(build_state.get("rate_gate_state"), dict) else {}
+    sleep_until_iso = _as_str(rate_gate.get("sleep_until"))
+    sleep_until_dt = _parse_iso_utc(sleep_until_iso)
+    terminal_state = (_as_str(build_state.get("terminal_state")) or "").strip()
+
+    if lock_snapshot.get("exists") and lock_snapshot.get("pid_alive"):
+        if sleep_until_dt is not None and sleep_until_dt > datetime.now(timezone.utc):
+            run_state = "sleeping"
+        else:
+            run_state = "running"
+    elif terminal_state:
+        run_state = "stopped" if terminal_state == "operator_stop" else "terminal"
+    elif build_state_path.exists():
+        run_state = "needs_resume"
+    else:
+        run_state = "not_started"
+
+    health_color = "green" if (health_ok and status_ok) else "yellow" if health_ok else "red"
+
+    counts_raw = status_data.get("task_counts_by_status") if isinstance(status_data.get("task_counts_by_status"), dict) else {}
+    counts: dict[str, int] = {}
+    for key, value in counts_raw.items():
+        if not isinstance(key, str):
+            continue
+        try:
+            counts[key] = int(value)
+        except (TypeError, ValueError):
+            continue
+    total_tasks = sum(max(0, val) for val in counts.values())
+    done_tasks = max(0, counts.get("review_done", 0))
+    in_progress_tasks = sum(max(0, val) for key, val in counts.items() if key.endswith("_in_progress"))
+
+    phase_id = _as_str(status_data.get("active_phase_id")) or _as_str(build_state.get("current_phase_id")) or "n/a"
+    try:
+        cycle = int(build_state.get("last_cycle", 0))
+    except (TypeError, ValueError):
+        cycle = 0
+    active_workers = status_data.get("active_workers")
+    if not isinstance(active_workers, int):
+        active_workers = _active_workers_count(req.repo_root)
+    if active_workers is None:
+        active_workers = 0
+    open_gap_ids = status_data.get("open_gap_ids") if isinstance(status_data.get("open_gap_ids"), list) else []
+    open_gaps = len([item for item in open_gap_ids if _as_str(item)])
+    blockers = _open_blockers_count(req.repo_root)
+    strategy = _as_str(status_data.get("current_strategy")) or _as_str(build_state.get("current_strategy")) or STRATEGY_LADDER[0]
+    last_update = _age_from_iso(build_state.get("updated_at"))
+
+    if run_state in {"running", "sleeping"}:
+        next_action = "wait (build active)"
+    elif run_state in {"needs_resume", "stopped"}:
+        next_action = "/op-resume"
+    elif run_state == "not_started":
+        next_action = "/op-build"
+    elif terminal_state == "project_done":
+        next_action = "completed"
+    elif terminal_state == "all_rate_gates_blocking":
+        next_action = "wait for rate reset, then /op-resume"
+    else:
+        next_action = "/op-status"
+
+    warnings: list[dict[str, Any]] = []
+    if not status_ok:
+        warnings.append(
+            {
+                "code": "report_status_degraded",
+                "message": "status snapshot is degraded; see /op-status for artifact-level details",
+                "stage": "report",
+            }
+        )
+    if not health_ok:
+        warnings.append(
+            {
+                "code": "report_health_blocked",
+                "message": "health checks are blocked; see /op-health for detailed failing checks",
+                "stage": "report",
+            }
+        )
+
+    summary = f"build: {run_state} | health: {health_color} | cycle: {cycle}"
+    return _response(
+        req,
+        ok=True,
+        status=run_state,
+        summary=summary,
+        warnings=warnings,
+        artifacts=[str(_repo_path(req.repo_root, PLANNING_REL))],
+        next_action=next_action,
+        state_ref=str(build_state_path),
+        data={
+            "build": run_state,
+            "health": health_color,
+            "cycle": cycle,
+            "phase": phase_id,
+            "tasks_done": done_tasks,
+            "tasks_total": total_tasks,
+            "tasks_in_progress": in_progress_tasks,
+            "workers_active": active_workers,
+            "gaps_open": open_gaps,
+            "blockers_open": blockers,
+            "strategy": strategy,
+            "last_update": last_update,
+            "next": next_action,
+            "terminal_state": terminal_state or None,
+            "lock": lock_snapshot,
+        },
+    )
+
+
 def command_resume(req: OpRequest) -> dict[str, Any]:
     build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
     if not build_state_path.exists():
@@ -5588,6 +5775,8 @@ def execute_request(req: OpRequest) -> dict[str, Any]:
         return command_health(req)
     if req.command == "op-status":
         return command_status(req)
+    if req.command == "op-report":
+        return command_report(req)
     if req.command == "op-resume":
         return command_resume(req)
     raise OpError(

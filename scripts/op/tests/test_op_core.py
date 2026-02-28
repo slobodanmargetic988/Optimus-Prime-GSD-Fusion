@@ -106,6 +106,7 @@ def test_command_normalization_accepts_new_commands():
         cases = {
             "/op-health": "op-health",
             "$op-status": "op-status",
+            "op-report": "op-report",
             "op-resume": "op-resume",
         }
         for raw, expected in cases.items():
@@ -1848,6 +1849,87 @@ def test_status_blocks_on_gap_closure_schema_invalid_plan_id():
         assert out["status"] == "blocked"
         assert any(item.get("code") == "status_artifact_invalid" for item in out.get("warnings", []))
         assert any(item.get("code") == "status_snapshot_degraded" for item in out.get("warnings", []))
+
+
+def test_op_report_shows_running_when_lock_pid_alive(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        build_state_path = root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json"
+        build_state_path.parent.mkdir(parents=True, exist_ok=True)
+        build_state_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "last_cycle": 12,
+                    "current_strategy": "self_heal",
+                    "current_phase_id": "phase-1",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        lock_path = root / "reports" / "optimus-prime" / "planning" / "BUILD_LOOP.lock"
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "lock_id": "test-lock",
+                    "pid": 42424,
+                    "acquired_at": "2026-01-01T00:00:00Z",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(MODULE, "_pid_is_running", lambda pid: pid == 42424)
+
+        out = run_payload({"command": "/op-report", "repo_root": str(root)})
+        assert out["ok"] is True
+        assert out["status"] == "running"
+        assert out["data"]["build"] == "running"
+        assert out["data"]["cycle"] == 12
+        assert out["data"]["next"] == "wait (build active)"
+        assert out["summary"].startswith("build: running")
+
+
+def test_op_report_shows_needs_resume_after_bounded_build():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        out = run_payload({"command": "/op-report", "repo_root": str(root)})
+        assert out["ok"] is True
+        assert out["status"] == "needs_resume"
+        assert out["data"]["build"] == "needs_resume"
+        assert out["data"]["next"] == "/op-resume"
 
 
 def test_op_health_fails_when_plan_not_ready():

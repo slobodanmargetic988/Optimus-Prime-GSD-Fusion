@@ -79,7 +79,7 @@ def parse_args() -> argparse.Namespace:
         description="Optimus Prime product CLI (workflow + install lifecycle).",
         usage=(
             "opctl <command> [args]\n\n"
-            "Workflow commands: /op-map-codebase /op-new-project /op-plan /op-initialize /op-build /op-health /op-status /op-resume\n"
+            "Workflow commands: /op-map-codebase /op-new-project /op-plan /op-initialize /op-build /op-health /op-status /op-report /op-resume\n"
             "Lifecycle commands: doctor update uninstall version"
         ),
     )

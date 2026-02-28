@@ -14,6 +14,7 @@ SUPPORTED_COMMANDS = {
     "op-build",
     "op-health",
     "op-status",
+    "op-report",
     "op-resume",
 }
 
@@ -32,6 +33,8 @@ ALIASES = {
     "health": "op-health",
     "op-status": "op-status",
     "status": "op-status",
+    "op-report": "op-report",
+    "report": "op-report",
     "op-resume": "op-resume",
     "resume": "op-resume",
 }
