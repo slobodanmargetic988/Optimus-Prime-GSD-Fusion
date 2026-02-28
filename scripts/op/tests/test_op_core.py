@@ -199,6 +199,226 @@ def test_initialize_chains_map_new_plan():
 
 
 
+def test_new_project_creates_gitignore_when_missing():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        gitignore_path = root / ".gitignore"
+        gitignore_path.unlink(missing_ok=True)
+
+        out = run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is True
+        assert gitignore_path.exists()
+        content = gitignore_path.read_text(encoding="utf-8")
+        assert MODULE.OPTIMUS_GITIGNORE_BEGIN in content
+        assert MODULE.OPTIMUS_GITIGNORE_END in content
+        for entry in MODULE.OPTIMUS_GITIGNORE_LINES[1:-1]:
+            assert entry in content
+
+
+def test_new_project_appends_managed_gitignore_block_preserving_user_lines():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        gitignore_path = root / ".gitignore"
+        original = "*.pyc\n.cache/\n"
+        gitignore_path.write_text(original, encoding="utf-8")
+
+        out = run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is True
+        content = gitignore_path.read_text(encoding="utf-8")
+        assert content.startswith(original)
+        assert content.count(MODULE.OPTIMUS_GITIGNORE_BEGIN) == 1
+        assert content.count(MODULE.OPTIMUS_GITIGNORE_END) == 1
+
+
+def test_new_project_replaces_existing_managed_gitignore_block_without_duplicate():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        gitignore_path = root / ".gitignore"
+        gitignore_path.write_text(
+            "\n".join(
+                [
+                    "node_modules/",
+                    MODULE.OPTIMUS_GITIGNORE_BEGIN,
+                    "/reports/optimus-prime/old/**",
+                    MODULE.OPTIMUS_GITIGNORE_END,
+                    ".venv/",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out = run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is True
+        content = gitignore_path.read_text(encoding="utf-8")
+        assert content.count(MODULE.OPTIMUS_GITIGNORE_BEGIN) == 1
+        assert content.count(MODULE.OPTIMUS_GITIGNORE_END) == 1
+        assert "/reports/optimus-prime/old/**" not in content
+        assert "node_modules/" in content
+        assert ".venv/" in content
+
+
+def test_new_project_repairs_corrupt_managed_gitignore_block_missing_end():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        gitignore_path = root / ".gitignore"
+        gitignore_path.write_text(
+            "\n".join(
+                [
+                    "node_modules/",
+                    MODULE.OPTIMUS_GITIGNORE_BEGIN,
+                    "/reports/optimus-prime/old/**",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out = run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is True
+        content = gitignore_path.read_text(encoding="utf-8")
+        assert content.count(MODULE.OPTIMUS_GITIGNORE_BEGIN) == 1
+        assert content.count(MODULE.OPTIMUS_GITIGNORE_END) == 1
+        assert "/reports/optimus-prime/old/**" not in content
+        assert "node_modules/" in content
+
+
+def test_new_project_preserves_existing_user_reports_wildcard_line():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        gitignore_path = root / ".gitignore"
+        gitignore_path.write_text("reports/*\n", encoding="utf-8")
+
+        out = run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is True
+        content = gitignore_path.read_text(encoding="utf-8")
+        assert "reports/*" in content
+        assert content.count(MODULE.OPTIMUS_GITIGNORE_BEGIN) == 1
+
+
+def test_gitignore_write_failure_is_silently_ignored_in_bootstrap_commands(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        original_write_text = MODULE.Path.write_text
+
+        def flaky_write_text(self: Path, *args: object, **kwargs: object):
+            if self.name == ".gitignore":
+                raise OSError("simulated gitignore write failure")
+            return original_write_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(MODULE.Path, "write_text", flaky_write_text, raising=False)
+
+        new_out = run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        init_out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert new_out["ok"] is True
+        assert init_out["ok"] is True
+
+
+def test_gitignore_helper_only_invoked_by_bootstrap_commands(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        calls: list[Path] = []
+
+        def recorder(repo_root: Path) -> None:
+            calls.append(repo_root)
+
+        monkeypatch.setattr(MODULE, "_ensure_managed_gitignore_block", recorder)
+
+        run_payload({"command": "/op-map-codebase", "repo_root": str(root)})
+        assert len(calls) == 0
+
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        assert len(calls) == 1
+
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+            }
+        )
+        assert len(calls) == 1
+
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        # /op-initialize invokes helper directly and once again via /op-new-project.
+        assert len(calls) == 3
+
+
 def test_build_preflight_blocks_without_baseline():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

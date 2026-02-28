@@ -93,6 +93,36 @@ TERMINAL_HARD_STOPS = {
 
 STALE_IN_PROGRESS_TIMEOUT_SEC = 900
 
+OPTIMUS_GITIGNORE_BEGIN = "# BEGIN OPTIMUS-PRIME MANAGED REPORT IGNORES"
+OPTIMUS_GITIGNORE_END = "# END OPTIMUS-PRIME MANAGED REPORT IGNORES"
+OPTIMUS_GITIGNORE_LINES = [
+    OPTIMUS_GITIGNORE_BEGIN,
+    "/reports/optimus-prime/runtime/**",
+    "/reports/optimus-prime/controller/**",
+    "/reports/optimus-prime/control/**",
+    "/reports/optimus-prime/prompts/**",
+    "/reports/optimus-prime/planning/evidence/**",
+    "/reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+    "/reports/optimus-prime/planning/BUILD_STATE.json",
+    "/reports/optimus-prime/planning/BUILD_LOOP.lock",
+    "/reports/optimus-prime/planning/GAPS.json",
+    "/reports/optimus-prime/planning/GAP_CLOSURE_PLAN_PACKETS.json",
+    "/reports/optimus-prime/BLOCKERS.jsonl",
+    "/reports/optimus-prime/BLOCKER_INDEX.json",
+    "/reports/optimus-prime/BLOCKER_ADAPTATION_CANDIDATES.md",
+    "/reports/optimus-prime/RUNTIME_REGISTRY.json",
+    "/reports/optimus-prime/TEST_RUNTIME_LEASES.json",
+    "/reports/optimus-prime/THREAD_HISTORY.log",
+    "/reports/optimus-prime/THREAD_TOKEN_USAGE_SUMMARY.json",
+    "/reports/optimus-prime/THREAD_TOKEN_USAGE_SUMMARY.md",
+    "/reports/optimus-prime/WORKER_REGISTRY.json",
+    "/reports/optimus-prime/TEST_TRAIN_STATE.json",
+    "/reports/optimus-prime/TEST_TASK_ATTEMPTS.json",
+    "/reports/optimus-prime/TEST_WAVE_LOG.jsonl",
+    OPTIMUS_GITIGNORE_END,
+]
+OPTIMUS_GITIGNORE_BLOCK = "\n".join(OPTIMUS_GITIGNORE_LINES) + "\n"
+
 
 class OpError(Exception):
     def __init__(self, code: str, message: str, stage: str | None = None) -> None:
@@ -199,6 +229,42 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
 def _write_text(path: Path, text: str) -> None:
     _ensure_parent(path)
     path.write_text(text, encoding="utf-8")
+
+
+def _ensure_managed_gitignore_block(repo_root: Path) -> None:
+    gitignore_path = repo_root / ".gitignore"
+    try:
+        existing = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
+    except OSError:
+        return
+
+    begin = existing.find(OPTIMUS_GITIGNORE_BEGIN)
+    end = existing.find(OPTIMUS_GITIGNORE_END, begin if begin >= 0 else 0)
+
+    if begin >= 0:
+        prefix = existing[:begin]
+        if end > begin:
+            end_line = existing.find("\n", end)
+            suffix_start = len(existing) if end_line < 0 else end_line + 1
+            suffix = existing[suffix_start:]
+        else:
+            # Corrupted prior block (missing END): replace from BEGIN through EOF.
+            suffix = ""
+        if prefix and not prefix.endswith("\n"):
+            prefix += "\n"
+        updated = f"{prefix}{OPTIMUS_GITIGNORE_BLOCK}{suffix}"
+    else:
+        base = existing
+        if base and not base.endswith("\n"):
+            base += "\n"
+        updated = f"{base}{OPTIMUS_GITIGNORE_BLOCK}"
+
+    if updated == existing:
+        return
+    try:
+        _write_text(gitignore_path, updated)
+    except OSError:
+        return
 
 
 def _read_json(path: Path) -> Any:
@@ -2707,6 +2773,7 @@ def _map_needs_refresh(repo_root: Path) -> tuple[bool, str]:
 def command_new_project(req: OpRequest) -> dict[str, Any]:
     _require_mission_scope(req)
     repo_root = req.repo_root
+    _ensure_managed_gitignore_block(repo_root)
 
     map_refresh, refresh_reason = _map_needs_refresh(repo_root)
     warnings: list[dict[str, Any]] = []
@@ -3257,6 +3324,7 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
 
 def command_initialize(req: OpRequest) -> dict[str, Any]:
     _require_mission_scope(req)
+    _ensure_managed_gitignore_block(req.repo_root)
     map_result = command_map_codebase(req)
     new_result = command_new_project(req)
     plan_result = command_plan(req)
