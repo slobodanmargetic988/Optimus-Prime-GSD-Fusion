@@ -206,9 +206,17 @@ def test_initialize_seeds_rate_registry_once_when_missing(monkeypatch: pytest.Mo
         build_repo(root)
         calls: list[Path] = []
 
-        def fake_seed(repo_root: Path, *, stage: str = "build_loop"):
+        def fake_seed(
+            repo_root: Path,
+            *,
+            stage: str = "build_loop",
+            force_refresh: bool = False,
+            emit_success_warning: bool = True,
+        ):
             calls.append(repo_root)
             assert stage == "initialize"
+            assert force_refresh is False
+            assert emit_success_warning is True
             return [{"code": "rate_registry_seeded", "message": "ok", "stage": stage}]
 
         monkeypatch.setattr(MODULE, "_seed_rate_registry_if_missing", fake_seed)
@@ -1277,7 +1285,7 @@ def test_build_escalates_strategy_after_five_attempts():
 
 
 
-def test_build_halts_on_hard_stop_all_rate_gates_blocking():
+def test_build_halts_on_hard_stop_all_rate_gates_blocking(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
@@ -1308,6 +1316,12 @@ def test_build_halts_on_hard_stop_all_rate_gates_blocking():
             )
             + "\n",
             encoding="utf-8",
+        )
+
+        monkeypatch.setattr(
+            MODULE,
+            "_seed_rate_registry_if_missing",
+            lambda *_args, **_kwargs: [],
         )
 
         out = run_payload(
@@ -1348,6 +1362,11 @@ def test_build_all_rate_gates_blocking_with_invalid_registry_continues_with_warn
 
         dispatch_calls = {"count": 0}
 
+        monkeypatch.setattr(
+            MODULE,
+            "_seed_rate_registry_if_missing",
+            lambda *_args, **_kwargs: [],
+        )
         monkeypatch.setattr(
             MODULE,
             "_run_controller_cycle",
@@ -1468,7 +1487,82 @@ def test_build_seeds_rate_registry_before_controller_cycle(monkeypatch: pytest.M
         assert "snapshot" in call_order
         assert "controller" in call_order
         assert call_order.index("snapshot") < call_order.index("controller")
-        assert any(item.get("code") == "rate_registry_seeded" for item in out.get("warnings", []))
+        assert not any(item.get("code") == "rate_registry_seeded" for item in out.get("warnings", []))
+
+
+def test_build_refreshes_rate_registry_each_cycle_even_when_registry_exists(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.parent.mkdir(parents=True, exist_ok=True)
+        rate_path.write_text(
+            json.dumps({"profiles": {"codex": {"recommended_action": "continue", "marker": "stale"}}}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+
+        calls: dict[str, int] = {"snapshot": 0}
+        original_run = MODULE._run
+
+        def wrapped_run(cmd, *, cwd, stdin_text=None):
+            script_name = Path(cmd[1]).name if len(cmd) > 1 else ""
+            if script_name == "read_codex_rate_snapshots.py":
+                calls["snapshot"] += 1
+                payload = {
+                    "profiles": {
+                        "codex": {
+                            "alias": "codex",
+                            "five_hour": {"remaining_percent": 80},
+                            "weekly": {"remaining_percent": 70},
+                            "recommended_action": "continue",
+                            "marker": "fresh",
+                        }
+                    },
+                    "profile_running_mode": "single-profile",
+                }
+                return 0, json.dumps(payload), ""
+            return original_run(cmd, cwd=cwd, stdin_text=stdin_text)
+
+        monkeypatch.setattr(MODULE, "_run", wrapped_run)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req: {
+                "ok": True,
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda *_args, **_kwargs: {"ok": True, "status": "noop"})
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+
+        assert out["status"] == "running_needs_resume"
+        assert calls["snapshot"] == 1
+        refreshed = json.loads(rate_path.read_text(encoding="utf-8"))
+        assert refreshed["profiles"]["codex"]["marker"] == "fresh"
 
 
 def test_build_recovers_malformed_gap_closure_and_releases_lock():

@@ -253,10 +253,16 @@ def _resolve_rate_snapshot_script(repo_root: Path) -> Path | None:
     return None
 
 
-def _seed_rate_registry_if_missing(repo_root: Path, *, stage: str = "build_loop") -> list[dict[str, Any]]:
+def _seed_rate_registry_if_missing(
+    repo_root: Path,
+    *,
+    stage: str = "build_loop",
+    force_refresh: bool = False,
+    emit_success_warning: bool = True,
+) -> list[dict[str, Any]]:
     warnings: list[dict[str, Any]] = []
     registry_path = _repo_path(repo_root, PROFILE_RATE_REGISTRY_JSON)
-    if registry_path.exists():
+    if registry_path.exists() and not force_refresh:
         return warnings
 
     script_path = _resolve_rate_snapshot_script(repo_root)
@@ -331,13 +337,14 @@ def _seed_rate_registry_if_missing(repo_root: Path, *, stage: str = "build_loop"
         )
         return warnings
 
-    warnings.append(
-        {
-            "code": "rate_registry_seeded",
-            "message": "generated PROFILE_RATE_REGISTRY.json via codex-rate-snapshot",
-            "stage": stage,
-        }
-    )
+    if emit_success_warning:
+        warnings.append(
+            {
+                "code": "rate_registry_seeded",
+                "message": "generated PROFILE_RATE_REGISTRY.json via codex-rate-snapshot",
+                "stage": stage,
+            }
+        )
     return warnings
 
 
@@ -4703,7 +4710,11 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 remediation_state["active"] = False
                 remediation_state["reason"] = None
 
-            rate_seed_warnings = _seed_rate_registry_if_missing(req.repo_root)
+            rate_seed_warnings = _seed_rate_registry_if_missing(
+                req.repo_root,
+                force_refresh=True,
+                emit_success_warning=False,
+            )
             warnings.extend(rate_seed_warnings)
             cycle_local_warnings.extend(rate_seed_warnings)
 
