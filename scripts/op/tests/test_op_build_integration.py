@@ -72,10 +72,102 @@ def build_repo(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+    fake_bin = root / "bin"
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import hashlib",
+                "import json",
+                "import re",
+                "import subprocess",
+                "import sys",
+                "from pathlib import Path",
+                "",
+                "def checksum(content_type, content):",
+                "    if content_type == 'json':",
+                "        payload = json.dumps(content, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')",
+                "    else:",
+                "        payload = str(content).encode('utf-8')",
+                "    return hashlib.sha256(payload).hexdigest()",
+                "",
+                "def row(path, content_type, content):",
+                "    return {'artifact_path': path, 'content_type': content_type, 'content': content, 'checksum_sha256': checksum(content_type, content)}",
+                "",
+                "args = sys.argv[1:]",
+                "prompt = sys.stdin.read()",
+                "bundle_match = re.search(r'Output artifacts by writing a JSONL file at:\\s*(\\S+)', prompt)",
+                "if not bundle_match:",
+                "    print('missing bundle path', file=sys.stderr)",
+                "    raise SystemExit(1)",
+                "bundle_path = Path(bundle_match.group(1)).expanduser().resolve()",
+                "bundle_path.parent.mkdir(parents=True, exist_ok=True)",
+                "validator_match = re.search(r'After writing the bundle, run this validator command:\\s*(.+)', prompt)",
+                "last_message = None",
+                "if '--output-last-message' in args:",
+                "    idx = args.index('--output-last-message')",
+                "    if idx + 1 < len(args):",
+                "        last_message = Path(args[idx + 1]).expanduser().resolve()",
+                "",
+                "plan_id = 'plan-test'",
+                "requirements = [",
+                "    {'id': 'REQ-001', 'title': 'Core workflow', 'acceptance_criteria': ['core path'], 'verify_commands': ['python3 -m pytest']},",
+                "    {'id': 'REQ-002', 'title': 'Quality gates', 'acceptance_criteria': ['quality path'], 'verify_commands': ['python3 -m pytest']},",
+                "    {'id': 'REQ-003', 'title': 'Rollout ops', 'acceptance_criteria': ['ops path'], 'verify_commands': ['python3 -m pytest']},",
+                "]",
+                "tasks = [",
+                "    {'task_id': 'TASK-001', 'title': 'Implement core workflow', 'phase_id': 'phase-1', 'requirement_ids': ['REQ-001'], 'depends_on': [], 'must_haves': ['core path'], 'verify_commands': ['python3 -m pytest']},",
+                "    {'task_id': 'TASK-002', 'title': 'Implement quality gates', 'phase_id': 'phase-1', 'requirement_ids': ['REQ-002'], 'depends_on': ['TASK-001'], 'must_haves': ['quality path'], 'verify_commands': ['python3 -m pytest']},",
+                "    {'task_id': 'TASK-003', 'title': 'Implement rollout ops', 'phase_id': 'phase-1', 'requirement_ids': ['REQ-003'], 'depends_on': ['TASK-002'], 'must_haves': ['ops path'], 'verify_commands': ['python3 -m pytest']},",
+                "]",
+                "plan_packets = {'schema_version': '1.0', 'generated_at': '2026-01-01T00:00:00Z', 'plan_id': plan_id, 'phase': 'multi-phase', 'phases': [{'phase_id': 'phase-1', 'task_ids': ['TASK-001', 'TASK-002', 'TASK-003'], 'depends_on_phase_ids': [], 'entry_criteria': ['phase_dependencies_done'], 'exit_criteria': ['all_tasks_review_done', 'verify_commands_passed', 'uat_matrix_passed', 'zero_open_gaps']}], 'requirements': requirements, 'tasks': tasks, 'depends_on': [], 'must_haves': ['core path', 'quality path', 'ops path'], 'verify_commands': ['python3 -m pytest']}",
+                "plan_check = {'schema_version': '1.0', 'passed': True, 'checks': [{'id': 'requirement_coverage', 'passed': True}], 'coverage': {'requirements_total': 3, 'requirements_covered': 3, 'missing_requirement_ids': []}, 'dependency_graph': {'nodes': ['TASK-001', 'TASK-002', 'TASK-003'], 'edges': [{'from': 'TASK-001', 'to': 'TASK-002'}, {'from': 'TASK-002', 'to': 'TASK-003'}], 'cycle_detected': False, 'valid': True}, 'verify_contract_completeness': True, 'phase_traceability': True, 'blocking_errors': []}",
+                "task_state = {'schema_version': '1.0', 'plan_id': plan_id, 'updated_at': '2026-01-01T00:00:00Z', 'tasks': []}",
+                "for task in tasks:",
+                "    task_id = task['task_id']",
+                "    evidence_ref = f'reports/optimus-prime/planning/evidence/{task_id}/TASK_EVIDENCE.json'",
+                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'requirement_ids': task['requirement_ids'], 'status': 'queued', 'owner_slot': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'blockers': []})",
+                "state_json = {'schema_version': '1.0', 'initialized_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z', 'mission': 'inline:Build MyBoard', 'scope': 'inline:Board workflow', 'mission_source': {'mode': 'inline', 'value': 'Build MyBoard', 'path': None, 'display': 'Build MyBoard'}, 'scope_source': {'mode': 'inline', 'value': 'Board workflow', 'path': None, 'display': 'Board workflow'}, 'constraints': [], 'requirements': requirements, 'map_fingerprint': 'map-test', 'repo_fingerprint': 'repo-test', 'baseline_ready': True, 'plan_ready': True, 'plan_id': plan_id, 'build_ready': True}",
+                "state_md = '# STATE\\n\\n- baseline_ready: true\\n- plan_ready: true\\n- build_ready: true\\n'",
+                "gaps = {'schema_version': '1.0', 'plan_id': plan_id, 'updated_at': '2026-01-01T00:00:00Z', 'gaps': []}",
+                "closure = {'schema_version': '1.0', 'plan_id': plan_id, 'generated_at': '2026-01-01T00:00:00Z', 'tasks': []}",
+                "rows = [",
+                "    row('PLAN_PACKETS.json', 'json', plan_packets),",
+                "    row('PLAN_CHECK.json', 'json', plan_check),",
+                "    row('TASK_EXECUTION_STATE.json', 'json', task_state),",
+                "    row('GAPS.json', 'json', gaps),",
+                "    row('GAP_CLOSURE_PLAN_PACKETS.json', 'json', closure),",
+                "    row('TEST_CONTRACT.md', 'text', '# TEST CONTRACT\\n'),",
+                "    row('PLAYWRIGHT_UAT_MATRIX.md', 'text', '# PLAYWRIGHT UAT MATRIX\\n'),",
+                "    row('VERIFICATION.md', 'text', '# VERIFICATION\\n'),",
+                "    row('UAT.md', 'text', '# UAT\\n'),",
+                "    row('STATE.json', 'json', state_json),",
+                "    row('STATE.md', 'text', state_md),",
+                "]",
+                "for task in tasks:",
+                "    task_id = task['task_id']",
+                "    ev = {'schema_version': '1.0', 'plan_id': plan_id, 'phase_id': task['phase_id'], 'task_id': task_id, 'requirement_ids': task['requirement_ids'], 'updated_at': '2026-01-01T00:00:00Z', 'dev': {'status': 'queued', 'checks': [], 'verify_results': [], 'dev_ready': False, 'blockers': [], 'artifacts': []}, 'test': {'status': 'queued', 'checks': [], 'verify_results': [], 'uat_results': [], 'blockers': [], 'artifacts': []}, 'review': {'status': 'queued', 'decision': None, 'blockers': [], 'artifacts': []}, 'gate': {'ready_for_test': False, 'ready_for_review': False, 'ready_for_phase_exit': False}, 'summary': {'result': 'pass', 'reason_codes': []}}",
+                "    rows.append(row(f'evidence/{task_id}/TASK_EVIDENCE.json', 'json', ev))",
+                "bundle_path.write_text('\\n'.join(json.dumps(item) for item in rows) + '\\n', encoding='utf-8')",
+                "if validator_match:",
+                "    subprocess.run(validator_match.group(1), shell=True, check=False)",
+                "if last_message is not None:",
+                "    last_message.parent.mkdir(parents=True, exist_ok=True)",
+                "    last_message.write_text('planner complete\\n', encoding='utf-8')",
+                "print(json.dumps({'ok': True, 'bundle_path': str(bundle_path)}))",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
     profile_dir = root.parent / ".codex"
     profile_dir.mkdir(parents=True, exist_ok=True)
     (profile_dir / "auth.json").write_text("{}\n", encoding="utf-8")
     os.environ["CODEX_HOME"] = str(profile_dir)
+    os.environ["PATH"] = f"{fake_bin}:{os.environ.get('PATH', '')}"
     git(root, "add", ".")
     git(root, "commit", "-m", "seed")
 

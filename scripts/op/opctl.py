@@ -60,7 +60,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--command")
     parser.add_argument("--repo-root")
     parser.add_argument("--mission")
+    parser.add_argument("--mission-file")
     parser.add_argument("--scope")
+    parser.add_argument("--scope-file")
+    parser.add_argument("--override-old-plan", action="store_true")
     parser.add_argument("--constraint", action="append")
     parser.add_argument("--non-interactive", action="store_true")
     parser.add_argument("--output-mode", choices=["json", "json+text"], default=None)
@@ -82,8 +85,14 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["repo_root"] = args.repo_root
     if args.mission is not None:
         payload["mission"] = args.mission
+    if args.mission_file is not None:
+        payload["mission_file"] = args.mission_file
     if args.scope is not None:
         payload["scope"] = args.scope
+    if args.scope_file is not None:
+        payload["scope_file"] = args.scope_file
+    if args.override_old_plan:
+        payload["override_old_plan"] = True
     if args.constraint is not None:
         payload["constraints"] = args.constraint
     if args.non_interactive:

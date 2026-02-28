@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
@@ -72,10 +73,125 @@ def build_repo(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+    fake_bin = root / "bin"
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import hashlib",
+                "import json",
+                "import re",
+                "import subprocess",
+                "import sys",
+                "from pathlib import Path",
+                "",
+                "def checksum(content_type, content):",
+                "    if content_type == 'json':",
+                "        payload = json.dumps(content, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')",
+                "    else:",
+                "        payload = str(content).encode('utf-8')",
+                "    return hashlib.sha256(payload).hexdigest()",
+                "",
+                "def row(path, content_type, content):",
+                "    return {",
+                "        'artifact_path': path,",
+                "        'content_type': content_type,",
+                "        'content': content,",
+                "        'checksum_sha256': checksum(content_type, content),",
+                "    }",
+                "",
+                "args = sys.argv[1:]",
+                "prompt = sys.stdin.read()",
+                "bundle_match = re.search(r'Output artifacts by writing a JSONL file at:\\s*(\\S+)', prompt)",
+                "if not bundle_match:",
+                "    print('missing bundle path', file=sys.stderr)",
+                "    raise SystemExit(1)",
+                "bundle_path = Path(bundle_match.group(1)).expanduser().resolve()",
+                "bundle_path.parent.mkdir(parents=True, exist_ok=True)",
+                "validator_match = re.search(r'After writing the bundle, run this validator command:\\s*(.+)', prompt)",
+                "last_message = None",
+                "if '--output-last-message' in args:",
+                "    idx = args.index('--output-last-message')",
+                "    if idx + 1 < len(args):",
+                "        last_message = Path(args[idx + 1]).expanduser().resolve()",
+                "",
+                "plan_id = 'plan-test'",
+                "requirements = [",
+                "    {'id': 'REQ-001', 'title': 'Core workflow', 'acceptance_criteria': ['core path'], 'verify_commands': ['python3 -m pytest']},",
+                "    {'id': 'REQ-002', 'title': 'Quality gates', 'acceptance_criteria': ['quality path'], 'verify_commands': ['python3 -m pytest']},",
+                "    {'id': 'REQ-003', 'title': 'Rollout ops', 'acceptance_criteria': ['ops path'], 'verify_commands': ['python3 -m pytest']},",
+                "]",
+                "tasks = [",
+                "    {'task_id': 'TASK-001', 'title': 'Implement core workflow', 'phase_id': 'phase-1', 'requirement_ids': ['REQ-001'], 'depends_on': [], 'must_haves': ['core path'], 'verify_commands': ['python3 -m pytest']},",
+                "    {'task_id': 'TASK-002', 'title': 'Implement quality gates', 'phase_id': 'phase-1', 'requirement_ids': ['REQ-002'], 'depends_on': ['TASK-001'], 'must_haves': ['quality path'], 'verify_commands': ['python3 -m pytest']},",
+                "    {'task_id': 'TASK-003', 'title': 'Implement rollout ops', 'phase_id': 'phase-1', 'requirement_ids': ['REQ-003'], 'depends_on': ['TASK-002'], 'must_haves': ['ops path'], 'verify_commands': ['python3 -m pytest']},",
+                "]",
+                "plan_packets = {",
+                "    'schema_version': '1.0',",
+                "    'generated_at': '2026-01-01T00:00:00Z',",
+                "    'plan_id': plan_id,",
+                "    'phase': 'multi-phase',",
+                "    'phases': [{'phase_id': 'phase-1', 'task_ids': ['TASK-001', 'TASK-002', 'TASK-003'], 'depends_on_phase_ids': [], 'entry_criteria': ['phase_dependencies_done'], 'exit_criteria': ['all_tasks_review_done', 'verify_commands_passed', 'uat_matrix_passed', 'zero_open_gaps']}],",
+                "    'requirements': requirements,",
+                "    'tasks': tasks,",
+                "    'depends_on': [],",
+                "    'must_haves': ['core path', 'quality path', 'ops path'],",
+                "    'verify_commands': ['python3 -m pytest'],",
+                "}",
+                "plan_check = {'schema_version': '1.0', 'passed': True, 'checks': [{'id': 'requirement_coverage', 'passed': True}], 'coverage': {'requirements_total': 3, 'requirements_covered': 3, 'missing_requirement_ids': []}, 'dependency_graph': {'nodes': ['TASK-001', 'TASK-002', 'TASK-003'], 'edges': [{'from': 'TASK-001', 'to': 'TASK-002'}, {'from': 'TASK-002', 'to': 'TASK-003'}], 'cycle_detected': False, 'valid': True}, 'verify_contract_completeness': True, 'phase_traceability': True, 'blocking_errors': []}",
+                "task_state = {'schema_version': '1.0', 'plan_id': plan_id, 'updated_at': '2026-01-01T00:00:00Z', 'tasks': []}",
+                "for task in tasks:",
+                "    task_id = task['task_id']",
+                "    evidence_ref = f'reports/optimus-prime/planning/evidence/{task_id}/TASK_EVIDENCE.json'",
+                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'requirement_ids': task['requirement_ids'], 'status': 'queued', 'owner_slot': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'blockers': []})",
+                "",
+                "state_json = {'schema_version': '1.0', 'initialized_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z', 'mission': 'inline:Build MyBoard', 'scope': 'inline:Board workflow', 'mission_source': {'mode': 'inline', 'value': 'Build MyBoard', 'path': None, 'display': 'Build MyBoard'}, 'scope_source': {'mode': 'inline', 'value': 'Board workflow', 'path': None, 'display': 'Board workflow'}, 'constraints': [], 'requirements': requirements, 'map_fingerprint': 'map-test', 'repo_fingerprint': 'repo-test', 'baseline_ready': True, 'plan_ready': True, 'plan_id': plan_id, 'build_ready': True}",
+                "state_md = '# STATE\\\\n\\\\n- baseline_ready: true\\\\n- plan_ready: true\\\\n- build_ready: true\\\\n'",
+                "gaps = {'schema_version': '1.0', 'plan_id': plan_id, 'updated_at': '2026-01-01T00:00:00Z', 'gaps': []}",
+                "closure = {'schema_version': '1.0', 'plan_id': plan_id, 'generated_at': '2026-01-01T00:00:00Z', 'tasks': []}",
+                "test_contract = '# TEST CONTRACT\\\\n'",
+                "uat_matrix = '# PLAYWRIGHT UAT MATRIX\\\\n'",
+                "verification = '# VERIFICATION\\\\n'",
+                "uat = '# UAT\\\\n'",
+                "",
+                "rows = [",
+                "    row('PLAN_PACKETS.json', 'json', plan_packets),",
+                "    row('PLAN_CHECK.json', 'json', plan_check),",
+                "    row('TASK_EXECUTION_STATE.json', 'json', task_state),",
+                "    row('GAPS.json', 'json', gaps),",
+                "    row('GAP_CLOSURE_PLAN_PACKETS.json', 'json', closure),",
+                "    row('TEST_CONTRACT.md', 'text', test_contract),",
+                "    row('PLAYWRIGHT_UAT_MATRIX.md', 'text', uat_matrix),",
+                "    row('VERIFICATION.md', 'text', verification),",
+                "    row('UAT.md', 'text', uat),",
+                "    row('STATE.json', 'json', state_json),",
+                "    row('STATE.md', 'text', state_md),",
+                "]",
+                "for task in tasks:",
+                "    task_id = task['task_id']",
+                "    ev = {'schema_version': '1.0', 'plan_id': plan_id, 'phase_id': task['phase_id'], 'task_id': task_id, 'requirement_ids': task['requirement_ids'], 'updated_at': '2026-01-01T00:00:00Z', 'dev': {'status': 'queued', 'checks': [], 'verify_results': [], 'dev_ready': False, 'blockers': [], 'artifacts': []}, 'test': {'status': 'queued', 'checks': [], 'verify_results': [], 'uat_results': [], 'blockers': [], 'artifacts': []}, 'review': {'status': 'queued', 'decision': None, 'blockers': [], 'artifacts': []}, 'gate': {'ready_for_test': False, 'ready_for_review': False, 'ready_for_phase_exit': False}, 'summary': {'result': 'pass', 'reason_codes': []}}",
+                "    rows.append(row(f'evidence/{task_id}/TASK_EVIDENCE.json', 'json', ev))",
+                "",
+                "bundle_path.write_text('\\n'.join(json.dumps(item) for item in rows) + '\\n', encoding='utf-8')",
+                "if validator_match:",
+                "    subprocess.run(validator_match.group(1), shell=True, check=False)",
+                "if last_message is not None:",
+                "    last_message.parent.mkdir(parents=True, exist_ok=True)",
+                "    last_message.write_text('planner complete\\\\n', encoding='utf-8')",
+                "print(json.dumps({'ok': True, 'bundle_path': str(bundle_path)}))",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
     profile_dir = root.parent / ".codex"
     profile_dir.mkdir(parents=True, exist_ok=True)
     (profile_dir / "auth.json").write_text("{}\n", encoding="utf-8")
     os.environ["CODEX_HOME"] = str(profile_dir)
+    os.environ["PATH"] = f"{fake_bin}:{os.environ.get('PATH', '')}"
     git(root, "add", ".")
     git(root, "commit", "-m", "seed")
 
@@ -84,6 +200,28 @@ def build_repo(root: Path) -> None:
 def run_payload(payload: dict) -> dict:
     req = MODULE.parse_request(payload)
     return MODULE.execute_request(req)
+
+
+def planner_checksum(content_type: str, content: object) -> str:
+    if content_type == "json":
+        payload = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    else:
+        payload = str(content).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def planner_row(path: str, content_type: str, content: object) -> dict[str, object]:
+    return {
+        "artifact_path": path,
+        "content_type": content_type,
+        "content": content,
+        "checksum_sha256": planner_checksum(content_type, content),
+    }
+
+
+def write_planner_bundle(path: Path, rows: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(item) for item in rows) + "\n", encoding="utf-8")
 
 
 def write_profile_selection(
@@ -228,7 +366,7 @@ def test_new_project_auto_maps_when_missing():
 
 
 
-def test_plan_check_blocks_when_verify_commands_missing():
+def test_op_plan_requires_override_when_planning_artifacts_exist():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
@@ -241,16 +379,19 @@ def test_plan_check_blocks_when_verify_commands_missing():
                 "scope": "Board workflow",
             }
         )
-        state_path = root / "reports" / "optimus-prime" / "planning" / "STATE.json"
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        state["requirements"][0]["verify_commands"] = []
-        state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+        with pytest.raises(MODULE.OpError) as exc_info:
+            run_payload({"command": "/op-plan", "repo_root": str(root)})
+        assert exc_info.value.code == "override_required"
 
-        out = run_payload({"command": "/op-plan", "repo_root": str(root)})
+        out = run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
         assert out["ok"] is True
-        assert out["status"] == "blocked_plan_check"
-        state2 = json.loads(state_path.read_text(encoding="utf-8"))
-        assert state2["plan_ready"] is False
+        assert out["status"] == "completed"
 
 
 
@@ -586,6 +727,7 @@ def test_gitignore_write_failure_is_silently_ignored_in_bootstrap_commands(monke
                 "repo_root": str(root),
                 "mission": "Build MyBoard",
                 "scope": "Board workflow",
+                "override_old_plan": True,
             }
         )
 
@@ -621,6 +763,7 @@ def test_gitignore_helper_only_invoked_by_bootstrap_commands(monkeypatch: pytest
             {
                 "command": "/op-plan",
                 "repo_root": str(root),
+                "override_old_plan": True,
             }
         )
         assert len(calls) == 1
@@ -631,6 +774,7 @@ def test_gitignore_helper_only_invoked_by_bootstrap_commands(monkeypatch: pytest
                 "repo_root": str(root),
                 "mission": "Build MyBoard",
                 "scope": "Board workflow",
+                "override_old_plan": True,
             }
         )
         # /op-initialize invokes helper directly and once again via /op-new-project.
@@ -3756,3 +3900,213 @@ def test_append_task_blocker_compacts_duplicates_and_bounds():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+def test_new_project_accepts_mission_scope_file_sources():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        mission_path = root / "mission.txt"
+        scope_path = root / "scope.md"
+        mission_path.write_text("Build MyBoard MCP backend\n", encoding="utf-8")
+        scope_path.write_text("Implement API, tests, docs.\n", encoding="utf-8")
+
+        out = run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission_file": str(mission_path),
+                "scope_file": str(scope_path),
+            }
+        )
+
+        assert out["ok"] is True
+        state = json.loads((root / "reports" / "optimus-prime" / "planning" / "STATE.json").read_text(encoding="utf-8"))
+        mission_source = state.get("mission_source", {})
+        scope_source = state.get("scope_source", {})
+        assert mission_source.get("mode") == "file"
+        assert mission_source.get("path") == str(mission_path.resolve())
+        assert scope_source.get("mode") == "file"
+        assert scope_source.get("path") == str(scope_path.resolve())
+
+
+def test_new_project_rejects_mixed_mission_input_modes():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        mission_path = root / "mission.txt"
+        mission_path.write_text("Build MyBoard MCP backend\n", encoding="utf-8")
+        with pytest.raises(MODULE.OpError) as exc_info:
+            run_payload(
+                {
+                    "command": "/op-new-project",
+                    "repo_root": str(root),
+                    "mission": "inline mission",
+                    "mission_file": str(mission_path),
+                    "scope": "inline scope",
+                }
+            )
+        assert exc_info.value.code == "input_error"
+        assert "mutually exclusive" in exc_info.value.message
+
+
+def test_planner_validator_rejects_missing_required_artifacts():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        write_planner_bundle(
+            bundle_path,
+            [
+                planner_row(
+                    "PLAN_PACKETS.json",
+                    "json",
+                    {
+                        "schema_version": "1.0",
+                        "plan_id": "plan-test",
+                        "phases": [],
+                        "requirements": [],
+                        "tasks": [],
+                    },
+                )
+            ],
+        )
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any(item.get("code") == "planner_bundle_schema_error" for item in errors)
+        assert any("missing required artifacts" in str(item.get("message")) for item in errors)
+
+
+def test_op_plan_retry_exhausted_after_ten_failed_attempts(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        def fake_run_codex_exec(**_kwargs: object) -> int:
+            return 0
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_run_codex_exec)
+        with pytest.raises(MODULE.OpError) as exc_info:
+            run_payload(
+                {
+                    "command": "/op-plan",
+                    "repo_root": str(root),
+                    "override_old_plan": True,
+                }
+            )
+        assert exc_info.value.code == "planner_retry_exhausted"
+        attempts_log = root / "reports" / "optimus-prime" / "planning" / "llm" / "PLAN_GENERATION_ATTEMPTS.jsonl"
+        lines = [line for line in attempts_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(lines) == 10
+
+
+def test_op_plan_retries_and_succeeds_after_validation_failure(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        original_validate = MODULE._planner_validate_bundle
+        calls = {"count": 0}
+
+        def fake_validate(req: object, bundle_path: Path):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return None, [{"code": "planner_bundle_schema_error", "message": "simulated-first-attempt-failure"}]
+            return original_validate(req, bundle_path)
+
+        monkeypatch.setattr(MODULE, "_planner_validate_bundle", fake_validate)
+        out = run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+        assert out["ok"] is True
+        assert calls["count"] >= 2
+        attempts_log = root / "reports" / "optimus-prime" / "planning" / "llm" / "PLAN_GENERATION_ATTEMPTS.jsonl"
+        lines = [line for line in attempts_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(lines) >= 2
+
+
+def test_initialize_fails_when_planner_retry_exhausted(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+
+        def fail_planner(*_args: object, **_kwargs: object):
+            raise MODULE.OpError("planner_retry_exhausted", "planner loop failed", stage="plan")
+
+        monkeypatch.setattr(MODULE, "_run_llm_plan_generation", fail_planner)
+        with pytest.raises(MODULE.OpError) as exc_info:
+            run_payload(
+                {
+                    "command": "/op-initialize",
+                    "repo_root": str(root),
+                    "mission": "Build MyBoard",
+                    "scope": "Board workflow",
+                }
+            )
+        assert exc_info.value.code == "planner_retry_exhausted"
+
+
+def test_hardening_rule_applies_only_when_requirement_group_has_more_than_two_tasks():
+    two_task_group = [
+        {"task_id": "TASK-001", "title": "Implement A", "requirement_ids": ["REQ-001"], "depends_on": []},
+        {"task_id": "TASK-002", "title": "Implement B", "requirement_ids": ["REQ-001"], "depends_on": ["TASK-001"]},
+    ]
+    no_error = MODULE._validate_hardening_rule(two_task_group)
+    assert no_error == []
+
+    three_task_group = [
+        {"task_id": "TASK-001", "title": "Implement A", "requirement_ids": ["REQ-001"], "depends_on": []},
+        {"task_id": "TASK-002", "title": "Implement B", "requirement_ids": ["REQ-001"], "depends_on": ["TASK-001"]},
+        {"task_id": "TASK-003", "title": "Ship feature", "requirement_ids": ["REQ-001"], "depends_on": ["TASK-002"]},
+    ]
+    errors = MODULE._validate_hardening_rule(three_task_group)
+    assert any(item.get("code") == "planner_bundle_schema_error" for item in errors)
+
+
+def test_op_plan_returns_planner_execution_failed_when_codex_exec_unavailable(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        def fail_run_codex_exec(**_kwargs: object) -> int:
+            raise FileNotFoundError("codex")
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fail_run_codex_exec)
+        with pytest.raises(MODULE.OpError) as exc_info:
+            run_payload(
+                {
+                    "command": "/op-plan",
+                    "repo_root": str(root),
+                    "override_old_plan": True,
+                }
+            )
+        assert exc_info.value.code == "planner_execution_failed"

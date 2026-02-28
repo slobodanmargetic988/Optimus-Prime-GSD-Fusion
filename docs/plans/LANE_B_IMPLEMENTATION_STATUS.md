@@ -51,6 +51,19 @@ Updated: 2026-02-28
   - `/op-health`
   - `/op-status`
   - `/op-resume`
+- Replaced static `/op-plan` generation with strict LLM planner flow:
+  - planner backend is foreground `codex exec` with high reasoning effort
+  - planner outputs `reports/optimus-prime/planning/llm/attempt-<n>/PLAN_BUNDLE.jsonl`
+  - OP validates parse + schema + recomputed plan-check and retries up to 10 attempts
+  - deterministic attempt ledger persisted at `reports/optimus-prime/planning/llm/PLAN_GENERATION_ATTEMPTS.jsonl`
+  - canonical planning artifacts are materialized only after full validation pass
+- Extended planning command input contract:
+  - `mission` xor `mission_file`
+  - `scope` xor `scope_file`
+  - file mode is path-reference only (OP validates file existence/path; does not parse file contents)
+- Added strict override gate for planning regeneration:
+  - `/op-new-project`, `/op-plan`, `/op-initialize` return `override_required` when planning artifacts already exist
+  - `--override-old-plan` archives prior planning artifacts and allows regeneration
 - Added profile autodetection in `/op-initialize`:
   - scans parent of `CODEX_HOME` (fallback `~`) for `.codex*` directories with first-level `auth.json`
   - writes canonical profile artifact `reports/optimus-prime/planning/PROFILE_SELECTION.json`

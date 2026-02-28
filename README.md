@@ -91,6 +91,15 @@ Run one command to prepare planning artifacts:
 opctl /op-initialize --mission "Build X" --scope "Y" --json-pretty
 ```
 
+File-source mode is also supported:
+
+```bash
+opctl /op-initialize \
+  --mission-file /abs/path/to/mission.md \
+  --scope-file /abs/path/to/scope.txt \
+  --json-pretty
+```
+
 `/op-initialize` runs:
 1. `/op-map-codebase`
 2. `/op-new-project`
@@ -98,6 +107,11 @@ opctl /op-initialize --mission "Build X" --scope "Y" --json-pretty
 4. Codex profile autodetection (`.codex*` with first-level `auth.json`) and writes `reports/optimus-prime/planning/PROFILE_SELECTION.json` for `/op-build` profile/rate wiring.
 
 It does **not** start implementation. It prepares decision-complete planning state.
+
+Planner behavior:
+- `/op-plan` is LLM-driven (`codex exec`) and writes a strict planning bundle.
+- OP validates parse + schema + recomputed plan-check and retries repair up to 10 attempts.
+- Existing planning artifacts require explicit replacement with `--override-old-plan`.
 
 ## 2) Autonomous Build
 
@@ -134,7 +148,7 @@ Operator stop behavior:
 Workflow commands:
 - `/op-map-codebase` — map current codebase and generate planning context artifacts
 - `/op-new-project` — initialize baseline project artifacts
-- `/op-plan` — generate plan packets and run plan checks
+- `/op-plan` — generate plan artifacts via strict LLM bundle + validation loop
 - `/op-initialize` — map + new-project + plan chain
 - `/op-build` — autonomous execution loop
 - `/op-status` — deterministic status snapshot

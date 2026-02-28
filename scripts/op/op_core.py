@@ -6,7 +6,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -25,6 +27,13 @@ ENGINE_ROOT = SCRIPT_DIR.parents[1]
 SKILLS_ROOT = ENGINE_ROOT / "skills"
 
 from op_router import SUPPORTED_COMMANDS, normalize_command
+from planner.llm_planner import (
+    PlannerError,
+    materialize_bundle,
+    parse_bundle_jsonl,
+    render_prompt,
+    run_codex_exec,
+)
 
 SCHEMA_VERSION = "1.0"
 TOOL = "opctl"
@@ -56,6 +65,8 @@ EVIDENCE_REL = PLANNING_REL / "evidence"
 BUILD_STATE_JSON = PLANNING_REL / "BUILD_STATE.json"
 TASK_EXECUTION_STATE_JSON = PLANNING_REL / "TASK_EXECUTION_STATE.json"
 PROFILE_SELECTION_JSON = PLANNING_REL / "PROFILE_SELECTION.json"
+PLANNER_REL = PLANNING_REL / "llm"
+PLANNER_ATTEMPTS_JSONL = PLANNER_REL / "PLAN_GENERATION_ATTEMPTS.jsonl"
 BUILD_LOOP_LOCK = PLANNING_REL / "BUILD_LOOP.lock"
 RUN_PROGRESS_LEDGER_JSONL = PLANNING_REL / "RUN_PROGRESS_LEDGER.jsonl"
 NO_PROGRESS_WATCHDOG_STATE_JSON = PLANNING_REL / "NO_PROGRESS_WATCHDOG_STATE.json"
@@ -67,6 +78,8 @@ OPERATOR_STOP_JSON = CONTROL_REL / "OPERATOR_STOP.json"
 OPERATOR_STOP_STATE_JSON = CONTROL_REL / "OPERATOR_STOP_STATE.json"
 PROFILE_RATE_REGISTRY_JSON = Path("reports") / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
+PLANNER_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "llm_plan_prompt.md"
+PLANNER_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_plan_bundle.py"
 
 MANDATORY_BUILD_BASELINE = [
     PROJECT_MD,
@@ -84,6 +97,19 @@ MANDATORY_BUILD_BASELINE = [
     UAT_MD,
     TASK_EXECUTION_STATE_JSON,
     PROFILE_SELECTION_JSON,
+]
+
+PLANNING_OVERRIDE_SENTINELS = [
+    PROJECT_MD,
+    REQUIREMENTS_MD,
+    ROADMAP_MD,
+    STATE_MD,
+    STATE_JSON,
+    PLAN_PACKETS_JSON,
+    PLAN_CHECK_JSON,
+    TASK_EXECUTION_STATE_JSON,
+    GAPS_JSON,
+    GAP_CLOSURE_PLAN_PACKETS_JSON,
 ]
 
 STRATEGY_LADDER = [
@@ -147,7 +173,10 @@ class OpRequest:
     command: str
     repo_root: Path
     mission: str | None
+    mission_file: str | None
     scope: str | None
+    scope_file: str | None
+    override_old_plan: bool
     constraints: list[str]
     non_interactive: bool
     output_mode: str
@@ -3578,11 +3607,101 @@ def _response(
     return out
 
 
-def _require_mission_scope(req: OpRequest) -> None:
-    if not req.mission:
-        raise OpError("input_error", "mission is required", stage="input")
-    if not req.scope:
-        raise OpError("input_error", "scope is required", stage="input")
+def _resolve_text_or_file_source(
+    *,
+    inline_value: str | None,
+    file_value: str | None,
+    field: str,
+    stage: str,
+    required: bool,
+) -> dict[str, Any]:
+    has_inline = bool(_as_str(inline_value))
+    has_file = bool(_as_str(file_value))
+    if has_inline and has_file:
+        raise OpError("input_error", f"{field} and {field}_file are mutually exclusive", stage=stage)
+    if not has_inline and not has_file:
+        if required:
+            raise OpError("input_error", f"{field} is required", stage=stage)
+        return {"mode": "none", "value": None, "path": None, "display": None}
+
+    if has_file:
+        raw = _as_str(file_value)
+        assert raw is not None
+        path = Path(raw).expanduser().resolve()
+        if not path.exists():
+            raise OpError("input_error", f"{field}_file does not exist: {path}", stage=stage)
+        if not path.is_file():
+            raise OpError("input_error", f"{field}_file must point to a file: {path}", stage=stage)
+        return {
+            "mode": "file",
+            "value": None,
+            "path": str(path),
+            "display": f"@file:{path}",
+        }
+
+    value = _as_str(inline_value)
+    assert value is not None
+    return {
+        "mode": "inline",
+        "value": value,
+        "path": None,
+        "display": value,
+    }
+
+
+def _resolve_mission_scope_sources(req: OpRequest, *, stage: str, required: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+    mission_source = _resolve_text_or_file_source(
+        inline_value=req.mission,
+        file_value=req.mission_file,
+        field="mission",
+        stage=stage,
+        required=required,
+    )
+    scope_source = _resolve_text_or_file_source(
+        inline_value=req.scope,
+        file_value=req.scope_file,
+        field="scope",
+        stage=stage,
+        required=required,
+    )
+    return mission_source, scope_source
+
+
+def _planning_artifacts_exist(repo_root: Path) -> bool:
+    for rel in PLANNING_OVERRIDE_SENTINELS:
+        if _repo_path(repo_root, rel).exists():
+            return True
+    return False
+
+
+def _require_override_if_existing_plan(req: OpRequest, *, stage: str) -> None:
+    if not _planning_artifacts_exist(req.repo_root):
+        return
+    if req.override_old_plan:
+        return
+    raise OpError(
+        "override_required",
+        "existing planning artifacts detected; rerun with --override-old-plan to replace them",
+        stage=stage,
+    )
+
+
+def _archive_existing_planning_artifacts(repo_root: Path) -> str | None:
+    planning_root = _repo_path(repo_root, PLANNING_REL)
+    if not planning_root.exists():
+        return None
+    archive_root = planning_root / "archive"
+    archive_root.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive_path = archive_root / f"override-{stamp}-{uuid.uuid4().hex[:8]}"
+    archive_path.mkdir(parents=True, exist_ok=False)
+    for rel in PLANNING_OVERRIDE_SENTINELS:
+        src = _repo_path(repo_root, rel)
+        if not src.exists():
+            continue
+        dst = archive_path / rel.name
+        shutil.copy2(src, dst)
+    return str(archive_path)
 
 
 def command_map_codebase(req: OpRequest) -> dict[str, Any]:
@@ -3744,39 +3863,6 @@ def command_map_codebase(req: OpRequest) -> dict[str, Any]:
     )
 
 
-def _requirements_from_request(req: OpRequest) -> list[dict[str, Any]]:
-    scope = req.scope or "project scope"
-    return [
-        {
-            "id": "REQ-001",
-            "title": f"Deliver core functionality for {scope}",
-            "acceptance_criteria": [
-                "Core workflow is implemented end-to-end.",
-                "Critical errors are handled deterministically.",
-            ],
-            "verify_commands": ["python3 -m pytest"],
-        },
-        {
-            "id": "REQ-002",
-            "title": f"Verify quality gates for {scope}",
-            "acceptance_criteria": [
-                "Relevant checks are automated.",
-                "Evidence is persisted in reports artifacts.",
-            ],
-            "verify_commands": ["python3 -m pytest"],
-        },
-        {
-            "id": "REQ-003",
-            "title": f"Operationalize rollout for {scope}",
-            "acceptance_criteria": [
-                "Runtime/deploy flow is deterministic.",
-                "Recovery path is documented and testable.",
-            ],
-            "verify_commands": ["python3 -m pytest"],
-        },
-    ]
-
-
 def _map_needs_refresh(repo_root: Path) -> tuple[bool, str]:
     map_path = _repo_path(repo_root, MAP_PATH)
     if not map_path.exists():
@@ -3792,9 +3878,13 @@ def _map_needs_refresh(repo_root: Path) -> tuple[bool, str]:
 
 
 def command_new_project(req: OpRequest) -> dict[str, Any]:
-    _require_mission_scope(req)
+    _require_override_if_existing_plan(req, stage="new-project")
+    mission_source, scope_source = _resolve_mission_scope_sources(req, stage="new-project", required=True)
     repo_root = req.repo_root
     _ensure_managed_gitignore_block(repo_root)
+    override_archive_path: str | None = None
+    if req.override_old_plan:
+        override_archive_path = _archive_existing_planning_artifacts(repo_root)
 
     map_refresh, refresh_reason = _map_needs_refresh(repo_root)
     warnings: list[dict[str, Any]] = []
@@ -3815,7 +3905,6 @@ def command_new_project(req: OpRequest) -> dict[str, Any]:
     if not isinstance(map_payload, dict):
         raise OpError("state_read_error", "map artifact is invalid", stage="new-project")
 
-    requirements = _requirements_from_request(req)
     constraints = req.constraints
     constraint_lines = [f"- {item}" for item in constraints] if constraints else ["- none"]
     initialized_at = utc_now_iso()
@@ -3824,8 +3913,8 @@ def command_new_project(req: OpRequest) -> dict[str, Any]:
         [
             "# PROJECT",
             "",
-            f"- Mission: {req.mission}",
-            f"- Scope: {req.scope}",
+            f"- Mission: {mission_source['display']}",
+            f"- Scope: {scope_source['display']}",
             f"- Initialized At: {initialized_at}",
             f"- Map Fingerprint: `{map_payload.get('map_fingerprint')}`",
             "",
@@ -3834,23 +3923,21 @@ def command_new_project(req: OpRequest) -> dict[str, Any]:
         ]
     )
 
-    requirements_md_lines = [
-        "# REQUIREMENTS",
-        "",
-        "| ID | Title |",
-        "| --- | --- |",
-    ]
-    for req_item in requirements:
-        requirements_md_lines.append(f"| {req_item['id']} | {req_item['title']} |")
-    requirements_md = "\n".join(requirements_md_lines)
+    requirements_md = "\n".join(
+        [
+            "# REQUIREMENTS",
+            "",
+            "Generated by `/op-plan` from LLM planner output.",
+        ]
+    )
 
     roadmap_md = "\n".join(
         [
             "# ROADMAP",
             "",
             "1. Planning baseline finalized.",
-            "2. Plan packets + plan-check pass.",
-            "3. Autonomous build loop executes packets.",
+            "2. LLM plan bundle generated + strict validation pass.",
+            "3. Autonomous build loop executes validated plan packets.",
             "4. Verification artifacts complete and terminal stop authorization passes.",
         ]
     )
@@ -3859,10 +3946,12 @@ def command_new_project(req: OpRequest) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "initialized_at": initialized_at,
         "updated_at": initialized_at,
-        "mission": req.mission,
-        "scope": req.scope,
+        "mission": mission_source["display"],
+        "scope": scope_source["display"],
+        "mission_source": mission_source,
+        "scope_source": scope_source,
         "constraints": constraints,
-        "requirements": requirements,
+        "requirements": [],
         "map_fingerprint": map_payload.get("map_fingerprint"),
         "repo_fingerprint": map_payload.get("repo_fingerprint"),
         "baseline_ready": True,
@@ -3875,14 +3964,14 @@ def command_new_project(req: OpRequest) -> dict[str, Any]:
         [
             "# STATE",
             "",
-            f"- baseline_ready: true",
-            f"- plan_ready: false",
-            f"- build_ready: false",
-            f"- mission: {req.mission}",
-            f"- scope: {req.scope}",
+            "- baseline_ready: true",
+            "- plan_ready: false",
+            "- build_ready: false",
+            f"- mission: {mission_source['display']}",
+            f"- scope: {scope_source['display']}",
             "",
             "## Traceability",
-            *[f"- {item['id']} -> planned task pending" for item in requirements],
+            "- Requirements/tasks are generated by /op-plan.",
         ]
     )
 
@@ -3891,6 +3980,10 @@ def command_new_project(req: OpRequest) -> dict[str, Any]:
     _write_text(_repo_path(repo_root, ROADMAP_MD), roadmap_md + "\n")
     _write_text(_repo_path(repo_root, STATE_MD), state_md + "\n")
     _atomic_write_json(_repo_path(repo_root, STATE_JSON), state_json)
+
+    data: dict[str, Any] = {"auto_map_performed": auto_map_performed}
+    if override_archive_path:
+        data["override_archive_path"] = override_archive_path
 
     return _response(
         req,
@@ -3907,8 +4000,632 @@ def command_new_project(req: OpRequest) -> dict[str, Any]:
         ],
         next_action="Run /op-plan to generate packets and enforce plan-check.",
         state_ref=str(_repo_path(repo_root, STATE_JSON)),
-        data={"auto_map_performed": auto_map_performed},
+        data=data,
     )
+
+
+def _normalize_requirement_rows(requirements_raw: Any) -> list[dict[str, Any]]:
+    requirements: list[dict[str, Any]] = []
+    if not isinstance(requirements_raw, list):
+        return requirements
+    for idx, row in enumerate(requirements_raw, start=1):
+        if not isinstance(row, dict):
+            continue
+        req_id = _as_str(row.get("id")) or f"REQ-{idx:03d}"
+        title = _as_str(row.get("title")) or f"Requirement {req_id}"
+        acceptance = row.get("acceptance_criteria")
+        verify = row.get("verify_commands")
+        requirements.append(
+            {
+                "id": req_id,
+                "title": title,
+                "acceptance_criteria": [item for item in acceptance if isinstance(item, str)] if isinstance(acceptance, list) else [],
+                "verify_commands": [item for item in verify if isinstance(item, str)] if isinstance(verify, list) else [],
+            }
+        )
+    return requirements
+
+
+def _build_dag_edges(tasks: list[dict[str, Any]]) -> tuple[dict[str, list[str]], dict[str, list[str]], list[dict[str, Any]]]:
+    task_ids = [_as_str(item.get("task_id")) for item in tasks if isinstance(item, dict)]
+    known = {task_id for task_id in task_ids if task_id}
+    preds: dict[str, list[str]] = {task_id: [] for task_id in known}
+    succs: dict[str, list[str]] = {task_id: [] for task_id in known}
+    errors: list[dict[str, Any]] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        if not task_id:
+            continue
+        deps = task.get("depends_on")
+        if not isinstance(deps, list):
+            errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id} depends_on must be list"})
+            continue
+        for dep in deps:
+            dep_id = _as_str(dep)
+            if not dep_id:
+                continue
+            if dep_id not in known:
+                errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id} depends on unknown task {dep_id}"})
+                continue
+            preds[task_id].append(dep_id)
+            succs[dep_id].append(task_id)
+    return preds, succs, errors
+
+
+def _validate_task_dag(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    preds, succs, errors = _build_dag_edges(tasks)
+    if errors:
+        return errors
+    indegree = {task_id: len(parents) for task_id, parents in preds.items()}
+    queue = deque(sorted([task_id for task_id, value in indegree.items() if value == 0]))
+    seen = 0
+    while queue:
+        node = queue.popleft()
+        seen += 1
+        for child in succs.get(node, []):
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                queue.append(child)
+    if seen != len(indegree):
+        return [{"code": "planner_bundle_schema_error", "message": "task DAG contains cycle"}]
+    return []
+
+
+def _validate_phase_dag(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    phase_ids = {_as_str(phase.get("phase_id")) for phase in phases if isinstance(phase, dict)}
+    phase_ids.discard(None)
+    if not phase_ids:
+        errors.append({"code": "planner_bundle_schema_error", "message": "phases must be non-empty"})
+        return errors
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id")) or "task-unknown"
+        phase_id = _as_str(task.get("phase_id"))
+        if not phase_id or phase_id not in phase_ids:
+            errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id} has invalid phase_id"})
+
+    phase_preds: dict[str, list[str]] = {phase_id: [] for phase_id in phase_ids}
+    phase_succs: dict[str, list[str]] = {phase_id: [] for phase_id in phase_ids}
+    for phase in phases:
+        if not isinstance(phase, dict):
+            continue
+        phase_id = _as_str(phase.get("phase_id"))
+        if not phase_id:
+            continue
+        deps = phase.get("depends_on_phase_ids")
+        if not isinstance(deps, list):
+            errors.append({"code": "planner_bundle_schema_error", "message": f"phase {phase_id} depends_on_phase_ids must be list"})
+            continue
+        for dep in deps:
+            dep_id = _as_str(dep)
+            if not dep_id:
+                continue
+            if dep_id not in phase_ids:
+                errors.append({"code": "planner_bundle_schema_error", "message": f"phase {phase_id} depends on unknown phase {dep_id}"})
+                continue
+            phase_preds[phase_id].append(dep_id)
+            phase_succs[dep_id].append(phase_id)
+    if errors:
+        return errors
+    indegree = {phase_id: len(parents) for phase_id, parents in phase_preds.items()}
+    queue = deque(sorted([phase_id for phase_id, value in indegree.items() if value == 0]))
+    seen = 0
+    while queue:
+        node = queue.popleft()
+        seen += 1
+        for child in phase_succs.get(node, []):
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                queue.append(child)
+    if seen != len(indegree):
+        errors.append({"code": "planner_bundle_schema_error", "message": "phase DAG contains cycle"})
+    return errors
+
+
+def _validate_hardening_rule(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    _, succs, dep_errors = _build_dag_edges(tasks)
+    if dep_errors:
+        return dep_errors
+    by_requirement: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        req_ids = task.get("requirement_ids")
+        if not isinstance(req_ids, list):
+            continue
+        for rid in req_ids:
+            rid_text = _as_str(rid)
+            if rid_text:
+                by_requirement[rid_text].append(task)
+    for req_id, req_tasks in by_requirement.items():
+        if len(req_tasks) <= 2:
+            continue
+        req_task_ids = {
+            _as_str(task.get("task_id"))
+            for task in req_tasks
+            if _as_str(task.get("task_id"))
+        }
+        terminals: list[dict[str, Any]] = []
+        for task in req_tasks:
+            task_id = _as_str(task.get("task_id"))
+            if not task_id:
+                continue
+            children = succs.get(task_id, [])
+            if not any(child in req_task_ids for child in children):
+                terminals.append(task)
+        hardening_count = 0
+        for task in terminals:
+            title = (_as_str(task.get("title")) or "").lower()
+            if re.search(r"(harden|hardening|review)", title):
+                hardening_count += 1
+        if hardening_count < 2:
+            errors.append(
+                {
+                    "code": "planner_bundle_schema_error",
+                    "message": f"requirement {req_id} needs at least 2 terminal hardening/review tasks when task count > 2",
+                }
+            )
+    return errors
+
+
+def _planner_static_required_paths() -> set[str]:
+    return {
+        "PLAN_PACKETS.json",
+        "PLAN_CHECK.json",
+        "TASK_EXECUTION_STATE.json",
+        "GAPS.json",
+        "GAP_CLOSURE_PLAN_PACKETS.json",
+        "TEST_CONTRACT.md",
+        "PLAYWRIGHT_UAT_MATRIX.md",
+        "VERIFICATION.md",
+        "UAT.md",
+        "STATE.json",
+        "STATE.md",
+    }
+
+
+def _planner_validate_bundle(req: OpRequest, bundle_path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    planning_root = _repo_path(req.repo_root, PLANNING_REL)
+    errors: list[dict[str, Any]] = []
+    try:
+        bundle = parse_bundle_jsonl(bundle_path, planning_root)
+    except PlannerError as exc:
+        errors.append({"code": exc.code, "message": exc.message})
+        return None, errors
+
+    missing_static = sorted(path for path in _planner_static_required_paths() if path not in bundle)
+    if missing_static:
+        errors.append(
+            {
+                "code": "planner_bundle_schema_error",
+                "message": "planner bundle missing required artifacts",
+                "missing": missing_static,
+            }
+        )
+        return None, errors
+
+    plan_artifact = bundle["PLAN_PACKETS.json"]
+    if not isinstance(plan_artifact.content, dict):
+        errors.append({"code": "planner_bundle_schema_error", "message": "PLAN_PACKETS.json must be object JSON"})
+        return None, errors
+    plan_packets = plan_artifact.content
+    plan_id = _as_str(plan_packets.get("plan_id"))
+    if not plan_id:
+        errors.append({"code": "planner_bundle_schema_error", "message": "PLAN_PACKETS.plan_id must be non-empty string"})
+
+    tasks = plan_packets.get("tasks")
+    phases = plan_packets.get("phases")
+    requirements_raw = plan_packets.get("requirements")
+    if not isinstance(tasks, list) or not tasks:
+        errors.append({"code": "planner_bundle_schema_error", "message": "PLAN_PACKETS.tasks must be non-empty list"})
+        return None, errors
+    if not isinstance(phases, list) or not phases:
+        errors.append({"code": "planner_bundle_schema_error", "message": "PLAN_PACKETS.phases must be non-empty list"})
+        return None, errors
+
+    requirement_ids: list[str] = []
+    if isinstance(requirements_raw, list):
+        for idx, req in enumerate(requirements_raw, start=1):
+            if isinstance(req, dict):
+                req_id = _as_str(req.get("id")) or f"REQ-{idx:03d}"
+            else:
+                req_id = _as_str(req)
+            if req_id:
+                requirement_ids.append(req_id)
+    if not requirement_ids:
+        errors.append({"code": "planner_bundle_schema_error", "message": "PLAN_PACKETS.requirements must include requirement IDs"})
+
+    task_ids: list[str] = []
+    covered_ids: set[str] = set()
+    for task in tasks:
+        if not isinstance(task, dict):
+            errors.append({"code": "planner_bundle_schema_error", "message": "PLAN_PACKETS.tasks rows must be objects"})
+            continue
+        task_id = _as_str(task.get("task_id"))
+        title = _as_str(task.get("title"))
+        phase_id = _as_str(task.get("phase_id"))
+        req_ids = task.get("requirement_ids")
+        deps = task.get("depends_on")
+        if not task_id:
+            errors.append({"code": "planner_bundle_schema_error", "message": "task_id is required"})
+        else:
+            task_ids.append(task_id)
+        if not title:
+            errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id or 'unknown'} title is required"})
+        if not phase_id:
+            errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id or 'unknown'} phase_id is required"})
+        if not isinstance(req_ids, list) or not [_as_str(item) for item in req_ids if _as_str(item)]:
+            errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id or 'unknown'} requirement_ids must be non-empty list"})
+        else:
+            for rid in req_ids:
+                rid_text = _as_str(rid)
+                if rid_text:
+                    covered_ids.add(rid_text)
+        if not isinstance(deps, list):
+            errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id or 'unknown'} depends_on must be list"})
+
+    for rid in requirement_ids:
+        if rid not in covered_ids:
+            errors.append({"code": "planner_bundle_schema_error", "message": f"requirement {rid} is not covered by tasks"})
+
+    errors.extend(_validate_task_dag([task for task in tasks if isinstance(task, dict)]))
+    errors.extend(_validate_phase_dag([phase for phase in phases if isinstance(phase, dict)], [task for task in tasks if isinstance(task, dict)]))
+    errors.extend(_validate_hardening_rule([task for task in tasks if isinstance(task, dict)]))
+    if errors:
+        return None, errors
+
+    evidence_expected = {f"evidence/{task_id}/TASK_EVIDENCE.json" for task_id in task_ids}
+    evidence_present = {path for path in bundle.keys() if path.startswith("evidence/") and path.endswith("/TASK_EVIDENCE.json")}
+    missing_evidence = sorted(evidence_expected - evidence_present)
+    extra_evidence = sorted(evidence_present - evidence_expected)
+    if missing_evidence:
+        errors.append({"code": "planner_bundle_schema_error", "message": "missing task evidence artifacts", "missing": missing_evidence})
+    if extra_evidence:
+        errors.append({"code": "planner_bundle_schema_error", "message": "unexpected task evidence artifacts", "extra": extra_evidence})
+    for path in sorted(evidence_present):
+        artifact = bundle[path]
+        if not isinstance(artifact.content, dict):
+            errors.append({"code": "planner_bundle_schema_error", "message": f"{path} must be object JSON"})
+            continue
+        evidence_task_id = _as_str(artifact.content.get("task_id"))
+        expected_task_id = path.split("/")[1] if "/" in path else None
+        if expected_task_id and evidence_task_id != expected_task_id:
+            errors.append({"code": "planner_bundle_schema_error", "message": f"{path} task_id mismatch"})
+        evidence_plan_id = _as_str(artifact.content.get("plan_id"))
+        if plan_id and evidence_plan_id and evidence_plan_id != plan_id:
+            errors.append({"code": "planner_bundle_schema_error", "message": f"{path} plan_id mismatch"})
+
+    task_state_artifact = bundle["TASK_EXECUTION_STATE.json"]
+    if not isinstance(task_state_artifact.content, dict):
+        errors.append({"code": "planner_bundle_schema_error", "message": "TASK_EXECUTION_STATE.json must be object JSON"})
+    else:
+        task_state_plan_id = _as_str(task_state_artifact.content.get("plan_id"))
+        if plan_id and task_state_plan_id and task_state_plan_id != plan_id:
+            errors.append({"code": "planner_bundle_schema_error", "message": "TASK_EXECUTION_STATE.plan_id mismatch"})
+        rows = task_state_artifact.content.get("tasks")
+        if not isinstance(rows, list):
+            errors.append({"code": "planner_bundle_schema_error", "message": "TASK_EXECUTION_STATE.tasks must be list"})
+        else:
+            row_ids = {
+                _as_str(row.get("task_id"))
+                for row in rows
+                if isinstance(row, dict) and _as_str(row.get("task_id"))
+            }
+            missing_state_ids = sorted([task_id for task_id in task_ids if task_id not in row_ids])
+            if missing_state_ids:
+                errors.append({"code": "planner_bundle_schema_error", "message": "TASK_EXECUTION_STATE missing plan task IDs", "missing_task_ids": missing_state_ids})
+
+    for name, key in (("GAPS.json", "gaps"), ("GAP_CLOSURE_PLAN_PACKETS.json", "tasks")):
+        artifact = bundle[name]
+        if not isinstance(artifact.content, dict):
+            errors.append({"code": "planner_bundle_schema_error", "message": f"{name} must be object JSON"})
+            continue
+        artifact_plan_id = _as_str(artifact.content.get("plan_id"))
+        if plan_id and artifact_plan_id and artifact_plan_id != plan_id:
+            errors.append({"code": "planner_bundle_schema_error", "message": f"{name} plan_id mismatch"})
+        if not isinstance(artifact.content.get(key), list):
+            errors.append({"code": "planner_bundle_schema_error", "message": f"{name} field '{key}' must be list"})
+
+    plan_check_artifact = bundle["PLAN_CHECK.json"]
+    if not isinstance(plan_check_artifact.content, dict):
+        errors.append({"code": "planner_bundle_schema_error", "message": "PLAN_CHECK.json must be object JSON"})
+    else:
+        if not bool(plan_check_artifact.content.get("passed")):
+            errors.append({"code": "planner_plan_check_failed", "message": "PLAN_CHECK.passed must be true"})
+
+    requirements_for_check = _normalize_requirement_rows(requirements_raw)
+    recomputed = _compute_plan_check(
+        _as_str(bundle["STATE.json"].content.get("mission")) if isinstance(bundle["STATE.json"].content, dict) else None,
+        _as_str(bundle["STATE.json"].content.get("scope")) if isinstance(bundle["STATE.json"].content, dict) else None,
+        requirements_for_check,
+        [task for task in tasks if isinstance(task, dict)],
+        [phase for phase in phases if isinstance(phase, dict)],
+    )
+    if not bool(recomputed.get("passed")):
+        errors.append(
+            {
+                "code": "planner_plan_check_failed",
+                "message": "recomputed plan-check failed",
+                "details": recomputed.get("blocking_errors", []),
+            }
+        )
+
+    if errors:
+        return None, errors
+    return {"bundle": bundle, "plan_packets": plan_packets, "recomputed_plan_check": recomputed}, []
+
+
+def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    _ensure_parent(path)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=False))
+        handle.write("\n")
+
+
+def _planner_source_display(source: dict[str, Any], *, label: str) -> str:
+    if source.get("mode") == "file":
+        return f"{label}=file:{source.get('path')}"
+    if source.get("mode") == "inline":
+        return f"{label}=inline:{source.get('value')}"
+    return f"{label}=none"
+
+
+def _planner_prompt_text(
+    *,
+    req: OpRequest,
+    bundle_path: Path,
+    mission_source: dict[str, Any],
+    scope_source: dict[str, Any],
+    prior_errors: list[dict[str, Any]],
+) -> str:
+    template_path = PLANNER_PROMPT_TEMPLATE_PATH.resolve()
+    if not template_path.exists():
+        raise OpError("planner_execution_failed", f"planner prompt template not found: {template_path}", stage="plan")
+    template_text = template_path.read_text(encoding="utf-8")
+    validator_script = PLANNER_VALIDATOR_SCRIPT_PATH.resolve()
+    validator_command = (
+        f"python3 {validator_script} --repo-root {req.repo_root} --bundle-path {bundle_path}"
+    )
+    prompt = render_prompt(
+        template_text,
+        repo_root=req.repo_root,
+        bundle_path=bundle_path,
+        validator_command=validator_command,
+        mission_source=_planner_source_display(mission_source, label="mission"),
+        scope_source=_planner_source_display(scope_source, label="scope"),
+        map_path=_repo_path(req.repo_root, MAP_PATH),
+        arch_path=_repo_path(req.repo_root, ARCH_PATH),
+    )
+    if prior_errors:
+        prompt += "\n\nRepair context from previous failed attempt:\n"
+        for idx, row in enumerate(prior_errors, start=1):
+            code = _as_str(row.get("code")) or "unknown"
+            message = _as_str(row.get("message")) or "validation failed"
+            prompt += f"{idx}. [{code}] {message}\n"
+    return prompt
+
+
+def _run_llm_plan_generation(
+    req: OpRequest,
+    *,
+    mission_source: dict[str, Any],
+    scope_source: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    planning_root = _repo_path(req.repo_root, PLANNING_REL)
+    llm_root = _repo_path(req.repo_root, PLANNER_REL)
+    attempts_log_path = _repo_path(req.repo_root, PLANNER_ATTEMPTS_JSONL)
+    errors_for_retry: list[dict[str, Any]] = []
+    final_validation: dict[str, Any] | None = None
+    warnings: list[dict[str, Any]] = []
+    attempt_artifacts: list[str] = []
+
+    for attempt in range(1, 11):
+        attempt_dir = llm_root / f"attempt-{attempt}"
+        attempt_dir.mkdir(parents=True, exist_ok=True)
+        bundle_path = attempt_dir / "PLAN_BUNDLE.jsonl"
+        stdout_path = attempt_dir / "llm_stdout.log"
+        stderr_path = attempt_dir / "llm_stderr.log"
+        last_message_path = attempt_dir / "last_message.txt"
+        prompt_path = attempt_dir / "prompt.txt"
+
+        prompt = _planner_prompt_text(
+            req=req,
+            bundle_path=bundle_path,
+            mission_source=mission_source,
+            scope_source=scope_source,
+            prior_errors=errors_for_retry,
+        )
+        prompt_path.write_text(prompt, encoding="utf-8")
+
+        started_at = utc_now_iso()
+        try:
+            exit_code = run_codex_exec(
+                repo_root=req.repo_root,
+                prompt_text=prompt,
+                output_last_message=last_message_path,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+        except OSError as exc:
+            finished_at = utc_now_iso()
+            error_row = {
+                "code": "planner_execution_failed",
+                "message": f"unable to invoke codex exec: {exc}",
+            }
+            _append_jsonl(
+                attempts_log_path,
+                {
+                    "attempt": attempt,
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                    "bundle_path": str(bundle_path),
+                    "parse_ok": False,
+                    "schema_ok": False,
+                    "plan_check_ok": False,
+                    "errors": [error_row],
+                    "llm_stdout_ref": str(stdout_path),
+                    "llm_stderr_ref": str(stderr_path),
+                    "status": "failed",
+                    "exit_code": None,
+                },
+            )
+            raise OpError(error_row["code"], error_row["message"], stage="plan") from exc
+        finished_at = utc_now_iso()
+        attempt_artifacts.extend(
+            [
+                str(bundle_path),
+                str(stdout_path),
+                str(stderr_path),
+                str(last_message_path),
+                str(prompt_path),
+            ]
+        )
+
+        parse_ok = False
+        schema_ok = False
+        plan_check_ok = False
+        validation_payload: dict[str, Any] | None
+        validation_payload, validation_errors = _planner_validate_bundle(req, bundle_path)
+        if not validation_errors:
+            parse_ok = True
+            schema_ok = True
+            plan_check_ok = True
+            final_validation = validation_payload
+        else:
+            parse_ok = not any(item.get("code") in {"planner_bundle_parse_error", "planner_bundle_missing"} for item in validation_errors)
+            schema_ok = not any(item.get("code") == "planner_bundle_schema_error" for item in validation_errors)
+            plan_check_ok = not any(item.get("code") == "planner_plan_check_failed" for item in validation_errors)
+            errors_for_retry = validation_errors
+
+        _append_jsonl(
+            attempts_log_path,
+            {
+                "attempt": attempt,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "bundle_path": str(bundle_path),
+                "parse_ok": parse_ok,
+                "schema_ok": schema_ok,
+                "plan_check_ok": plan_check_ok,
+                "errors": validation_errors,
+                "llm_stdout_ref": str(stdout_path),
+                "llm_stderr_ref": str(stderr_path),
+                "status": "passed" if final_validation else "failed",
+                "exit_code": exit_code,
+            },
+        )
+
+        if final_validation:
+            break
+
+        if exit_code != 0:
+            warnings.append(
+                {
+                    "code": "planner_execution_failed",
+                    "message": f"codex exec attempt {attempt} exited with code {exit_code}",
+                    "stage": "plan",
+                }
+            )
+
+    if final_validation is None:
+        raise OpError(
+            "planner_retry_exhausted",
+            "planner failed to produce a valid artifact bundle after 10 attempts",
+            stage="plan",
+        )
+
+    bundle = final_validation["bundle"]
+    if not isinstance(bundle, dict):
+        raise OpError("planner_bundle_schema_error", "validated planner bundle missing", stage="plan")
+    written = materialize_bundle(bundle, planning_root)
+    return final_validation, warnings, [str(path) for path in written] + attempt_artifacts
+
+
+def _state_from_bundle_inputs(
+    mission_source: dict[str, Any],
+    scope_source: dict[str, Any],
+    constraints: list[str],
+    map_payload: dict[str, Any],
+    plan_id: str | None,
+    plan_ready: bool,
+) -> dict[str, Any]:
+    now = utc_now_iso()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "initialized_at": now,
+        "updated_at": now,
+        "mission": mission_source.get("display"),
+        "scope": scope_source.get("display"),
+        "mission_source": mission_source,
+        "scope_source": scope_source,
+        "constraints": constraints,
+        "requirements": [],
+        "map_fingerprint": map_payload.get("map_fingerprint"),
+        "repo_fingerprint": map_payload.get("repo_fingerprint"),
+        "baseline_ready": True,
+        "plan_ready": bool(plan_ready),
+        "plan_id": plan_id,
+        "build_ready": bool(plan_ready),
+    }
+
+
+def _write_baseline_docs_from_sources(
+    *,
+    req: OpRequest,
+    mission_source: dict[str, Any],
+    scope_source: dict[str, Any],
+    constraints: list[str],
+    map_payload: dict[str, Any],
+) -> None:
+    constraint_lines = [f"- {item}" for item in constraints] if constraints else ["- none"]
+    initialized_at = utc_now_iso()
+    project_md = "\n".join(
+        [
+            "# PROJECT",
+            "",
+            f"- Mission: {mission_source['display']}",
+            f"- Scope: {scope_source['display']}",
+            f"- Initialized At: {initialized_at}",
+            f"- Map Fingerprint: `{map_payload.get('map_fingerprint')}`",
+            "",
+            "## Constraints",
+            *constraint_lines,
+        ]
+    )
+    requirements_md = "\n".join(["# REQUIREMENTS", "", "Generated by `/op-plan` from LLM planner output."])
+    roadmap_md = "\n".join(
+        [
+            "# ROADMAP",
+            "",
+            "1. Planning baseline finalized.",
+            "2. LLM plan bundle generated + strict validation pass.",
+            "3. Autonomous build loop executes validated plan packets.",
+            "4. Verification artifacts complete and terminal stop authorization passes.",
+        ]
+    )
+    state_md = "\n".join(
+        [
+            "# STATE",
+            "",
+            "- baseline_ready: true",
+            "- plan_ready: false",
+            "- build_ready: false",
+            f"- mission: {mission_source['display']}",
+            f"- scope: {scope_source['display']}",
+            "",
+            "## Traceability",
+            "- Requirements/tasks are generated by /op-plan.",
+        ]
+    )
+    _write_text(_repo_path(req.repo_root, PROJECT_MD), project_md + "\n")
+    _write_text(_repo_path(req.repo_root, REQUIREMENTS_MD), requirements_md + "\n")
+    _write_text(_repo_path(req.repo_root, ROADMAP_MD), roadmap_md + "\n")
+    _write_text(_repo_path(req.repo_root, STATE_MD), state_md + "\n")
 
 
 def _derive_phases_from_task_dag(tasks: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, str], list[dict[str, Any]]]:
@@ -4148,6 +4865,8 @@ def _compute_plan_check(
 
 def command_plan(req: OpRequest) -> dict[str, Any]:
     repo_root = req.repo_root
+    if req.command == "op-plan":
+        _require_override_if_existing_plan(req, stage="plan")
     state_path = _repo_path(repo_root, STATE_JSON)
     if not state_path.exists():
         raise OpError("input_error", "state baseline missing; run /op-new-project first", stage="plan")
@@ -4156,205 +4875,105 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
     if not isinstance(state, dict):
         raise OpError("state_read_error", "planning STATE.json must be an object", stage="plan")
 
-    mission = _as_str(state.get("mission"))
-    scope = _as_str(state.get("scope"))
-    requirements = state.get("requirements")
-    if not isinstance(requirements, list) or not requirements:
-        raise OpError("validation_error", "requirements missing from STATE.json", stage="plan")
+    mission_source, scope_source = _resolve_mission_scope_sources(req, stage="plan", required=False)
+    if mission_source.get("mode") == "none":
+        persisted = state.get("mission_source")
+        if isinstance(persisted, dict):
+            mission_source = persisted
+        else:
+            fallback = _as_str(state.get("mission"))
+            if fallback:
+                mission_source = {"mode": "inline", "value": fallback, "path": None, "display": fallback}
+    if scope_source.get("mode") == "none":
+        persisted = state.get("scope_source")
+        if isinstance(persisted, dict):
+            scope_source = persisted
+        else:
+            fallback = _as_str(state.get("scope"))
+            if fallback:
+                scope_source = {"mode": "inline", "value": fallback, "path": None, "display": fallback}
+    if mission_source.get("mode") == "none" or scope_source.get("mode") == "none":
+        raise OpError("input_error", "mission/scope inputs are required for planning", stage="plan")
 
-    tasks: list[dict[str, Any]] = []
-    prev_task_id: str | None = None
-    for idx, req_item in enumerate(requirements, start=1):
-        if not isinstance(req_item, dict):
-            continue
-        req_id = _as_str(req_item.get("id")) or f"REQ-{idx:03d}"
-        title = _as_str(req_item.get("title")) or f"Requirement {req_id}"
-        task_id = f"TASK-{idx:03d}"
-        task = {
-            "task_id": task_id,
-            "title": f"Implement {title}",
-            "requirement_ids": [req_id],
-            "depends_on": [prev_task_id] if prev_task_id else [],
-            "must_haves": req_item.get("acceptance_criteria") if isinstance(req_item.get("acceptance_criteria"), list) else [],
-            "verify_commands": req_item.get("verify_commands") if isinstance(req_item.get("verify_commands"), list) else ["python3 -m pytest"],
-        }
-        tasks.append(task)
-        prev_task_id = task_id
+    if req.command == "op-plan" and req.override_old_plan:
+        _archive_existing_planning_artifacts(repo_root)
 
-    phases, phase_map, phase_errors = _derive_phases_from_task_dag(tasks)
-    if phase_errors:
-        raise OpError("validation_error", phase_errors[0]["message"], stage="plan")
-    for task in tasks:
-        if not isinstance(task, dict):
-            continue
-        task_id = _as_str(task.get("task_id"))
-        if task_id:
-            task["phase_id"] = phase_map.get(task_id, "phase-1")
+    validation_payload, planner_warnings, planner_artifacts = _run_llm_plan_generation(
+        req,
+        mission_source=mission_source,
+        scope_source=scope_source,
+    )
 
-    plan_id = f"plan-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-    plan_packets = {
-        "schema_version": SCHEMA_VERSION,
-        "generated_at": utc_now_iso(),
-        "plan_id": plan_id,
-        "phase": "multi-phase",
-        "phases": phases,
-        "requirements": [item.get("id") for item in requirements if isinstance(item, dict)],
-        "tasks": tasks,
-        "depends_on": [],
-        "must_haves": sorted({crit for task in tasks for crit in task.get("must_haves", []) if isinstance(crit, str)}),
-        "verify_commands": sorted({cmd for task in tasks for cmd in task.get("verify_commands", []) if isinstance(cmd, str)}),
-    }
+    plan_packets = validation_payload["plan_packets"]
+    recomputed_plan_check = validation_payload["recomputed_plan_check"]
+    plan_id = _as_str(plan_packets.get("plan_id")) or f"plan-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
 
-    plan_check = _compute_plan_check(mission, scope, requirements, tasks, phases)
+    map_payload = _read_json(_repo_path(repo_root, MAP_PATH)) if _repo_path(repo_root, MAP_PATH).exists() else {}
+    if not isinstance(map_payload, dict):
+        map_payload = {}
 
-    test_contract_md_lines = [
-        "# TEST CONTRACT",
-        "",
-        f"Plan ID: `{plan_id}`",
-        "",
-    ]
-    for req_item in requirements:
-        if not isinstance(req_item, dict):
-            continue
-        req_id = _as_str(req_item.get("id")) or "REQ-UNKNOWN"
-        title = _as_str(req_item.get("title")) or "Untitled"
-        test_contract_md_lines.append(f"## {req_id} - {title}")
-        ac = req_item.get("acceptance_criteria") if isinstance(req_item.get("acceptance_criteria"), list) else []
-        vc = req_item.get("verify_commands") if isinstance(req_item.get("verify_commands"), list) else []
-        if ac:
-            test_contract_md_lines.append("Acceptance Criteria:")
-            for item in ac:
-                test_contract_md_lines.append(f"- {item}")
-        if vc:
-            test_contract_md_lines.append("Verification Commands:")
-            for cmd in vc:
-                test_contract_md_lines.append(f"- `{cmd}`")
-        test_contract_md_lines.append("")
+    merged_state = _state_from_bundle_inputs(
+        mission_source,
+        scope_source,
+        req.constraints,
+        map_payload,
+        plan_id,
+        bool(recomputed_plan_check.get("passed")),
+    )
+    requirements = _normalize_requirement_rows(plan_packets.get("requirements"))
+    merged_state["requirements"] = requirements
+    merged_state["phase_count"] = len(plan_packets.get("phases", [])) if isinstance(plan_packets.get("phases"), list) else 0
+    _atomic_write_json(state_path, merged_state)
 
-    uat_md_lines = [
-        "# PLAYWRIGHT UAT MATRIX",
-        "",
-        f"Plan ID: `{plan_id}`",
-        "",
-        "| Requirement | Scenario | Expected |",
-        "| --- | --- | --- |",
-    ]
-    for req_item in requirements:
-        if not isinstance(req_item, dict):
-            continue
-        req_id = _as_str(req_item.get("id")) or "REQ-UNKNOWN"
-        title = _as_str(req_item.get("title")) or "Untitled"
-        uat_md_lines.append(f"| {req_id} | Validate flow for {title} | Scenario passes without blocker |")
+    if requirements:
+        requirements_md_lines = ["# REQUIREMENTS", "", "| ID | Title |", "| --- | --- |"]
+        for row in requirements:
+            requirements_md_lines.append(f"| {row['id']} | {row['title']} |")
+        _write_text(_repo_path(repo_root, REQUIREMENTS_MD), "\n".join(requirements_md_lines) + "\n")
 
-    verification_md_lines = [
-        "# VERIFICATION",
-        "",
-        f"Plan ID: `{plan_id}`",
-        "",
-        "## Required Verify Commands",
-    ]
-    for cmd in plan_packets["verify_commands"]:
-        verification_md_lines.append(f"- `{cmd}`")
-    verification_md_lines.extend(["", "## Phase Exit Rules", "- all tasks review_done", "- verify commands passed", "- UAT requirements passed", "- open gaps = 0"])
-
-    uat_phase_md_lines = [
-        "# UAT",
-        "",
-        f"Plan ID: `{plan_id}`",
-        "",
-        "Autonomous tester-driven UAT: pass/fail results are consumed from canonical task evidence artifacts.",
-    ]
-
-    gaps_payload = {
-        "schema_version": SCHEMA_VERSION,
-        "plan_id": plan_id,
-        "updated_at": utc_now_iso(),
-        "gaps": [],
-    }
-    gap_closure_payload = {
-        "schema_version": SCHEMA_VERSION,
-        "plan_id": plan_id,
-        "generated_at": utc_now_iso(),
-        "tasks": [],
-    }
-
-    evidence_refs = _write_task_evidence_files(repo_root, plan_packets)
-    task_state_payload = _task_state_from_plan(plan_packets, evidence_refs=evidence_refs)
-
-    state["updated_at"] = utc_now_iso()
-    state["plan_id"] = plan_id
-    state["plan_ready"] = bool(plan_check["passed"])
-    state["build_ready"] = bool(plan_check["passed"])
-    state["phase_count"] = len(phases)
-
-    state_md_lines = [
-        "# STATE",
-        "",
-        "- baseline_ready: true",
-        f"- plan_ready: {str(bool(plan_check['passed'])).lower()}",
-        f"- build_ready: {str(bool(plan_check['passed'])).lower()}",
-        f"- plan_id: {plan_id}",
-        f"- phase_count: {len(phases)}",
-        "",
-        "## Plan Checks",
-    ]
-    for check in plan_check["checks"]:
-        state_md_lines.append(f"- {check['id']}: {str(bool(check['passed'])).lower()}")
-
-    _atomic_write_json(_repo_path(repo_root, PLAN_PACKETS_JSON), plan_packets)
-    _atomic_write_json(_repo_path(repo_root, PLAN_CHECK_JSON), plan_check)
-    _atomic_write_json(_repo_path(repo_root, TASK_EXECUTION_STATE_JSON), task_state_payload)
-    _atomic_write_json(_repo_path(repo_root, GAPS_JSON), gaps_payload)
-    _atomic_write_json(_repo_path(repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON), gap_closure_payload)
-    _write_text(_repo_path(repo_root, TEST_CONTRACT_MD), "\n".join(test_contract_md_lines) + "\n")
-    _write_text(_repo_path(repo_root, PLAYWRIGHT_UAT_MD), "\n".join(uat_md_lines) + "\n")
-    _write_text(_repo_path(repo_root, VERIFICATION_MD), "\n".join(verification_md_lines) + "\n")
-    _write_text(_repo_path(repo_root, UAT_MD), "\n".join(uat_phase_md_lines) + "\n")
-    _atomic_write_json(state_path, state)
-    _write_text(_repo_path(repo_root, STATE_MD), "\n".join(state_md_lines) + "\n")
-
-    status = "completed" if plan_check["passed"] else "blocked_plan_check"
-    summary = "Plan artifacts generated and plan-check passed." if plan_check["passed"] else "Plan artifacts generated but plan-check failed."
-    next_action = "/op-build" if plan_check["passed"] else "Fix plan-check blockers and run /op-plan again."
-
+    status = "completed" if bool(recomputed_plan_check.get("passed")) else "blocked_plan_check"
+    summary = (
+        "Plan artifacts generated by LLM planner and strict validation passed."
+        if bool(recomputed_plan_check.get("passed"))
+        else "Plan artifacts generated but strict plan-check failed."
+    )
     return _response(
         req,
-        ok=True,
+        ok=bool(recomputed_plan_check.get("passed")),
         status=status,
         summary=summary,
-        artifacts=[
-            str(_repo_path(repo_root, PLAN_PACKETS_JSON)),
-            str(_repo_path(repo_root, PLAN_CHECK_JSON)),
-            str(_repo_path(repo_root, TASK_EXECUTION_STATE_JSON)),
-            str(_repo_path(repo_root, GAPS_JSON)),
-            str(_repo_path(repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)),
-            str(_repo_path(repo_root, TEST_CONTRACT_MD)),
-            str(_repo_path(repo_root, PLAYWRIGHT_UAT_MD)),
-            str(_repo_path(repo_root, VERIFICATION_MD)),
-            str(_repo_path(repo_root, UAT_MD)),
-            str(state_path),
-        ],
-        next_action=next_action,
+        warnings=planner_warnings,
+        artifacts=planner_artifacts + [str(state_path)],
+        next_action="/op-build" if bool(recomputed_plan_check.get("passed")) else "Fix planner bundle failures and rerun /op-plan.",
         state_ref=str(state_path),
         data={
             "plan_id": plan_id,
-            "plan_ready": bool(plan_check["passed"]),
+            "plan_ready": bool(recomputed_plan_check.get("passed")),
         },
     )
 
 
 def command_initialize(req: OpRequest) -> dict[str, Any]:
-    _require_mission_scope(req)
+    _require_override_if_existing_plan(req, stage="initialize")
+    _resolve_mission_scope_sources(req, stage="initialize", required=True)
     _ensure_managed_gitignore_block(req.repo_root)
     map_result = command_map_codebase(req)
     new_result = command_new_project(req)
-    plan_result = command_plan(req)
 
     profile_selection = _detect_profile_selection_payload()
     profile_selection_path = _repo_path(req.repo_root, PROFILE_SELECTION_JSON)
     _atomic_write_json(profile_selection_path, profile_selection)
 
     state_path = _repo_path(req.repo_root, STATE_JSON)
+    state_payload = _read_json(state_path)
+    if not isinstance(state_payload, dict):
+        raise OpError("state_payload_invalid", "STATE.json must be a JSON object", stage="initialize")
+    state_payload["profile_aliases"] = list(profile_selection.get("selected_aliases", []))
+    state_payload["profile_selection_ref"] = str(profile_selection_path)
+    state_payload["updated_at"] = utc_now_iso()
+    _atomic_write_json(state_path, state_payload)
+
+    plan_result = command_plan(req)
     state_payload = _read_json(state_path)
     if not isinstance(state_payload, dict):
         raise OpError("state_payload_invalid", "STATE.json must be a JSON object", stage="initialize")
@@ -7273,7 +7892,10 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         command=command,
         repo_root=repo_root,
         mission=_as_str(payload.get("mission")),
+        mission_file=_as_str(payload.get("mission_file")),
         scope=_as_str(payload.get("scope")),
+        scope_file=_as_str(payload.get("scope_file")),
+        override_old_plan=_as_bool(payload.get("override_old_plan"), default=False),
         constraints=_as_constraints(payload.get("constraints")),
         non_interactive=_as_bool(payload.get("non_interactive"), default=True),
         output_mode=_as_str(payload.get("output_mode")) or "json",
