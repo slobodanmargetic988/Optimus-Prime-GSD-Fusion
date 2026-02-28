@@ -47,6 +47,16 @@ def test_bundle_manifest_has_required_contract_fields():
         assert manifest["managed_files"]
 
 
+def test_bundle_manifest_includes_profile_and_dispatch_runtime_skills():
+    repo_root = Path(__file__).resolve().parents[3]
+    with tempfile.TemporaryDirectory() as tmp:
+        out = MODULE.build_bundle(repo_root, Path(tmp), "9.9.12-test")
+        manifest = json.loads((Path(out["bundle_dir"]) / "bundle_manifest.json").read_text(encoding="utf-8"))
+        skills_manifest = manifest.get("skills_manifest") or []
+        assert "codex-rate-snapshot" in skills_manifest
+        assert "thread-dispatch" in skills_manifest
+
+
 def test_build_bundle_excludes_runtime_cache_artifacts():
     repo_root = Path(__file__).resolve().parents[3]
     pycache_dir = repo_root / "scripts" / "op" / "__pycache__"

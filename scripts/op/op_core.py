@@ -59,6 +59,8 @@ BUILD_LOOP_LOCK = PLANNING_REL / "BUILD_LOOP.lock"
 CONTROL_REL = Path("reports") / "optimus-prime" / "control"
 OPERATOR_STOP_JSON = CONTROL_REL / "OPERATOR_STOP.json"
 OPERATOR_STOP_STATE_JSON = CONTROL_REL / "OPERATOR_STOP_STATE.json"
+PROFILE_RATE_REGISTRY_JSON = Path("reports") / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
 
 MANDATORY_BUILD_BASELINE = [
     PROJECT_MD,
@@ -229,6 +231,114 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
 def _write_text(path: Path, text: str) -> None:
     _ensure_parent(path)
     path.write_text(text, encoding="utf-8")
+
+
+def _resolve_rate_snapshot_script(repo_root: Path) -> Path | None:
+    candidates: list[Path] = []
+    candidates.append(repo_root / RATE_SNAPSHOT_SCRIPT_REL)
+    candidates.append(ENGINE_ROOT / RATE_SNAPSHOT_SCRIPT_REL)
+    codex_home = _as_str(os.environ.get("CODEX_HOME"))
+    if codex_home:
+        candidates.append(Path(codex_home).expanduser().resolve() / RATE_SNAPSHOT_SCRIPT_REL)
+    candidates.append(Path.home() / ".codex" / RATE_SNAPSHOT_SCRIPT_REL)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        text = str(candidate)
+        if text in seen:
+            continue
+        seen.add(text)
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _seed_rate_registry_if_missing(repo_root: Path, *, stage: str = "build_loop") -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    registry_path = _repo_path(repo_root, PROFILE_RATE_REGISTRY_JSON)
+    if registry_path.exists():
+        return warnings
+
+    script_path = _resolve_rate_snapshot_script(repo_root)
+    if script_path is None:
+        warnings.append(
+            {
+                "code": "rate_registry_seed_unavailable",
+                "message": "codex-rate-snapshot script not found; PROFILE_RATE_REGISTRY.json was not generated",
+                "stage": stage,
+            }
+        )
+        return warnings
+
+    cmd = [sys.executable, str(script_path), "--profile", "codex=default", "--json-pretty"]
+    code, out, err = _run(cmd, cwd=repo_root)
+    if code != 0:
+        stderr = (err or "").strip()
+        warnings.append(
+            {
+                "code": "rate_registry_seed_failed",
+                "message": (
+                    "failed to generate PROFILE_RATE_REGISTRY.json via codex-rate-snapshot"
+                    + (f": {stderr}" if stderr else "")
+                ),
+                "stage": stage,
+            }
+        )
+        return warnings
+
+    try:
+        payload = json.loads(out)
+    except json.JSONDecodeError as exc:
+        warnings.append(
+            {
+                "code": "rate_registry_seed_failed",
+                "message": f"codex-rate-snapshot emitted invalid JSON: {exc}",
+                "stage": stage,
+            }
+        )
+        return warnings
+
+    if not isinstance(payload, dict):
+        warnings.append(
+            {
+                "code": "rate_registry_seed_failed",
+                "message": "codex-rate-snapshot output must be a JSON object",
+                "stage": stage,
+            }
+        )
+        return warnings
+
+    profiles = payload.get("profiles")
+    if not isinstance(profiles, dict):
+        warnings.append(
+            {
+                "code": "rate_registry_seed_failed",
+                "message": "codex-rate-snapshot output missing valid 'profiles' object",
+                "stage": stage,
+            }
+        )
+        return warnings
+
+    try:
+        _atomic_write_json(registry_path, payload)
+    except OSError as exc:
+        warnings.append(
+            {
+                "code": "rate_registry_seed_failed",
+                "message": f"unable to write PROFILE_RATE_REGISTRY.json: {exc}",
+                "stage": stage,
+            }
+        )
+        return warnings
+
+    warnings.append(
+        {
+            "code": "rate_registry_seeded",
+            "message": "generated PROFILE_RATE_REGISTRY.json via codex-rate-snapshot",
+            "stage": stage,
+        }
+    )
+    return warnings
 
 
 def _ensure_managed_gitignore_block(repo_root: Path) -> None:
@@ -3385,6 +3495,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
     _require_mission_scope(req)
     _ensure_managed_gitignore_block(req.repo_root)
     map_result = command_map_codebase(req)
+    rate_seed_warnings = _seed_rate_registry_if_missing(req.repo_root, stage="initialize")
     new_result = command_new_project(req)
     plan_result = command_plan(req)
 
@@ -3395,6 +3506,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
 
     warnings = []
     warnings.extend(map_result.get("warnings", []))
+    warnings.extend(rate_seed_warnings)
     warnings.extend(new_result.get("warnings", []))
     warnings.extend(plan_result.get("warnings", []))
 
@@ -4590,6 +4702,10 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             else:
                 remediation_state["active"] = False
                 remediation_state["reason"] = None
+
+            rate_seed_warnings = _seed_rate_registry_if_missing(req.repo_root)
+            warnings.extend(rate_seed_warnings)
+            cycle_local_warnings.extend(rate_seed_warnings)
 
             handoff_warnings = _apply_handoff_updates(req.repo_root, task_state, build_state)
             warnings.extend(handoff_warnings)

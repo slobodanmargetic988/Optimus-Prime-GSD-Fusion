@@ -200,6 +200,51 @@ def test_initialize_chains_map_new_plan():
 
 
 
+def test_initialize_seeds_rate_registry_once_when_missing(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        calls: list[Path] = []
+
+        def fake_seed(repo_root: Path, *, stage: str = "build_loop"):
+            calls.append(repo_root)
+            assert stage == "initialize"
+            return [{"code": "rate_registry_seeded", "message": "ok", "stage": stage}]
+
+        monkeypatch.setattr(MODULE, "_seed_rate_registry_if_missing", fake_seed)
+        out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is True
+        assert len(calls) == 1
+        assert any(item.get("code") == "rate_registry_seeded" for item in out.get("warnings", []))
+
+
+def test_seed_rate_registry_skips_when_registry_exists(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        registry_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry_path.write_text(
+            json.dumps({"profiles": {"codex": {"recommended_action": "continue"}}}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        def fail_run(*_args, **_kwargs):
+            raise AssertionError("snapshot script should not run when registry already exists")
+
+        monkeypatch.setattr(MODULE, "_run", fail_run)
+        warnings = MODULE._seed_rate_registry_if_missing(root, stage="initialize")
+        assert warnings == []
+
+
 def test_new_project_creates_gitignore_when_missing():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -1333,6 +1378,97 @@ def test_build_all_rate_gates_blocking_with_invalid_registry_continues_with_warn
         assert out["status"] == "running_needs_resume"
         assert dispatch_calls["count"] == 1
         assert any(item.get("code") == "rate_registry_invalid_ignored" for item in out["warnings"])
+
+
+def test_seed_rate_registry_warns_when_snapshot_script_unavailable(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.unlink(missing_ok=True)
+
+        monkeypatch.setattr(MODULE, "_resolve_rate_snapshot_script", lambda _repo_root: None)
+        warnings = MODULE._seed_rate_registry_if_missing(root)
+
+        assert any(item.get("code") == "rate_registry_seed_unavailable" for item in warnings)
+        assert not rate_path.exists()
+
+
+def test_build_seeds_rate_registry_before_controller_cycle(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.unlink(missing_ok=True)
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+
+        call_order: list[str] = []
+        original_run = MODULE._run
+
+        def wrapped_run(cmd, *, cwd, stdin_text=None):
+            script_name = Path(cmd[1]).name if len(cmd) > 1 else ""
+            if script_name == "read_codex_rate_snapshots.py":
+                call_order.append("snapshot")
+                payload = {
+                    "profiles": {
+                        "codex": {
+                            "alias": "codex",
+                            "five_hour": {"remaining_percent": 80},
+                            "weekly": {"remaining_percent": 70},
+                            "recommended_action": "continue",
+                        }
+                    },
+                    "profile_running_mode": "single-profile",
+                }
+                return 0, json.dumps(payload), ""
+            return original_run(cmd, cwd=cwd, stdin_text=stdin_text)
+
+        monkeypatch.setattr(MODULE, "_run", wrapped_run)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req: (
+                call_order.append("controller")
+                or {
+                    "ok": True,
+                    "terminal_reason": None,
+                    "last_cycle_number": 1,
+                    "events_path": str(events_path),
+                }
+            ),
+        )
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda *_args, **_kwargs: {"ok": True, "status": "noop"})
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+
+        assert out["status"] == "running_needs_resume"
+        assert rate_path.exists()
+        seeded = json.loads(rate_path.read_text(encoding="utf-8"))
+        assert isinstance(seeded.get("profiles"), dict)
+        assert "codex" in seeded["profiles"]
+        assert "snapshot" in call_order
+        assert "controller" in call_order
+        assert call_order.index("snapshot") < call_order.index("controller")
+        assert any(item.get("code") == "rate_registry_seeded" for item in out.get("warnings", []))
 
 
 def test_build_recovers_malformed_gap_closure_and_releases_lock():

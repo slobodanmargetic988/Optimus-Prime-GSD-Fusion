@@ -49,6 +49,24 @@ def test_global_install_and_uninstall_flow():
         assert state["installed_version"] == "1.2.3-test"
         assert (Path(home) / ".local" / "bin" / "opctl").exists()
         assert (Path(home) / ".local" / "bin" / "op").exists()
+        codex_skills = Path(home) / ".codex" / "skills"
+        required = {
+            "dispatch-worker-packet",
+            "optimus-cycle-controller",
+            "runtime-coordinator",
+            "test-train-manager",
+            "codex-rate-snapshot",
+            "thread-dispatch",
+        }
+        for skill in required:
+            assert (codex_skills / skill).is_dir()
+        managed_paths = {
+            str(Path(item).expanduser().resolve())
+            for item in state.get("managed_paths", [])
+            if isinstance(item, str) and item.strip()
+        }
+        for skill in required:
+            assert str((codex_skills / skill).resolve()) in managed_paths
 
         uninstalled = UNINSTALL.run_uninstall({"mode": "global", "home_override": home})
         assert uninstalled["ok"] is True
