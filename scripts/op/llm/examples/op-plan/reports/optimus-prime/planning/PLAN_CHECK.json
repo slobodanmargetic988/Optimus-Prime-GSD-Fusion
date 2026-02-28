@@ -1,0 +1,61 @@
+{
+  "blocking_errors": [],
+  "checks": [
+    {
+      "id": "requirement_coverage",
+      "passed": true
+    },
+    {
+      "id": "task_completeness",
+      "passed": true
+    },
+    {
+      "id": "verify_contract_completeness",
+      "passed": true
+    },
+    {
+      "id": "scope_sanity",
+      "passed": true
+    },
+    {
+      "id": "dependency_dag_sanity",
+      "passed": true
+    },
+    {
+      "id": "phase_traceability",
+      "passed": true
+    },
+    {
+      "id": "phase_dependency_dag_sanity",
+      "passed": true
+    }
+  ],
+  "coverage": {
+    "missing_requirement_ids": [],
+    "requirements_covered": 3,
+    "requirements_total": 3
+  },
+  "dependency_graph": {
+    "cycle_detected": false,
+    "edges": [
+      {
+        "from": "TASK-001",
+        "to": "TASK-002"
+      },
+      {
+        "from": "TASK-002",
+        "to": "TASK-003"
+      }
+    ],
+    "nodes": [
+      "TASK-001",
+      "TASK-002",
+      "TASK-003"
+    ],
+    "valid": true
+  },
+  "passed": true,
+  "phase_traceability": true,
+  "schema_version": "1.0",
+  "verify_contract_completeness": true
+}

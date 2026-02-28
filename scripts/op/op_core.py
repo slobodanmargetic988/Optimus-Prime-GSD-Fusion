@@ -28,12 +28,11 @@ SKILLS_ROOT = ENGINE_ROOT / "skills"
 
 from op_router import SUPPORTED_COMMANDS, normalize_command
 from planner.llm_planner import (
-    PlannerError,
     materialize_bundle,
-    parse_bundle_jsonl,
     render_prompt,
     run_codex_exec,
 )
+from planner.validate_plan_bundle import validate_bundle_contract
 
 SCHEMA_VERSION = "1.0"
 TOOL = "opctl"
@@ -80,6 +79,7 @@ PROFILE_RATE_REGISTRY_JSON = Path("reports") / "optimus-prime" / "PROFILE_RATE_R
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
 PLANNER_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "llm_plan_prompt.md"
 PLANNER_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_plan_bundle.py"
+PLANNER_EXAMPLE_ROOT_PATH = SCRIPT_DIR / "llm" / "examples" / "op-plan" / "reports" / "optimus-prime" / "planning"
 
 MANDATORY_BUILD_BASELINE = [
     PROJECT_MD,
@@ -4173,41 +4173,16 @@ def _validate_hardening_rule(tasks: list[dict[str, Any]]) -> list[dict[str, Any]
     return errors
 
 
-def _planner_static_required_paths() -> set[str]:
-    return {
-        "PLAN_PACKETS.json",
-        "PLAN_CHECK.json",
-        "TASK_EXECUTION_STATE.json",
-        "GAPS.json",
-        "GAP_CLOSURE_PLAN_PACKETS.json",
-        "TEST_CONTRACT.md",
-        "PLAYWRIGHT_UAT_MATRIX.md",
-        "VERIFICATION.md",
-        "UAT.md",
-        "STATE.json",
-        "STATE.md",
-    }
-
-
 def _planner_validate_bundle(req: OpRequest, bundle_path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     planning_root = _repo_path(req.repo_root, PLANNING_REL)
-    errors: list[dict[str, Any]] = []
-    try:
-        bundle = parse_bundle_jsonl(bundle_path, planning_root)
-    except PlannerError as exc:
-        errors.append({"code": exc.code, "message": exc.message})
-        return None, errors
+    strict_bundle, strict_errors = validate_bundle_contract(bundle_path, planning_root)
+    if strict_errors:
+        return None, [{"code": _as_str(item.get("code")) or "planner_bundle_schema_error", "message": _as_str(item.get("message")) or "planner bundle validation failed", **{k: v for k, v in item.items() if k not in {"code", "message"}}} for item in strict_errors]
+    if strict_bundle is None:
+        return None, [{"code": "planner_bundle_schema_error", "message": "planner bundle validation returned no bundle"}]
 
-    missing_static = sorted(path for path in _planner_static_required_paths() if path not in bundle)
-    if missing_static:
-        errors.append(
-            {
-                "code": "planner_bundle_schema_error",
-                "message": "planner bundle missing required artifacts",
-                "missing": missing_static,
-            }
-        )
-        return None, errors
+    bundle = strict_bundle
+    errors: list[dict[str, Any]] = []
 
     plan_artifact = bundle["PLAN_PACKETS.json"]
     if not isinstance(plan_artifact.content, dict):
@@ -4396,6 +4371,7 @@ def _planner_prompt_text(
         repo_root=req.repo_root,
         bundle_path=bundle_path,
         validator_command=validator_command,
+        example_root=PLANNER_EXAMPLE_ROOT_PATH.resolve(),
         mission_source=_planner_source_display(mission_source, label="mission"),
         scope_source=_planner_source_display(scope_source, label="scope"),
         map_path=_repo_path(req.repo_root, MAP_PATH),

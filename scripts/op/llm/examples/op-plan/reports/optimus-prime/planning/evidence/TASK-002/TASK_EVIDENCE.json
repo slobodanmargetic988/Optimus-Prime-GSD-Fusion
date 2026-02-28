@@ -1,0 +1,43 @@
+{
+  "dev": {
+    "artifacts": [],
+    "blockers": [],
+    "checks": [],
+    "dev_ready": false,
+    "status": "pending",
+    "verify_results": []
+  },
+  "gate": {
+    "ready_for_phase_exit": false,
+    "ready_for_review": false,
+    "ready_for_test": false
+  },
+  "phase_id": "phase-2",
+  "plan_id": "plan-20260228T204938Z",
+  "requirement_ids": [
+    "REQ-002"
+  ],
+  "review": {
+    "artifacts": [],
+    "blockers": [],
+    "decision": "pending",
+    "status": "pending"
+  },
+  "schema_version": "1.0",
+  "summary": {
+    "reason_codes": [
+      "not_started"
+    ],
+    "result": "blocked"
+  },
+  "task_id": "TASK-002",
+  "test": {
+    "artifacts": [],
+    "blockers": [],
+    "checks": [],
+    "status": "pending",
+    "uat_results": [],
+    "verify_results": []
+  },
+  "updated_at": "2026-02-28T20:49:38Z"
+}

@@ -54,6 +54,7 @@ Updated: 2026-02-28
 - Replaced static `/op-plan` generation with strict LLM planner flow:
   - planner backend is foreground `codex exec` with high reasoning effort
   - planner outputs `reports/optimus-prime/planning/llm/attempt-<n>/PLAN_BUNDLE.jsonl`
+  - bundled planning template examples are shipped under `scripts/op/llm/examples/op-plan/reports/optimus-prime/planning`
   - OP validates parse + schema + recomputed plan-check and retries up to 10 attempts
   - deterministic attempt ledger persisted at `reports/optimus-prime/planning/llm/PLAN_GENERATION_ATTEMPTS.jsonl`
   - canonical planning artifacts are materialized only after full validation pass

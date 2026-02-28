@@ -112,6 +112,7 @@ Planner behavior:
 - `/op-plan` is LLM-driven (`codex exec`) and writes a strict planning bundle.
 - OP validates parse + schema + recomputed plan-check and retries repair up to 10 attempts.
 - Existing planning artifacts require explicit replacement with `--override-old-plan`.
+- The planner prompt points LLM to bundled reference templates at `scripts/op/llm/examples/op-plan/reports/optimus-prime/planning`.
 
 ## 2) Autonomous Build
 

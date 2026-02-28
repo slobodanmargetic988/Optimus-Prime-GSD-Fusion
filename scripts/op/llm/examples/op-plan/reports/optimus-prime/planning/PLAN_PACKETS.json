@@ -1,0 +1,131 @@
+{
+  "depends_on": [],
+  "generated_at": "2026-02-28T20:49:38Z",
+  "must_haves": [
+    "Core workflow is implemented end-to-end.",
+    "Critical errors are handled deterministically.",
+    "Evidence is persisted in reports artifacts.",
+    "Recovery path is documented and testable.",
+    "Relevant checks are automated.",
+    "Runtime/deploy flow is deterministic."
+  ],
+  "phase": "multi-phase",
+  "phases": [
+    {
+      "depends_on_phase_ids": [],
+      "entry_criteria": [
+        "phase_dependencies_done"
+      ],
+      "exit_criteria": [
+        "all_tasks_review_done",
+        "verify_commands_passed",
+        "uat_matrix_passed",
+        "zero_open_gaps"
+      ],
+      "phase_id": "phase-1",
+      "task_ids": [
+        "TASK-001"
+      ]
+    },
+    {
+      "depends_on_phase_ids": [
+        "phase-1"
+      ],
+      "entry_criteria": [
+        "phase_dependencies_done"
+      ],
+      "exit_criteria": [
+        "all_tasks_review_done",
+        "verify_commands_passed",
+        "uat_matrix_passed",
+        "zero_open_gaps"
+      ],
+      "phase_id": "phase-2",
+      "task_ids": [
+        "TASK-002"
+      ]
+    },
+    {
+      "depends_on_phase_ids": [
+        "phase-2"
+      ],
+      "entry_criteria": [
+        "phase_dependencies_done"
+      ],
+      "exit_criteria": [
+        "all_tasks_review_done",
+        "verify_commands_passed",
+        "uat_matrix_passed",
+        "zero_open_gaps"
+      ],
+      "phase_id": "phase-3",
+      "task_ids": [
+        "TASK-003"
+      ]
+    }
+  ],
+  "plan_id": "plan-20260228T204938Z",
+  "requirements": [
+    "REQ-001",
+    "REQ-002",
+    "REQ-003"
+  ],
+  "schema_version": "1.0",
+  "tasks": [
+    {
+      "depends_on": [],
+      "must_haves": [
+        "Core workflow is implemented end-to-end.",
+        "Critical errors are handled deterministically."
+      ],
+      "phase_id": "phase-1",
+      "requirement_ids": [
+        "REQ-001"
+      ],
+      "task_id": "TASK-001",
+      "title": "Implement Deliver core functionality for Implement and integrate MCP backend API, tests, and docs",
+      "verify_commands": [
+        "python3 -m pytest"
+      ]
+    },
+    {
+      "depends_on": [
+        "TASK-001"
+      ],
+      "must_haves": [
+        "Relevant checks are automated.",
+        "Evidence is persisted in reports artifacts."
+      ],
+      "phase_id": "phase-2",
+      "requirement_ids": [
+        "REQ-002"
+      ],
+      "task_id": "TASK-002",
+      "title": "Implement Verify quality gates for Implement and integrate MCP backend API, tests, and docs",
+      "verify_commands": [
+        "python3 -m pytest"
+      ]
+    },
+    {
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Runtime/deploy flow is deterministic.",
+        "Recovery path is documented and testable."
+      ],
+      "phase_id": "phase-3",
+      "requirement_ids": [
+        "REQ-003"
+      ],
+      "task_id": "TASK-003",
+      "title": "Implement Operationalize rollout for Implement and integrate MCP backend API, tests, and docs",
+      "verify_commands": [
+        "python3 -m pytest"
+      ]
+    }
+  ],
+  "verify_commands": [
+    "python3 -m pytest"
+  ]
+}

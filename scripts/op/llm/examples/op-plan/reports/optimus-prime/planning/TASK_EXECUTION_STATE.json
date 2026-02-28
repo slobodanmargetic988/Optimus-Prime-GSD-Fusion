@@ -1,0 +1,75 @@
+{
+  "plan_id": "plan-20260228T204938Z",
+  "schema_version": "1.0",
+  "tasks": [
+    {
+      "attempts": {
+        "dev": 3,
+        "review": 0,
+        "test": 8
+      },
+      "blockers": [],
+      "evidence": {
+        "dev_ready_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+        "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+        "uat_results": [],
+        "verify_results": [
+          "python3 -m pytest :: passed (227 passed, 10 warnings in 124.15s)"
+        ]
+      },
+      "last_progress_at": "2026-02-28T23:10:24Z",
+      "owner_slot": "test-1",
+      "phase_id": "phase-1",
+      "requirement_ids": [
+        "REQ-001"
+      ],
+      "status": "test_in_progress",
+      "task_id": "TASK-001"
+    },
+    {
+      "attempts": {
+        "dev": 0,
+        "review": 0,
+        "test": 0
+      },
+      "blockers": [],
+      "evidence": {
+        "dev_ready_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-002/TASK_EVIDENCE.json",
+        "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-002/TASK_EVIDENCE.json",
+        "uat_results": [],
+        "verify_results": []
+      },
+      "last_progress_at": "2026-02-28T20:49:38Z",
+      "owner_slot": null,
+      "phase_id": "phase-2",
+      "requirement_ids": [
+        "REQ-002"
+      ],
+      "status": "queued",
+      "task_id": "TASK-002"
+    },
+    {
+      "attempts": {
+        "dev": 0,
+        "review": 0,
+        "test": 0
+      },
+      "blockers": [],
+      "evidence": {
+        "dev_ready_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-003/TASK_EVIDENCE.json",
+        "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-003/TASK_EVIDENCE.json",
+        "uat_results": [],
+        "verify_results": []
+      },
+      "last_progress_at": "2026-02-28T20:49:38Z",
+      "owner_slot": null,
+      "phase_id": "phase-3",
+      "requirement_ids": [
+        "REQ-003"
+      ],
+      "status": "queued",
+      "task_id": "TASK-003"
+    }
+  ],
+  "updated_at": "2026-02-28T23:15:25Z"
+}

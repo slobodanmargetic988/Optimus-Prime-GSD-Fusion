@@ -4110,3 +4110,61 @@ def test_op_plan_returns_planner_execution_failed_when_codex_exec_unavailable(mo
                 }
             )
         assert exc_info.value.code == "planner_execution_failed"
+
+
+def test_planner_prompt_includes_bundled_example_path():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        mission_source, scope_source = MODULE._resolve_mission_scope_sources(req, stage="plan", required=False)
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        prompt = MODULE._planner_prompt_text(
+            req=req,
+            bundle_path=bundle_path,
+            mission_source=mission_source,
+            scope_source=scope_source,
+            prior_errors=[],
+        )
+        expected = str((MODULE.SCRIPT_DIR / "llm" / "examples" / "op-plan" / "reports" / "optimus-prime" / "planning").resolve())
+        assert expected in prompt
+
+
+def test_planner_validator_rejects_unexpected_artifact_rows():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        lines = [line for line in bundle_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        rows = [json.loads(line) for line in lines]
+        rows.append(planner_row("UNEXPECTED_FILE.json", "json", {"hello": "world"}))
+        write_planner_bundle(bundle_path, rows)
+
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any(item.get("code") == "planner_bundle_schema_error" for item in errors)
+        assert any("unexpected artifacts" in str(item.get("message")) for item in errors)

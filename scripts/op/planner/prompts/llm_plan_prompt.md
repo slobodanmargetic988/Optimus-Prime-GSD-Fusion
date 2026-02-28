@@ -11,6 +11,8 @@ Hard requirements:
    {{VALIDATOR_COMMAND}}
 4. If validation fails, fix artifacts and rerun validator until it passes.
 5. Do not output prose files outside required artifacts.
+6. The output must match the planner example contract in both folder path shape and per-file structure:
+   {{EXAMPLE_ROOT}}
 
 Context:
 - repo_root: {{REPO_ROOT}}

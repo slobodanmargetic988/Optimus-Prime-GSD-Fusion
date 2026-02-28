@@ -1,0 +1,54 @@
+{
+  "dev": {
+    "artifacts": [
+      "app/mcp_api.py",
+      "tests/api/test_mcp_backend.py",
+      "docs/mcp-backend-api.md"
+    ],
+    "blockers": [],
+    "checks": [
+      "python3 -m pytest tests/api/test_mcp_backend.py -q :: passed (4 passed in 4.32s)",
+      "python3 -m pytest :: passed (227 passed, 10 warnings in 124.15s)"
+    ],
+    "dev_ready": true,
+    "status": "ready_for_test",
+    "verify_results": [
+      "python3 -m pytest :: passed (227 passed, 10 warnings in 124.15s)"
+    ]
+  },
+  "gate": {
+    "ready_for_phase_exit": false,
+    "ready_for_review": false,
+    "ready_for_test": true
+  },
+  "phase_id": "phase-1",
+  "plan_id": "plan-20260228T204938Z",
+  "requirement_ids": [
+    "REQ-001"
+  ],
+  "review": {
+    "artifacts": [],
+    "blockers": [],
+    "decision": "pending",
+    "status": "pending"
+  },
+  "schema_version": "1.0",
+  "summary": {
+    "reason_codes": [
+      "dev_ready",
+      "checks_passed",
+      "normalized_noncanonical_result"
+    ],
+    "result": "pass"
+  },
+  "task_id": "TASK-001",
+  "test": {
+    "artifacts": [],
+    "blockers": [],
+    "checks": [],
+    "status": "pending",
+    "uat_results": [],
+    "verify_results": []
+  },
+  "updated_at": "2026-02-28T21:24:37Z"
+}
