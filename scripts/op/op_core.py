@@ -56,6 +56,11 @@ EVIDENCE_REL = PLANNING_REL / "evidence"
 BUILD_STATE_JSON = PLANNING_REL / "BUILD_STATE.json"
 TASK_EXECUTION_STATE_JSON = PLANNING_REL / "TASK_EXECUTION_STATE.json"
 BUILD_LOOP_LOCK = PLANNING_REL / "BUILD_LOOP.lock"
+RUN_PROGRESS_LEDGER_JSONL = PLANNING_REL / "RUN_PROGRESS_LEDGER.jsonl"
+NO_PROGRESS_WATCHDOG_STATE_JSON = PLANNING_REL / "NO_PROGRESS_WATCHDOG_STATE.json"
+NO_PROGRESS_WATCHDOG_EVENT_JSON = PLANNING_REL / "NO_PROGRESS_WATCHDOG_EVENT.json"
+RUN_FINDINGS_JSON = PLANNING_REL / "RUN_FINDINGS.json"
+LANE_B_RUNTIME_CANARY_GATE_JSON = PLANNING_REL / "LANE_B_RUNTIME_CANARY_GATE.json"
 CONTROL_REL = Path("reports") / "optimus-prime" / "control"
 OPERATOR_STOP_JSON = CONTROL_REL / "OPERATOR_STOP.json"
 OPERATOR_STOP_STATE_JSON = CONTROL_REL / "OPERATOR_STOP_STATE.json"
@@ -94,6 +99,7 @@ TERMINAL_HARD_STOPS = {
 }
 
 STALE_IN_PROGRESS_TIMEOUT_SEC = 900
+NO_PROGRESS_THRESHOLD_CYCLES = 25
 
 OPTIMUS_GITIGNORE_BEGIN = "# BEGIN OPTIMUS-PRIME MANAGED REPORT IGNORES"
 OPTIMUS_GITIGNORE_END = "# END OPTIMUS-PRIME MANAGED REPORT IGNORES"
@@ -427,6 +433,17 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    _ensure_parent(path)
+    line = json.dumps(payload, sort_keys=False)
+    try:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+            fh.write("\n")
+    except OSError as exc:
+        raise OpError("state_write_error", f"unable to append {path}: {exc}", stage="state") from exc
+
+
 def _parse_iso_utc(value: Any) -> datetime | None:
     text = _as_str(value)
     if not text:
@@ -442,6 +459,106 @@ def _parse_iso_utc(value: Any) -> datetime | None:
         return dt.astimezone(timezone.utc)
     except ValueError:
         return None
+
+
+def _task_progress_payload(task_state: dict[str, Any], open_gap_ids: list[str]) -> dict[str, Any]:
+    task_rows = task_state.get("tasks") if isinstance(task_state.get("tasks"), list) else []
+    normalized_tasks: list[dict[str, Any]] = []
+    for row in task_rows:
+        if not isinstance(row, dict):
+            continue
+        task_id = _as_str(row.get("task_id"))
+        if not task_id:
+            continue
+        normalized_tasks.append(
+            {
+                "task_id": task_id,
+                "status": _as_str(row.get("status")) or "unknown",
+                "owner_slot": _as_str(row.get("owner_slot")),
+                "phase_id": _as_str(row.get("phase_id")) or "phase-1",
+            }
+        )
+    normalized_tasks.sort(key=lambda item: item.get("task_id") or "")
+    gaps = sorted([gap_id for gap_id in (_as_str(v) for v in open_gap_ids) if gap_id])
+    return {
+        "tasks": normalized_tasks,
+        "open_gap_ids": gaps,
+    }
+
+
+def _task_progress_fingerprint(payload: dict[str, Any]) -> str:
+    return _sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+def _load_no_progress_watchdog_state(path: Path) -> dict[str, Any]:
+    default = {
+        "schema_version": SCHEMA_VERSION,
+        "last_cycle": 0,
+        "consecutive_no_progress_cycles": 0,
+        "threshold_cycles": NO_PROGRESS_THRESHOLD_CYCLES,
+        "last_progress_at": None,
+        "triggered": False,
+        "triggered_at": None,
+        "trigger_reason": None,
+    }
+    if not path.exists():
+        return default
+    try:
+        payload = _read_json(path)
+    except OpError:
+        return default
+    if not isinstance(payload, dict):
+        return default
+    out = dict(default)
+    out.update(payload)
+    out["threshold_cycles"] = NO_PROGRESS_THRESHOLD_CYCLES
+    out["consecutive_no_progress_cycles"] = _coerce_nonneg_int(out.get("consecutive_no_progress_cycles"), default=0)
+    out["last_cycle"] = _coerce_nonneg_int(out.get("last_cycle"), default=0)
+    out["triggered"] = _as_bool(out.get("triggered"), default=False)
+    out["schema_version"] = SCHEMA_VERSION
+    return out
+
+
+def _init_no_progress_watchdog_state(path: Path, build_state: dict[str, Any]) -> dict[str, Any]:
+    state = _load_no_progress_watchdog_state(path)
+    build_watchdog = build_state.get("no_progress_watchdog")
+    if isinstance(build_watchdog, dict):
+        build_counter = _coerce_nonneg_int(build_watchdog.get("consecutive_no_progress_cycles"), default=0)
+        file_counter = _coerce_nonneg_int(state.get("consecutive_no_progress_cycles"), default=0)
+        if build_counter > file_counter:
+            state["consecutive_no_progress_cycles"] = build_counter
+        build_last_progress = _as_str(build_watchdog.get("last_progress_at"))
+        file_last_progress = _as_str(state.get("last_progress_at"))
+        if build_last_progress:
+            build_last_progress_dt = _parse_iso_utc(build_last_progress)
+            file_last_progress_dt = _parse_iso_utc(file_last_progress)
+            if file_last_progress_dt is None:
+                state["last_progress_at"] = build_last_progress
+            elif build_last_progress_dt is not None and build_last_progress_dt > file_last_progress_dt:
+                state["last_progress_at"] = build_last_progress
+        if _as_bool(build_watchdog.get("triggered"), default=False):
+            state["triggered"] = True
+            state["triggered_at"] = _as_str(build_watchdog.get("triggered_at")) or _as_str(state.get("triggered_at"))
+            state["trigger_reason"] = _as_str(state.get("trigger_reason")) or "task_state_no_progress_25_cycles"
+    state["threshold_cycles"] = NO_PROGRESS_THRESHOLD_CYCLES
+    state["schema_version"] = SCHEMA_VERSION
+    return state
+
+
+def _write_watchdog_stop_marker(repo_root: Path, *, reason: str, requested_at: str) -> Path:
+    marker_path = _repo_path(repo_root, OPERATOR_STOP_JSON)
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "stop": True,
+        "reason": reason,
+        "stop_mode": "graceful_then_force",
+        "term_grace_sec": 10,
+        "kill_grace_sec": 3,
+        "resume_policy": "auto",
+        "requested_at": requested_at,
+    }
+    _atomic_write_json(marker_path, payload)
+    return marker_path
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -571,24 +688,29 @@ def _load_operator_stop_request(marker_path: Path) -> tuple[dict[str, Any] | Non
             }
         )
 
-    requested_at = _as_str(payload.get("requested_at")) or utc_now_iso()
-    stop_mode = (_as_str(payload.get("stop_mode")) or "graceful_then_force").lower()
+    req = _normalize_operator_stop_request(payload)
+    return req, raw_text, warnings
+
+
+def _normalize_operator_stop_request(payload: dict[str, Any] | None) -> dict[str, Any]:
+    body = payload if isinstance(payload, dict) else {}
+    requested_at = _as_str(body.get("requested_at")) or utc_now_iso()
+    stop_mode = (_as_str(body.get("stop_mode")) or "graceful_then_force").lower()
     if stop_mode != "graceful_then_force":
         stop_mode = "graceful_then_force"
-    resume_policy = (_as_str(payload.get("resume_policy")) or "auto").lower()
+    resume_policy = (_as_str(body.get("resume_policy")) or "auto").lower()
     if resume_policy != "auto":
         resume_policy = "auto"
-    req = {
-        "schema_version": _as_str(payload.get("schema_version")) or SCHEMA_VERSION,
+    return {
+        "schema_version": _as_str(body.get("schema_version")) or SCHEMA_VERSION,
         "stop": True,
-        "reason": _as_str(payload.get("reason")) or "operator_requested_stop",
+        "reason": _as_str(body.get("reason")) or "operator_requested_stop",
         "stop_mode": stop_mode,
-        "term_grace_sec": _clamp_int(payload.get("term_grace_sec"), default=10, low=1, high=120),
-        "kill_grace_sec": _clamp_int(payload.get("kill_grace_sec"), default=3, low=1, high=30),
+        "term_grace_sec": _clamp_int(body.get("term_grace_sec"), default=10, low=1, high=120),
+        "kill_grace_sec": _clamp_int(body.get("kill_grace_sec"), default=3, low=1, high=30),
         "resume_policy": resume_policy,
         "requested_at": requested_at,
     }
-    return req, raw_text, warnings
 
 
 def _next_operator_stop_archive_path(marker_path: Path) -> Path:
@@ -636,12 +758,20 @@ def _apply_operator_stop(
     repo_root: Path,
     task_state: dict[str, Any],
     build_state: dict[str, Any],
+    *,
+    request_override: dict[str, Any] | None = None,
+    raw_text_override: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     marker_path = _repo_path(repo_root, OPERATOR_STOP_JSON)
     stop_state_path = _repo_path(repo_root, OPERATOR_STOP_STATE_JSON)
-    request, raw_text, warnings = _load_operator_stop_request(marker_path)
-    if request is None:
-        return {}, warnings
+    if isinstance(request_override, dict):
+        request = _normalize_operator_stop_request(request_override)
+        raw_text = raw_text_override
+        warnings: list[dict[str, Any]] = []
+    else:
+        request, raw_text, warnings = _load_operator_stop_request(marker_path)
+        if request is None:
+            return {}, warnings
 
     applied_at = utc_now_iso()
     stop_id = f"stop-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
@@ -3612,6 +3742,14 @@ def _fresh_build_state_payload() -> dict[str, Any]:
         "stale_in_progress_policy": {
             "timeout_sec": STALE_IN_PROGRESS_TIMEOUT_SEC,
         },
+        "last_task_state_fingerprint": None,
+        "no_progress_watchdog": {
+            "consecutive_no_progress_cycles": 0,
+            "threshold_cycles": NO_PROGRESS_THRESHOLD_CYCLES,
+            "last_progress_at": None,
+            "triggered": False,
+            "triggered_at": None,
+        },
         "state_recovery": {
             "last_recovery_at": None,
             "reason": None,
@@ -3667,6 +3805,17 @@ def _load_build_state(path: Path) -> dict[str, Any]:
             "timeout_sec": STALE_IN_PROGRESS_TIMEOUT_SEC,
         },
     )
+    payload.setdefault("last_task_state_fingerprint", None)
+    payload.setdefault(
+        "no_progress_watchdog",
+        {
+            "consecutive_no_progress_cycles": 0,
+            "threshold_cycles": NO_PROGRESS_THRESHOLD_CYCLES,
+            "last_progress_at": None,
+            "triggered": False,
+            "triggered_at": None,
+        },
+    )
     payload.setdefault(
         "state_recovery",
         {
@@ -3709,6 +3858,18 @@ def _load_build_state(path: Path) -> dict[str, Any]:
             "last_reset_at": None,
         },
     )
+    no_progress = payload.get("no_progress_watchdog")
+    if not isinstance(no_progress, dict):
+        no_progress = {}
+    no_progress["consecutive_no_progress_cycles"] = _coerce_nonneg_int(
+        no_progress.get("consecutive_no_progress_cycles"),
+        default=0,
+    )
+    no_progress["threshold_cycles"] = NO_PROGRESS_THRESHOLD_CYCLES
+    no_progress["triggered"] = _as_bool(no_progress.get("triggered"), default=False)
+    no_progress.setdefault("last_progress_at", None)
+    no_progress.setdefault("triggered_at", None)
+    payload["no_progress_watchdog"] = no_progress
     return payload
 
 
@@ -4658,6 +4819,9 @@ def command_build(req: OpRequest) -> dict[str, Any]:
 
     try:
         operator_stop_path = _repo_path(req.repo_root, OPERATOR_STOP_JSON)
+        progress_ledger_path = _repo_path(req.repo_root, RUN_PROGRESS_LEDGER_JSONL)
+        watchdog_state_path = _repo_path(req.repo_root, NO_PROGRESS_WATCHDOG_STATE_JSON)
+        watchdog_event_path = _repo_path(req.repo_root, NO_PROGRESS_WATCHDOG_EVENT_JSON)
         plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
         resume_cmd = "/op-resume" if req.command == "op-resume" else "/op-build"
 
@@ -4719,6 +4883,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
         history: list[dict[str, Any]] = build_state.get("history", [])
         if not isinstance(history, list):
             history = []
+        watchdog_state = _init_no_progress_watchdog_state(watchdog_state_path, build_state)
         while req.max_build_cycles is None or cycles < req.max_build_cycles:
             cycles += 1
             cycle_local_warnings: list[dict[str, Any]] = []
@@ -5108,6 +5273,241 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     handoff_warnings = _apply_handoff_updates(req.repo_root, task_state, build_state)
                     warnings.extend(handoff_warnings)
                     cycle_local_warnings.extend(handoff_warnings)
+
+            open_gap_ids = [
+                gap_id
+                for gap_id in (_as_str(item) for item in build_state.get("open_gap_ids", []))
+                if gap_id
+            ]
+            progress_payload = _task_progress_payload(task_state, open_gap_ids)
+            progress_fingerprint = _task_progress_fingerprint(progress_payload)
+            previous_fingerprint = _as_str(build_state.get("last_task_state_fingerprint"))
+            progress_delta = previous_fingerprint is None or previous_fingerprint != progress_fingerprint
+            progress_reason_codes = (
+                ["initial_baseline"]
+                if previous_fingerprint is None
+                else ["task_state_fingerprint_changed"]
+                if progress_delta
+                else ["no_task_state_delta"]
+            )
+            build_state["last_task_state_fingerprint"] = progress_fingerprint
+
+            watchdog_state["last_cycle"] = int(build_state.get("last_cycle", 0))
+            watchdog_state["threshold_cycles"] = NO_PROGRESS_THRESHOLD_CYCLES
+            trigger_watchdog_now = False
+            if progress_delta:
+                watchdog_state["consecutive_no_progress_cycles"] = 0
+                watchdog_state["last_progress_at"] = utc_now_iso()
+                watchdog_state["triggered"] = False
+                watchdog_state["triggered_at"] = None
+                watchdog_state["trigger_reason"] = None
+            else:
+                watchdog_state["consecutive_no_progress_cycles"] = int(watchdog_state.get("consecutive_no_progress_cycles", 0)) + 1
+                if int(watchdog_state.get("consecutive_no_progress_cycles", 0)) > 1:
+                    warning = {
+                        "code": "no_progress_watchdog_warning",
+                        "message": (
+                            "no meaningful task-state progress detected in build cycle "
+                            f"{int(build_state.get('last_cycle', 0))}"
+                        ),
+                        "stage": "build_loop",
+                        "consecutive_no_progress_cycles": int(watchdog_state.get("consecutive_no_progress_cycles", 0)),
+                        "threshold_cycles": NO_PROGRESS_THRESHOLD_CYCLES,
+                    }
+                    warnings.append(warning)
+                    cycle_local_warnings.append(warning)
+                if int(watchdog_state.get("consecutive_no_progress_cycles", 0)) >= NO_PROGRESS_THRESHOLD_CYCLES and not _as_bool(
+                    watchdog_state.get("triggered"),
+                    default=False,
+                ):
+                    trigger_watchdog_now = True
+                    watchdog_state["triggered"] = True
+                    watchdog_state["triggered_at"] = utc_now_iso()
+                    watchdog_state["trigger_reason"] = "task_state_no_progress_25_cycles"
+
+            build_state["no_progress_watchdog"] = {
+                "consecutive_no_progress_cycles": int(watchdog_state.get("consecutive_no_progress_cycles", 0)),
+                "threshold_cycles": NO_PROGRESS_THRESHOLD_CYCLES,
+                "last_progress_at": _as_str(watchdog_state.get("last_progress_at")),
+                "triggered": _as_bool(watchdog_state.get("triggered"), default=False),
+                "triggered_at": _as_str(watchdog_state.get("triggered_at")),
+            }
+            try:
+                _atomic_write_json(watchdog_state_path, watchdog_state)
+            except Exception as exc:  # noqa: BLE001
+                warning = {
+                    "code": "no_progress_watchdog_state_persist_failed",
+                    "message": f"failed persisting no-progress watchdog state: {exc}",
+                    "stage": "build_loop",
+                }
+                warnings.append(warning)
+                cycle_local_warnings.append(warning)
+
+            progress_row = {
+                "timestamp": utc_now_iso(),
+                "build_cycle": int(build_state.get("last_cycle", 0)),
+                "active_phase_id": active_phase_id,
+                "task_state_fingerprint": progress_fingerprint,
+                "open_gap_ids": open_gap_ids,
+                "progress_delta": progress_delta,
+                "progress_reason_codes": progress_reason_codes,
+                "controller_control_number": cycle_control_number,
+                "controller_control_run_id": cycle_control_run_id,
+                "warnings_codes": [
+                    code
+                    for code in (_as_str(item.get("code")) for item in cycle_local_warnings if isinstance(item, dict))
+                    if code
+                ],
+            }
+            try:
+                _append_jsonl(progress_ledger_path, progress_row)
+            except OpError as exc:
+                warning = {
+                    "code": "state_write_error",
+                    "message": f"failed appending run progress ledger: {exc.message}",
+                    "stage": "build_loop",
+                }
+                warnings.append(warning)
+                cycle_local_warnings.append(warning)
+
+            if trigger_watchdog_now:
+                trigger_warning = {
+                    "code": "no_progress_watchdog_triggered",
+                    "message": (
+                        f"no meaningful task-state progress for {NO_PROGRESS_THRESHOLD_CYCLES} cycles; "
+                        "initiating full stop (loop + workers)"
+                    ),
+                    "stage": "build_loop",
+                    "consecutive_no_progress_cycles": int(watchdog_state.get("consecutive_no_progress_cycles", 0)),
+                    "threshold_cycles": NO_PROGRESS_THRESHOLD_CYCLES,
+                }
+                warnings.append(trigger_warning)
+                cycle_local_warnings.append(trigger_warning)
+                watchdog_stop_request = _normalize_operator_stop_request(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "stop": True,
+                        "reason": "no_progress_watchdog",
+                        "stop_mode": "graceful_then_force",
+                        "term_grace_sec": 10,
+                        "kill_grace_sec": 3,
+                        "resume_policy": "auto",
+                        "requested_at": utc_now_iso(),
+                    }
+                )
+                watchdog_stop_raw = json.dumps(watchdog_stop_request, indent=2, sort_keys=True) + "\n"
+                try:
+                    _write_watchdog_stop_marker(
+                        req.repo_root,
+                        reason=_as_str(watchdog_stop_request.get("reason")) or "no_progress_watchdog",
+                        requested_at=_as_str(watchdog_stop_request.get("requested_at")) or utc_now_iso(),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    warning = {
+                        "code": "no_progress_watchdog_marker_write_failed",
+                        "message": f"unable to persist watchdog stop marker: {exc}",
+                        "stage": "build_loop",
+                    }
+                    warnings.append(warning)
+                    cycle_local_warnings.append(warning)
+                stop_summary: dict[str, Any] = {}
+                try:
+                    stop_summary, stop_warnings = _apply_operator_stop(
+                        req.repo_root,
+                        task_state,
+                        build_state,
+                        request_override=watchdog_stop_request,
+                        raw_text_override=watchdog_stop_raw,
+                    )
+                    warnings.extend(stop_warnings)
+                    cycle_local_warnings.extend(stop_warnings)
+                except OpError as exc:
+                    warnings.append(
+                        {
+                            "code": "operator_stop_apply_failed",
+                            "message": f"watchdog stop encountered errors: {exc.message}",
+                            "stage": "build_loop",
+                        }
+                    )
+                    build_state["terminal_state"] = {
+                        "reason": "operator_stop_apply_failed",
+                        "timestamp": utc_now_iso(),
+                    }
+                    _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
+                    _atomic_write_json(build_state_path, build_state)
+                    return _response(
+                        req,
+                        ok=False,
+                        status="blocked_terminal",
+                        summary="Build halted: no-progress watchdog triggered but worker stop failed.",
+                        warnings=warnings,
+                        errors=[
+                            {
+                                "code": "operator_stop_apply_failed",
+                                "message": exc.message,
+                                "stage": "build_loop",
+                            }
+                        ],
+                        state_ref=str(build_state_path),
+                        next_action="Fix operator stop/state artifact write failures and rerun /op-build.",
+                        data={"terminal_reason": "operator_stop_apply_failed"},
+                    )
+
+                watchdog_event = {
+                    "schema_version": SCHEMA_VERSION,
+                    "triggered_at": _as_str(watchdog_state.get("triggered_at")) or utc_now_iso(),
+                    "consecutive_no_progress_cycles": int(watchdog_state.get("consecutive_no_progress_cycles", 0)),
+                    "affected_task_ids": stop_summary.get("affected_task_ids", []),
+                    "active_workers": _active_workers_count(req.repo_root),
+                    "action_taken": "stop_loop_and_workers",
+                    "stop_state_ref": stop_summary.get("stop_state_path"),
+                }
+                try:
+                    _atomic_write_json(watchdog_event_path, watchdog_event)
+                except Exception as exc:  # noqa: BLE001
+                    warning = {
+                        "code": "no_progress_watchdog_event_write_failed",
+                        "message": f"unable to persist watchdog event artifact: {exc}",
+                        "stage": "build_loop",
+                    }
+                    warnings.append(warning)
+                    cycle_local_warnings.append(warning)
+                warnings.append(
+                    {
+                        "code": "no_progress_watchdog_stopped",
+                        "message": "no-progress watchdog applied full stop to build loop and workers",
+                        "stage": "build_loop",
+                        "event_path": str(watchdog_event_path),
+                    }
+                )
+                build_state["terminal_state"] = {
+                    "reason": "no_progress_watchdog",
+                    "timestamp": utc_now_iso(),
+                }
+                build_state["updated_at"] = utc_now_iso()
+                _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
+                _atomic_write_json(build_state_path, build_state)
+                return _response(
+                    req,
+                    ok=False,
+                    status="blocked_terminal",
+                    summary="Build halted by no-progress watchdog after 25 cycles without meaningful task-state progress.",
+                    warnings=warnings,
+                    errors=[
+                        {
+                            "code": "no_progress_watchdog_triggered",
+                            "message": "no task-state progress reached watchdog threshold",
+                            "stage": "build_loop",
+                        }
+                    ],
+                    state_ref=str(build_state_path),
+                    next_action=f"Rerun {resume_cmd} after triaging watchdog event evidence.",
+                    data={
+                        "terminal_reason": "no_progress_watchdog",
+                        "cycles_executed": cycles,
+                        "watchdog_event_path": str(watchdog_event_path),
+                    },
+                )
 
             fingerprint_warnings: list[dict[str, Any]] = []
             fingerprint = _detect_blocker_fingerprint(req.repo_root, warnings_sink=fingerprint_warnings)

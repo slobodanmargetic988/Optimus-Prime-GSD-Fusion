@@ -1,6 +1,6 @@
 # Lane B Implementation Status
 
-Updated: 2026-02-27
+Updated: 2026-02-28
 
 ## Implemented (Batch 1 Runtime Pipeline + Hard Gate Remediation)
 
@@ -133,6 +133,14 @@ Updated: 2026-02-27
   - explicit risk-test manifest: `scripts/quality/lane_b_required_tests.json`
   - quality artifact: `reports/optimus-prime/planning/LANE_B_QUALITY_GATE.json`
   - gate status is reliability-first (`passed|blocked`) based on required risk tests + full matrix + coverage snapshot generation
+  - runtime canary root resolution is explicit-only (`--canary-project-root` or `OP_CANARY_PROJECT_ROOT` or manifest field), with deterministic `canary_project_root_missing` block when unset
+- Lane D2 reliability remediation hardening:
+  - canary finding fingerprinting is stable for repeated unchanged defects (dedup count updates instead of new finding IDs)
+  - no-progress watchdog now keeps in-memory counter continuity when watchdog state persistence fails
+  - watchdog trigger path is crash-safe for marker/event artifact write failures, with deterministic warnings:
+    - `no_progress_watchdog_state_persist_failed`
+    - `no_progress_watchdog_marker_write_failed`
+    - `no_progress_watchdog_event_write_failed`
 
 ## Runtime + Blocker Artifacts (Canonical)
 

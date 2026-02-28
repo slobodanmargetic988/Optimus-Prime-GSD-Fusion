@@ -1382,3 +1382,294 @@ def test_project_done_still_blocked_when_preserved_gap_survives_recovery():
             if isinstance(row, dict) and row.get("status") == "open"
         }
         assert "gap-preserved-done-1" in open_ids
+
+
+def test_no_progress_watchdog_triggers_terminal_stop_and_writes_event(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(MODULE, "NO_PROGRESS_THRESHOLD_CYCLES", 3)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
+        monkeypatch.setattr(MODULE, "_apply_handoff_updates", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(MODULE, "_sync_task_state_from_evidence", lambda *_args, **_kwargs: [])
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 6,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["ok"] is False
+        assert out["status"] == "blocked_terminal"
+        assert out.get("data", {}).get("terminal_reason") == "no_progress_watchdog"
+        warning_codes = {item.get("code") for item in out.get("warnings", [])}
+        assert "no_progress_watchdog_triggered" in warning_codes
+        assert "no_progress_watchdog_stopped" in warning_codes
+
+        watchdog_event_path = root / "reports" / "optimus-prime" / "planning" / "NO_PROGRESS_WATCHDOG_EVENT.json"
+        assert watchdog_event_path.exists()
+        watchdog_event = json.loads(watchdog_event_path.read_text(encoding="utf-8"))
+        assert watchdog_event["action_taken"] == "stop_loop_and_workers"
+        assert isinstance(watchdog_event.get("affected_task_ids"), list)
+
+        lock_path = root / "reports" / "optimus-prime" / "planning" / "BUILD_LOOP.lock"
+        assert not lock_path.exists()
+
+
+def test_no_progress_watchdog_resets_on_task_state_delta(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+
+        monkeypatch.setattr(MODULE, "NO_PROGRESS_THRESHOLD_CYCLES", 5)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_apply_handoff_updates", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(MODULE, "_sync_task_state_from_evidence", lambda *_args, **_kwargs: [])
+
+        dispatch_calls = {"count": 0}
+
+        def fake_dispatch(_req, _plan, task_state, _build_state, *_):
+            dispatch_calls["count"] += 1
+            if dispatch_calls["count"] == 2:
+                task = task_state["tasks"][0]
+                task["status"] = "dev_in_progress"
+                task["owner_slot"] = "dev-1"
+                task["last_progress_at"] = MODULE.utc_now_iso()
+            return {"ok": True, "status": "noop"}
+
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", fake_dispatch)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 4,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+
+        watchdog_state_path = root / "reports" / "optimus-prime" / "planning" / "NO_PROGRESS_WATCHDOG_STATE.json"
+        watchdog_state = json.loads(watchdog_state_path.read_text(encoding="utf-8"))
+        assert watchdog_state["triggered"] is False
+        assert watchdog_state["consecutive_no_progress_cycles"] == 2
+        assert watchdog_state["last_progress_at"] is not None
+
+        progress_path = root / "reports" / "optimus-prime" / "planning" / "RUN_PROGRESS_LEDGER.jsonl"
+        rows = [json.loads(line) for line in progress_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(rows) == 4
+        assert any(row.get("progress_reason_codes") == ["task_state_fingerprint_changed"] for row in rows)
+
+
+def test_watchdog_triggers_even_when_watchdog_state_write_fails(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+
+        monkeypatch.setattr(MODULE, "NO_PROGRESS_THRESHOLD_CYCLES", 3)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
+        monkeypatch.setattr(MODULE, "_apply_handoff_updates", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(MODULE, "_sync_task_state_from_evidence", lambda *_args, **_kwargs: [])
+        original_atomic = MODULE._atomic_write_json
+
+        def flaky_atomic(path: Path, payload: dict):
+            if path.name == "NO_PROGRESS_WATCHDOG_STATE.json":
+                raise OSError("simulated watchdog state persist failure")
+            return original_atomic(path, payload)
+
+        monkeypatch.setattr(MODULE, "_atomic_write_json", flaky_atomic)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 6,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "blocked_terminal"
+        assert out.get("data", {}).get("terminal_reason") == "no_progress_watchdog"
+        warning_codes = {item.get("code") for item in out.get("warnings", [])}
+        assert "no_progress_watchdog_state_persist_failed" in warning_codes
+        assert "no_progress_watchdog_triggered" in warning_codes
+        assert not (root / "reports" / "optimus-prime" / "planning" / "BUILD_LOOP.lock").exists()
+
+
+def test_watchdog_marker_write_failure_does_not_crash_and_returns_terminal_watchdog(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+
+        monkeypatch.setattr(MODULE, "NO_PROGRESS_THRESHOLD_CYCLES", 3)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
+        monkeypatch.setattr(MODULE, "_apply_handoff_updates", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(MODULE, "_sync_task_state_from_evidence", lambda *_args, **_kwargs: [])
+        def fail_marker_write(*_args, **_kwargs):
+            raise OSError("simulated marker write failure")
+
+        monkeypatch.setattr(MODULE, "_write_watchdog_stop_marker", fail_marker_write)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 6,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "blocked_terminal"
+        assert out.get("data", {}).get("terminal_reason") == "no_progress_watchdog"
+        warning_codes = {item.get("code") for item in out.get("warnings", [])}
+        assert "no_progress_watchdog_marker_write_failed" in warning_codes
+        assert "no_progress_watchdog_stopped" in warning_codes
+        assert not (root / "reports" / "optimus-prime" / "planning" / "BUILD_LOOP.lock").exists()
+
+
+def test_watchdog_event_write_failure_does_not_crash_and_returns_terminal_watchdog(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+
+        monkeypatch.setattr(MODULE, "NO_PROGRESS_THRESHOLD_CYCLES", 3)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
+        monkeypatch.setattr(MODULE, "_apply_handoff_updates", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(MODULE, "_sync_task_state_from_evidence", lambda *_args, **_kwargs: [])
+        original_atomic = MODULE._atomic_write_json
+
+        def flaky_atomic(path: Path, payload: dict):
+            if path.name == "NO_PROGRESS_WATCHDOG_EVENT.json":
+                raise OSError("simulated watchdog event write failure")
+            return original_atomic(path, payload)
+
+        monkeypatch.setattr(MODULE, "_atomic_write_json", flaky_atomic)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 6,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "blocked_terminal"
+        assert out.get("data", {}).get("terminal_reason") == "no_progress_watchdog"
+        warning_codes = {item.get("code") for item in out.get("warnings", [])}
+        assert "no_progress_watchdog_event_write_failed" in warning_codes
+        assert "no_progress_watchdog_stopped" in warning_codes
+        assert not (root / "reports" / "optimus-prime" / "planning" / "BUILD_LOOP.lock").exists()

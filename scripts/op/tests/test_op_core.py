@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.quality import lane_b_quality_gate as QUALITY_GATE
+
 
 OP_CORE_PATH = Path(__file__).resolve().parents[1] / "op_core.py"
 CONTROLLER_SOURCE = Path(__file__).resolve().parents[3] / "skills" / "optimus-cycle-controller" / "scripts" / "optimus_cycle_controller.py"
@@ -1207,6 +1209,71 @@ def test_stale_in_progress_missing_last_progress_at_recovers():
         assert recovered[0].get("reason") == "missing_last_progress_at"
         assert task["status"] == "queued"
         assert task["owner_slot"] is None
+
+
+def test_lane_b_quality_gate_blocks_when_canary_root_unset(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        manifest = root / "scripts" / "quality" / "lane_b_required_tests.json"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "required_risk_tests": [],
+                    "full_matrix_targets": [],
+                    "coverage_targets": [],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("OP_CANARY_PROJECT_ROOT", raising=False)
+        monkeypatch.setattr(sys, "argv", ["lane_b_quality_gate", "--repo-root", str(root)])
+        rc = QUALITY_GATE.main()
+        assert rc == 1
+        artifact = json.loads((root / "reports" / "optimus-prime" / "planning" / "LANE_B_QUALITY_GATE.json").read_text(encoding="utf-8"))
+        assert artifact["status"] == "blocked"
+        assert artifact["runtime_canary"]["error_code"] == "canary_project_root_missing"
+
+
+def test_lane_b_quality_gate_uses_env_canary_root_when_set(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        manifest = root / "scripts" / "quality" / "lane_b_required_tests.json"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "required_risk_tests": [],
+                    "full_matrix_targets": [],
+                    "coverage_targets": [],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        capture: dict[str, str] = {}
+        monkeypatch.setenv("OP_CANARY_PROJECT_ROOT", "/tmp/canary-root")
+        monkeypatch.setattr(QUALITY_GATE, "run_required_risk_tests", lambda *_args, **_kwargs: (True, []))
+        monkeypatch.setattr(QUALITY_GATE, "run_full_matrix", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(QUALITY_GATE, "run_coverage_snapshot", lambda *_args, **_kwargs: (True, {"scripts/op/op_core.py": 80.0}))
+
+        def fake_run_canary(_repo_root: Path, canary_project_root: str):
+            capture["project_root"] = canary_project_root
+            return True, {"status": "passed", "artifacts": {"canary_gate": "/tmp/canary.json"}}
+
+        monkeypatch.setattr(QUALITY_GATE, "run_runtime_canary_gate", fake_run_canary)
+        monkeypatch.setattr(sys, "argv", ["lane_b_quality_gate", "--repo-root", str(root)])
+        rc = QUALITY_GATE.main()
+        assert rc == 0
+        assert capture["project_root"] == "/tmp/canary-root"
+        artifact = json.loads((root / "reports" / "optimus-prime" / "planning" / "LANE_B_QUALITY_GATE.json").read_text(encoding="utf-8"))
+        assert artifact["status"] == "passed"
+        assert artifact["runtime_canary"]["project_root"] == "/tmp/canary-root"
 
 
 def test_strategy_repair_uses_state_derived_mode(monkeypatch: pytest.MonkeyPatch):

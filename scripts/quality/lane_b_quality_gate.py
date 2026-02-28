@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,13 @@ def run_cmd(repo_root: Path, cmd: list[str]) -> subprocess.CompletedProcess[str]
         capture_output=True,
         check=False,
     )
+
+
+def _as_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def read_manifest(repo_root: Path) -> dict[str, Any]:
@@ -123,6 +131,43 @@ def run_coverage_snapshot(repo_root: Path, matrix_targets: list[str], coverage_t
     return proc.returncode == 0 and len(module_coverage) > 0, module_coverage
 
 
+def run_runtime_canary_gate(repo_root: Path, canary_project_root: str) -> tuple[bool, dict[str, Any]]:
+    target_root = Path(canary_project_root).expanduser().resolve()
+    cmd = [
+        sys.executable,
+        "-m",
+        "scripts.quality.op_runtime_canary_gate",
+        "--project-root",
+        str(target_root),
+        "--project-name",
+        target_root.name,
+        "--json-pretty",
+    ]
+    proc = run_cmd(repo_root, cmd)
+    out = (proc.stdout or "").strip()
+    payload: dict[str, Any] = {}
+    if out:
+        try:
+            parsed = json.loads(out)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            payload = {
+                "status": "blocked",
+                "error": "invalid_canary_json",
+                "raw_stdout": out[:4000],
+            }
+    if not payload:
+        payload = {
+            "status": "blocked",
+            "error": "missing_canary_output",
+            "stderr": (proc.stderr or "").strip()[:4000],
+        }
+    payload.setdefault("project_root", str(target_root))
+    ok = proc.returncode == 0 and str(payload.get("status")) == "passed"
+    return ok, payload
+
+
 def write_artifact(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
@@ -131,6 +176,7 @@ def write_artifact(path: Path, payload: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run deterministic Lane B quality gate.")
     parser.add_argument("--repo-root", required=True, help="Absolute repo root path")
+    parser.add_argument("--canary-project-root", default=None, help="Absolute path to real-project canary root (default: $OP_CANARY_PROJECT_ROOT or /Users/slobodan/Projects/MyBoard)")
     args = parser.parse_args()
     repo_root = Path(args.repo_root).expanduser().resolve()
 
@@ -138,12 +184,42 @@ def main() -> int:
     required_tests = as_str_list(manifest.get("required_risk_tests"))
     matrix_targets = as_str_list(manifest.get("full_matrix_targets"))
     coverage_targets = as_str_list(manifest.get("coverage_targets"))
+    canary_project_root = (
+        _as_str(args.canary_project_root)
+        or _as_str(os.environ.get("OP_CANARY_PROJECT_ROOT"))
+        or _as_str(manifest.get("runtime_canary_project_root"))
+    )
+
+    if not canary_project_root:
+        artifact = {
+            "schema_version": SCHEMA_VERSION,
+            "generated_at": utc_now_iso(),
+            "matrix_passed": False,
+            "risk_tests_passed": False,
+            "required_risk_tests": required_tests,
+            "failed_risk_tests": [],
+            "module_coverage": {},
+            "runtime_canary": {
+                "project_root": None,
+                "passed": False,
+                "status": "blocked",
+                "artifact": None,
+                "error_code": "canary_project_root_missing",
+            },
+            "status": "blocked",
+            "next_action": "Set --canary-project-root or OP_CANARY_PROJECT_ROOT (or manifest runtime_canary_project_root) and rerun.",
+        }
+        artifact_path = (repo_root / ARTIFACT_REL).resolve()
+        write_artifact(artifact_path, artifact)
+        print(json.dumps(artifact, indent=2, sort_keys=False))
+        return 1
 
     risk_tests_passed, failed_risk_tests = run_required_risk_tests(repo_root, required_tests)
     matrix_passed = run_full_matrix(repo_root, matrix_targets)
     coverage_collected, module_coverage = run_coverage_snapshot(repo_root, matrix_targets, coverage_targets)
+    canary_passed, canary_payload = run_runtime_canary_gate(repo_root, canary_project_root)
 
-    gate_passed = risk_tests_passed and matrix_passed and coverage_collected
+    gate_passed = risk_tests_passed and matrix_passed and coverage_collected and canary_passed
     artifact = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": utc_now_iso(),
@@ -152,11 +228,20 @@ def main() -> int:
         "required_risk_tests": required_tests,
         "failed_risk_tests": failed_risk_tests,
         "module_coverage": module_coverage,
+        "runtime_canary": {
+            "project_root": canary_project_root,
+            "passed": canary_passed,
+            "status": canary_payload.get("status"),
+            "artifact": (canary_payload.get("artifacts") or {}).get("canary_gate")
+            if isinstance(canary_payload.get("artifacts"), dict)
+            else None,
+            "error_code": _as_str(canary_payload.get("error")),
+        },
         "status": "passed" if gate_passed else "blocked",
         "next_action": (
             "Lane B quality gate passed. Proceed with release workflow."
             if gate_passed
-            else "Run scripts/quality/run_lane_b_quality.sh and fix failing required risk tests or matrix errors."
+            else "Run scripts/quality/run_lane_b_quality.sh and fix failing required risk tests, matrix errors, or canary findings."
         ),
     }
     artifact_path = (repo_root / ARTIFACT_REL).resolve()
