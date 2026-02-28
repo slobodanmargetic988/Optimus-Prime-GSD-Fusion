@@ -3265,5 +3265,494 @@ def test_build_strict_done_blocks_when_sticky_open_gap_exists():
         assert any(item.get("code") == "strict_done_incomplete" for item in out.get("warnings", []))
 
 
+def test_gap_closure_generated_tasks_require_requirement_ids():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        plan_packets = json.loads((root / "reports" / "optimus-prime" / "planning" / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json")
+
+        for task in task_state["tasks"]:
+            task["status"] = "review_done"
+            task["owner_slot"] = None
+        task_state["tasks"][0]["status"] = "blocked"
+        task_state["tasks"][0]["owner_slot"] = None
+
+        _, closure_payload = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
+        closure_tasks = [task for task in closure_payload.get("tasks", []) if isinstance(task, dict)]
+        assert closure_tasks
+        assert all(isinstance(task.get("requirement_ids"), list) and task.get("requirement_ids") for task in closure_tasks)
+
+
+def test_gap_recovery_generated_tasks_require_requirement_ids():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        (planning / "GAPS.json").write_text("{ invalid-json", encoding="utf-8")
+        (planning / "GAP_CLOSURE_PLAN_PACKETS.json").write_text("{ invalid-json", encoding="utf-8")
+
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["open_gap_ids"] = ["gap-recovery-reqids-1"]
+        build_state["active_gap_closure_phase_id"] = "phase-1"
+
+        _, closure_payload, _ = MODULE._recover_gap_artifacts_for_build(
+            root,
+            plan_packets,
+            task_state,
+            build_state,
+            MODULE._as_str(plan_packets.get("plan_id")) if isinstance(plan_packets, dict) else "plan-unknown",
+            True,
+            True,
+        )
+        closure_tasks = [task for task in closure_payload.get("tasks", []) if isinstance(task, dict)]
+        assert closure_tasks
+        assert all(isinstance(task.get("requirement_ids"), list) and task.get("requirement_ids") for task in closure_tasks)
+
+
+def test_dispatch_exhausted_gap_closure_continues_to_next_dispatchable_task(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+            }
+        )
+        plan_packets = json.loads((root / "reports" / "optimus-prime" / "planning" / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json")
+        build_state["profile_aliases"] = ["codex"]
+
+        for task in task_state["tasks"]:
+            task["status"] = "review_done"
+            task["owner_slot"] = None
+        task_state["tasks"][0]["status"] = "blocked"
+        task_state["tasks"][1]["status"] = "blocked"
+
+        _, gap_closure_payload = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
+        MODULE._ensure_gap_closure_task_state(root, task_state, gap_closure_payload, plan_packets["plan_id"])
+        merged_plan = MODULE._merge_plan_with_gap_closure(plan_packets, gap_closure_payload)
+        gap_tasks = [task for task in task_state["tasks"] if task.get("is_gap_closure")]
+        assert len(gap_tasks) >= 2
+        gap_tasks.sort(key=lambda item: item.get("task_id") or "")
+
+        first = gap_tasks[0]
+        first["status"] = "blocked"
+        first["owner_slot"] = None
+        source_gap_id = first.get("source_gap_id")
+        assert isinstance(source_gap_id, str) and source_gap_id
+        build_state["gap_retry_exhausted_ids"] = [source_gap_id]
+
+        second = gap_tasks[1]
+        second["status"] = "queued"
+        second["owner_slot"] = None
+        merged_task_map = {task.get("task_id"): task for task in merged_plan.get("tasks", []) if isinstance(task, dict)}
+        merged_plan["tasks"] = [
+            merged_task_map[first.get("task_id")],
+            merged_task_map[second.get("task_id")],
+        ]
+
+        dispatched: list[str] = []
+
+        def fake_dispatch_task_packet(_req, task, _plan_task, _stage, _plan_id, _alias):
+            dispatched.append(task.get("task_id"))
+            return {"ok": True, "status": "dispatch_started"}
+
+        monkeypatch.setattr(MODULE, "_dispatch_task_packet", fake_dispatch_task_packet)
+
+        result = MODULE._dispatch_next_task(req, merged_plan, task_state, build_state, None)
+        assert result.get("ok") is True
+        assert dispatched
+        assert dispatched[0] != first.get("task_id")
+        warning_codes = set()
+        warning = result.get("warning")
+        if isinstance(warning, dict):
+            warning_codes.add(warning.get("code"))
+        for item in result.get("warnings", []):
+            if isinstance(item, dict):
+                warning_codes.add(item.get("code"))
+        assert "gap_closure_skipped_exhausted_continue_scan" in warning_codes
+
+
+def test_dispatch_returns_blocked_only_after_full_scan_if_all_exhausted():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+            }
+        )
+        plan_packets = json.loads((root / "reports" / "optimus-prime" / "planning" / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json")
+        build_state["profile_aliases"] = ["codex"]
+
+        for task in task_state["tasks"]:
+            task["status"] = "review_done"
+            task["owner_slot"] = None
+        task_state["tasks"][0]["status"] = "blocked"
+        task_state["tasks"][1]["status"] = "blocked"
+        _, gap_closure_payload = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
+        MODULE._ensure_gap_closure_task_state(root, task_state, gap_closure_payload, plan_packets["plan_id"])
+        merged_plan = MODULE._merge_plan_with_gap_closure(plan_packets, gap_closure_payload)
+        gap_tasks = [task for task in task_state["tasks"] if task.get("is_gap_closure")]
+        assert len(gap_tasks) >= 2
+        exhausted_ids = []
+        merged_task_map = {task.get("task_id"): task for task in merged_plan.get("tasks", []) if isinstance(task, dict)}
+        ordered_gap_tasks = sorted(gap_tasks, key=lambda item: item.get("task_id") or "")
+        merged_plan["tasks"] = [merged_task_map[item.get("task_id")] for item in ordered_gap_tasks]
+        for task in ordered_gap_tasks:
+            task["status"] = "blocked"
+            task["owner_slot"] = None
+            source_gap_id = task.get("source_gap_id")
+            assert isinstance(source_gap_id, str) and source_gap_id
+            exhausted_ids.append(source_gap_id)
+        build_state["gap_retry_exhausted_ids"] = exhausted_ids
+
+        result = MODULE._dispatch_next_task(req, merged_plan, task_state, build_state, None)
+        assert result.get("ok") is False
+        assert result.get("status") == "blocked"
+        assert result.get("reason") in {"gap_closure_retry_suppressed", "gap_retry_exhausted"}
+
+
+def test_active_workers_count_ignores_dead_running_pid(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        reports = root / "reports" / "optimus-prime"
+        reports.mkdir(parents=True, exist_ok=True)
+        (reports / "WORKER_REGISTRY.json").write_text(
+            json.dumps(
+                {
+                    "workers": [
+                        {"slot": "dev-1", "session_state": "running", "dispatch_pid": 12345},
+                        {"slot": "test-1", "session_state": "running", "dispatch_pid": 23456},
+                        {"slot": "review-1", "session_state": "not_running", "dispatch_pid": 34567},
+                    ]
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(MODULE, "_pid_is_running", lambda pid: pid == 23456)
+        assert MODULE._active_workers_count(root) == 1
+
+
+def test_sync_task_state_invalid_evidence_clears_owner_slot_and_appends_blocker():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = task_state["tasks"][0]
+        task["status"] = "dev_in_progress"
+        task["owner_slot"] = "dev-1"
+        evidence_path = root / task["evidence"]["task_evidence_ref"]
+        evidence_path.write_text("{ invalid-json", encoding="utf-8")
+
+        warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
+        assert any(item.get("code") == "task_evidence_invalid" for item in warnings)
+        assert task["status"] == "blocked"
+        assert task["owner_slot"] is None
+        assert isinstance(task.get("blockers"), list) and task["blockers"]
+
+
+def test_task_evidence_summary_ready_for_test_normalized_to_pass():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = task_state["tasks"][0]
+        evidence_path = root / task["evidence"]["task_evidence_ref"]
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["summary"]["result"] = "ready_for_test"
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
+        assert any(item.get("code") == "task_evidence_normalized" for item in warnings)
+        after = json.loads(evidence_path.read_text(encoding="utf-8"))
+        assert after["summary"]["result"] == "pass"
+
+
+def test_task_evidence_unknown_summary_result_still_invalid():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = task_state["tasks"][0]
+        evidence_path = root / task["evidence"]["task_evidence_ref"]
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["summary"]["result"] = "maybe"
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
+        assert any(item.get("code") == "task_evidence_invalid" for item in warnings)
+        assert not any(item.get("code") == "task_evidence_normalized" for item in warnings)
+
+
+def test_gap_rows_have_category_and_reason_codes_after_refresh():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+
+        task_state["tasks"][0]["status"] = "blocked"
+        task_state["tasks"][0]["owner_slot"] = None
+        gaps_payload, _ = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
+        open_rows = [row for row in gaps_payload.get("gaps", []) if isinstance(row, dict) and row.get("status") == "open"]
+        assert open_rows
+        assert all(MODULE._as_str(row.get("category")) for row in open_rows)
+        assert all(isinstance(row.get("reason_codes"), list) and row.get("reason_codes") for row in open_rows)
+
+
+def test_gap_rows_backfill_missing_category_reason_codes():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task_state["tasks"][0]["status"] = "review_done"
+        task_state["tasks"][0]["owner_slot"] = None
+
+        gaps_path = planning / "GAPS.json"
+        gaps_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "plan_id": plan_packets["plan_id"],
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "gaps": [
+                        {
+                            "gap_id": "gap-backfill-1",
+                            "phase_id": "phase-1",
+                            "task_id": "TASK-001",
+                            "requirement_id": None,
+                            "severity": "high",
+                            "result": "blocked",
+                            "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+                            "opened_at": "2026-01-01T00:00:00Z",
+                            "status": "open",
+                            "reason": "task state blocked",
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        gaps_payload, _ = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
+        row = next(item for item in gaps_payload.get("gaps", []) if item.get("gap_id") == "gap-backfill-1")
+        assert row.get("category")
+        assert isinstance(row.get("reason_codes"), list) and row.get("reason_codes")
+
+
+def test_active_workers_count_falls_back_to_snapshot_when_registry_unreadable():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        reports = root / "reports" / "optimus-prime"
+        reports.mkdir(parents=True, exist_ok=True)
+        (reports / "WORKER_REGISTRY.json").write_text("{ invalid-json", encoding="utf-8")
+        (reports / "STATUS_SNAPSHOT.json").write_text(
+            json.dumps({"counts": {"active_workers": 2}}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        assert MODULE._active_workers_count(root) == 2
+
+
+def test_recover_unreadable_worker_registry_success():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        reports = root / "reports" / "optimus-prime"
+        reports.mkdir(parents=True, exist_ok=True)
+        registry_path = reports / "WORKER_REGISTRY.json"
+        registry_path.write_text("{ invalid-json", encoding="utf-8")
+
+        warnings = MODULE._recover_unreadable_worker_registry(root)
+        assert any(item.get("code") == "worker_registry_recovered" for item in warnings)
+        payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        assert payload == {"workers": []}
+
+
+def test_recover_unreadable_worker_registry_failure_warns_dispatch_allowed(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        reports = root / "reports" / "optimus-prime"
+        reports.mkdir(parents=True, exist_ok=True)
+        registry_path = reports / "WORKER_REGISTRY.json"
+        registry_path.write_text("{ invalid-json", encoding="utf-8")
+        original_atomic = MODULE._atomic_write_json
+
+        def failing_atomic(path: Path, payload: dict):
+            if path == registry_path:
+                raise OSError("simulated write failure")
+            return original_atomic(path, payload)
+
+        monkeypatch.setattr(MODULE, "_atomic_write_json", failing_atomic)
+        warnings = MODULE._recover_unreadable_worker_registry(root)
+        assert any(item.get("code") == "worker_registry_recovery_failed_dispatch_allowed" for item in warnings)
+
+
+def test_derive_gap_requirement_ids_missing_fields_uses_fallback():
+    req_ids, fallback_used = MODULE._derive_gap_requirement_ids({}, {}, {})
+    assert req_ids == ["REQ-GAP-CLOSURE"]
+    assert fallback_used is True
+
+
+def test_dispatch_task_packet_emits_gap_requirement_fallback_warning(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+            }
+        )
+
+        task = {
+            "task_id": "GAPFIX-TEST",
+            "requirement_ids": ["REQ-GAP-CLOSURE"],
+            "requirement_fallback_used": True,
+            "evidence": {
+                "task_evidence_ref": "reports/optimus-prime/planning/evidence/GAPFIX-TEST/TASK_EVIDENCE.json",
+            },
+            "attempts": {"dev": 0, "test": 0, "review": 0},
+            "blockers": [],
+        }
+        plan_task = {
+            "must_haves": ["Resolve gap"],
+            "requirement_ids": ["REQ-GAP-CLOSURE"],
+            "requirement_fallback_used": True,
+        }
+
+        monkeypatch.setattr(MODULE, "_resolve_skill_script", lambda *_args, **_kwargs: Path("/tmp/fake_script.py"))
+        monkeypatch.setattr(MODULE, "_run_tool_json", lambda *_args, **_kwargs: {"ok": True, "status": "dispatch_started"})
+        monkeypatch.setattr(MODULE, "_git_text", lambda *_args, **_kwargs: "abc1234")
+
+        out = MODULE._dispatch_task_packet(req, task, plan_task, "dev", "plan-1", "codex")
+        warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
+        assert "gap_closure_requirement_fallback" in warning_codes
+
+
+def test_append_task_blocker_compacts_duplicates_and_bounds():
+    task = {"blockers": []}
+    for _ in range(5):
+        MODULE._append_task_blocker(
+            task,
+            summary="task evidence invalid for TASK-001",
+            details={"code": "task_evidence_invalid", "evidence_path": "/tmp/evidence.json"},
+        )
+    blockers = task.get("blockers")
+    assert isinstance(blockers, list) and len(blockers) == 1
+    assert blockers[0].get("occurrences") == 5
+
+    for idx in range(40):
+        MODULE._append_task_blocker(
+            task,
+            summary=f"unique-{idx}",
+            details={"code": f"c-{idx}", "evidence_path": f"/tmp/e-{idx}.json"},
+        )
+    blockers = task.get("blockers")
+    assert isinstance(blockers, list)
+    assert len(blockers) <= 25
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

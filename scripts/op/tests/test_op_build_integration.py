@@ -1940,3 +1940,123 @@ def test_watchdog_event_write_failure_does_not_crash_and_returns_terminal_watchd
         assert "no_progress_watchdog_event_write_failed" in warning_codes
         assert "no_progress_watchdog_stopped" in warning_codes
         assert not (root / "reports" / "optimus-prime" / "planning" / "BUILD_LOOP.lock").exists()
+
+
+def test_build_loop_normalizes_dead_running_registry_entry_before_dispatch(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry_path.write_text(
+            json.dumps(
+                {
+                    "workers": [
+                        {
+                            "slot": "dev-1",
+                            "session_state": "running",
+                            "state": "running",
+                            "dispatch_pid": 99887,
+                            "active_task": None,
+                        }
+                    ]
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(MODULE, "_pid_is_running", lambda _pid: False)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        assert any(item.get("code") == "worker_registry_dead_pid_normalized" for item in out.get("warnings", []))
+        registry_after = json.loads(registry_path.read_text(encoding="utf-8"))
+        assert registry_after["workers"][0]["session_state"] == "not_running"
+
+
+def test_build_allows_dispatch_with_warning_when_registry_recovery_fails(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            MODULE,
+            "_recover_unreadable_worker_registry",
+            lambda _repo_root: [
+                {
+                    "code": "worker_registry_recovery_failed_dispatch_allowed",
+                    "message": "simulated registry recovery failure; dispatch remains allowed",
+                    "stage": "build_loop",
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        assert any(
+            item.get("code") == "worker_registry_recovery_failed_dispatch_allowed"
+            for item in out.get("warnings", [])
+        )

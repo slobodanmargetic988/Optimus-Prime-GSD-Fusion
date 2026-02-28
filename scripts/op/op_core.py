@@ -1757,6 +1757,15 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         evidence_path = _task_evidence_path(repo_root, task)
         if not evidence_path.exists():
             task["status"] = "blocked"
+            task["owner_slot"] = None
+            _append_task_blocker(
+                task,
+                summary=f"task evidence missing for {task_id}",
+                details={
+                    "code": "task_evidence_missing",
+                    "evidence_path": str(evidence_path),
+                },
+            )
             warnings.append(
                 {
                     "code": "task_evidence_missing",
@@ -1769,6 +1778,16 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
             payload = _read_json(evidence_path)
         except OpError as exc:
             task["status"] = "blocked"
+            task["owner_slot"] = None
+            _append_task_blocker(
+                task,
+                summary=f"task evidence invalid for {task_id}",
+                details={
+                    "code": "task_evidence_invalid",
+                    "reason": exc.message,
+                    "evidence_path": str(evidence_path),
+                },
+            )
             warnings.append(
                 {
                     "code": "task_evidence_invalid",
@@ -1779,6 +1798,16 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
             continue
         if not isinstance(payload, dict):
             task["status"] = "blocked"
+            task["owner_slot"] = None
+            _append_task_blocker(
+                task,
+                summary=f"task evidence invalid for {task_id}",
+                details={
+                    "code": "task_evidence_invalid",
+                    "reason": "payload_not_object",
+                    "evidence_path": str(evidence_path),
+                },
+            )
             warnings.append(
                 {
                     "code": "task_evidence_invalid",
@@ -1787,9 +1816,39 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
                 }
             )
             continue
+        if _normalize_task_evidence_payload(payload):
+            try:
+                _atomic_write_json(evidence_path, payload)
+            except OSError as exc:
+                warnings.append(
+                    {
+                        "code": "task_evidence_normalization_write_failed",
+                        "message": f"failed to persist normalized TASK_EVIDENCE for {task_id}: {exc}",
+                        "stage": "build_loop",
+                    }
+                )
+            else:
+                warnings.append(
+                    {
+                        "code": "task_evidence_normalized",
+                        "message": f"normalized TASK_EVIDENCE summary.result for {task_id}",
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                    }
+                )
         validation_errors = _validate_task_evidence_payload(payload, task_id, phase_id)
         if validation_errors:
             task["status"] = "blocked"
+            task["owner_slot"] = None
+            _append_task_blocker(
+                task,
+                summary=f"task evidence schema invalid for {task_id}",
+                details={
+                    "code": "task_evidence_invalid",
+                    "validation_errors": validation_errors,
+                    "evidence_path": str(evidence_path),
+                },
+            )
             warnings.append(
                 {
                     "code": "task_evidence_invalid",
@@ -1804,7 +1863,7 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         if not isinstance(evidence, dict):
             evidence = {}
             task["evidence"] = evidence
-        evidence_ref = str(evidence_path.relative_to(repo_root))
+        evidence_ref = os.path.relpath(str(evidence_path), str(repo_root))
         evidence["task_evidence_ref"] = evidence_ref
         evidence["dev_ready_evidence_ref"] = evidence_ref
 
@@ -1888,9 +1947,25 @@ def _load_gaps_payload(path: Path, plan_id: str) -> dict[str, Any]:
     return payload
 
 
-def _default_gap_row(*, plan_id: str, phase_id: str, task_id: str, requirement_id: str | None, result: str, evidence_ref: str, reason: str, gap_id: str, severity: str = "high") -> dict[str, Any]:
+def _default_gap_row(
+    *,
+    plan_id: str,
+    phase_id: str,
+    task_id: str,
+    requirement_id: str | None,
+    result: str,
+    evidence_ref: str,
+    reason: str,
+    gap_id: str,
+    severity: str = "high",
+    category: str = "other",
+    reason_codes: list[str] | None = None,
+) -> dict[str, Any]:
     closure_task_id = f"GAPFIX-{_sha256(gap_id)[:8].upper()}"
     now = utc_now_iso()
+    normalized_reason_codes = [code for code in (_as_str(item) for item in (reason_codes or [])) if code]
+    if not normalized_reason_codes:
+        normalized_reason_codes = ["gap_detected"]
     return {
         "gap_id": gap_id,
         "phase_id": phase_id,
@@ -1902,6 +1977,8 @@ def _default_gap_row(*, plan_id: str, phase_id: str, task_id: str, requirement_i
         "opened_at": now,
         "status": "open",
         "reason": reason,
+        "category": category,
+        "reason_codes": normalized_reason_codes,
         "retry_count": 0,
         "escalated": False,
         "escalated_at": None,
@@ -1913,6 +1990,141 @@ def _default_gap_row(*, plan_id: str, phase_id: str, task_id: str, requirement_i
         "closed_at": None,
         "resolution_candidate_at": None,
     }
+
+
+def _normalize_gap_metadata(row: dict[str, Any]) -> None:
+    reason = (_as_str(row.get("reason")) or "").lower()
+    result = (_as_str(row.get("result")) or "").lower()
+    requirement_id = _as_str(row.get("requirement_id"))
+    category = _as_str(row.get("category"))
+    if not category:
+        if "verify command not passed" in reason:
+            category = "verify_missing"
+        elif "uat requirement not passed" in reason:
+            category = "uat_missing"
+        elif "task state blocked" in reason or (result == "blocked" and not requirement_id):
+            category = "task_blocked"
+        else:
+            category = "other"
+        row["category"] = category
+    else:
+        row["category"] = category
+
+    reason_codes_raw = row.get("reason_codes")
+    reason_codes = (
+        [code for code in (_as_str(item) for item in reason_codes_raw) if code]
+        if isinstance(reason_codes_raw, list)
+        else []
+    )
+    if not reason_codes:
+        category_to_code = {
+            "verify_missing": "verify_command_not_passed",
+            "uat_missing": "uat_requirement_not_passed",
+            "task_blocked": "task_state_blocked",
+            "other": "gap_detected",
+        }
+        reason_codes = [category_to_code.get(category, "gap_detected")]
+    row["reason_codes"] = reason_codes
+
+
+def _derive_gap_requirement_ids(
+    gap_row: dict[str, Any],
+    plan_task_map: dict[str, dict[str, Any]],
+    task_map: dict[str, dict[str, Any]],
+) -> tuple[list[str], bool]:
+    requirement_id = _as_str(gap_row.get("requirement_id"))
+    if requirement_id:
+        return [requirement_id], False
+    task_id = _as_str(gap_row.get("task_id"))
+    req_ids: list[str] = []
+    if task_id:
+        plan_task = plan_task_map.get(task_id)
+        if isinstance(plan_task, dict):
+            req_ids.extend(
+                rid
+                for rid in ((_as_str(item) for item in plan_task.get("requirement_ids", [])))
+                if rid
+            )
+        task = task_map.get(task_id)
+        if isinstance(task, dict):
+            req_ids.extend(
+                rid
+                for rid in ((_as_str(item) for item in task.get("requirement_ids", [])))
+                if rid
+            )
+    out: list[str] = []
+    seen: set[str] = set()
+    for rid in sorted(req_ids):
+        if rid in seen:
+            continue
+        seen.add(rid)
+        out.append(rid)
+    if out:
+        return out, False
+    return ["REQ-GAP-CLOSURE"], True
+
+
+def _append_task_blocker(task: dict[str, Any], *, summary: str, details: dict[str, Any] | None = None) -> None:
+    blockers = task.get("blockers")
+    if not isinstance(blockers, list):
+        blockers = []
+        task["blockers"] = blockers
+    now = utc_now_iso()
+    details_payload = details if isinstance(details, dict) else {}
+    fingerprint_payload = {
+        "summary": summary,
+        "code": _as_str(details_payload.get("code")) or "",
+        "evidence_path": _as_str(details_payload.get("evidence_path")) or "",
+        "reason": _as_str(details_payload.get("reason")) or "",
+    }
+    fingerprint = _sha256(json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")))[:16]
+    for item in blockers:
+        if not isinstance(item, dict):
+            continue
+        if _as_str(item.get("fingerprint")) != fingerprint:
+            continue
+        item["last_seen_at"] = now
+        item["occurrences"] = int(item.get("occurrences") or 1) + 1
+        if isinstance(details, dict):
+            item["details"] = details
+        return
+    row: dict[str, Any] = {
+        "timestamp": now,
+        "first_seen_at": now,
+        "last_seen_at": now,
+        "occurrences": 1,
+        "fingerprint": fingerprint,
+        "summary": summary,
+    }
+    if isinstance(details, dict):
+        row["details"] = details
+    blockers.append(row)
+    while len(blockers) > 25:
+        blockers.pop(0)
+
+
+def _normalize_task_evidence_payload(payload: dict[str, Any]) -> bool:
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        return False
+    result = (_as_str(summary.get("result")) or "").lower()
+    canonical = {
+        "ready_for_test": "pass",
+        "ready_for_review": "pass",
+        "ready_for_phase_exit": "pass",
+    }.get(result)
+    if not canonical:
+        return False
+    summary["result"] = canonical
+    reason_codes = summary.get("reason_codes")
+    if not isinstance(reason_codes, list):
+        reason_codes = []
+    cleaned = [code for code in (_as_str(item) for item in reason_codes) if code]
+    if "normalized_noncanonical_result" not in cleaned:
+        cleaned.append("normalized_noncanonical_result")
+    summary["reason_codes"] = cleaned
+    payload["summary"] = summary
+    return True
 
 
 def _default_gaps_payload(plan_id: str) -> dict[str, Any]:
@@ -2134,6 +2346,8 @@ def _recover_gap_artifacts_for_build(
             preserved_rows: list[dict[str, Any]] = []
             phase_id = _as_str(build_state.get("active_gap_closure_phase_id")) or "phase-1"
             now = utc_now_iso()
+            task_map = _task_by_id(task_state)
+            plan_task_map = _plan_task_map(plan_packets)
             for gap_id in prior_open_gap_ids:
                 if gap_id in existing_by_id:
                     continue
@@ -2146,6 +2360,8 @@ def _recover_gap_artifacts_for_build(
                     evidence_ref=str(TASK_EXECUTION_STATE_JSON),
                     reason="preserved open gap from prior build state after artifact recovery",
                     gap_id=gap_id,
+                    category="task_blocked",
+                    reason_codes=["gap_preserved_from_build_state"],
                 )
                 row["updated_at"] = now
                 preserved_rows.append(row)
@@ -2172,6 +2388,7 @@ def _recover_gap_artifacts_for_build(
             for row in existing_rows:
                 if not isinstance(row, dict):
                     continue
+                _normalize_gap_metadata(row)
                 gap_id = _as_str(row.get("gap_id"))
                 if not gap_id or _as_str(row.get("status")) != "open":
                     continue
@@ -2181,13 +2398,15 @@ def _recover_gap_artifacts_for_build(
                 phase_id = _as_str(row.get("phase_id")) or "phase-1"
                 closure_task_id = _as_str(row.get("closure_task_id")) or f"GAPFIX-{_sha256(gap_id)[:8].upper()}"
                 depends_on = [task_id] if task_id and not task_id.startswith("GAPFIX-") and task_id != "TASK-UNKNOWN" else []
+                req_ids, fallback_used = _derive_gap_requirement_ids(row, plan_task_map, task_map)
                 closure_tasks.append(
                     {
                         "task_id": closure_task_id,
                         "phase_id": phase_id,
                         "source_gap_id": gap_id,
                         "title": f"Close gap {gap_id}",
-                        "requirement_ids": [],
+                        "requirement_ids": req_ids,
+                        "requirement_fallback_used": fallback_used,
                         "depends_on": depends_on,
                         "must_haves": [f"Resolve {row.get('reason') or gap_id}"],
                         "verify_commands": ["python3 -m pytest"],
@@ -2306,6 +2525,8 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
                     evidence_ref=evidence_ref,
                     reason=f"verify command not passed: {cmd}",
                     gap_id=gap_id,
+                    category="verify_missing",
+                    reason_codes=["verify_command_not_passed"],
                 )
 
         requirement_ids = [
@@ -2338,6 +2559,8 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
                     evidence_ref=evidence_ref,
                     reason=f"UAT requirement not passed: {rid}",
                     gap_id=gap_id,
+                    category="uat_missing",
+                    reason_codes=["uat_requirement_not_passed"],
                 )
 
         if (_as_str(task.get("status")) or "") == "blocked":
@@ -2351,6 +2574,8 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
                 evidence_ref=evidence_ref,
                 reason="task state blocked",
                 gap_id=gap_id,
+                category="task_blocked",
+                reason_codes=["task_state_blocked"],
             )
 
     now = utc_now_iso()
@@ -2373,6 +2598,7 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
         merged["retry_count"] = max(0, retry_count)
         merged["escalated"] = is_escalated
         merged["escalated_at"] = (_as_str(prior.get("escalated_at")) or now) if is_escalated else None
+        _normalize_gap_metadata(merged)
         merged_by_id[gap_id] = merged
 
     for gap_id, prior in existing_by_id.items():
@@ -2395,6 +2621,7 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
         row["retry_count"] = max(0, retry_count)
         row["escalated"] = is_escalated
         row["escalated_at"] = (_as_str(row.get("escalated_at")) or now) if is_escalated else None
+        _normalize_gap_metadata(row)
         status = (_as_str(row.get("status")) or "open").lower()
         if status == "open":
             closure_task = closure_task_by_gap.get(gap_id)
@@ -2441,11 +2668,10 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
         gap_id = _as_str(gap.get("gap_id"))
         phase_id = _as_str(gap.get("phase_id")) or "phase-1"
         task_id = _as_str(gap.get("task_id")) or "TASK-UNKNOWN"
-        requirement_id = _as_str(gap.get("requirement_id"))
         if not gap_id:
             continue
         closure_task_id = _as_str(gap.get("closure_task_id")) or f"GAPFIX-{_sha256(gap_id)[:8].upper()}"
-        req_ids = [requirement_id] if requirement_id else []
+        req_ids, fallback_used = _derive_gap_requirement_ids(gap, plan_task_map, task_map)
         depends_on = [task_id] if task_id and not task_id.startswith("GAPFIX-") else []
         closure_tasks.append(
             {
@@ -2454,6 +2680,7 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
                 "source_gap_id": gap_id,
                 "title": f"Close gap {gap_id}",
                 "requirement_ids": req_ids,
+                "requirement_fallback_used": fallback_used,
                 "depends_on": depends_on,
                 "must_haves": [f"Resolve {gap.get('reason') or gap_id}"],
                 "verify_commands": ["python3 -m pytest"],
@@ -2514,6 +2741,7 @@ def _ensure_gap_closure_task_state(repo_root: Path, task_state: dict[str, Any], 
                 "phase_id": phase_id,
                 "source_gap_id": _as_str(task.get("source_gap_id")),
                 "requirement_ids": req_ids,
+                "requirement_fallback_used": _as_bool_field(task.get("requirement_fallback_used")),
                 "status": "queued",
                 "owner_slot": None,
                 "last_progress_at": None,
@@ -2886,26 +3114,32 @@ def _resolve_test_train_mode(repo_root: Path) -> str:
     return mode
 
 
+def _active_workers_from_snapshot(reports_dir: Path) -> int | None:
+    snapshot_path = reports_dir / "STATUS_SNAPSHOT.json"
+    if not snapshot_path.exists():
+        return None
+    try:
+        snapshot = _read_json(snapshot_path)
+    except OpError:
+        return None
+    if not isinstance(snapshot, dict):
+        return None
+    counts = snapshot.get("counts") if isinstance(snapshot.get("counts"), dict) else {}
+    active = counts.get("active_workers")
+    if isinstance(active, int):
+        return max(0, active)
+    return None
+
+
 def _active_workers_count(repo_root: Path) -> int | None:
     reports = repo_root / "reports" / "optimus-prime"
-    snapshot_path = reports / "STATUS_SNAPSHOT.json"
-    if snapshot_path.exists():
-        try:
-            snapshot = _read_json(snapshot_path)
-        except OpError:
-            snapshot = None
-        if isinstance(snapshot, dict):
-            counts = snapshot.get("counts") if isinstance(snapshot.get("counts"), dict) else {}
-            active = counts.get("active_workers")
-            if isinstance(active, int):
-                return max(0, active)
     registry_path = reports / "WORKER_REGISTRY.json"
     if not registry_path.exists():
-        return None
+        return _active_workers_from_snapshot(reports)
     try:
         registry = _read_json(registry_path)
     except OpError:
-        return None
+        return _active_workers_from_snapshot(reports)
     workers: list[dict[str, Any]] = []
     if isinstance(registry, dict):
         raw = registry.get("workers")
@@ -2919,8 +3153,75 @@ def _active_workers_count(repo_root: Path) -> int | None:
     for worker in workers:
         state = (_as_str(worker.get("state")) or _as_str(worker.get("session_state")) or _as_str(worker.get("status")) or "").lower()
         if state in {"running", "active", "busy"}:
+            pid = worker.get("dispatch_pid")
+            if isinstance(pid, int) and not _pid_is_running(pid):
+                continue
             active += 1
     return active
+
+
+def _recover_unreadable_worker_registry(repo_root: Path) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    registry_path = repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+    if not registry_path.exists():
+        return warnings
+    corrupted_reason: str | None = None
+    try:
+        payload = _read_json(registry_path)
+    except OpError as exc:
+        corrupted_reason = exc.message
+        payload = None
+    if corrupted_reason is None:
+        if isinstance(payload, dict):
+            workers = payload.get("workers")
+            if workers is not None and not isinstance(workers, (list, dict)):
+                corrupted_reason = "field 'workers' must be list|object"
+        elif not isinstance(payload, list):
+            corrupted_reason = "payload must be object|list"
+    if corrupted_reason is None:
+        return warnings
+    try:
+        _atomic_write_json(registry_path, {"workers": []})
+    except OSError as exc:
+        warnings.append(
+            {
+                "code": "worker_registry_recovery_failed_dispatch_allowed",
+                "message": (
+                    f"WORKER_REGISTRY unreadable/invalid ({corrupted_reason}); "
+                    f"recovery failed ({exc}); dispatch remains allowed"
+                ),
+                "stage": "build_loop",
+                "artifact": str(registry_path),
+            }
+        )
+        return warnings
+    warnings.append(
+        {
+            "code": "worker_registry_recovered",
+            "message": f"WORKER_REGISTRY unreadable/invalid ({corrupted_reason}); reset to canonical empty registry",
+            "stage": "build_loop",
+            "artifact": str(registry_path),
+        }
+    )
+    return warnings
+
+
+def _normalize_dead_worker_registry_entries(repo_root: Path) -> int:
+    registry_path = repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+    if not registry_path.exists():
+        return 0
+    registry_base, workers, registry_shape = _load_worker_registry(registry_path)
+    if not workers:
+        return 0
+    now_iso = utc_now_iso()
+    normalized = _reconcile_running_workers_with_pid_state(
+        workers,
+        now_iso=now_iso,
+        reason="build_cycle_dead_pid_pre_dispatch",
+    )
+    if normalized > 0:
+        _write_worker_registry(registry_path, registry_base, workers, registry_shape)
+    return normalized
 
 
 def _load_build_lock_snapshot(repo_root: Path) -> dict[str, Any]:
@@ -4602,6 +4903,19 @@ def _dispatch_task_packet(
         for rid in ((_as_str(item) for item in task.get("requirement_ids", [])))
         if rid
     ]
+    requirement_fallback_used = _as_bool_field(task.get("requirement_fallback_used")) or _as_bool_field(
+        plan_task.get("requirement_fallback_used")
+    )
+    dispatch_warnings: list[dict[str, Any]] = []
+    if requirement_fallback_used:
+        dispatch_warnings.append(
+            {
+                "code": "gap_closure_requirement_fallback",
+                "message": f"using fallback requirement_ids for gap closure task {task_id}",
+                "stage": "build_loop",
+                "task_id": task_id,
+            }
+        )
     acceptance_refs = [
         item
         for item in ((_as_str(item) for item in plan_task.get("must_haves", [])))
@@ -4657,7 +4971,10 @@ def _dispatch_task_packet(
             attempts = {"dev": 0, "test": 0, "review": 0}
             task["attempts"] = attempts
         attempts[cfg["attempt_key"]] = int(attempts.get(cfg["attempt_key"], 0)) + 1
-        return {"ok": True, "task_id": task_id, "stage": stage, "dispatch": result}
+        out = {"ok": True, "task_id": task_id, "stage": stage, "dispatch": result}
+        if dispatch_warnings:
+            out["warnings"] = dispatch_warnings
+        return out
     task["status"] = "blocked"
     task["owner_slot"] = None
     task["last_progress_at"] = utc_now_iso()
@@ -4672,7 +4989,10 @@ def _dispatch_task_packet(
             "details": result,
         }
     )
-    return {"ok": False, "task_id": task_id, "stage": stage, "dispatch": result}
+    out = {"ok": False, "task_id": task_id, "stage": stage, "dispatch": result}
+    if dispatch_warnings:
+        out["warnings"] = dispatch_warnings
+    return out
 
 
 def _dispatch_next_task(
@@ -4712,6 +5032,8 @@ def _dispatch_next_task(
     )
     if has_in_progress:
         return {"ok": True, "status": "skipped", "reason": "task already in progress"}
+    deferred_block: dict[str, Any] | None = None
+    carried_warning: dict[str, Any] | None = None
 
     stage_cfg = {
         "dev": {"slot": "dev-1", "role": "developer"},
@@ -4747,8 +5069,13 @@ def _dispatch_next_task(
             local_plan_id,
             _as_str(selection.get("alias")) or "codex",
         )
-        if isinstance(selection.get("warning"), dict):
-            result["warning"] = selection.get("warning")
+        selection_warning = selection.get("warning")
+        if isinstance(selection_warning, dict):
+            warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+            warning_rows.append(selection_warning)
+            result["warnings"] = warning_rows
+            if not isinstance(result.get("warning"), dict):
+                result["warning"] = selection_warning
         return result
 
     plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
@@ -4762,12 +5089,19 @@ def _dispatch_next_task(
             continue
         build_state["current_task_pointer"] = task_id
         if status == "queued":
-            return _dispatch_for_stage(task, plan_task, "dev", plan_id)
+            result = _dispatch_for_stage(task, plan_task, "dev", plan_id)
+            if carried_warning:
+                warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+                warning_rows.append(carried_warning)
+                result["warnings"] = warning_rows
+                if not isinstance(result.get("warning"), dict):
+                    result["warning"] = carried_warning
+            return result
         if status == "blocked" and bool(task.get("is_gap_closure")):
             source_gap_id = _as_str(task.get("source_gap_id")) or _as_str(plan_task.get("source_gap_id")) or f"gap:{task_id}"
             retries = _coerce_nonneg_int(retry_attempts.get(source_gap_id, 0), default=0)
             if source_gap_id in exhausted_set:
-                return {
+                deferred_block = deferred_block or {
                     "ok": False,
                     "status": "blocked",
                     "task_id": task_id,
@@ -4782,12 +5116,20 @@ def _dispatch_next_task(
                         "retry_count": retries,
                     },
                 }
+                carried_warning = {
+                    "code": "gap_closure_skipped_exhausted_continue_scan",
+                    "message": f"gap closure {task_id} already exhausted for {source_gap_id}; continuing queue scan",
+                    "stage": "build_loop",
+                    "gap_id": source_gap_id,
+                    "task_id": task_id,
+                }
+                continue
             retries += 1
             retry_attempts[source_gap_id] = retries
             if retries >= max_retry_attempts:
                 exhausted_set.add(source_gap_id)
                 build_state["gap_retry_exhausted_ids"] = sorted(exhausted_set)
-                return {
+                deferred_block = deferred_block or {
                     "ok": False,
                     "status": "blocked",
                     "task_id": task_id,
@@ -4803,9 +5145,29 @@ def _dispatch_next_task(
                         "max_attempts": max_retry_attempts,
                     },
                 }
+                carried_warning = {
+                    "code": "gap_closure_skipped_exhausted_continue_scan",
+                    "message": (
+                        f"gap closure {task_id} reached retry cap for {source_gap_id}; "
+                        "continuing queue scan"
+                    ),
+                    "stage": "build_loop",
+                    "gap_id": source_gap_id,
+                    "task_id": task_id,
+                    "retry_count": retries,
+                    "max_attempts": max_retry_attempts,
+                }
+                continue
             task["status"] = "queued"
             task["owner_slot"] = None
-            return _dispatch_for_stage(task, plan_task, "dev", plan_id)
+            result = _dispatch_for_stage(task, plan_task, "dev", plan_id)
+            if carried_warning:
+                warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+                warning_rows.append(carried_warning)
+                result["warnings"] = warning_rows
+                if not isinstance(result.get("warning"), dict):
+                    result["warning"] = carried_warning
+            return result
         if status == "dev_done":
             evidence_path = _task_evidence_path(req.repo_root, task)
             if not evidence_path.exists():
@@ -4823,7 +5185,14 @@ def _dispatch_next_task(
                     "task_id": task_id,
                     "reason": "dev_gate_not_ready_for_test",
                 }
-            return _dispatch_for_stage(task, plan_task, "test", plan_id)
+            result = _dispatch_for_stage(task, plan_task, "test", plan_id)
+            if carried_warning:
+                warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+                warning_rows.append(carried_warning)
+                result["warnings"] = warning_rows
+                if not isinstance(result.get("warning"), dict):
+                    result["warning"] = carried_warning
+            return result
         if status == "test_done":
             evidence_path = _task_evidence_path(req.repo_root, task)
             if not evidence_path.exists():
@@ -4841,8 +5210,19 @@ def _dispatch_next_task(
                     "task_id": task_id,
                     "reason": "test_gate_not_ready_for_review",
                 }
-            return _dispatch_for_stage(task, plan_task, "review", plan_id)
-    return {"ok": True, "status": "noop", "reason": "no dispatchable tasks"}
+            result = _dispatch_for_stage(task, plan_task, "review", plan_id)
+            if carried_warning:
+                warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+                warning_rows.append(carried_warning)
+                result["warnings"] = warning_rows
+                if not isinstance(result.get("warning"), dict):
+                    result["warning"] = carried_warning
+            return result
+    if deferred_block is not None:
+        if carried_warning and not isinstance(deferred_block.get("warning"), dict):
+            deferred_block["warning"] = carried_warning
+        return deferred_block
+    return {"ok": True, "status": "noop", "reason": "no dispatchable tasks", "warning": carried_warning}
 
 
 def _apply_directives(
@@ -5760,6 +6140,19 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 warnings.append(warning)
                 cycle_local_warnings.append(warning)
             else:
+                registry_recovery_warnings = _recover_unreadable_worker_registry(req.repo_root)
+                warnings.extend(registry_recovery_warnings)
+                cycle_local_warnings.extend(registry_recovery_warnings)
+                normalized_workers = _normalize_dead_worker_registry_entries(req.repo_root)
+                if normalized_workers > 0:
+                    warning = {
+                        "code": "worker_registry_dead_pid_normalized",
+                        "message": f"normalized {normalized_workers} dead running worker registry entrie(s) before dispatch",
+                        "stage": "build_loop",
+                        "normalized_workers": normalized_workers,
+                    }
+                    warnings.append(warning)
+                    cycle_local_warnings.append(warning)
                 stale_recovery_warnings = _recover_stale_in_progress_tasks(req.repo_root, task_state, build_state)
                 warnings.extend(stale_recovery_warnings)
                 cycle_local_warnings.extend(stale_recovery_warnings)
@@ -5784,9 +6177,19 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 else:
                     dispatch_result = _dispatch_next_task(req, merged_plan_packets, task_state, build_state, active_phase_id)
                     dispatch_warning = dispatch_result.get("warning") if isinstance(dispatch_result, dict) else None
+                    dispatch_warning_rows = dispatch_result.get("warnings") if isinstance(dispatch_result, dict) else None
+                    appended_warning_keys: set[tuple[str, str]] = set()
+                    if isinstance(dispatch_warning_rows, list):
+                        for row in dispatch_warning_rows:
+                            if isinstance(row, dict):
+                                warnings.append(row)
+                                cycle_local_warnings.append(row)
+                                appended_warning_keys.add((_as_str(row.get("code")) or "", _as_str(row.get("message")) or ""))
                     if isinstance(dispatch_warning, dict):
-                        warnings.append(dispatch_warning)
-                        cycle_local_warnings.append(dispatch_warning)
+                        warning_key = (_as_str(dispatch_warning.get("code")) or "", _as_str(dispatch_warning.get("message")) or "")
+                        if warning_key not in appended_warning_keys:
+                            warnings.append(dispatch_warning)
+                            cycle_local_warnings.append(dispatch_warning)
                     dispatch_reason = _as_str(dispatch_result.get("reason")) if isinstance(dispatch_result, dict) else None
                     if dispatch_reason in {
                         "gap_retry_exhausted",

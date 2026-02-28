@@ -117,6 +117,13 @@ opctl /op-health --json-pretty
 opctl /op-resume --json-pretty
 ```
 
+Runtime reliability notes:
+- Gap-closure packets always carry non-empty `requirement_ids` (no OP packet contract deadloop on GAPFIX dispatch).
+- If gap metadata is too malformed to derive requirement linkage, OP uses deterministic fallback `REQ-GAP-CLOSURE` and emits `gap_closure_requirement_fallback`.
+- If one gap closure is retry-exhausted, build continues scanning and can dispatch other queued tasks in the same cycle.
+- Dead running worker PIDs are normalized before dispatch gating, so stale registry entries do not block dispatch capacity.
+- If `WORKER_REGISTRY.json` is unreadable, OP attempts auto-recovery; if recovery fails, it emits `worker_registry_recovery_failed_dispatch_allowed` and continues dispatch by policy.
+
 Operator stop behavior:
 - Create `reports/optimus-prime/control/OPERATOR_STOP.json` to stop current `/op-build`.
 - `/op-build` now applies stop to active worker PIDs (`SIGTERM` then `SIGKILL` fallback), writes `OPERATOR_STOP_STATE.json`, archives the marker, and exits with `stopped_operator`.

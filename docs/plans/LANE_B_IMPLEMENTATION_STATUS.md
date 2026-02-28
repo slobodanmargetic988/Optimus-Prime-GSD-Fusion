@@ -149,6 +149,17 @@ Updated: 2026-02-28
     - `no_progress_watchdog_state_persist_failed`
     - `no_progress_watchdog_marker_write_failed`
     - `no_progress_watchdog_event_write_failed`
+- Lane B critical gap/dispatch reliability remediation:
+  - gap closure packet generation now enforces non-empty `requirement_ids` for all `GAPFIX-*` tasks (including recovery rebuild path)
+  - if gap linkage metadata is missing, fallback requirement `REQ-GAP-CLOSURE` is applied with warning `gap_closure_requirement_fallback`
+  - dispatch queue fairness fixed: exhausted gap-closure retries no longer starve remaining dispatchable tasks in the same cycle
+  - build loop pre-dispatch now normalizes dead running worker PIDs in `WORKER_REGISTRY.json`, with warning `worker_registry_dead_pid_normalized`
+  - active worker counting ignores dead PID entries, preventing false `dispatch_window_cap` gating
+  - unreadable/invalid `WORKER_REGISTRY.json` now triggers deterministic auto-recovery warning (`worker_registry_recovered`) or permissive warning fallback (`worker_registry_recovery_failed_dispatch_allowed`) without hard-stop
+  - task evidence ingest now clears stale `owner_slot` and appends blocker details on missing/invalid evidence payloads
+  - repeated identical evidence failures are compacted in-task using blocker fingerprint + occurrence counters (bounded list)
+  - known non-canonical evidence summaries (`ready_for_test|ready_for_review|ready_for_phase_exit`) are canonicalized to `pass` with warning `task_evidence_normalized`
+  - gap artifacts now enforce/backfill `category` and `reason_codes[]` fields for deterministic gap semantics
 
 ## Runtime + Blocker Artifacts (Canonical)
 
