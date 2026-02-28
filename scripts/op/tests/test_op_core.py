@@ -4168,3 +4168,40 @@ def test_planner_validator_rejects_unexpected_artifact_rows():
         assert payload is None
         assert any(item.get("code") == "planner_bundle_schema_error" for item in errors)
         assert any("unexpected artifacts" in str(item.get("message")) for item in errors)
+
+
+def test_planner_validator_rejects_non_string_task_fields():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        rows = [json.loads(line) for line in bundle_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        for row in rows:
+            if row.get("artifact_path") == "PLAN_PACKETS.json":
+                row["content"]["tasks"][0]["task_id"] = 123
+                row["checksum_sha256"] = planner_checksum("json", row["content"])
+                break
+        write_planner_bundle(bundle_path, rows)
+
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any(item.get("code") == "planner_bundle_schema_error" for item in errors)
+        assert any("task_id must be string" in str(item.get("message")) for item in errors)

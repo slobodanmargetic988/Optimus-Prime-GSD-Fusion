@@ -97,9 +97,13 @@ def _strict_keys(
 
 
 def _require_nonempty_str(value: object, *, label: str, errors: list[dict[str, object]]) -> str | None:
-    text = _as_str(value)
-    if text is None:
+    if not isinstance(value, str):
+        _err(errors, "planner_bundle_schema_error", f"{label} must be string")
+        return None
+    text = value.strip()
+    if not text:
         _err(errors, "planner_bundle_schema_error", f"{label} must be non-empty string")
+        return None
     return text
 
 
@@ -122,8 +126,11 @@ def _require_str_list(
         _err(errors, "planner_bundle_schema_error", f"{label} must be list")
         return out
     for idx, item in enumerate(value):
-        text = _as_str(item)
-        if text is None:
+        if not isinstance(item, str):
+            _err(errors, "planner_bundle_schema_error", f"{label}[{idx}] must be string")
+            continue
+        text = item.strip()
+        if not text:
             _err(errors, "planner_bundle_schema_error", f"{label}[{idx}] must be non-empty string")
             continue
         out.append(text)
