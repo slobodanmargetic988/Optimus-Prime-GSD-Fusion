@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,45 @@ def build_repo(root: Path) -> None:
     controller_target = root / "skills" / "optimus-cycle-controller" / "scripts" / "optimus_cycle_controller.py"
     controller_target.parent.mkdir(parents=True, exist_ok=True)
     controller_target.write_text(CONTROLLER_SOURCE.read_text(encoding="utf-8"), encoding="utf-8")
+    snapshot_script = root / "skills" / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
+    snapshot_script.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_script.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import argparse",
+                "import json",
+                "",
+                "parser = argparse.ArgumentParser()",
+                "parser.add_argument('--profile', action='append', default=[])",
+                "parser.add_argument('--json-pretty', action='store_true')",
+                "args = parser.parse_args()",
+                "profiles = {}",
+                "for item in args.profile:",
+                "    alias = item.split('=', 1)[0].strip()",
+                "    if not alias:",
+                "        continue",
+                "    profiles[alias] = {",
+                "        'recommended_action': 'continue',",
+                "        'five_hour': {'remaining_percent': 80},",
+                "        'weekly': {'remaining_percent': 80},",
+                "    }",
+                "if not profiles:",
+                "    profiles = {'codex': {'recommended_action': 'continue', 'five_hour': {'remaining_percent': 80}, 'weekly': {'remaining_percent': 80}}}",
+                "payload = {'profiles': profiles}",
+                "if args.json_pretty:",
+                "    print(json.dumps(payload, indent=2))",
+                "else:",
+                "    print(json.dumps(payload))",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    profile_dir = root.parent / ".codex"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / "auth.json").write_text("{}\n", encoding="utf-8")
+    os.environ["CODEX_HOME"] = str(profile_dir)
     git(root, "add", ".")
     git(root, "commit", "-m", "seed")
 
@@ -43,6 +83,45 @@ def build_repo(root: Path) -> None:
 def run_payload(payload: dict) -> dict:
     req = MODULE.parse_request(payload)
     return MODULE.execute_request(req)
+
+
+def write_profile_selection(root: Path, aliases: list[str]) -> None:
+    profile_root = Path(os.environ["CODEX_HOME"]).expanduser().resolve().parent
+    profiles: list[dict[str, str]] = []
+    for alias in aliases:
+        dirname = f".{alias}"
+        if alias == "codex":
+            dirname = ".codex"
+        home = profile_root / dirname
+        home.mkdir(parents=True, exist_ok=True)
+        auth = home / "auth.json"
+        if not auth.exists():
+            auth.write_text("{}\n", encoding="utf-8")
+        profiles.append(
+            {
+                "alias": alias,
+                "codex_home": str(home.resolve()),
+                "auth_path": str(auth.resolve()),
+            }
+        )
+    path = root / "reports" / "optimus-prime" / "planning" / "PROFILE_SELECTION.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "detected_at": "2026-01-01T00:00:00Z",
+                "detection_root": str(profile_root),
+                "profiles": profiles,
+                "selected_aliases": aliases,
+                "selection_policy": "initialize_autodetect",
+                "notes": [],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def pin_build_lock(monkeypatch: pytest.MonkeyPatch, lock_id: str = TEST_CONTROL_RUN_ID) -> None:
@@ -222,6 +301,194 @@ def test_op_build_uses_control_number_for_directive_selection(monkeypatch: pytes
         assert dispatch_calls["count"] == 1
         warning_codes = {item.get("code") for item in out.get("warnings", [])}
         assert "dispatch_skipped_hard_gate" not in warning_codes
+
+
+def test_op_build_passes_selected_profile_aliases_to_controller(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        init = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        assert init["ok"] is True
+        write_profile_selection(root, ["codex", "codex-second"])
+
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+
+        captured: dict[str, object] = {}
+
+        def fake_cycle(_req, **kwargs):
+            captured.update(kwargs)
+            return {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            }
+
+        monkeypatch.setattr(MODULE, "_run_controller_cycle", fake_cycle)
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda *_args, **_kwargs: {"ok": True, "status": "noop"})
+        pin_build_lock(monkeypatch)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        assert captured.get("profile_aliases") == ["codex", "codex-second"]
+
+
+def test_op_build_dispatch_reassigns_profile_when_current_is_hard_gated(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        init = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        assert init["ok"] is True
+        write_profile_selection(root, ["codex", "codex-second"])
+
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.parent.mkdir(parents=True, exist_ok=True)
+        rate_path.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "codex": {"recommended_action": "wind_down"},
+                        "codex-second": {"recommended_action": "continue"},
+                    }
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_seed_rate_registry_if_missing", lambda *_args, **_kwargs: [])
+
+        dispatch_payloads: list[dict] = []
+
+        def fake_tool(script: Path, payload: dict, cwd: Path) -> dict:
+            if script.name == "dispatch_worker_packet.py":
+                dispatch_payloads.append(payload)
+            return {"ok": True, "status": "dispatch_started"}
+
+        monkeypatch.setattr(MODULE, "_run_tool_json", fake_tool)
+        pin_build_lock(monkeypatch)
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        assert dispatch_payloads
+        assert dispatch_payloads[0]["codex_profile_alias"] == "codex-second"
+        assert any(item.get("code") == "profile_assignment_reassigned" for item in out.get("warnings", []))
+
+
+def test_op_build_skips_dispatch_when_all_selected_profiles_hard_gated(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        init = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        assert init["ok"] is True
+        write_profile_selection(root, ["codex", "codex-second"])
+
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.parent.mkdir(parents=True, exist_ok=True)
+        rate_path.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "codex": {"recommended_action": "wind_down"},
+                        "codex-second": {"recommended_action": "wait_until_reset"},
+                    }
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_seed_rate_registry_if_missing", lambda *_args, **_kwargs: [])
+        dispatch_calls = {"count": 0}
+
+        def fake_tool(script: Path, payload: dict, cwd: Path) -> dict:
+            if script.name == "dispatch_worker_packet.py":
+                dispatch_calls["count"] += 1
+            return {"ok": True, "status": "dispatch_started"}
+
+        monkeypatch.setattr(MODULE, "_run_tool_json", fake_tool)
+        pin_build_lock(monkeypatch)
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        assert dispatch_calls["count"] == 0
+        assert any(item.get("code") == "profile_assignment_all_hard_gated" for item in out.get("warnings", []))
 
 
 def test_operator_stop_integration_consumes_marker_and_records_stop_state(monkeypatch: pytest.MonkeyPatch):

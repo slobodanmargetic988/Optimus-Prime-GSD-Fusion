@@ -51,6 +51,14 @@ Updated: 2026-02-28
   - `/op-health`
   - `/op-status`
   - `/op-resume`
+- Added profile autodetection in `/op-initialize`:
+  - scans parent of `CODEX_HOME` (fallback `~`) for `.codex*` directories with first-level `auth.json`
+  - writes canonical profile artifact `reports/optimus-prime/planning/PROFILE_SELECTION.json`
+  - persists `profile_aliases[]` + `profile_selection_ref` in `STATE.json`
+- `/op-build` now enforces profile artifact preflight and uses selected aliases end-to-end:
+  - rate registry seeding (`codex-rate-snapshot`) runs with all selected aliases (no single-profile hardcode)
+  - controller cycles receive `profile_aliases` payload for rate-gate decisions
+  - dispatch selects `codex_profile_alias` per slot with gate-driven reassignment and deterministic warnings
 - Added shared command core:
   - `scripts/op/op_router.py`
   - `scripts/op/op_core.py`

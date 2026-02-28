@@ -55,6 +55,7 @@ EVIDENCE_REL = PLANNING_REL / "evidence"
 
 BUILD_STATE_JSON = PLANNING_REL / "BUILD_STATE.json"
 TASK_EXECUTION_STATE_JSON = PLANNING_REL / "TASK_EXECUTION_STATE.json"
+PROFILE_SELECTION_JSON = PLANNING_REL / "PROFILE_SELECTION.json"
 BUILD_LOOP_LOCK = PLANNING_REL / "BUILD_LOOP.lock"
 RUN_PROGRESS_LEDGER_JSONL = PLANNING_REL / "RUN_PROGRESS_LEDGER.jsonl"
 NO_PROGRESS_WATCHDOG_STATE_JSON = PLANNING_REL / "NO_PROGRESS_WATCHDOG_STATE.json"
@@ -82,6 +83,7 @@ MANDATORY_BUILD_BASELINE = [
     VERIFICATION_MD,
     UAT_MD,
     TASK_EXECUTION_STATE_JSON,
+    PROFILE_SELECTION_JSON,
 ]
 
 STRATEGY_LADDER = [
@@ -239,6 +241,210 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _resolve_profile_detection_root() -> Path:
+    codex_home = _as_str(os.environ.get("CODEX_HOME"))
+    if codex_home:
+        try:
+            root = Path(codex_home).expanduser().resolve().parent
+            if root.exists():
+                return root
+        except OSError:
+            pass
+    return Path.home().expanduser().resolve()
+
+
+def _profile_alias_from_dir_name(name: str) -> str | None:
+    if not name.startswith(".codex"):
+        return None
+    if name == ".codex":
+        return "codex"
+    alias = name[1:].strip()
+    return alias or None
+
+
+def _detect_profile_selection_payload() -> dict[str, Any]:
+    detection_root = _resolve_profile_detection_root()
+    profiles: list[dict[str, str]] = []
+    try:
+        entries = sorted(detection_root.iterdir(), key=lambda path: path.name.lower())
+    except OSError as exc:
+        raise OpError(
+            "profile_detection_none_found",
+            f"unable to scan profile root {detection_root}: {exc}",
+            stage="initialize",
+        ) from exc
+
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        alias = _profile_alias_from_dir_name(entry.name)
+        if not alias:
+            continue
+        auth_path = entry / "auth.json"
+        if not auth_path.is_file():
+            continue
+        profiles.append(
+            {
+                "alias": alias,
+                "codex_home": str(entry.resolve()),
+                "auth_path": str(auth_path.resolve()),
+            }
+        )
+
+    profiles.sort(key=lambda item: (0 if item["alias"] == "codex" else 1, item["alias"]))
+    if not profiles:
+        raise OpError(
+            "profile_detection_none_found",
+            (
+                f"no valid .codex* profiles with first-level auth.json found under {detection_root}. "
+                "Install Codex profile(s) or add a symlink like ~/.codex -> <your-codex-home>."
+            ),
+            stage="initialize",
+        )
+
+    selected_aliases = [item["alias"] for item in profiles]
+    notes: list[str] = []
+    if "codex" not in selected_aliases:
+        notes.append("default .codex profile not found; using alternate detected profiles")
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "detected_at": utc_now_iso(),
+        "detection_root": str(detection_root),
+        "profiles": profiles,
+        "selected_aliases": selected_aliases,
+        "selection_policy": "initialize_autodetect",
+        "notes": notes,
+    }
+
+
+def _validate_profile_selection_payload(payload: Any, *, stage: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise OpError("profile_selection_invalid", "PROFILE_SELECTION.json must be a JSON object", stage=stage)
+
+    profiles = payload.get("profiles")
+    if not isinstance(profiles, list):
+        raise OpError("profile_selection_invalid", "PROFILE_SELECTION.json field 'profiles' must be a list", stage=stage)
+
+    normalized_profiles: list[dict[str, str]] = []
+    alias_to_home: dict[str, str] = {}
+    for idx, item in enumerate(profiles):
+        if not isinstance(item, dict):
+            raise OpError(
+                "profile_selection_invalid",
+                f"PROFILE_SELECTION.json profile row {idx} must be an object",
+                stage=stage,
+            )
+        alias = _as_str(item.get("alias"))
+        codex_home = _as_str(item.get("codex_home"))
+        auth_path = _as_str(item.get("auth_path"))
+        if not alias or not codex_home or not auth_path:
+            raise OpError(
+                "profile_selection_invalid",
+                f"PROFILE_SELECTION.json profile row {idx} missing alias/codex_home/auth_path",
+                stage=stage,
+            )
+        normalized_profiles.append(
+            {
+                "alias": alias,
+                "codex_home": codex_home,
+                "auth_path": auth_path,
+            }
+        )
+        alias_to_home[alias] = codex_home
+
+    selected_aliases_raw = payload.get("selected_aliases")
+    if not isinstance(selected_aliases_raw, list):
+        raise OpError(
+            "profile_selection_invalid",
+            "PROFILE_SELECTION.json field 'selected_aliases' must be a list",
+            stage=stage,
+        )
+    selected_aliases = [alias for alias in (_as_str(item) for item in selected_aliases_raw) if alias]
+    if not selected_aliases:
+        raise OpError(
+            "profile_selection_invalid",
+            "PROFILE_SELECTION.json selected_aliases must contain at least one alias",
+            stage=stage,
+        )
+    if len(set(selected_aliases)) != len(selected_aliases):
+        raise OpError(
+            "profile_selection_invalid",
+            "PROFILE_SELECTION.json selected_aliases must not contain duplicates",
+            stage=stage,
+        )
+    for alias in selected_aliases:
+        if alias not in alias_to_home:
+            raise OpError(
+                "profile_selection_invalid",
+                f"PROFILE_SELECTION.json selected alias '{alias}' missing from profiles[]",
+                stage=stage,
+            )
+
+    return {
+        "schema_version": _as_str(payload.get("schema_version")) or SCHEMA_VERSION,
+        "detected_at": _as_str(payload.get("detected_at")) or utc_now_iso(),
+        "detection_root": _as_str(payload.get("detection_root")) or str(_resolve_profile_detection_root()),
+        "profiles": normalized_profiles,
+        "selected_aliases": selected_aliases,
+        "selection_policy": _as_str(payload.get("selection_policy")) or "initialize_autodetect",
+        "notes": payload.get("notes") if isinstance(payload.get("notes"), list) else [],
+        "alias_to_home": alias_to_home,
+    }
+
+
+def _load_profile_selection_required(repo_root: Path, *, stage: str) -> dict[str, Any]:
+    path = _repo_path(repo_root, PROFILE_SELECTION_JSON)
+    if not path.exists():
+        raise OpError(
+            "profile_selection_missing",
+            "PROFILE_SELECTION.json is missing; run /op-initialize to detect profiles",
+            stage=stage,
+        )
+    payload = _read_json(path)
+    validated = _validate_profile_selection_payload(payload, stage=stage)
+    validated["path"] = str(path)
+    return validated
+
+
+def _profile_args_from_selection(selection_payload: dict[str, Any], *, stage: str) -> list[str]:
+    alias_to_home = selection_payload.get("alias_to_home")
+    if not isinstance(alias_to_home, dict):
+        validated = _validate_profile_selection_payload(selection_payload, stage=stage)
+        alias_to_home = validated["alias_to_home"]
+    selected_aliases = selection_payload.get("selected_aliases")
+    if not isinstance(selected_aliases, list):
+        raise OpError(
+            "profile_selection_invalid",
+            "PROFILE_SELECTION payload missing selected_aliases list",
+            stage=stage,
+        )
+
+    args: list[str] = []
+    for alias in selected_aliases:
+        alias_text = _as_str(alias)
+        if not alias_text:
+            continue
+        if alias_text == "codex":
+            args.append("codex=default")
+            continue
+        home = _as_str(alias_to_home.get(alias_text))
+        if not home:
+            raise OpError(
+                "profile_selection_invalid",
+                f"PROFILE_SELECTION missing codex_home for alias '{alias_text}'",
+                stage=stage,
+            )
+        args.append(f"{alias_text}={home}")
+    if not args:
+        raise OpError(
+            "profile_selection_invalid",
+            "PROFILE_SELECTION selected_aliases resolved to zero profile args",
+            stage=stage,
+        )
+    return args
+
+
 def _resolve_rate_snapshot_script(repo_root: Path) -> Path | None:
     candidates: list[Path] = []
     candidates.append(repo_root / RATE_SNAPSHOT_SCRIPT_REL)
@@ -265,6 +471,7 @@ def _seed_rate_registry_if_missing(
     stage: str = "build_loop",
     force_refresh: bool = False,
     emit_success_warning: bool = True,
+    profile_selection: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     warnings: list[dict[str, Any]] = []
     registry_path = _repo_path(repo_root, PROFILE_RATE_REGISTRY_JSON)
@@ -282,7 +489,27 @@ def _seed_rate_registry_if_missing(
         )
         return warnings
 
-    cmd = [sys.executable, str(script_path), "--profile", "codex=default", "--json-pretty"]
+    try:
+        resolved_selection = (
+            _validate_profile_selection_payload(profile_selection, stage=stage)
+            if profile_selection is not None
+            else _load_profile_selection_required(repo_root, stage=stage)
+        )
+        profile_args = _profile_args_from_selection(resolved_selection, stage=stage)
+    except OpError as exc:
+        warnings.append(
+            {
+                "code": exc.code,
+                "message": exc.message,
+                "stage": stage,
+            }
+        )
+        return warnings
+
+    cmd = [sys.executable, str(script_path)]
+    for arg in profile_args:
+        cmd.extend(["--profile", arg])
+    cmd.append("--json-pretty")
     code, out, err = _run(cmd, cwd=repo_root)
     if code != 0:
         stderr = (err or "").strip()
@@ -2466,6 +2693,183 @@ def _read_rate_gate_window(repo_root: Path) -> dict[str, Any]:
     }
 
 
+def _extract_remaining_percent(window: Any) -> float | None:
+    if not isinstance(window, dict):
+        return None
+    for key in ("remaining_percent", "remaining_pct", "remaining"):
+        value = window.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _read_profile_rate_states(repo_root: Path, aliases: list[str]) -> dict[str, dict[str, Any]]:
+    states: dict[str, dict[str, Any]] = {}
+    default_state = {
+        "hard_gated": False,
+        "soft_gated": False,
+        "score": 50.0,
+        "reset_at": None,
+    }
+    path = _repo_path(repo_root, PROFILE_RATE_REGISTRY_JSON)
+    if not path.exists():
+        return {alias: dict(default_state) for alias in aliases}
+    try:
+        payload = _read_json(path)
+    except OpError:
+        return {alias: dict(default_state) for alias in aliases}
+    if not isinstance(payload, dict):
+        return {alias: dict(default_state) for alias in aliases}
+
+    profiles_raw = payload.get("profiles")
+    profiles_map: dict[str, dict[str, Any]] = {}
+    if isinstance(profiles_raw, dict):
+        for alias, data in profiles_raw.items():
+            if isinstance(data, dict):
+                profiles_map[str(alias)] = data
+    elif isinstance(profiles_raw, list):
+        for idx, data in enumerate(profiles_raw):
+            if isinstance(data, dict):
+                alias = _as_str(data.get("alias")) or f"profile-{idx+1}"
+                profiles_map[alias] = data
+
+    for alias in aliases:
+        data = profiles_map.get(alias)
+        if not isinstance(data, dict):
+            states[alias] = dict(default_state)
+            continue
+        five = data.get("five_hour") if isinstance(data.get("five_hour"), dict) else data.get("5h")
+        weekly = data.get("weekly") if isinstance(data.get("weekly"), dict) else {}
+        if not isinstance(five, dict):
+            five = {}
+        if not isinstance(weekly, dict):
+            weekly = {}
+        five_remaining = _extract_remaining_percent(five)
+        weekly_remaining = _extract_remaining_percent(weekly)
+        remaining_candidates = [value for value in (five_remaining, weekly_remaining) if value is not None]
+        score = min(remaining_candidates) if remaining_candidates else 50.0
+
+        hard_gated = bool(data.get("hard_gated") or data.get("gated") or five.get("gated") or weekly.get("gated"))
+        if (five_remaining is not None and five_remaining <= 1.0) or (weekly_remaining is not None and weekly_remaining <= 1.0):
+            hard_gated = True
+        soft_gated = bool(data.get("soft_concurrency_gated"))
+        if (five_remaining is not None and five_remaining <= 5.0) or (weekly_remaining is not None and weekly_remaining <= 5.0):
+            soft_gated = True
+
+        recommended_action = (_as_str(data.get("recommended_action")) or "").lower()
+        if recommended_action in {"wind_down", "wait_until_reset"}:
+            hard_gated = True
+        reset_at = (
+            _as_str(data.get("reset_at"))
+            or _as_str(data.get("next_reset_at"))
+            or _as_str(five.get("reset_at"))
+            or _as_str(five.get("resets_at"))
+            or _as_str(five.get("resetAt"))
+            or _as_str(five.get("resetsAt"))
+            or _as_str(weekly.get("reset_at"))
+            or _as_str(weekly.get("resets_at"))
+            or _as_str(weekly.get("resetAt"))
+            or _as_str(weekly.get("resetsAt"))
+        )
+
+        states[alias] = {
+            "hard_gated": hard_gated,
+            "soft_gated": soft_gated,
+            "score": float(score),
+            "reset_at": reset_at,
+        }
+    return states
+
+
+def _select_profile_alias_for_slot(
+    repo_root: Path,
+    build_state: dict[str, Any],
+    *,
+    slot: str,
+    slot_count: int,
+) -> dict[str, Any]:
+    aliases_raw = build_state.get("profile_aliases")
+    aliases = (
+        [alias for alias in (_as_str(item) for item in aliases_raw) if alias]
+        if isinstance(aliases_raw, list)
+        else []
+    )
+    if not aliases:
+        return {
+            "ok": False,
+            "reason": "profile_selection_invalid",
+            "warning": {
+                "code": "profile_selection_invalid",
+                "message": "build state has no profile_aliases; rerun /op-initialize",
+                "stage": "build_loop",
+            },
+        }
+
+    rate_states = _read_profile_rate_states(repo_root, aliases)
+    non_gated_aliases = [alias for alias in aliases if not rate_states.get(alias, {}).get("hard_gated")]
+    if not non_gated_aliases:
+        reset_candidates = [
+            _as_str(rate_states.get(alias, {}).get("reset_at"))
+            for alias in aliases
+            if _as_str(rate_states.get(alias, {}).get("reset_at"))
+        ]
+        return {
+            "ok": False,
+            "reason": "profile_assignment_all_hard_gated",
+            "warning": {
+                "code": "profile_assignment_all_hard_gated",
+                "message": "all selected profiles are hard-gated; dispatch skipped",
+                "stage": "build_loop",
+                "profiles": aliases,
+                "reset_at_candidates": reset_candidates,
+            },
+        }
+
+    assignments = build_state.get("slot_profile_assignments")
+    if not isinstance(assignments, dict):
+        assignments = {}
+        build_state["slot_profile_assignments"] = assignments
+
+    current_alias = _as_str(assignments.get(slot))
+    if current_alias and current_alias in non_gated_aliases:
+        return {"ok": True, "alias": current_alias}
+
+    assigned_non_gated = {
+        alias
+        for value in assignments.values()
+        for alias in [(_as_str(value))]
+        if alias and alias in non_gated_aliases
+    }
+    candidate_aliases: list[str] = []
+    if len(aliases) > max(1, slot_count):
+        candidate_aliases = [alias for alias in non_gated_aliases if alias not in assigned_non_gated]
+
+    if not candidate_aliases:
+        candidate_aliases = sorted(
+            non_gated_aliases,
+            key=lambda alias: (-float(rate_states.get(alias, {}).get("score", 50.0)), alias),
+        )
+
+    selected_alias = candidate_aliases[0]
+    assignments[slot] = selected_alias
+
+    warning: dict[str, Any] | None = None
+    if current_alias != selected_alias:
+        warning = {
+            "code": "profile_assignment_reassigned",
+            "message": f"slot {slot} reassigned profile alias: {current_alias or 'unset'} -> {selected_alias}",
+            "stage": "build_loop",
+            "slot": slot,
+            "from_alias": current_alias,
+            "to_alias": selected_alias,
+        }
+    return {"ok": True, "alias": selected_alias, "warning": warning}
+
+
 def _resolve_test_train_mode(repo_root: Path) -> str:
     path = repo_root / "reports" / "optimus-prime" / "TEST_TRAIN_STATE.json"
     if not path.exists():
@@ -3642,14 +4046,34 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
     _require_mission_scope(req)
     _ensure_managed_gitignore_block(req.repo_root)
     map_result = command_map_codebase(req)
-    rate_seed_warnings = _seed_rate_registry_if_missing(req.repo_root, stage="initialize")
     new_result = command_new_project(req)
     plan_result = command_plan(req)
+
+    profile_selection = _detect_profile_selection_payload()
+    profile_selection_path = _repo_path(req.repo_root, PROFILE_SELECTION_JSON)
+    _atomic_write_json(profile_selection_path, profile_selection)
+
+    state_path = _repo_path(req.repo_root, STATE_JSON)
+    state_payload = _read_json(state_path)
+    if not isinstance(state_payload, dict):
+        raise OpError("state_payload_invalid", "STATE.json must be a JSON object", stage="initialize")
+    state_payload["profile_aliases"] = list(profile_selection.get("selected_aliases", []))
+    state_payload["profile_selection_ref"] = str(profile_selection_path)
+    state_payload["updated_at"] = utc_now_iso()
+    _atomic_write_json(state_path, state_payload)
+
+    rate_seed_warnings = _seed_rate_registry_if_missing(
+        req.repo_root,
+        stage="initialize",
+        profile_selection=profile_selection,
+    )
 
     artifacts = []
     artifacts.extend(map_result.get("artifacts", []))
     artifacts.extend(new_result.get("artifacts", []))
     artifacts.extend(plan_result.get("artifacts", []))
+    artifacts.append(str(profile_selection_path))
+    artifacts.append(str(state_path))
 
     warnings = []
     warnings.extend(map_result.get("warnings", []))
@@ -3672,7 +4096,10 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
         artifacts=artifacts,
         next_action="Use /op-build when ready to execute autonomously.",
         state_ref=str(_repo_path(req.repo_root, STATE_JSON)),
-        data={"plan_ready": plan_ready},
+        data={
+            "plan_ready": plan_ready,
+            "profile_aliases": profile_selection.get("selected_aliases", []),
+        },
     )
 
 
@@ -3694,6 +4121,9 @@ def _fresh_build_state_payload() -> dict[str, Any]:
             "max_running_workers": 6,
             "soft_cap_active": False,
         },
+        "profile_aliases": [],
+        "slot_profile_assignments": {},
+        "profile_assignment_policy": "dynamic_reassign_on_gate",
         "rate_gate_state": {
             "hard_gated": False,
             "min_reset_at": None,
@@ -3771,6 +4201,19 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     payload.setdefault("history", [])
     payload.setdefault("loop_lock_id", None)
     payload.setdefault("dispatch_window", {"max_running_workers": 6, "soft_cap_active": False})
+    payload.setdefault("profile_aliases", [])
+    payload.setdefault("slot_profile_assignments", {})
+    payload.setdefault("profile_assignment_policy", "dynamic_reassign_on_gate")
+    if not isinstance(payload.get("profile_aliases"), list):
+        payload["profile_aliases"] = []
+    else:
+        payload["profile_aliases"] = [
+            alias for alias in (_as_str(item) for item in payload["profile_aliases"]) if alias
+        ]
+    if not isinstance(payload.get("slot_profile_assignments"), dict):
+        payload["slot_profile_assignments"] = {}
+    if not isinstance(payload.get("profile_assignment_policy"), str):
+        payload["profile_assignment_policy"] = "dynamic_reassign_on_gate"
     payload.setdefault(
         "rate_gate_state",
         {
@@ -3873,13 +4316,20 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _run_controller_cycle(req: OpRequest, *, control_number: int, control_run_id: str) -> dict[str, Any]:
+def _run_controller_cycle(
+    req: OpRequest,
+    *,
+    control_number: int,
+    control_run_id: str,
+    profile_aliases: list[str] | None = None,
+) -> dict[str, Any]:
     script = _resolve_skill_script("optimus-cycle-controller", "optimus_cycle_controller.py")
 
     payload = {
         "repo_root": str(req.repo_root),
         "control_number": int(control_number),
         "control_run_id": control_run_id,
+        "profile_aliases": profile_aliases or ["codex"],
         "sleep_minutes": req.sleep_minutes,
         "allow_autonomous_ops": True,
         "max_cycles": 1,
@@ -4143,6 +4593,7 @@ def _dispatch_task_packet(
     plan_task: dict[str, Any],
     stage: str,
     plan_id: str,
+    codex_profile_alias: str,
 ) -> dict[str, Any]:
     script = _resolve_skill_script("dispatch-worker-packet", "dispatch_worker_packet.py")
     task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
@@ -4182,7 +4633,7 @@ def _dispatch_task_packet(
         "start_from_commit": start_from_commit,
         "acceptance_criteria": acceptance_refs,
         "packet_version": 1,
-        "codex_profile_alias": "codex",
+        "codex_profile_alias": codex_profile_alias,
         "mcp_mode": "disable-all",
         "mcp_allowlist": [],
         "sandbox_mode": "danger-full-access",
@@ -4262,6 +4713,44 @@ def _dispatch_next_task(
     if has_in_progress:
         return {"ok": True, "status": "skipped", "reason": "task already in progress"}
 
+    stage_cfg = {
+        "dev": {"slot": "dev-1", "role": "developer"},
+        "test": {"slot": "test-1", "role": "tester"},
+        "review": {"slot": "review-1", "role": "reviewer"},
+    }
+    slot_count = len({cfg["slot"] for cfg in stage_cfg.values()})
+
+    def _dispatch_for_stage(
+        task_payload: dict[str, Any],
+        plan_task_payload: dict[str, Any],
+        stage_name: str,
+        local_plan_id: str,
+    ) -> dict[str, Any]:
+        selection = _select_profile_alias_for_slot(
+            req.repo_root,
+            build_state,
+            slot=stage_cfg[stage_name]["slot"],
+            slot_count=slot_count,
+        )
+        if not _as_bool(selection.get("ok"), default=False):
+            return {
+                "ok": True,
+                "status": "skipped",
+                "reason": _as_str(selection.get("reason")) or "profile_selection_invalid",
+                "warning": selection.get("warning"),
+            }
+        result = _dispatch_task_packet(
+            req,
+            task_payload,
+            plan_task_payload,
+            stage_name,
+            local_plan_id,
+            _as_str(selection.get("alias")) or "codex",
+        )
+        if isinstance(selection.get("warning"), dict):
+            result["warning"] = selection.get("warning")
+        return result
+
     plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
     for task_id in ordered_ids:
         task = task_map.get(task_id)
@@ -4273,7 +4762,7 @@ def _dispatch_next_task(
             continue
         build_state["current_task_pointer"] = task_id
         if status == "queued":
-            return _dispatch_task_packet(req, task, plan_task, "dev", plan_id)
+            return _dispatch_for_stage(task, plan_task, "dev", plan_id)
         if status == "blocked" and bool(task.get("is_gap_closure")):
             source_gap_id = _as_str(task.get("source_gap_id")) or _as_str(plan_task.get("source_gap_id")) or f"gap:{task_id}"
             retries = _coerce_nonneg_int(retry_attempts.get(source_gap_id, 0), default=0)
@@ -4316,7 +4805,7 @@ def _dispatch_next_task(
                 }
             task["status"] = "queued"
             task["owner_slot"] = None
-            return _dispatch_task_packet(req, task, plan_task, "dev", plan_id)
+            return _dispatch_for_stage(task, plan_task, "dev", plan_id)
         if status == "dev_done":
             evidence_path = _task_evidence_path(req.repo_root, task)
             if not evidence_path.exists():
@@ -4334,7 +4823,7 @@ def _dispatch_next_task(
                     "task_id": task_id,
                     "reason": "dev_gate_not_ready_for_test",
                 }
-            return _dispatch_task_packet(req, task, plan_task, "test", plan_id)
+            return _dispatch_for_stage(task, plan_task, "test", plan_id)
         if status == "test_done":
             evidence_path = _task_evidence_path(req.repo_root, task)
             if not evidence_path.exists():
@@ -4352,7 +4841,7 @@ def _dispatch_next_task(
                     "task_id": task_id,
                     "reason": "test_gate_not_ready_for_review",
                 }
-            return _dispatch_task_packet(req, task, plan_task, "review", plan_id)
+            return _dispatch_for_stage(task, plan_task, "review", plan_id)
     return {"ok": True, "status": "noop", "reason": "no dispatchable tasks"}
 
 
@@ -4635,7 +5124,9 @@ def _evaluate_strict_done(
     return checks
 
 
-def _preflight_build(req: OpRequest) -> tuple[list[dict[str, Any]], list[str], dict[str, Any], dict[str, Any], dict[str, Any]]:
+def _preflight_build(
+    req: OpRequest,
+) -> tuple[list[dict[str, Any]], list[str], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None]:
     missing: list[str] = []
     for rel in MANDATORY_BUILD_BASELINE:
         if not _repo_path(req.repo_root, rel).exists():
@@ -4739,13 +5230,34 @@ def _preflight_build(req: OpRequest) -> tuple[list[dict[str, Any]], list[str], d
             }
         )
 
-    return warnings, missing, state_payload, plan_packets, task_state
+    profile_selection: dict[str, Any] | None = None
+    try:
+        profile_selection = _load_profile_selection_required(req.repo_root, stage="build_preflight")
+    except OpError as exc:
+        warnings.append(
+            {
+                "code": exc.code,
+                "message": exc.message,
+                "stage": "build_preflight",
+            }
+        )
+
+    return warnings, missing, state_payload, plan_packets, task_state, profile_selection
 
 
 def command_build(req: OpRequest) -> dict[str, Any]:
-    warnings, missing, _, plan_packets, task_state = _preflight_build(req)
+    warnings, missing, _, plan_packets, task_state, profile_selection = _preflight_build(req)
     preflight_failed = bool(missing) or any(
-        item.get("code") in {"plan_not_ready", "task_state_invalid", "task_state_plan_mismatch", "plan_packets_invalid", "state_payload_invalid"}
+        item.get("code")
+        in {
+            "plan_not_ready",
+            "task_state_invalid",
+            "task_state_plan_mismatch",
+            "plan_packets_invalid",
+            "state_payload_invalid",
+            "profile_selection_missing",
+            "profile_selection_invalid",
+        }
         for item in warnings
     )
     if preflight_failed:
@@ -4793,6 +5305,31 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             next_action="Fix malformed build state artifacts or rerun /op-initialize, then rerun /op-build.",
             state_ref=str(build_state_path),
         )
+    if not isinstance(profile_selection, dict):
+        return _response(
+            req,
+            ok=False,
+            status="blocked_preflight",
+            summary="Build blocked: profile selection artifact is missing or invalid.",
+            warnings=warnings,
+            errors=[
+                {
+                    "code": "build_preflight_failed",
+                    "message": "Run /op-initialize to detect profiles and regenerate PROFILE_SELECTION.json.",
+                    "stage": "build_preflight",
+                }
+            ],
+            next_action="Run /op-initialize, then rerun /op-build.",
+            state_ref=str(_repo_path(req.repo_root, STATE_JSON)),
+        )
+    selected_aliases = [
+        alias for alias in (_as_str(item) for item in profile_selection.get("selected_aliases", [])) if alias
+    ]
+    build_state["profile_aliases"] = selected_aliases
+    build_state["profile_assignment_policy"] = "dynamic_reassign_on_gate"
+    if not isinstance(build_state.get("slot_profile_assignments"), dict):
+        build_state["slot_profile_assignments"] = {}
+
     task_state_path = _repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)
     lock_path = _repo_path(req.repo_root, BUILD_LOOP_LOCK)
     lock_ok, lock_id, active_pid = _acquire_build_loop_lock(lock_path)
@@ -4911,6 +5448,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 req.repo_root,
                 force_refresh=True,
                 emit_success_warning=False,
+                profile_selection=profile_selection,
             )
             warnings.extend(rate_seed_warnings)
             cycle_local_warnings.extend(rate_seed_warnings)
@@ -4994,6 +5532,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 req,
                 control_number=cycle_control_number,
                 control_run_id=cycle_control_run_id,
+                profile_aliases=selected_aliases,
             )
             events_path_raw = _as_str(cycle_result.get("events_path"))
             directives: list[dict[str, Any]] = []
@@ -5249,18 +5788,23 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                         warnings.append(dispatch_warning)
                         cycle_local_warnings.append(dispatch_warning)
                     dispatch_reason = _as_str(dispatch_result.get("reason")) if isinstance(dispatch_result, dict) else None
-                    if dispatch_reason in {"gap_retry_exhausted", "gap_closure_retry_suppressed"}:
+                    if dispatch_reason in {
+                        "gap_retry_exhausted",
+                        "gap_closure_retry_suppressed",
+                        "profile_assignment_all_hard_gated",
+                    }:
                         build_state["cycle_gate_decision"] = {
                             "dispatch_blocked": True,
                             "reason": dispatch_reason,
                             "terminal_reason": terminal_reason,
                         }
-                        gaps_payload, gap_closure_payload = _refresh_gap_artifacts(
-                            req.repo_root,
-                            merged_plan_packets,
-                            task_state,
-                            build_state,
-                        )
+                        if dispatch_reason in {"gap_retry_exhausted", "gap_closure_retry_suppressed"}:
+                            gaps_payload, gap_closure_payload = _refresh_gap_artifacts(
+                                req.repo_root,
+                                merged_plan_packets,
+                                task_state,
+                                build_state,
+                            )
                     directive_outcomes.append(
                         {
                             "directive_type": "review_dispatch_queue"
@@ -5580,7 +6124,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
 
 def command_health(req: OpRequest) -> dict[str, Any]:
     try:
-        warnings, missing, _, plan_packets, task_state = _preflight_build(req)
+        warnings, missing, _, plan_packets, task_state, _ = _preflight_build(req)
     except OpError as exc:
         warning = {
             "code": "build_preflight_read_error",
@@ -5612,7 +6156,15 @@ def command_health(req: OpRequest) -> dict[str, Any]:
             data={"checks": checks, "open_gap_ids": []},
         )
     checks: list[dict[str, Any]] = []
-    preflight_block_codes = {"plan_not_ready", "task_state_invalid", "task_state_plan_mismatch", "plan_packets_invalid", "state_payload_invalid"}
+    preflight_block_codes = {
+        "plan_not_ready",
+        "task_state_invalid",
+        "task_state_plan_mismatch",
+        "plan_packets_invalid",
+        "state_payload_invalid",
+        "profile_selection_missing",
+        "profile_selection_invalid",
+    }
     preflight_blockers = [item for item in warnings if _as_str(item.get("code")) in preflight_block_codes]
     checks.append(
         {

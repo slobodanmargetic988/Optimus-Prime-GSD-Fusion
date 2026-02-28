@@ -9,6 +9,14 @@ Primary outcome:
 3. Let `/op-build` choose continue-vs-new dispatch mode automatically.
 4. Add automatic profile recognition so `/op-build` uses all available Codex profiles by default.
 
+## Implemented Baseline (Profile Wiring)
+1. `/op-initialize` now performs deterministic profile autodetection from `.codex*` folders (first-level `auth.json` required).
+2. Detected profiles are persisted in `reports/optimus-prime/planning/PROFILE_SELECTION.json`.
+3. `/op-build` now consumes persisted `profile_aliases[]` for:
+   - rate snapshot seeding,
+   - controller `profile_aliases` payload,
+   - slot-level dispatch profile assignment with gate-driven reassignment.
+
 ## Why This Lane
 Current dispatch behavior creates a new Codex run for each dispatched task/stage.
 That is reliable, but inefficient for related work streams where continuing the same worker thread would preserve context and reduce repeated prompt overhead.

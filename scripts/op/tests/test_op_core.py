@@ -37,6 +37,45 @@ def build_repo(root: Path) -> None:
     controller_target = root / "skills" / "optimus-cycle-controller" / "scripts" / "optimus_cycle_controller.py"
     controller_target.parent.mkdir(parents=True, exist_ok=True)
     controller_target.write_text(CONTROLLER_SOURCE.read_text(encoding="utf-8"), encoding="utf-8")
+    snapshot_script = root / "skills" / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
+    snapshot_script.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_script.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import argparse",
+                "import json",
+                "",
+                "parser = argparse.ArgumentParser()",
+                "parser.add_argument('--profile', action='append', default=[])",
+                "parser.add_argument('--json-pretty', action='store_true')",
+                "args = parser.parse_args()",
+                "profiles = {}",
+                "for item in args.profile:",
+                "    alias = item.split('=', 1)[0].strip()",
+                "    if not alias:",
+                "        continue",
+                "    profiles[alias] = {",
+                "        'recommended_action': 'continue',",
+                "        'five_hour': {'remaining_percent': 80},",
+                "        'weekly': {'remaining_percent': 80},",
+                "    }",
+                "if not profiles:",
+                "    profiles = {'codex': {'recommended_action': 'continue', 'five_hour': {'remaining_percent': 80}, 'weekly': {'remaining_percent': 80}}}",
+                "payload = {'profiles': profiles}",
+                "if args.json_pretty:",
+                "    print(json.dumps(payload, indent=2))",
+                "else:",
+                "    print(json.dumps(payload))",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    profile_dir = root.parent / ".codex"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / "auth.json").write_text("{}\n", encoding="utf-8")
+    os.environ["CODEX_HOME"] = str(profile_dir)
     git(root, "add", ".")
     git(root, "commit", "-m", "seed")
 
@@ -45,6 +84,40 @@ def build_repo(root: Path) -> None:
 def run_payload(payload: dict) -> dict:
     req = MODULE.parse_request(payload)
     return MODULE.execute_request(req)
+
+
+def write_profile_selection(
+    root: Path,
+    *,
+    profiles: list[dict[str, str]] | None = None,
+    selected_aliases: list[str] | None = None,
+) -> Path:
+    planning = root / "reports" / "optimus-prime" / "planning"
+    planning.mkdir(parents=True, exist_ok=True)
+    if profiles is None:
+        codex_home = Path(os.environ.get("CODEX_HOME", str(root.parent / ".codex"))).expanduser().resolve()
+        auth_path = codex_home / "auth.json"
+        profiles = [
+            {
+                "alias": "codex",
+                "codex_home": str(codex_home),
+                "auth_path": str(auth_path),
+            }
+        ]
+    if selected_aliases is None:
+        selected_aliases = [item["alias"] for item in profiles]
+    payload = {
+        "schema_version": "1.0",
+        "detected_at": "2026-01-01T00:00:00Z",
+        "detection_root": str(Path(profiles[0]["codex_home"]).parent if profiles else root.parent),
+        "profiles": profiles,
+        "selected_aliases": selected_aliases,
+        "selection_policy": "initialize_autodetect",
+        "notes": [],
+    }
+    path = planning / "PROFILE_SELECTION.json"
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
 def write_schema_invalid_tasks_artifact(path: Path, *, plan_id: str = "plan-test") -> None:
@@ -201,6 +274,92 @@ def test_initialize_chains_map_new_plan():
         assert (planning / "PLAN_CHECK.json").exists()
 
 
+def test_profile_detection_accepts_valid_codex_dirs_only():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        profile_root = Path(os.environ["CODEX_HOME"]).expanduser().resolve().parent
+        (profile_root / ".codex-second").mkdir(parents=True, exist_ok=True)
+        (profile_root / ".codex-second" / "auth.json").write_text("{}\n", encoding="utf-8")
+        (profile_root / ".codex-invalid").mkdir(parents=True, exist_ok=True)
+        (profile_root / ".codexinvalid-noauth").mkdir(parents=True, exist_ok=True)
+
+        payload = MODULE._detect_profile_selection_payload()
+        aliases = payload["selected_aliases"]
+        assert "codex" in aliases
+        assert "codex-second" in aliases
+        assert "codex-invalid" not in aliases
+        assert "codexinvalid-noauth" not in aliases
+
+
+def test_profile_detection_allows_alternate_profiles_without_default():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        profile_root = root.parent / "profiles"
+        profile_root.mkdir(parents=True, exist_ok=True)
+        alt_one = profile_root / ".codex-second"
+        alt_two = profile_root / ".codexslobodan"
+        alt_one.mkdir(parents=True, exist_ok=True)
+        alt_two.mkdir(parents=True, exist_ok=True)
+        (alt_one / "auth.json").write_text("{}\n", encoding="utf-8")
+        (alt_two / "auth.json").write_text("{}\n", encoding="utf-8")
+        os.environ["CODEX_HOME"] = str(profile_root / ".codex-missing")
+
+        payload = MODULE._detect_profile_selection_payload()
+        assert payload["selected_aliases"] == ["codex-second", "codexslobodan"]
+        assert any("default .codex profile not found" in str(item) for item in payload.get("notes", []))
+
+
+def test_initialize_writes_profile_selection_and_state_refs():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+
+        out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        assert out["ok"] is True
+        selection_path = root / "reports" / "optimus-prime" / "planning" / "PROFILE_SELECTION.json"
+        assert selection_path.exists()
+        selection = json.loads(selection_path.read_text(encoding="utf-8"))
+        assert selection["selection_policy"] == "initialize_autodetect"
+        assert isinstance(selection.get("selected_aliases"), list) and selection["selected_aliases"]
+
+        state_path = root / "reports" / "optimus-prime" / "planning" / "STATE.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state["profile_aliases"] == selection["selected_aliases"]
+        assert state["profile_selection_ref"] == str(selection_path.resolve())
+
+
+def test_initialize_blocks_when_no_profiles_detected():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        codex_home = Path(os.environ["CODEX_HOME"]).expanduser().resolve()
+        auth_file = codex_home / "auth.json"
+        if auth_file.exists():
+            auth_file.unlink()
+        empty_root = root.parent / "empty-profiles"
+        empty_root.mkdir(parents=True, exist_ok=True)
+        os.environ["CODEX_HOME"] = str(empty_root / ".codex")
+
+        with pytest.raises(MODULE.OpError) as exc_info:
+            run_payload(
+                {
+                    "command": "/op-initialize",
+                    "repo_root": str(root),
+                    "mission": "Build MyBoard",
+                    "scope": "Board workflow",
+                }
+            )
+        assert exc_info.value.code == "profile_detection_none_found"
+
 
 def test_initialize_seeds_rate_registry_once_when_missing(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
@@ -214,11 +373,14 @@ def test_initialize_seeds_rate_registry_once_when_missing(monkeypatch: pytest.Mo
             stage: str = "build_loop",
             force_refresh: bool = False,
             emit_success_warning: bool = True,
+            profile_selection: dict | None = None,
         ):
             calls.append(repo_root)
             assert stage == "initialize"
             assert force_refresh is False
             assert emit_success_warning is True
+            assert isinstance(profile_selection, dict)
+            assert profile_selection.get("selected_aliases")
             return [{"code": "rate_registry_seeded", "message": "ok", "stage": stage}]
 
         monkeypatch.setattr(MODULE, "_seed_rate_registry_if_missing", fake_seed)
@@ -516,6 +678,63 @@ def test_build_preflight_blocks_on_malformed_state_json():
         assert out["ok"] is False
         assert out["status"] == "blocked_preflight"
         assert any(item.get("code") == "state_payload_invalid" for item in out.get("warnings", []))
+
+
+def test_build_preflight_blocks_when_profile_selection_missing():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        profile_path = root / "reports" / "optimus-prime" / "planning" / "PROFILE_SELECTION.json"
+        profile_path.unlink(missing_ok=True)
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+            }
+        )
+        assert out["ok"] is False
+        assert out["status"] == "blocked_preflight"
+        assert any(item.get("code") == "profile_selection_missing" for item in out.get("warnings", []))
+
+
+def test_build_preflight_blocks_when_profile_selection_invalid():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        profile_path = root / "reports" / "optimus-prime" / "planning" / "PROFILE_SELECTION.json"
+        profile_path.write_text(
+            json.dumps({"schema_version": "1.0", "selected_aliases": []}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+            }
+        )
+        assert out["ok"] is False
+        assert out["status"] == "blocked_preflight"
+        assert any(item.get("code") == "profile_selection_invalid" for item in out.get("warnings", []))
 
 
 def test_op_build_default_sleep_minutes_is_five():
@@ -1100,6 +1319,7 @@ def test_gap_closure_retry_exhausts_after_five_attempts(monkeypatch: pytest.Monk
         plan_packets = json.loads((root / "reports" / "optimus-prime" / "planning" / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
         task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
         build_state = MODULE._load_build_state(root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json")
+        build_state["profile_aliases"] = ["codex"]
 
         for task in task_state["tasks"]:
             task["status"] = "review_done"
@@ -1390,6 +1610,19 @@ def test_build_halts_on_hard_stop_all_rate_gates_blocking(monkeypatch: pytest.Mo
             "_seed_rate_registry_if_missing",
             lambda *_args, **_kwargs: [],
         )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": True,
+                "terminal_reason": "all_rate_gates_blocking",
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
 
         out = run_payload(
             {
@@ -1470,6 +1703,7 @@ def test_seed_rate_registry_warns_when_snapshot_script_unavailable(monkeypatch: 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
+        write_profile_selection(root)
         rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
         rate_path.unlink(missing_ok=True)
 
@@ -1478,6 +1712,151 @@ def test_seed_rate_registry_warns_when_snapshot_script_unavailable(monkeypatch: 
 
         assert any(item.get("code") == "rate_registry_seed_unavailable" for item in warnings)
         assert not rate_path.exists()
+
+
+def test_seed_rate_registry_uses_selected_aliases(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        second = root.parent / ".codex-second"
+        second.mkdir(parents=True, exist_ok=True)
+        (second / "auth.json").write_text("{}\n", encoding="utf-8")
+        selection = {
+            "schema_version": "1.0",
+            "detected_at": "2026-01-01T00:00:00Z",
+            "detection_root": str(root.parent),
+            "profiles": [
+                {
+                    "alias": "codex",
+                    "codex_home": str((root.parent / ".codex").resolve()),
+                    "auth_path": str((root.parent / ".codex" / "auth.json").resolve()),
+                },
+                {
+                    "alias": "codex-second",
+                    "codex_home": str(second.resolve()),
+                    "auth_path": str((second / "auth.json").resolve()),
+                },
+            ],
+            "selected_aliases": ["codex", "codex-second"],
+            "selection_policy": "initialize_autodetect",
+            "notes": [],
+        }
+        captured: dict[str, object] = {}
+
+        script_path = root / "fake_snapshot.py"
+        script_path.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+        monkeypatch.setattr(MODULE, "_resolve_rate_snapshot_script", lambda _repo_root: script_path)
+
+        def fake_run(cmd, *, cwd, stdin_text=None):
+            captured["cmd"] = cmd
+            payload = {
+                "profiles": {
+                    "codex": {"recommended_action": "continue"},
+                    "codex-second": {"recommended_action": "continue"},
+                },
+            }
+            return 0, json.dumps(payload), ""
+
+        monkeypatch.setattr(MODULE, "_run", fake_run)
+        warnings = MODULE._seed_rate_registry_if_missing(
+            root,
+            force_refresh=True,
+            emit_success_warning=False,
+            profile_selection=selection,
+        )
+        assert warnings == []
+        cmd = captured["cmd"]
+        assert isinstance(cmd, list)
+        assert "--profile" in cmd
+        assert "codex=default" in cmd
+        assert any(str(item).startswith("codex-second=") for item in cmd)
+
+
+def test_select_profile_alias_prefers_unassigned_when_extra_profiles():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        build_state = {
+            "profile_aliases": ["codex", "codex-second", "codex-third"],
+            "slot_profile_assignments": {
+                "dev-1": "codex",
+                "test-1": "codex-second",
+            },
+        }
+        result = MODULE._select_profile_alias_for_slot(
+            root,
+            build_state,
+            slot="review-1",
+            slot_count=2,
+        )
+        assert result["ok"] is True
+        assert result["alias"] == "codex-third"
+
+
+def test_select_profile_alias_uses_least_gated_when_slots_exhausted():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.parent.mkdir(parents=True, exist_ok=True)
+        rate_path.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "codex": {"five_hour": {"remaining_percent": 10}, "weekly": {"remaining_percent": 10}},
+                        "codex-second": {"five_hour": {"remaining_percent": 80}, "weekly": {"remaining_percent": 80}},
+                    }
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        build_state = {
+            "profile_aliases": ["codex", "codex-second"],
+            "slot_profile_assignments": {"dev-1": "codex"},
+        }
+        result = MODULE._select_profile_alias_for_slot(
+            root,
+            build_state,
+            slot="test-1",
+            slot_count=2,
+        )
+        assert result["ok"] is True
+        assert result["alias"] == "codex-second"
+
+
+def test_select_profile_alias_returns_all_hard_gated_reason():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.parent.mkdir(parents=True, exist_ok=True)
+        rate_path.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "codex": {"recommended_action": "wind_down"},
+                        "codex-second": {"recommended_action": "wait_until_reset"},
+                    }
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        build_state = {
+            "profile_aliases": ["codex", "codex-second"],
+            "slot_profile_assignments": {},
+        }
+        result = MODULE._select_profile_alias_for_slot(
+            root,
+            build_state,
+            slot="dev-1",
+            slot_count=3,
+        )
+        assert result["ok"] is False
+        assert result["reason"] == "profile_assignment_all_hard_gated"
 
 
 def test_build_seeds_rate_registry_before_controller_cycle(monkeypatch: pytest.MonkeyPatch):

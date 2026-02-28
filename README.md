@@ -95,6 +95,7 @@ opctl /op-initialize --mission "Build X" --scope "Y" --json-pretty
 1. `/op-map-codebase`
 2. `/op-new-project`
 3. `/op-plan`
+4. Codex profile autodetection (`.codex*` with first-level `auth.json`) and writes `reports/optimus-prime/planning/PROFILE_SELECTION.json` for `/op-build` profile/rate wiring.
 
 It does **not** start implementation. It prepares decision-complete planning state.
 
