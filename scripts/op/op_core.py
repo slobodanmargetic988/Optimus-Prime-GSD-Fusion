@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -19,6 +20,9 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+
+ENGINE_ROOT = SCRIPT_DIR.parents[1]
+SKILLS_ROOT = ENGINE_ROOT / "skills"
 
 from op_router import SUPPORTED_COMMANDS, normalize_command
 
@@ -52,6 +56,9 @@ EVIDENCE_REL = PLANNING_REL / "evidence"
 BUILD_STATE_JSON = PLANNING_REL / "BUILD_STATE.json"
 TASK_EXECUTION_STATE_JSON = PLANNING_REL / "TASK_EXECUTION_STATE.json"
 BUILD_LOOP_LOCK = PLANNING_REL / "BUILD_LOOP.lock"
+CONTROL_REL = Path("reports") / "optimus-prime" / "control"
+OPERATOR_STOP_JSON = CONTROL_REL / "OPERATOR_STOP.json"
+OPERATOR_STOP_STATE_JSON = CONTROL_REL / "OPERATOR_STOP_STATE.json"
 
 MANDATORY_BUILD_BASELINE = [
     PROJECT_MD,
@@ -164,6 +171,20 @@ def _repo_path(repo_root: Path, rel: Path) -> Path:
     return (repo_root / rel).resolve()
 
 
+def _resolve_skill_script(
+    skill_name: str,
+    script_name: str,
+    *,
+    required: bool = True,
+) -> Path | None:
+    script = SKILLS_ROOT / skill_name / "scripts" / script_name
+    if script.exists():
+        return script
+    if required:
+        raise OpError("runtime_error", f"bundled skill script not found: {script}", stage="build")
+    return None
+
+
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -248,6 +269,521 @@ def _pid_is_running(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+def _clamp_int(value: Any, *, default: int, low: int, high: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if parsed < low:
+        return low
+    if parsed > high:
+        return high
+    return parsed
+
+
+def _wait_pid_exit(pid: int, timeout_sec: int) -> bool:
+    if pid <= 0:
+        return True
+    deadline = time.monotonic() + max(0, timeout_sec)
+    while time.monotonic() < deadline:
+        if not _pid_is_running(pid):
+            return True
+        time.sleep(0.2)
+    return not _pid_is_running(pid)
+
+
+def _worker_state(worker: dict[str, Any]) -> str:
+    return (
+        _as_str(worker.get("state"))
+        or _as_str(worker.get("session_state"))
+        or _as_str(worker.get("status"))
+        or ""
+    ).lower()
+
+
+def _load_worker_registry(path: Path) -> tuple[Any, list[dict[str, Any]], str]:
+    if not path.exists():
+        return {"workers": []}, [], "dict_list"
+    try:
+        raw = _read_json(path)
+    except OpError:
+        return {"workers": []}, [], "dict_list"
+    workers: list[dict[str, Any]] = []
+    shape = "dict_list"
+    if isinstance(raw, dict):
+        nested = raw.get("workers")
+        if isinstance(nested, list):
+            workers = [item for item in nested if isinstance(item, dict)]
+            shape = "dict_list"
+        elif isinstance(nested, dict):
+            workers = [item for item in nested.values() if isinstance(item, dict)]
+            shape = "dict_dict"
+        else:
+            workers = []
+            shape = "dict_list"
+    elif isinstance(raw, list):
+        workers = [item for item in raw if isinstance(item, dict)]
+        shape = "list"
+    else:
+        raw = {"workers": []}
+        workers = []
+        shape = "dict_list"
+    return raw, workers, shape
+
+
+def _write_worker_registry(path: Path, base_payload: Any, workers: list[dict[str, Any]], shape: str) -> None:
+    normalized = [item for item in workers if isinstance(item, dict)]
+    if shape == "list":
+        _atomic_write_json(path, normalized)
+        return
+    if shape == "dict_dict":
+        out = base_payload if isinstance(base_payload, dict) else {}
+        workers_dict: dict[str, dict[str, Any]] = {}
+        for idx, worker in enumerate(normalized):
+            slot = _as_str(worker.get("slot")) or f"slot-{idx+1}"
+            workers_dict[slot] = worker
+        out["workers"] = workers_dict
+        _atomic_write_json(path, out)
+        return
+    out = base_payload if isinstance(base_payload, dict) else {}
+    out["workers"] = normalized
+    _atomic_write_json(path, out)
+
+
+def _load_operator_stop_request(marker_path: Path) -> tuple[dict[str, Any] | None, str | None, list[dict[str, Any]]]:
+    if not marker_path.exists():
+        return None, None, []
+    warnings: list[dict[str, Any]] = []
+    raw_text: str | None = None
+    payload: dict[str, Any] = {}
+    try:
+        raw_text = marker_path.read_text(encoding="utf-8")
+        parsed = json.loads(raw_text) if raw_text.strip() else {}
+        if isinstance(parsed, dict):
+            payload = parsed
+        else:
+            warnings.append(
+                {
+                    "code": "operator_stop_marker_invalid",
+                    "message": "OPERATOR_STOP.json must be object JSON; defaults were applied.",
+                    "stage": "build_loop",
+                }
+            )
+    except json.JSONDecodeError as exc:
+        warnings.append(
+            {
+                "code": "operator_stop_marker_invalid",
+                "message": f"OPERATOR_STOP.json malformed; defaults were applied: {exc}",
+                "stage": "build_loop",
+            }
+        )
+    except OSError as exc:
+        warnings.append(
+            {
+                "code": "operator_stop_marker_invalid",
+                "message": f"OPERATOR_STOP.json unreadable; defaults were applied: {exc}",
+                "stage": "build_loop",
+            }
+        )
+
+    requested_at = _as_str(payload.get("requested_at")) or utc_now_iso()
+    stop_mode = (_as_str(payload.get("stop_mode")) or "graceful_then_force").lower()
+    if stop_mode != "graceful_then_force":
+        stop_mode = "graceful_then_force"
+    resume_policy = (_as_str(payload.get("resume_policy")) or "auto").lower()
+    if resume_policy != "auto":
+        resume_policy = "auto"
+    req = {
+        "schema_version": _as_str(payload.get("schema_version")) or SCHEMA_VERSION,
+        "stop": True,
+        "reason": _as_str(payload.get("reason")) or "operator_requested_stop",
+        "stop_mode": stop_mode,
+        "term_grace_sec": _clamp_int(payload.get("term_grace_sec"), default=10, low=1, high=120),
+        "kill_grace_sec": _clamp_int(payload.get("kill_grace_sec"), default=3, low=1, high=30),
+        "resume_policy": resume_policy,
+        "requested_at": requested_at,
+    }
+    return req, raw_text, warnings
+
+
+def _next_operator_stop_archive_path(marker_path: Path) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archived = marker_path.with_name(f"OPERATOR_STOP.applied.{stamp}.json")
+    if archived.exists():
+        archived = marker_path.with_name(f"OPERATOR_STOP.applied.{stamp}.{uuid.uuid4().hex[:8]}.json")
+    return archived
+
+
+def _archive_operator_stop_marker(
+    marker_path: Path,
+    raw_text: str | None,
+    request: dict[str, Any],
+    *,
+    archived_path: Path | None = None,
+) -> Path:
+    archived = archived_path if isinstance(archived_path, Path) else _next_operator_stop_archive_path(marker_path)
+    _ensure_parent(archived)
+    archive_text = raw_text if isinstance(raw_text, str) and raw_text.strip() else json.dumps(request, indent=2, sort_keys=True) + "\n"
+    archived.write_text(archive_text, encoding="utf-8")
+    marker_path.unlink(missing_ok=True)
+    return archived
+
+
+def _reconcile_running_workers_with_pid_state(workers: list[dict[str, Any]], *, now_iso: str, reason: str) -> int:
+    normalized = 0
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        state = _worker_state(worker)
+        if state not in {"running", "active", "busy"}:
+            continue
+        pid = worker.get("dispatch_pid")
+        if not isinstance(pid, int) or not _pid_is_running(pid):
+            worker["session_state"] = "not_running"
+            worker["state"] = "not_running"
+            worker["updated_at"] = now_iso
+            worker["last_state_reason"] = reason
+            normalized += 1
+    return normalized
+
+
+def _apply_operator_stop(
+    repo_root: Path,
+    task_state: dict[str, Any],
+    build_state: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    marker_path = _repo_path(repo_root, OPERATOR_STOP_JSON)
+    stop_state_path = _repo_path(repo_root, OPERATOR_STOP_STATE_JSON)
+    request, raw_text, warnings = _load_operator_stop_request(marker_path)
+    if request is None:
+        return {}, warnings
+
+    applied_at = utc_now_iso()
+    stop_id = f"stop-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+    registry_path = repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+    registry_base, workers, registry_shape = _load_worker_registry(registry_path)
+
+    affected_task_ids: set[str] = set()
+    worker_rows: list[dict[str, Any]] = []
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        slot = _as_str(worker.get("slot")) or "unknown-slot"
+        task_id = _as_str(worker.get("active_task"))
+        initial_state = _worker_state(worker) or "unknown"
+        pid = worker.get("dispatch_pid") if isinstance(worker.get("dispatch_pid"), int) else None
+        running_state = initial_state in {"running", "active", "busy"}
+        pid_live = isinstance(pid, int) and _pid_is_running(pid)
+        if (running_state or pid_live) and task_id:
+            affected_task_ids.add(task_id)
+
+        stop_action = "none"
+        result = "not_running"
+        final_state = "not_running"
+        if pid_live:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                stop_action = "sigterm"
+                if _wait_pid_exit(pid, int(request["term_grace_sec"])):
+                    result = "terminated"
+                    final_state = "stopped_operator"
+                else:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        stop_action = "sigterm_sigkill"
+                        if _wait_pid_exit(pid, int(request["kill_grace_sec"])):
+                            result = "force_killed"
+                            final_state = "stopped_operator"
+                        else:
+                            result = "kill_failed"
+                            final_state = "stop_failed_running"
+                    except OSError:
+                        result = "kill_failed"
+                        final_state = "stop_failed_running"
+            except OSError:
+                if not _pid_is_running(pid):
+                    result = "not_running"
+                    final_state = "stopped_operator"
+                else:
+                    result = "kill_failed"
+                    final_state = "stop_failed_running"
+        elif running_state:
+            final_state = "stopped_operator"
+
+        if result == "terminated":
+            warnings.append(
+                {
+                    "code": "operator_stop_worker_terminated",
+                    "message": f"worker {slot} terminated via SIGTERM",
+                    "stage": "build_loop",
+                    "slot": slot,
+                    "task_id": task_id,
+                }
+            )
+        elif result == "force_killed":
+            warnings.append(
+                {
+                    "code": "operator_stop_worker_force_killed",
+                    "message": f"worker {slot} required SIGKILL after SIGTERM timeout",
+                    "stage": "build_loop",
+                    "slot": slot,
+                    "task_id": task_id,
+                }
+            )
+        elif result == "kill_failed":
+            warnings.append(
+                {
+                    "code": "operator_stop_worker_kill_failed",
+                    "message": f"worker {slot} could not be stopped cleanly",
+                    "stage": "build_loop",
+                    "slot": slot,
+                    "task_id": task_id,
+                }
+            )
+
+        worker["session_state"] = final_state
+        worker["state"] = final_state
+        worker["updated_at"] = applied_at
+        worker["last_stop_id"] = stop_id
+        worker["last_stop_result"] = result
+        worker_rows.append(
+            {
+                "slot": slot,
+                "task_id": task_id,
+                "pid": pid,
+                "initial_state": initial_state,
+                "stop_action": stop_action,
+                "final_state": final_state,
+                "result": result,
+            }
+        )
+
+    try:
+        _reconcile_running_workers_with_pid_state(workers, now_iso=applied_at, reason="operator_stop_post_check")
+        _write_worker_registry(registry_path, registry_base, workers, registry_shape)
+
+        archived_path = _next_operator_stop_archive_path(marker_path)
+        stop_state: dict[str, Any] = {
+            "schema_version": SCHEMA_VERSION,
+            "stop_id": stop_id,
+            "requested_at": request["requested_at"],
+            "applied_at": applied_at,
+            "stop_mode": request["stop_mode"],
+            "resume_policy": request["resume_policy"],
+            "marker_path": str(marker_path),
+            "marker_archived_path": str(archived_path),
+            "workers": worker_rows,
+            "affected_task_ids": sorted(affected_task_ids),
+            "reconcile_pending": True,
+            "reconciled_at": None,
+            "reconcile_results": [],
+        }
+        _atomic_write_json(stop_state_path, stop_state)
+        _archive_operator_stop_marker(marker_path, raw_text, request, archived_path=archived_path)
+    except Exception as exc:  # noqa: BLE001
+        raise OpError(
+            "operator_stop_apply_failed",
+            f"failed to apply operator stop state updates: {exc}",
+            stage="build_loop",
+        ) from exc
+
+    build_state["operator_stop"] = {
+        "last_stop_id": stop_id,
+        "last_applied_at": applied_at,
+        "reconcile_pending": True,
+    }
+    build_state["stop_affected_task_ids"] = sorted(affected_task_ids)
+
+    warnings.append(
+        {
+            "code": "operator_stop_applied",
+            "message": f"operator stop applied; {len(worker_rows)} worker slots inspected",
+            "stage": "build_loop",
+            "stop_id": stop_id,
+        }
+    )
+    warnings.append(
+        {
+            "code": "operator_stop_marker_consumed",
+            "message": f"operator stop marker consumed and archived at {archived_path.name}",
+            "stage": "build_loop",
+            "stop_id": stop_id,
+        }
+    )
+    return {
+        "stop_id": stop_id,
+        "applied_at": applied_at,
+        "affected_task_ids": sorted(affected_task_ids),
+        "workers": worker_rows,
+        "stop_state_path": str(stop_state_path),
+        "marker_archived_path": str(archived_path),
+    }, warnings
+
+
+def _reconcile_post_operator_stop(repo_root: Path) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    build_state_path = _repo_path(repo_root, BUILD_STATE_JSON)
+    task_state_path = _repo_path(repo_root, TASK_EXECUTION_STATE_JSON)
+    stop_state_path = _repo_path(repo_root, OPERATOR_STOP_STATE_JSON)
+    if not stop_state_path.exists():
+        return [], None
+
+    stop_state = _read_json(stop_state_path)
+    if not isinstance(stop_state, dict):
+        raise OpError("resume_stop_reconcile_failed", "OPERATOR_STOP_STATE.json must be object JSON", stage="resume")
+    if not _as_bool(stop_state.get("reconcile_pending"), default=False):
+        return [], None
+
+    build_state = _load_build_state(build_state_path)
+    task_state = _read_json(task_state_path)
+    if not isinstance(task_state, dict):
+        raise OpError("resume_stop_reconcile_failed", "TASK_EXECUTION_STATE.json must be object JSON", stage="resume")
+    plan_packets_path = _repo_path(repo_root, PLAN_PACKETS_JSON)
+    plan_packets = _read_json(plan_packets_path) if plan_packets_path.exists() else {"tasks": []}
+    if not isinstance(plan_packets, dict):
+        plan_packets = {"tasks": []}
+
+    _apply_handoff_updates(repo_root, task_state, build_state)
+    _sync_task_state_from_evidence(repo_root, plan_packets, task_state)
+
+    registry_path = repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+    registry_base, workers, registry_shape = _load_worker_registry(registry_path)
+    by_slot: dict[str, dict[str, Any]] = {}
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        slot = _as_str(worker.get("slot"))
+        if slot:
+            by_slot[slot] = worker
+
+    stop_applied_at = _parse_iso_utc(stop_state.get("applied_at"))
+    affected = stop_state.get("affected_task_ids")
+    affected_ids = [item for item in (_as_str(v) for v in (affected if isinstance(affected, list) else [])) if item]
+    if not affected_ids:
+        fallback = build_state.get("stop_affected_task_ids")
+        affected_ids = [item for item in (_as_str(v) for v in (fallback if isinstance(fallback, list) else [])) if item]
+
+    warnings: list[dict[str, Any]] = []
+    reconcile_results: list[dict[str, Any]] = []
+    task_map = _task_by_id(task_state)
+    now_iso = utc_now_iso()
+
+    for task_id in affected_ids:
+        task = task_map.get(task_id)
+        if not isinstance(task, dict):
+            continue
+        status = (_as_str(task.get("status")) or "").lower()
+        if status not in {"dev_in_progress", "test_in_progress", "review_in_progress"}:
+            reconcile_results.append({"task_id": task_id, "decision": "ignored_not_in_progress"})
+            continue
+
+        owner_slot = _as_str(task.get("owner_slot"))
+        worker = by_slot.get(owner_slot or "")
+        pid = worker.get("dispatch_pid") if isinstance(worker, dict) and isinstance(worker.get("dispatch_pid"), int) else None
+        alive = isinstance(pid, int) and _pid_is_running(pid)
+        evidence_path = _task_evidence_path(repo_root, task)
+        evidence_progress = False
+        if evidence_path.exists():
+            try:
+                modified = datetime.fromtimestamp(evidence_path.stat().st_mtime, timezone.utc)
+                if stop_applied_at is None or modified >= stop_applied_at:
+                    evidence_progress = True
+            except OSError:
+                evidence_progress = False
+        progress_at = _parse_iso_utc(task.get("last_progress_at"))
+        if progress_at and (stop_applied_at is None or progress_at >= stop_applied_at):
+            evidence_progress = True
+
+        if alive and (evidence_progress or evidence_path.exists()):
+            reconcile_results.append(
+                {
+                    "task_id": task_id,
+                    "decision": "continued",
+                    "reason": "worker_alive_and_progressing",
+                    "owner_slot": owner_slot,
+                }
+            )
+            warnings.append(
+                {
+                    "code": "resume_task_continued_after_stop",
+                    "message": f"task {task_id} kept in progress during resume reconciliation",
+                    "stage": "resume",
+                    "task_id": task_id,
+                }
+            )
+            continue
+
+        task["status"] = "queued"
+        task["owner_slot"] = None
+        task["last_progress_at"] = now_iso
+        blockers = task.get("blockers")
+        if not isinstance(blockers, list):
+            blockers = []
+            task["blockers"] = blockers
+        blockers.append(
+            {
+                "timestamp": now_iso,
+                "summary": "requeued after operator stop reconciliation",
+            }
+        )
+        reconcile_results.append(
+            {
+                "task_id": task_id,
+                "decision": "requeued",
+                "reason": "worker_not_running_or_no_progress",
+                "owner_slot": owner_slot,
+            }
+        )
+        warnings.append(
+            {
+                "code": "resume_task_requeued_after_stop",
+                "message": f"task {task_id} requeued during resume reconciliation",
+                "stage": "resume",
+                "task_id": task_id,
+            }
+        )
+
+    normalized = _reconcile_running_workers_with_pid_state(workers, now_iso=now_iso, reason="resume_reconcile")
+    if normalized:
+        warnings.append(
+            {
+                "code": "resume_registry_normalized",
+                "message": f"normalized {normalized} worker registry entries with dead running pids",
+                "stage": "resume",
+            }
+        )
+
+    _write_worker_registry(registry_path, registry_base, workers, registry_shape)
+    _atomic_write_json(task_state_path, {**task_state, "updated_at": now_iso})
+    stop_state["reconcile_pending"] = False
+    stop_state["reconciled_at"] = now_iso
+    stop_state["reconcile_results"] = reconcile_results
+    _atomic_write_json(stop_state_path, stop_state)
+    build_state["operator_stop"] = {
+        "last_stop_id": _as_str(stop_state.get("stop_id")),
+        "last_applied_at": _as_str(stop_state.get("applied_at")),
+        "reconcile_pending": False,
+    }
+    build_state["stop_affected_task_ids"] = []
+    build_state["updated_at"] = now_iso
+    _atomic_write_json(build_state_path, build_state)
+
+    warnings.insert(
+        0,
+        {
+            "code": "resume_post_stop_reconciled",
+            "message": f"post-stop reconciliation completed for {len(affected_ids)} task(s)",
+            "stage": "resume",
+        },
+    )
+    summary = {
+        "stop_id": _as_str(stop_state.get("stop_id")),
+        "affected_task_ids": affected_ids,
+        "reconcile_results": reconcile_results,
+        "stop_state_path": str(stop_state_path),
+    }
+    return warnings, summary
 
 
 def _acquire_build_loop_lock(lock_path: Path) -> tuple[bool, str, int | None]:
@@ -2789,6 +3325,12 @@ def _fresh_build_state_payload() -> dict[str, Any]:
             "last_queued_at": None,
             "fingerprint": None,
         },
+        "operator_stop": {
+            "last_stop_id": None,
+            "last_applied_at": None,
+            "reconcile_pending": False,
+        },
+        "stop_affected_task_ids": [],
         "offset_recovery": {
             "handoff_offset_resets": 0,
             "last_reset_at": None,
@@ -2896,6 +3438,15 @@ def _load_build_state(path: Path) -> dict[str, Any]:
         },
     )
     payload.setdefault(
+        "operator_stop",
+        {
+            "last_stop_id": None,
+            "last_applied_at": None,
+            "reconcile_pending": False,
+        },
+    )
+    payload.setdefault("stop_affected_task_ids", [])
+    payload.setdefault(
         "offset_recovery",
         {
             "handoff_offset_resets": 0,
@@ -2906,9 +3457,7 @@ def _load_build_state(path: Path) -> dict[str, Any]:
 
 
 def _run_controller_cycle(req: OpRequest) -> dict[str, Any]:
-    script = req.repo_root / "skills" / "optimus-cycle-controller" / "scripts" / "optimus_cycle_controller.py"
-    if not script.exists():
-        raise OpError("runtime_error", f"controller script not found: {script}", stage="build")
+    script = _resolve_skill_script("optimus-cycle-controller", "optimus_cycle_controller.py")
 
     payload = {
         "repo_root": str(req.repo_root),
@@ -2940,7 +3489,7 @@ def _run_controller_cycle(req: OpRequest) -> dict[str, Any]:
 
 
 def _verify_final_state(req: OpRequest, final_state_path: Path) -> dict[str, Any]:
-    script = req.repo_root / "skills" / "optimus-cycle-controller" / "scripts" / "optimus_cycle_controller.py"
+    script = _resolve_skill_script("optimus-cycle-controller", "optimus_cycle_controller.py")
     code, out, err = _run(
         [
             sys.executable,
@@ -3031,8 +3580,8 @@ def _apply_strategy_action(req: OpRequest, strategy: str) -> dict[str, Any]:
     repo_root = req.repo_root
     resolved_mode = _resolve_test_train_mode(repo_root)
     if strategy in {"self_heal", "runtime_repair"}:
-        script = repo_root / "skills" / "runtime-coordinator" / "scripts" / "runtime_coordinator.py"
-        if not script.exists():
+        script = _resolve_skill_script("runtime-coordinator", "runtime_coordinator.py", required=False)
+        if script is None:
             return {"action": strategy, "status": "skipped", "reason": "runtime-coordinator missing"}
         payload = {
             "repo_root": str(repo_root),
@@ -3156,7 +3705,7 @@ def _dispatch_task_packet(
     stage: str,
     plan_id: str,
 ) -> dict[str, Any]:
-    script = req.repo_root / "skills" / "dispatch-worker-packet" / "scripts" / "dispatch_worker_packet.py"
+    script = _resolve_skill_script("dispatch-worker-packet", "dispatch_worker_packet.py")
     task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
     requirement_ids = [
         rid
@@ -3376,8 +3925,8 @@ def _apply_directives(
     task_state: dict[str, Any],
 ) -> dict[str, Any]:
     outcomes: list[dict[str, Any]] = []
-    runtime_script = req.repo_root / "skills" / "runtime-coordinator" / "scripts" / "runtime_coordinator.py"
-    train_script = req.repo_root / "skills" / "test-train-manager" / "scripts" / "test_train_manager.py"
+    runtime_script = _resolve_skill_script("runtime-coordinator", "runtime_coordinator.py")
+    train_script = _resolve_skill_script("test-train-manager", "test_train_manager.py")
     resolved_mode = _resolve_test_train_mode(req.repo_root)
     dispatch_requested = False
     dispatch_blocked = False
@@ -3830,7 +4379,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
     _atomic_write_json(build_state_path, build_state)
 
     try:
-        operator_stop_path = req.repo_root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
+        operator_stop_path = _repo_path(req.repo_root, OPERATOR_STOP_JSON)
         plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
         resume_cmd = "/op-resume" if req.command == "op-resume" else "/op-build"
 
@@ -3929,6 +4478,41 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             build_state["phase_exit_checks"] = phase_checks
 
             if operator_stop_path.exists():
+                stop_summary: dict[str, Any] = {}
+                try:
+                    stop_summary, stop_warnings = _apply_operator_stop(req.repo_root, task_state, build_state)
+                    warnings.extend(stop_warnings)
+                except OpError as exc:
+                    warnings.append(
+                        {
+                            "code": "operator_stop_apply_failed",
+                            "message": f"operator stop encountered errors: {exc.message}",
+                            "stage": "build_loop",
+                        }
+                    )
+                    build_state["terminal_state"] = {
+                        "reason": "operator_stop_apply_failed",
+                        "timestamp": utc_now_iso(),
+                    }
+                    _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
+                    _atomic_write_json(build_state_path, build_state)
+                    return _response(
+                        req,
+                        ok=False,
+                        status="blocked_terminal",
+                        summary="Build halted: operator stop signal could not be safely applied.",
+                        warnings=warnings,
+                        errors=[
+                            {
+                                "code": "operator_stop_apply_failed",
+                                "message": exc.message,
+                                "stage": "build_loop",
+                            }
+                        ],
+                        state_ref=str(build_state_path),
+                        next_action="Fix operator stop/state artifact write failures and rerun /op-build.",
+                        data={"terminal_reason": "operator_stop_apply_failed"},
+                    )
                 build_state["terminal_state"] = {
                     "reason": "operator_stop",
                     "timestamp": utc_now_iso(),
@@ -3944,13 +4528,13 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     errors=[
                         {
                             "code": "operator_stop",
-                            "message": f"operator stop marker found: {operator_stop_path}",
+                            "message": f"operator stop applied from marker {operator_stop_path}",
                             "stage": "build_loop",
                         }
                     ],
                     state_ref=str(build_state_path),
-                    next_action=f"Remove operator stop marker and rerun {resume_cmd} to continue.",
-                    data={"terminal_reason": "operator_stop"},
+                    next_action=f"Rerun {resume_cmd} to continue with post-stop reconciliation.",
+                    data={"terminal_reason": "operator_stop", "operator_stop": stop_summary},
                 )
 
             cycle_result = _run_controller_cycle(req)
@@ -4261,6 +4845,10 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             build_state["updated_at"] = utc_now_iso()
             _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
             _atomic_write_json(build_state_path, build_state)
+            cycle_sleep_seconds = int(req.sleep_minutes * 60)
+            more_cycles_pending = req.max_build_cycles is None or cycles < req.max_build_cycles
+            if more_cycles_pending and not req.dry_run and cycle_sleep_seconds > 0:
+                time.sleep(cycle_sleep_seconds)
 
         return _response(
             req,
@@ -4819,7 +5407,38 @@ def command_resume(req: OpRequest) -> dict[str, Any]:
             next_action="Run /op-build to start a fresh autonomous run.",
             state_ref=str(build_state_path),
         )
+
+    try:
+        reconcile_warnings, reconcile_summary = _reconcile_post_operator_stop(req.repo_root)
+    except OpError as exc:
+        return _response(
+            req,
+            ok=False,
+            status="blocked_preflight",
+            summary="Resume blocked: failed to reconcile operator-stop state.",
+            errors=[
+                {
+                    "code": "resume_stop_reconcile_failed",
+                    "message": exc.message,
+                    "stage": "resume",
+                }
+            ],
+            next_action="Repair OPERATOR_STOP_STATE/BUILD_STATE/TASK_EXECUTION_STATE artifacts, then rerun /op-resume.",
+            state_ref=str(build_state_path),
+        )
+
     out = command_build(req)
+    if reconcile_warnings:
+        existing = out.get("warnings")
+        if not isinstance(existing, list):
+            existing = []
+        out["warnings"] = [*reconcile_warnings, *existing]
+    if reconcile_summary is not None:
+        data = out.get("data")
+        if not isinstance(data, dict):
+            data = {}
+        data["resume_reconcile"] = reconcile_summary
+        out["data"] = data
     if recovered_warning is not None:
         existing = out.get("warnings")
         if not isinstance(existing, list):

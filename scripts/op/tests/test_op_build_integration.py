@@ -134,6 +134,119 @@ def test_op_build_applies_runtime_and_test_train_directives(monkeypatch: pytest.
         assert "evaluate_promotion_gate" in actions
 
 
+def test_operator_stop_integration_consumes_marker_and_records_stop_state(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        init = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        assert init["ok"] is True
+
+        task_state_path = root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json"
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task_id = task_state["tasks"][0]["task_id"]
+        task_state["tasks"][0]["status"] = "dev_in_progress"
+        task_state["tasks"][0]["owner_slot"] = "dev-1"
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry_path.write_text(
+            json.dumps(
+                {
+                    "workers": [
+                        {
+                            "slot": "dev-1",
+                            "session_state": "running",
+                            "active_task": task_id,
+                            "dispatch_pid": 24680,
+                        }
+                    ]
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        marker = root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"stop": True, "reason": "integration stop"}, indent=2) + "\n", encoding="utf-8")
+
+        alive = {24680}
+
+        def fake_pid_is_running(pid: int) -> bool:
+            return pid in alive
+
+        def fake_kill(pid: int, sig: int) -> None:
+            if pid == 24680 and sig == MODULE.signal.SIGTERM:
+                alive.discard(pid)
+
+        monkeypatch.setattr(MODULE, "_pid_is_running", fake_pid_is_running)
+        monkeypatch.setattr(MODULE.os, "kill", fake_kill)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "stopped_operator"
+        assert not marker.exists()
+        assert list((root / "reports" / "optimus-prime" / "control").glob("OPERATOR_STOP.applied.*.json"))
+        stop_state = json.loads((root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP_STATE.json").read_text(encoding="utf-8"))
+        assert stop_state["reconcile_pending"] is True
+        assert task_id in stop_state["affected_task_ids"]
+
+
+def test_operator_stop_failure_integration_returns_blocked_terminal(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        init = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        assert init["ok"] is True
+
+        marker = root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"stop": True, "reason": "integration-failure"}, indent=2) + "\n", encoding="utf-8")
+
+        def fail_apply(*_args, **_kwargs):
+            raise MODULE.OpError("operator_stop_apply_failed", "simulated integration failure", stage="build_loop")
+
+        monkeypatch.setattr(MODULE, "_apply_operator_stop", fail_apply)
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["ok"] is False
+        assert out["status"] == "blocked_terminal"
+        assert any(item.get("code") == "operator_stop_apply_failed" for item in out.get("errors", []))
+        assert marker.exists()
+        lock_path = root / "reports" / "optimus-prime" / "planning" / "BUILD_LOOP.lock"
+        assert not lock_path.exists()
+
+
 def test_op_build_stops_for_manual_rerun_when_rate_reset_exceeds_two_hours(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

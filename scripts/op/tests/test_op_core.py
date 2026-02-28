@@ -335,6 +335,345 @@ def test_build_lock_conflict_when_loop_lock_exists():
         assert out["status"] == "lock_conflict"
 
 
+def test_operator_stop_halts_running_workers_and_records_ledger(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        task_state_path = root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json"
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task_id = task_state["tasks"][0]["task_id"]
+        task_state["tasks"][0]["status"] = "dev_in_progress"
+        task_state["tasks"][0]["owner_slot"] = "dev-1"
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry_path.write_text(
+            json.dumps(
+                {
+                    "workers": [
+                        {
+                            "slot": "dev-1",
+                            "session_state": "running",
+                            "active_task": task_id,
+                            "dispatch_pid": 12345,
+                        }
+                    ]
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        stop_marker = root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
+        stop_marker.parent.mkdir(parents=True, exist_ok=True)
+        stop_marker.write_text(json.dumps({"stop": True, "reason": "manual stop"}, indent=2) + "\n", encoding="utf-8")
+
+        alive = {12345}
+
+        def fake_pid_is_running(pid: int) -> bool:
+            return pid in alive
+
+        def fake_kill(pid: int, sig: int) -> None:
+            if pid == 12345 and sig == MODULE.signal.SIGTERM:
+                alive.discard(pid)
+
+        monkeypatch.setattr(MODULE, "_pid_is_running", fake_pid_is_running)
+        monkeypatch.setattr(MODULE.os, "kill", fake_kill)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "stopped_operator"
+        warning_codes = {item.get("code") for item in out.get("warnings", [])}
+        assert "operator_stop_applied" in warning_codes
+        assert "operator_stop_worker_terminated" in warning_codes
+        assert "operator_stop_marker_consumed" in warning_codes
+
+        assert not stop_marker.exists()
+        archived = list((root / "reports" / "optimus-prime" / "control").glob("OPERATOR_STOP.applied.*.json"))
+        assert archived
+
+        stop_state = json.loads((root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP_STATE.json").read_text(encoding="utf-8"))
+        assert stop_state["reconcile_pending"] is True
+        assert task_id in stop_state["affected_task_ids"]
+
+        build_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "BUILD_STATE.json").read_text(encoding="utf-8"))
+        assert build_state["operator_stop"]["reconcile_pending"] is True
+        assert task_id in build_state["stop_affected_task_ids"]
+
+        registry_after = json.loads(registry_path.read_text(encoding="utf-8"))
+        assert registry_after["workers"][0]["session_state"] == "stopped_operator"
+
+
+def test_operator_stop_force_kill_path_when_term_does_not_exit(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        task_state_path = root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json"
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task_id = task_state["tasks"][0]["task_id"]
+        task_state["tasks"][0]["status"] = "dev_in_progress"
+        task_state["tasks"][0]["owner_slot"] = "dev-1"
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry_path.write_text(
+            json.dumps(
+                {
+                    "workers": [
+                        {
+                            "slot": "dev-1",
+                            "session_state": "running",
+                            "active_task": task_id,
+                            "dispatch_pid": 23456,
+                        }
+                    ]
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        stop_marker = root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
+        stop_marker.parent.mkdir(parents=True, exist_ok=True)
+        stop_marker.write_text(
+            json.dumps({"stop": True, "term_grace_sec": 1, "kill_grace_sec": 1}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        alive = {23456}
+        wait_calls = {"count": 0}
+
+        def fake_pid_is_running(pid: int) -> bool:
+            return pid in alive
+
+        def fake_kill(pid: int, sig: int) -> None:
+            if pid == 23456 and sig == MODULE.signal.SIGKILL:
+                alive.discard(pid)
+
+        def fake_wait(pid: int, timeout_sec: int) -> bool:
+            wait_calls["count"] += 1
+            if wait_calls["count"] == 1:
+                return False
+            return True
+
+        monkeypatch.setattr(MODULE, "_pid_is_running", fake_pid_is_running)
+        monkeypatch.setattr(MODULE.os, "kill", fake_kill)
+        monkeypatch.setattr(MODULE, "_wait_pid_exit", fake_wait)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "stopped_operator"
+        assert any(item.get("code") == "operator_stop_worker_force_killed" for item in out.get("warnings", []))
+
+
+def test_build_operator_stop_io_failure_returns_blocked_not_stopped(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        marker = root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"stop": True, "reason": "io-fail"}, indent=2) + "\n", encoding="utf-8")
+
+        def fail_archive(*_args, **_kwargs):
+            raise OSError("simulated archive failure")
+
+        monkeypatch.setattr(MODULE, "_archive_operator_stop_marker", fail_archive)
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["ok"] is False
+        assert out["status"] == "blocked_terminal"
+        assert any(item.get("code") == "operator_stop_apply_failed" for item in out.get("errors", []))
+        assert any(item.get("code") == "operator_stop_apply_failed" for item in out.get("warnings", []))
+        assert marker.exists()
+        assert_build_lock_released(root)
+
+
+def test_operator_stop_targets_live_pid_even_when_state_not_running(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        task_state_path = root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json"
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task_id = task_state["tasks"][0]["task_id"]
+        task_state["tasks"][0]["status"] = "dev_in_progress"
+        task_state["tasks"][0]["owner_slot"] = "dev-1"
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry_path.write_text(
+            json.dumps(
+                {
+                    "workers": [
+                        {
+                            "slot": "dev-1",
+                            "session_state": "idle",
+                            "active_task": task_id,
+                            "dispatch_pid": 34567,
+                        }
+                    ]
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        marker = root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"stop": True}, indent=2) + "\n", encoding="utf-8")
+
+        alive = {34567}
+        kill_calls: list[tuple[int, int]] = []
+
+        def fake_pid_is_running(pid: int) -> bool:
+            return pid in alive
+
+        def fake_kill(pid: int, sig: int) -> None:
+            kill_calls.append((pid, int(sig)))
+            if pid == 34567 and sig == MODULE.signal.SIGTERM:
+                alive.discard(pid)
+
+        monkeypatch.setattr(MODULE, "_pid_is_running", fake_pid_is_running)
+        monkeypatch.setattr(MODULE.os, "kill", fake_kill)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "stopped_operator"
+        assert any(pid == 34567 and sig == MODULE.signal.SIGTERM for pid, sig in kill_calls)
+
+
+def test_operator_stop_apply_failure_does_not_consume_marker(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        marker = root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"stop": True, "reason": "simulated failure"}, indent=2) + "\n", encoding="utf-8")
+
+        def fail_apply(*_args, **_kwargs):
+            raise MODULE.OpError("operator_stop_apply_failed", "simulated apply failure", stage="build_loop")
+
+        monkeypatch.setattr(MODULE, "_apply_operator_stop", fail_apply)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "blocked_terminal"
+        assert any(item.get("code") == "operator_stop_apply_failed" for item in out.get("errors", []))
+        assert marker.exists()
+
+
+def test_build_lock_released_after_operator_stop_failure(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        marker = root / "reports" / "optimus-prime" / "control" / "OPERATOR_STOP.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"stop": True}, indent=2) + "\n", encoding="utf-8")
+
+        def fail_apply(*_args, **_kwargs):
+            raise MODULE.OpError("operator_stop_apply_failed", "simulated apply failure", stage="build_loop")
+
+        monkeypatch.setattr(MODULE, "_apply_operator_stop", fail_apply)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "blocked_terminal"
+        assert_build_lock_released(root)
+
+
 def test_build_does_not_escalate_on_unknown_fingerprint():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -462,7 +801,7 @@ def test_build_invalid_gap_retry_policy_does_not_crash():
         assert out["status"] == "running_needs_resume"
 
 
-def test_gap_closure_retry_exhausts_after_five_attempts():
+def test_gap_closure_retry_exhausts_after_five_attempts(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
@@ -506,6 +845,13 @@ def test_gap_closure_retry_exhausts_after_five_attempts():
             other["owner_slot"] = None
         source_gap_id = closure_task.get("source_gap_id")
         assert source_gap_id
+
+        def fake_dispatch(*_args, **_kwargs):
+            closure_task["status"] = "blocked"
+            closure_task["owner_slot"] = None
+            return {"ok": False, "status": "blocked", "reason": "forced_test_failure"}
+
+        monkeypatch.setattr(MODULE, "_dispatch_task_packet", fake_dispatch)
 
         for _ in range(4):
             result = MODULE._dispatch_next_task(req, merged_plan, task_state, build_state, active_phase_id)
@@ -1585,6 +1931,262 @@ def test_op_resume_non_numeric_last_cycle_backup_and_reset():
         recovery = repaired_state.get("state_recovery", {})
         assert recovery.get("reason") == "malformed_build_state"
         assert recovery.get("backup_path")
+
+
+def test_op_resume_requeues_all_dead_stop_affected_in_progress_tasks(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+
+        planning_root = root / "reports" / "optimus-prime" / "planning"
+        task_state_path = planning_root / "TASK_EXECUTION_STATE.json"
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task_id = task_state["tasks"][0]["task_id"]
+        task_state["tasks"][0]["status"] = "dev_in_progress"
+        task_state["tasks"][0]["owner_slot"] = "dev-1"
+        task_state["tasks"][0]["last_progress_at"] = "2000-01-01T00:00:00Z"
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        build_state_path = planning_root / "BUILD_STATE.json"
+        build_state = json.loads(build_state_path.read_text(encoding="utf-8"))
+        build_state["operator_stop"] = {
+            "last_stop_id": "stop-test-1",
+            "last_applied_at": "2026-01-01T00:00:00Z",
+            "reconcile_pending": True,
+        }
+        build_state["stop_affected_task_ids"] = [task_id]
+        build_state_path.write_text(json.dumps(build_state, indent=2) + "\n", encoding="utf-8")
+
+        control_root = root / "reports" / "optimus-prime" / "control"
+        control_root.mkdir(parents=True, exist_ok=True)
+        (control_root / "OPERATOR_STOP_STATE.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "stop_id": "stop-test-1",
+                    "requested_at": "2026-01-01T00:00:00Z",
+                    "applied_at": "2026-01-01T00:00:10Z",
+                    "stop_mode": "graceful_then_force",
+                    "resume_policy": "auto",
+                    "marker_path": str(control_root / "OPERATOR_STOP.json"),
+                    "marker_archived_path": str(control_root / "OPERATOR_STOP.applied.test.json"),
+                    "workers": [],
+                    "affected_task_ids": [task_id],
+                    "reconcile_pending": True,
+                    "reconciled_at": None,
+                    "reconcile_results": [],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry_path.write_text(
+            json.dumps(
+                {
+                    "workers": [
+                        {
+                            "slot": "dev-1",
+                            "session_state": "running",
+                            "active_task": task_id,
+                            "dispatch_pid": 34567,
+                        }
+                    ]
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(MODULE, "_pid_is_running", lambda _pid: False)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
+
+        out = run_payload(
+            {
+                "command": "/op-resume",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        warning_codes = {item.get("code") for item in out.get("warnings", [])}
+        assert "resume_post_stop_reconciled" in warning_codes
+        assert "resume_task_requeued_after_stop" in warning_codes
+
+        task_state_after = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task_after = next(item for item in task_state_after.get("tasks", []) if item.get("task_id") == task_id)
+        assert task_after["status"] == "queued"
+        assert task_after["owner_slot"] is None
+
+        stop_state_after = json.loads((control_root / "OPERATOR_STOP_STATE.json").read_text(encoding="utf-8"))
+        assert stop_state_after["reconcile_pending"] is False
+        assert stop_state_after["reconciled_at"]
+
+        registry_after = json.loads(registry_path.read_text(encoding="utf-8"))
+        assert registry_after["workers"][0]["session_state"] == "not_running"
+
+
+def test_op_resume_continues_task_when_worker_alive_and_evidence_progressing(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+
+        planning_root = root / "reports" / "optimus-prime" / "planning"
+        task_state_path = planning_root / "TASK_EXECUTION_STATE.json"
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task_id = task_state["tasks"][0]["task_id"]
+        task_state["tasks"][0]["status"] = "dev_in_progress"
+        task_state["tasks"][0]["owner_slot"] = "dev-1"
+        task_state["tasks"][0]["last_progress_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        evidence_path = root / "reports" / "optimus-prime" / "planning" / "evidence" / task_id / "TASK_EVIDENCE.json"
+        evidence_payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        evidence_payload["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        evidence_path.write_text(json.dumps(evidence_payload, indent=2) + "\n", encoding="utf-8")
+
+        build_state_path = planning_root / "BUILD_STATE.json"
+        build_state = json.loads(build_state_path.read_text(encoding="utf-8"))
+        build_state["operator_stop"] = {
+            "last_stop_id": "stop-test-2",
+            "last_applied_at": "2026-01-01T00:00:00Z",
+            "reconcile_pending": True,
+        }
+        build_state["stop_affected_task_ids"] = [task_id]
+        build_state_path.write_text(json.dumps(build_state, indent=2) + "\n", encoding="utf-8")
+
+        control_root = root / "reports" / "optimus-prime" / "control"
+        control_root.mkdir(parents=True, exist_ok=True)
+        (control_root / "OPERATOR_STOP_STATE.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "stop_id": "stop-test-2",
+                    "requested_at": "2026-01-01T00:00:00Z",
+                    "applied_at": "2026-01-01T00:00:10Z",
+                    "stop_mode": "graceful_then_force",
+                    "resume_policy": "auto",
+                    "marker_path": str(control_root / "OPERATOR_STOP.json"),
+                    "marker_archived_path": str(control_root / "OPERATOR_STOP.applied.test.json"),
+                    "workers": [],
+                    "affected_task_ids": [task_id],
+                    "reconcile_pending": True,
+                    "reconciled_at": None,
+                    "reconcile_results": [],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry_path.write_text(
+            json.dumps(
+                {
+                    "workers": [
+                        {
+                            "slot": "dev-1",
+                            "session_state": "running",
+                            "active_task": task_id,
+                            "dispatch_pid": 45678,
+                        }
+                    ]
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(MODULE, "_pid_is_running", lambda pid: pid == 45678)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
+
+        out = run_payload(
+            {
+                "command": "/op-resume",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        assert any(item.get("code") == "resume_task_continued_after_stop" for item in out.get("warnings", []))
+
+        task_state_after = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task_after = next(item for item in task_state_after.get("tasks", []) if item.get("task_id") == task_id)
+        assert task_after["status"] == "dev_in_progress"
+        assert task_after["owner_slot"] == "dev-1"
 
 
 def test_build_strict_done_blocks_when_sticky_open_gap_exists():
