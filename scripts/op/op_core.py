@@ -1211,11 +1211,18 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
     return errors
 
 
-def _extract_cycle_directives(events_path: Path, control_number: int) -> list[dict[str, Any]]:
+def _extract_cycle_directives(
+    events_path: Path,
+    control_number: int,
+    control_run_id: str | None = None,
+) -> list[dict[str, Any]]:
     rows = _read_jsonl(events_path)
     out: list[dict[str, Any]] = []
+    expected_run_id = _as_str(control_run_id)
     for row in rows:
         if int(row.get("control_number") or 0) != int(control_number):
+            continue
+        if expected_run_id and _as_str(row.get("control_run_id")) != expected_run_id:
             continue
         if _as_str(row.get("event_type")) != "directive":
             continue
@@ -2471,6 +2478,9 @@ def _active_worker_slots(repo_root: Path) -> set[str]:
             or ""
         ).lower()
         if state in {"running", "active", "busy"}:
+            pid = worker.get("dispatch_pid")
+            if isinstance(pid, int) and not _pid_is_running(pid):
+                continue
             out.add(slot)
     return out
 
@@ -3702,12 +3712,13 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _run_controller_cycle(req: OpRequest, *, control_number: int) -> dict[str, Any]:
+def _run_controller_cycle(req: OpRequest, *, control_number: int, control_run_id: str) -> dict[str, Any]:
     script = _resolve_skill_script("optimus-cycle-controller", "optimus_cycle_controller.py")
 
     payload = {
         "repo_root": str(req.repo_root),
         "control_number": int(control_number),
+        "control_run_id": control_run_id,
         "sleep_minutes": req.sleep_minutes,
         "allow_autonomous_ops": True,
         "max_cycles": 1,
@@ -3739,6 +3750,16 @@ def _run_controller_cycle(req: OpRequest, *, control_number: int) -> dict[str, A
             (
                 "controller control_number mismatch: "
                 f"expected {int(control_number)} got {returned_control_number}"
+            ),
+            stage="build",
+        )
+    returned_run_id = _as_str(parsed.get("control_run_id"))
+    if returned_run_id != control_run_id:
+        raise OpError(
+            "runtime_error",
+            (
+                "controller control_run_id mismatch: "
+                f"expected {control_run_id} got {returned_run_id}"
             ),
             stage="build",
         )
@@ -4803,13 +4824,19 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 )
 
             cycle_control_number = int(build_state.get("last_cycle") or 0)
-            cycle_result = _run_controller_cycle(req, control_number=cycle_control_number)
+            cycle_control_run_id = _as_str(build_state.get("loop_lock_id")) or lock_id
+            cycle_result = _run_controller_cycle(
+                req,
+                control_number=cycle_control_number,
+                control_run_id=cycle_control_run_id,
+            )
             events_path_raw = _as_str(cycle_result.get("events_path"))
             directives: list[dict[str, Any]] = []
             if events_path_raw and cycle_control_number > 0:
                 directives = _extract_cycle_directives(
                     Path(events_path_raw).expanduser().resolve(),
                     cycle_control_number,
+                    cycle_control_run_id,
                 )
             directive_state = _apply_directives(req, directives, build_state, merged_plan_packets, task_state)
             directive_outcomes = directive_state.get("outcomes", [])

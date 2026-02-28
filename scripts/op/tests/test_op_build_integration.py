@@ -15,6 +15,7 @@ MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+TEST_CONTROL_RUN_ID = "test-control-run-id"
 
 
 def git(cwd: Path, *args: str) -> None:
@@ -42,6 +43,10 @@ def build_repo(root: Path) -> None:
 def run_payload(payload: dict) -> dict:
     req = MODULE.parse_request(payload)
     return MODULE.execute_request(req)
+
+
+def pin_build_lock(monkeypatch: pytest.MonkeyPatch, lock_id: str = TEST_CONTROL_RUN_ID) -> None:
+    monkeypatch.setattr(MODULE, "_acquire_build_loop_lock", lambda _lock_path: (True, lock_id, None))
 
 
 def seed_stale_in_progress_task(root: Path, *, status: str = "dev_in_progress", owner_slot: str = "dev-1", minutes_ago: int = 20) -> str:
@@ -78,6 +83,7 @@ def test_op_build_applies_runtime_and_test_train_directives(monkeypatch: pytest.
                 "timestamp": "2026-01-01T00:00:00Z",
                 "cycle_number": 1,
                 "control_number": 1,
+                "control_run_id": TEST_CONTROL_RUN_ID,
                 "event_type": "directive",
                 "action_code": "runtime_health_check",
                 "payload": {
@@ -90,6 +96,7 @@ def test_op_build_applies_runtime_and_test_train_directives(monkeypatch: pytest.
                 "timestamp": "2026-01-01T00:00:01Z",
                 "cycle_number": 1,
                 "control_number": 1,
+                "control_run_id": TEST_CONTROL_RUN_ID,
                 "event_type": "directive",
                 "action_code": "evaluate_promotion_gate",
                 "payload": {
@@ -119,6 +126,7 @@ def test_op_build_applies_runtime_and_test_train_directives(monkeypatch: pytest.
         monkeypatch.setattr(MODULE, "_run_controller_cycle", fake_cycle)
         monkeypatch.setattr(MODULE, "_run_tool_json", fake_tool)
         monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
+        pin_build_lock(monkeypatch)
 
         build_out = run_payload(
             {
@@ -157,6 +165,7 @@ def test_op_build_uses_control_number_for_directive_selection(monkeypatch: pytes
                 "timestamp": "2026-01-01T00:00:00Z",
                 "cycle_number": 1,
                 "control_number": 1,
+                "control_run_id": TEST_CONTROL_RUN_ID,
                 "event_type": "directive",
                 "action_code": "review_dispatch_queue",
                 "payload": {
@@ -168,6 +177,7 @@ def test_op_build_uses_control_number_for_directive_selection(monkeypatch: pytes
                 "timestamp": "2026-01-01T00:00:01Z",
                 "cycle_number": 1,
                 "control_number": 2,
+                "control_run_id": TEST_CONTROL_RUN_ID,
                 "event_type": "directive",
                 "action_code": "dispatch_filter",
                 "payload": {
@@ -197,6 +207,7 @@ def test_op_build_uses_control_number_for_directive_selection(monkeypatch: pytes
             return {"ok": True, "status": "noop"}
 
         monkeypatch.setattr(MODULE, "_dispatch_next_task", fake_dispatch)
+        pin_build_lock(monkeypatch)
 
         out = run_payload(
             {
@@ -418,6 +429,7 @@ def test_dispatch_filter_blocks_dispatch_for_cycle(monkeypatch: pytest.MonkeyPat
                     "timestamp": "2026-01-01T00:00:00Z",
                     "cycle_number": 1,
                     "control_number": 1,
+                    "control_run_id": TEST_CONTROL_RUN_ID,
                     "event_type": "directive",
                     "action_code": "dispatch_filter",
                     "payload": {
@@ -448,6 +460,7 @@ def test_dispatch_filter_blocks_dispatch_for_cycle(monkeypatch: pytest.MonkeyPat
             return {"ok": True, "status": "noop"}
 
         monkeypatch.setattr(MODULE, "_dispatch_next_task", fake_dispatch)
+        pin_build_lock(monkeypatch)
         out = run_payload(
             {
                 "command": "/op-build",
@@ -485,6 +498,7 @@ def test_runtime_adapter_uses_state_derived_mode(monkeypatch: pytest.MonkeyPatch
                     "timestamp": "2026-01-01T00:00:00Z",
                     "cycle_number": 1,
                     "control_number": 1,
+                    "control_run_id": TEST_CONTROL_RUN_ID,
                     "event_type": "directive",
                     "action_code": "runtime_health_check",
                     "payload": {
@@ -517,6 +531,7 @@ def test_runtime_adapter_uses_state_derived_mode(monkeypatch: pytest.MonkeyPatch
         )
         monkeypatch.setattr(MODULE, "_run_tool_json", fake_tool)
         monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
+        pin_build_lock(monkeypatch)
         out = run_payload(
             {
                 "command": "/op-build",
@@ -553,6 +568,7 @@ def test_runtime_adapter_fallback_mode_when_state_malformed(monkeypatch: pytest.
                     "timestamp": "2026-01-01T00:00:00Z",
                     "cycle_number": 1,
                     "control_number": 1,
+                    "control_run_id": TEST_CONTROL_RUN_ID,
                     "event_type": "directive",
                     "action_code": "runtime_health_check",
                     "payload": {
@@ -585,6 +601,7 @@ def test_runtime_adapter_fallback_mode_when_state_malformed(monkeypatch: pytest.
         )
         monkeypatch.setattr(MODULE, "_run_tool_json", fake_tool)
         monkeypatch.setattr(MODULE, "_dispatch_next_task", lambda req, plan, state, build, *_: {"ok": True, "status": "noop"})
+        pin_build_lock(monkeypatch)
         out = run_payload(
             {
                 "command": "/op-build",
@@ -681,6 +698,7 @@ def test_directive_failure_queues_remediation_and_skips_dispatch(monkeypatch: py
                     "timestamp": "2026-01-01T00:00:00Z",
                     "cycle_number": 1,
                     "control_number": 1,
+                    "control_run_id": TEST_CONTROL_RUN_ID,
                     "event_type": "directive",
                     "action_code": "runtime_health_check",
                     "payload": {
@@ -723,6 +741,7 @@ def test_directive_failure_queues_remediation_and_skips_dispatch(monkeypatch: py
 
         monkeypatch.setattr(MODULE, "_run_tool_json", fake_tool)
         monkeypatch.setattr(MODULE, "_dispatch_next_task", fake_dispatch)
+        pin_build_lock(monkeypatch)
         out = run_payload(
             {
                 "command": "/op-build",
