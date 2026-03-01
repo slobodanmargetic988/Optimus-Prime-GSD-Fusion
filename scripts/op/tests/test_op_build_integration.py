@@ -2220,3 +2220,211 @@ def test_build_allows_dispatch_with_warning_when_registry_recovery_fails(monkeyp
             item.get("code") == "worker_registry_recovery_failed_dispatch_allowed"
             for item in out.get("warnings", [])
         )
+
+
+def _write_manager_action_from_prompt(prompt_text: str, payload: dict[str, object]) -> None:
+    marker = "Write JSON action file to: "
+    path_line = next((line for line in prompt_text.splitlines() if marker in line), "")
+    action_path = Path(path_line.split(marker, 1)[1].strip())
+    action_path.parent.mkdir(parents=True, exist_ok=True)
+    action_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def test_build_fails_terminal_when_workstation_skill_missing(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        original_resolver = MODULE._resolve_skill_script
+
+        def fake_resolver(skill_name, script_name, required=True):
+            if skill_name == "workstation-preparation":
+                return None
+            return original_resolver(skill_name, script_name, required=required)
+
+        monkeypatch.setattr(MODULE, "_resolve_skill_script", fake_resolver)
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "blocked_terminal"
+        assert any(item.get("code") == "workstation_manager_missing_skill_fatal" for item in out.get("errors", []))
+
+
+def test_dispatch_observation_rows_present_after_manager_dispatch_cycle(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        (planning / "WORK_DISPATCH_PLAN.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "active_phase_id": "phase-1",
+                    "assignments": [
+                        {
+                            "task_id": "TASK-001",
+                            "lane_id": "phase-1/lane-a",
+                            "phase_id": "phase-1",
+                            "next_stage": "dev",
+                            "next_role": "developer",
+                            "slot": "dev-1",
+                            "dispatch_policy": "resume_if_same_lane",
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_manager_production_line_cycle",
+            lambda _req, **_kwargs: {
+                "warnings": [],
+                "merged_plan_packets": plan_packets,
+                "gaps_payload": {"schema_version": "1.0", "gaps": []},
+                "active_phase_id": "phase-1",
+                "phase_checks": {},
+            },
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_dispatch_task_packet",
+            lambda *_args, **_kwargs: {"ok": True, "dispatch": {"dispatch_mode_used": "exec", "dispatch_thread_id": "thread-1"}},
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_select_profile_alias_for_slot",
+            lambda *_args, **_kwargs: {"ok": True, "alias": "codex"},
+        )
+        monkeypatch.setattr(MODULE, "_active_worker_count_by_alias", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(
+            MODULE,
+            "_read_profile_rate_states",
+            lambda *_args, **_kwargs: {"codex": {"soft_gated": False}},
+        )
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        obs_path = planning / "DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl"
+        assert obs_path.exists()
+        rows = [json.loads(line) for line in obs_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert rows
+        assert all("reason_code" in row for row in rows)
+        assert all("duration_ms" in row for row in rows)
+
+
+def test_branch_manager_success_path_does_not_block_unrelated_lanes(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task_1 = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task_2 = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-002")
+        task_1["status"] = "review_done"
+        task_1["active_branch"] = "codex/dev-1/task-001"
+        task_2["status"] = "pending"
+
+        def fake_codex_exec(**kwargs):
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "task_id": "TASK-001",
+                    "attempt": 1,
+                    "target_branch": "RAB-BASE",
+                    "source_branch": "codex/dev-1/task-001",
+                    "merge_strategy": "no_ff",
+                    "commands": [
+                        "git checkout RAB-BASE",
+                        "git merge --no-ff --no-edit codex/dev-1/task-001",
+                    ],
+                    "verification_commands": ["python3 -m pytest"],
+                },
+            )
+            return 0
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_manager_command",
+            lambda *args, **kwargs: {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": "",
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            },
+        )
+        monkeypatch.setattr(MODULE, "_git_text", lambda *_args, **_kwargs: "abc123")
+        warnings = MODULE._manager_branch_merge_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+        )
+        warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
+        assert "merge_manager_retry_exhausted" not in warning_codes
+        assert task_2["status"] == "pending"

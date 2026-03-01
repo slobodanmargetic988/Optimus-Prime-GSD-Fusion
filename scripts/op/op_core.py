@@ -8,6 +8,7 @@ import json
 import os
 import re
 import signal
+import shlex
 import shutil
 import subprocess
 import sys
@@ -64,6 +65,7 @@ EVIDENCE_REL = PLANNING_REL / "evidence"
 PRODUCTION_LINE_STATE_JSON = PLANNING_REL / "PRODUCTION_LINE_STATE.json"
 DONE_TASKS_REGISTRY_JSON = PLANNING_REL / "DONE_TASKS_REGISTRY.json"
 WORK_DISPATCH_PLAN_JSON = PLANNING_REL / "WORK_DISPATCH_PLAN.json"
+DISPATCH_ASSIGNMENT_OBSERVATIONS_JSONL = PLANNING_REL / "DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl"
 
 BUILD_STATE_JSON = PLANNING_REL / "BUILD_STATE.json"
 TASK_EXECUTION_STATE_JSON = PLANNING_REL / "TASK_EXECUTION_STATE.json"
@@ -136,6 +138,10 @@ TERMINAL_HARD_STOPS = {
 
 STALE_IN_PROGRESS_TIMEOUT_SEC = 900
 NO_PROGRESS_THRESHOLD_CYCLES = 25
+
+BRANCH_ACTION_COMMAND_TIMEOUT_SEC = 300
+BRANCH_VERIFY_COMMAND_TIMEOUT_SEC = 1800
+WORKSTATION_PREP_COMMAND_TIMEOUT_SEC = 600
 
 TASK_STATUS_PENDING = "pending"
 TASK_STATUS_DEV_WORKING = "dev_working"
@@ -4145,6 +4151,126 @@ def _run(cmd: list[str], *, cwd: Path, stdin_text: str | None = None) -> tuple[i
     return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
 
 
+def _unwrap_bash_lc(command_text: str) -> str | None:
+    try:
+        tokens = shlex.split(command_text)
+    except ValueError:
+        return None
+    if len(tokens) == 3 and tokens[0] in {"bash", "/bin/bash"} and tokens[1] == "-lc":
+        return tokens[2]
+    return None
+
+
+def _validate_manager_command(
+    command_text: str,
+    *,
+    manager: str,
+    allow_bash_wrapper: bool = True,
+) -> tuple[bool, str | None, str]:
+    text = (command_text or "").strip()
+    if not text:
+        return False, "manager_command_disallowed", "empty command is not allowed"
+
+    lowered = text.lower()
+    forbidden_patterns = (
+        " sudo ",
+        "rm -rf /",
+        "mkfs",
+        "dd if=",
+        "curl ",
+        "wget ",
+        "| bash",
+        "| sh",
+    )
+    padded = f" {lowered} "
+    if any(item in padded for item in forbidden_patterns):
+        return False, "manager_command_disallowed", "command contains forbidden tokens/patterns"
+
+    wrapped = _unwrap_bash_lc(text) if allow_bash_wrapper else None
+    if wrapped is not None:
+        return _validate_manager_command(wrapped, manager=manager, allow_bash_wrapper=False)
+
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        return False, "manager_command_disallowed", "command has invalid shell quoting/syntax"
+    if not tokens:
+        return False, "manager_command_disallowed", "empty command is not allowed"
+
+    head = tokens[0]
+    if manager == "branch":
+        if head not in {"git", "python", "python3", "pytest"}:
+            return (
+                False,
+                "manager_command_disallowed",
+                f"branch manager command head not allowed: {head}",
+            )
+        return True, None, ""
+    if manager == "workstation":
+        if head not in {"python", "python3"}:
+            return (
+                False,
+                "manager_command_disallowed",
+                f"workstation manager command head not allowed: {head}",
+            )
+        if "prepare_workstation.py" not in text:
+            return (
+                False,
+                "manager_command_disallowed",
+                "workstation command must invoke prepare_workstation.py",
+            )
+        return True, None, ""
+    return False, "manager_command_disallowed", f"unsupported manager type: {manager}"
+
+
+def _run_manager_command(
+    command_text: str,
+    *,
+    cwd: Path,
+    timeout_sec: int,
+    manager: str,
+) -> dict[str, Any]:
+    ok, code, message = _validate_manager_command(command_text, manager=manager, allow_bash_wrapper=True)
+    if not ok:
+        return {
+            "ok": False,
+            "code": code or "manager_command_disallowed",
+            "message": message,
+            "stdout": "",
+            "stderr": "",
+            "exit_code": None,
+            "timed_out": False,
+        }
+    try:
+        proc = subprocess.run(
+            ["bash", "-lc", command_text],
+            cwd=str(cwd),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=max(1, int(timeout_sec)),
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "code": "manager_command_timeout",
+            "message": f"command timed out after {int(timeout_sec)}s",
+            "stdout": "",
+            "stderr": "",
+            "exit_code": None,
+            "timed_out": True,
+        }
+    return {
+        "ok": proc.returncode == 0,
+        "code": None,
+        "message": "",
+        "stdout": (proc.stdout or ""),
+        "stderr": (proc.stderr or ""),
+        "exit_code": proc.returncode,
+        "timed_out": False,
+    }
+
+
 def _git_text(repo_root: Path, *args: str) -> str | None:
     code, out, _ = _run(["git", *args], cwd=repo_root)
     if code != 0:
@@ -6687,13 +6813,71 @@ def _dispatch_next_task_from_assignments(
 
     all_warnings: list[dict[str, Any]] = []
     first_failure: dict[str, Any] | None = None
+    assignment_observations: list[dict[str, Any]] = []
+    observations_path = _repo_path(req.repo_root, DISPATCH_ASSIGNMENT_OBSERVATIONS_JSONL)
+
+    def _record_assignment_observation(
+        *,
+        row: dict[str, Any],
+        status: str,
+        reason_code: str,
+        started_at: float,
+        warning_codes: list[str] | None = None,
+        selected_alias: str | None = None,
+        dispatch_mode: str | None = None,
+    ) -> None:
+        assignment_observations.append(
+            {
+                "timestamp": utc_now_iso(),
+                "cycle": int(build_state.get("last_cycle", 0)),
+                "task_id": _as_str(row.get("task_id")),
+                "slot": _as_str(row.get("slot")),
+                "lane_id": _as_str(row.get("lane_id")),
+                "next_stage": _as_str(row.get("next_stage")),
+                "dispatch_policy": _as_str(row.get("dispatch_policy")),
+                "status": status,
+                "reason_code": reason_code,
+                "duration_ms": int(max(0.0, (time.perf_counter() - started_at) * 1000.0)),
+                "selected_alias": selected_alias,
+                "dispatch_mode": dispatch_mode,
+                "warning_codes": [code for code in (warning_codes or []) if code],
+            }
+        )
+
+    def _persist_assignment_observations(warnings_target: list[dict[str, Any]]) -> None:
+        if not assignment_observations:
+            return
+        write_failed = False
+        for obs in assignment_observations:
+            try:
+                _append_jsonl(observations_path, obs)
+            except OpError as exc:
+                if not write_failed:
+                    warnings_target.append(
+                        {
+                            "code": "dispatch_observation_write_failed",
+                            "message": f"failed to persist dispatch assignment observations: {exc.message}",
+                            "stage": "build_loop",
+                            "artifact": str(observations_path),
+                        }
+                    )
+                    write_failed = True
+
     for row in assignments:
+        started = time.perf_counter()
         task_id = _as_str(row.get("task_id"))
         lane_id = _as_str(row.get("lane_id"))
         next_stage = _as_str(row.get("next_stage"))
         slot_name = _as_str(row.get("slot"))
         dispatch_policy = _as_str(row.get("dispatch_policy")) or "resume_if_same_lane"
         if not task_id or not lane_id or next_stage not in {"dev", "test", "review"} or not slot_name:
+            _record_assignment_observation(
+                row=row,
+                status="invalid",
+                reason_code="dispatch_assignment_invalid",
+                started_at=started,
+                warning_codes=["dispatch_assignment_invalid"],
+            )
             all_warnings.append(
                 {
                     "code": "dispatch_assignment_invalid",
@@ -6706,6 +6890,13 @@ def _dispatch_next_task_from_assignments(
         task = task_map.get(task_id)
         plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
         if not isinstance(task, dict) or not isinstance(plan_task, dict):
+            _record_assignment_observation(
+                row=row,
+                status="invalid",
+                reason_code="dispatch_assignment_unknown_task",
+                started_at=started,
+                warning_codes=["dispatch_assignment_invalid"],
+            )
             all_warnings.append(
                 {
                     "code": "dispatch_assignment_invalid",
@@ -6717,6 +6908,12 @@ def _dispatch_next_task_from_assignments(
             continue
         status = _normalize_task_status(task.get("status"))
         if status not in stage_status_requirements[next_stage]:
+            _record_assignment_observation(
+                row=row,
+                status="skipped",
+                reason_code="dispatch_assignment_stage_not_ready",
+                started_at=started,
+            )
             continue
 
         slot_worker = workers_by_slot.get(slot_name) if isinstance(workers_by_slot.get(slot_name), dict) else {}
@@ -6745,8 +6942,22 @@ def _dispatch_next_task_from_assignments(
                         "slot": slot_name,
                     }
                 )
+                _record_assignment_observation(
+                    row=row,
+                    status="skipped",
+                    reason_code="dispatch_assignment_missing_workstation_context",
+                    started_at=started,
+                    warning_codes=["dispatch_assignment_invalid"],
+                )
                 continue
         if not worktree_root or not branch_name:
+            _record_assignment_observation(
+                row=row,
+                status="invalid",
+                reason_code="dispatch_assignment_invalid_context",
+                started_at=started,
+                warning_codes=["dispatch_assignment_invalid"],
+            )
             all_warnings.append(
                 {
                     "code": "dispatch_assignment_invalid",
@@ -6777,12 +6988,27 @@ def _dispatch_next_task_from_assignments(
             warning_row = selection.get("warning") if isinstance(selection.get("warning"), dict) else None
             if warning_row:
                 all_warnings.append(warning_row)
+            _record_assignment_observation(
+                row=row,
+                status="skipped",
+                reason_code=_as_str(selection.get("reason")) or "profile_selection_invalid",
+                started_at=started,
+                warning_codes=[_as_str(warning_row.get("code"))] if isinstance(warning_row, dict) else None,
+            )
             continue
         selected_alias = _as_str(selection.get("alias")) or "codex"
         alias_state = _read_profile_rate_states(req.repo_root, [selected_alias]).get(selected_alias, {})
         if bool(alias_state.get("soft_gated")):
             active_by_alias = _active_worker_count_by_alias(req.repo_root)
             if int(active_by_alias.get(selected_alias, 0)) >= 1:
+                _record_assignment_observation(
+                    row=row,
+                    status="skipped",
+                    reason_code="dispatch_skipped_soft_cap",
+                    started_at=started,
+                    selected_alias=selected_alias,
+                    warning_codes=["dispatch_skipped_soft_cap"],
+                )
                 all_warnings.append(
                     {
                         "code": "dispatch_skipped_soft_cap",
@@ -6843,17 +7069,46 @@ def _dispatch_next_task_from_assignments(
 
         if _as_bool(result.get("ok"), default=False):
             dispatch_payload = result.get("dispatch") if isinstance(result.get("dispatch"), dict) else {}
+            effective_mode = _as_str(dispatch_payload.get("dispatch_mode_used")) or dispatch_mode
+            _record_assignment_observation(
+                row=row,
+                status="dispatched",
+                reason_code="dispatch_ok",
+                started_at=started,
+                selected_alias=selected_alias,
+                dispatch_mode=effective_mode,
+                warning_codes=[
+                    _as_str(item.get("code"))
+                    for item in warning_rows
+                    if isinstance(item, dict) and _as_str(item.get("code"))
+                ],
+            )
             _persist_worker_slot_transition(
                 slot_name=slot_name,
                 lane_value=lane_id,
                 active_task_id=task_id,
                 dispatch_thread_id=_as_str(task.get("dispatch_thread_id")) or _as_str(dispatch_payload.get("dispatch_thread_id")),
-                dispatch_mode_used=_as_str(dispatch_payload.get("dispatch_mode_used")) or dispatch_mode,
+                dispatch_mode_used=effective_mode,
                 branch_name=branch_name,
                 worktree_root=worktree_root,
             )
+            _persist_assignment_observations(all_warnings)
+            result["assignment_observations"] = assignment_observations
             return result
 
+        _record_assignment_observation(
+            row=row,
+            status="failed",
+            reason_code=_as_str(result.get("reason")) or "dispatch_failed",
+            started_at=started,
+            selected_alias=selected_alias,
+            dispatch_mode=_as_str(((result.get("dispatch") or {}).get("dispatch_mode_used")) or dispatch_mode),
+            warning_codes=[
+                _as_str(item.get("code"))
+                for item in warning_rows
+                if isinstance(item, dict) and _as_str(item.get("code"))
+            ],
+        )
         if first_failure is None:
             first_failure = result
         result_warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
@@ -6864,13 +7119,18 @@ def _dispatch_next_task_from_assignments(
         existing.extend(all_warnings)
         if existing:
             first_failure["warnings"] = existing
+        _persist_assignment_observations(existing)
+        first_failure["assignment_observations"] = assignment_observations
         return first_failure
-    return {
+    out = {
         "ok": True,
         "status": "noop",
         "reason": "no_dispatchable_assignments",
         "warnings": all_warnings,
+        "assignment_observations": assignment_observations,
     }
+    _persist_assignment_observations(all_warnings)
+    return out
 
 
 def _dispatch_next_task(
@@ -7588,38 +7848,71 @@ def _manager_branch_merge_cycle(
                 continue
 
             try:
-                checkout_code, _, checkout_err = _run(["git", "checkout", "RAB-BASE"], cwd=req.repo_root)
-                if checkout_code != 0:
-                    raise OpError("branch_manager_execution_failed", checkout_err.strip() or "unable to checkout RAB-BASE", stage="build_loop")
+                checkout_result = _run_manager_command(
+                    "git checkout RAB-BASE",
+                    cwd=req.repo_root,
+                    timeout_sec=BRANCH_ACTION_COMMAND_TIMEOUT_SEC,
+                    manager="branch",
+                )
+                if not _as_bool(checkout_result.get("ok"), default=False):
+                    raise OpError(
+                        _as_str(checkout_result.get("code")) or "branch_manager_execution_failed",
+                        _as_str(checkout_result.get("message"))
+                        or _as_str(checkout_result.get("stderr"))
+                        or "unable to checkout RAB-BASE",
+                        stage="build_loop",
+                    )
                 command_rows: list[dict[str, Any]] = []
                 for cmd in commands:
-                    code, stdout, stderr = _run(["bash", "-lc", cmd], cwd=req.repo_root)
+                    cmd_result = _run_manager_command(
+                        cmd,
+                        cwd=req.repo_root,
+                        timeout_sec=BRANCH_ACTION_COMMAND_TIMEOUT_SEC,
+                        manager="branch",
+                    )
+                    code = cmd_result.get("exit_code")
+                    stdout = _as_str(cmd_result.get("stdout")) or ""
+                    stderr = _as_str(cmd_result.get("stderr")) or ""
+                    cmd_ok = _as_bool(cmd_result.get("ok"), default=False)
                     command_rows.append(
                         {
                             "command": cmd,
                             "exit_code": code,
-                            "stdout": (stdout or "").strip(),
-                            "stderr": (stderr or "").strip(),
-                            "passed": code == 0,
+                            "stdout": stdout.strip(),
+                            "stderr": stderr.strip(),
+                            "passed": cmd_ok,
+                            "error_code": _as_str(cmd_result.get("code")),
                         }
                     )
-                    if code != 0:
-                        raise OpError("branch_manager_execution_failed", f"merge action command failed: {cmd}", stage="build_loop")
+                    if not cmd_ok:
+                        raise OpError(
+                            _as_str(cmd_result.get("code")) or "branch_manager_execution_failed",
+                            _as_str(cmd_result.get("message"))
+                            or f"merge action command failed: {cmd}",
+                            stage="build_loop",
+                        )
                 merged_ok = True
                 merged_commit = _git_text(req.repo_root, "rev-parse", "HEAD")
                 verification_rows: list[dict[str, Any]] = []
                 verification_ok = True
                 for cmd in verify_commands:
-                    code, stdout, stderr = _run(["bash", "-lc", cmd], cwd=req.repo_root)
+                    verify_result = _run_manager_command(
+                        cmd,
+                        cwd=req.repo_root,
+                        timeout_sec=BRANCH_VERIFY_COMMAND_TIMEOUT_SEC,
+                        manager="branch",
+                    )
+                    verify_ok = _as_bool(verify_result.get("ok"), default=False)
                     row = {
                         "command": cmd,
-                        "passed": code == 0,
-                        "exit_code": code,
-                        "stdout": (stdout or "").strip(),
-                        "stderr": (stderr or "").strip(),
+                        "passed": verify_ok,
+                        "exit_code": verify_result.get("exit_code"),
+                        "stdout": (_as_str(verify_result.get("stdout")) or "").strip(),
+                        "stderr": (_as_str(verify_result.get("stderr")) or "").strip(),
+                        "error_code": _as_str(verify_result.get("code")),
                     }
                     verification_rows.append(row)
-                    if code != 0:
+                    if not verify_ok:
                         verification_ok = False
                 validation_payload = {
                     "schema_version": SCHEMA_VERSION,
@@ -7703,7 +7996,12 @@ def _manager_branch_merge_cycle(
             )
         last_error = prior_errors[0] if prior_errors else {}
         last_error_code = _as_str(last_error.get("code"))
-        if last_error_code in {"branch_manager_action_invalid", "branch_manager_execution_failed"}:
+        if last_error_code in {
+            "branch_manager_action_invalid",
+            "branch_manager_execution_failed",
+            "manager_command_disallowed",
+            "manager_command_timeout",
+        }:
             warnings.append(
                 {
                     "code": last_error_code,
@@ -7748,19 +8046,45 @@ def _manager_workstation_cycle(
     *,
     task_state: dict[str, Any],
     build_state: dict[str, Any],
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     warnings: list[dict[str, Any]] = []
+    out: dict[str, Any] = {
+        "warnings": warnings,
+        "fatal": False,
+        "fatal_code": None,
+        "fatal_message": None,
+    }
     cycle = int(build_state.get("last_cycle", 0))
     script = _resolve_skill_script("workstation-preparation", "prepare_workstation.py", required=False)
     if script is None:
+        fatal_message = "workstation-preparation skill script missing; build cannot continue safely"
+        attempt_dir = req.repo_root / "reports" / "optimus-prime" / "workstation-manager" / f"attempt-{cycle}"
+        _atomic_write_json(
+            attempt_dir / "WORKSTATION_VALIDATION.json",
+            {
+                "schema_version": SCHEMA_VERSION,
+                "cycle": cycle,
+                "updated_at": utc_now_iso(),
+                "ok": False,
+                "status": "blocked_fatal",
+                "error": {
+                    "code": "workstation_manager_missing_skill_fatal",
+                    "message": fatal_message,
+                    "stage": "build_loop",
+                },
+            }
+        )
         warnings.append(
             {
-                "code": "workstation_manager_unavailable",
-                "message": "workstation-preparation skill script missing; skipping workstation manager cycle",
+                "code": "workstation_manager_missing_skill_fatal",
+                "message": fatal_message,
                 "stage": "build_loop",
             }
         )
-        return warnings
+        out["fatal"] = True
+        out["fatal_code"] = "workstation_manager_missing_skill_fatal"
+        out["fatal_message"] = fatal_message
+        return out
     script_path = str(script.resolve())
     prompt_template_path = WORKSTATION_MANAGER_PROMPT_TEMPLATE_PATH.resolve()
     prompt_template_text = (
@@ -7790,7 +8114,7 @@ def _manager_workstation_cycle(
                 "checks": [{"id": "workstation_manager_dry_run", "passed": True}],
             },
         )
-        return warnings
+        return out
     registry_path = req.repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
     registry_base, workers, registry_shape = _load_worker_registry(registry_path)
     task_map = _task_by_id(task_state)
@@ -7964,10 +8288,19 @@ def _manager_workstation_cycle(
                 prior_errors = [validation_payload["error"]]
                 continue
 
-            code, out, err = _run(["bash", "-lc", prepare_command], cwd=req.repo_root)
+            prepare_result = _run_manager_command(
+                prepare_command,
+                cwd=req.repo_root,
+                timeout_sec=WORKSTATION_PREP_COMMAND_TIMEOUT_SEC,
+                manager="workstation",
+            )
+            code = prepare_result.get("exit_code")
+            stdout_text = _as_str(prepare_result.get("stdout")) or ""
+            err = _as_str(prepare_result.get("stderr")) or ""
+            manager_error_code = _as_str(prepare_result.get("code"))
             parsed: dict[str, Any] | None = None
             try:
-                parsed_raw = json.loads(out.strip() or "{}")
+                parsed_raw = json.loads(stdout_text.strip() or "{}")
                 if isinstance(parsed_raw, dict):
                     parsed = parsed_raw
             except json.JSONDecodeError:
@@ -7985,15 +8318,22 @@ def _manager_workstation_cycle(
                 "task_id": active_task_id,
                 "lane_id": lane_id,
                 "attempt": attempt,
-                "ok": bool(code == 0 and parsed and parsed.get("ok") is True and target_path and branch_check_ok),
+                "ok": bool(
+                    _as_bool(prepare_result.get("ok"), default=False)
+                    and parsed
+                    and parsed.get("ok") is True
+                    and target_path
+                    and branch_check_ok
+                ),
                 "checks": [
-                    {"id": "prepare_command_exit_zero", "passed": code == 0},
+                    {"id": "prepare_command_exit_zero", "passed": _as_bool(prepare_result.get("ok"), default=False)},
                     {"id": "prepare_output_json", "passed": isinstance(parsed, dict)},
                     {"id": "prepare_target_path", "passed": bool(target_path)},
                     {"id": "prepare_branch_match", "passed": branch_check_ok},
                 ],
                 "result": parsed,
                 "stderr": (err or "").strip(),
+                "error_code": manager_error_code,
                 "llm_exit_code": llm_exit_code,
                 "updated_at": utc_now_iso(),
             }
@@ -8008,8 +8348,11 @@ def _manager_workstation_cycle(
                 break
             prior_errors = [
                 {
-                    "code": "workstation_execution_failed",
-                    "message": "workstation action execution/validation failed",
+                    "code": manager_error_code or "workstation_execution_failed",
+                    "message": (
+                        _as_str(prepare_result.get("message"))
+                        or "workstation action execution/validation failed"
+                    ),
                 }
             ]
         if prepared:
@@ -8037,7 +8380,12 @@ def _manager_workstation_cycle(
             )
         last_error = prior_errors[0] if prior_errors else {}
         last_error_code = _as_str(last_error.get("code"))
-        if last_error_code in {"workstation_action_invalid", "workstation_execution_failed"}:
+        if last_error_code in {
+            "workstation_action_invalid",
+            "workstation_execution_failed",
+            "manager_command_disallowed",
+            "manager_command_timeout",
+        }:
             warnings.append(
                 {
                     "code": last_error_code,
@@ -8057,7 +8405,7 @@ def _manager_workstation_cycle(
             }
         )
     _write_worker_registry(registry_path, registry_base, workers, registry_shape if registry_shape in {"dict_list", "dict_dict", "list"} else "dict_list")
-    return warnings
+    return out
 
 
 def _manager_dispatcher_cycle(
@@ -8079,6 +8427,7 @@ def _manager_dispatcher_cycle(
             "reason": "dispatch_plan_invalid",
             "warnings": plan_warnings,
             "warning": plan_warnings[0] if plan_warnings else None,
+            "assignment_observations": [],
         }
     if not assignments:
         dispatch_result = _dispatch_next_task(
@@ -8797,9 +9146,40 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             warnings.extend(branch_warnings)
             cycle_local_warnings.extend(branch_warnings)
 
-            workstation_warnings = _manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+            workstation_out = _manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+            workstation_warnings = (
+                workstation_out.get("warnings", [])
+                if isinstance(workstation_out.get("warnings"), list)
+                else []
+            )
             warnings.extend(workstation_warnings)
             cycle_local_warnings.extend(workstation_warnings)
+            if _as_bool(workstation_out.get("fatal"), default=False):
+                fatal_code = _as_str(workstation_out.get("fatal_code")) or "workstation_manager_missing_skill_fatal"
+                fatal_message = _as_str(workstation_out.get("fatal_message")) or "workstation manager reported fatal runtime error"
+                build_state["terminal_state"] = {
+                    "reason": fatal_code,
+                    "timestamp": utc_now_iso(),
+                }
+                _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
+                _atomic_write_json(build_state_path, build_state)
+                return _response(
+                    req,
+                    ok=False,
+                    status="blocked_terminal",
+                    summary="Build halted: workstation manager reported fatal runtime error.",
+                    warnings=warnings,
+                    errors=[
+                        {
+                            "code": fatal_code,
+                            "message": fatal_message,
+                            "stage": "build_loop",
+                        }
+                    ],
+                    state_ref=str(build_state_path),
+                    next_action="Restore workstation-preparation skill and rerun /op-build.",
+                    data={"terminal_reason": fatal_code},
+                )
 
             if operator_stop_path.exists():
                 stop_summary: dict[str, Any] = {}
