@@ -87,6 +87,8 @@ PLANNER_EXAMPLE_ROOT_PATH = SCRIPT_DIR / "llm" / "examples" / "op-plan" / "repor
 GIT_BOOTSTRAP_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "git_bootstrap_prompt.md"
 GIT_BOOTSTRAP_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_git_bootstrap.py"
 GIT_BOOTSTRAP_REQUIRED_BRANCH = "RAB-BASE"
+BRANCH_MANAGER_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "branch_manager_prompt.md"
+WORKSTATION_MANAGER_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "workstation_manager_prompt.md"
 
 MANDATORY_BUILD_BASELINE = [
     PROJECT_MD,
@@ -3031,9 +3033,18 @@ def _upsert_task_gap(task: dict[str, Any], row: dict[str, Any]) -> None:
     for item in rows:
         if _as_str(item.get("gap_id")) != target_gap_id:
             continue
+        prior_status = (_as_str(item.get("status")) or "open").lower()
+        prior_retry_count = _coerce_nonneg_int(item.get("retry_count"), default=0)
+        requested_status = (_as_str(row.get("status")) or "open").lower()
         item.update(row)
         item["updated_at"] = now
         item["status"] = _as_str(item.get("status")) or "open"
+        requested_retry_count = _coerce_nonneg_int(row.get("retry_count"), default=prior_retry_count)
+        if prior_status == "closed" and requested_status == "open":
+            item["retry_count"] = max(prior_retry_count + 1, requested_retry_count)
+        else:
+            item["retry_count"] = requested_retry_count
+        item["max_retries"] = max(1, _coerce_nonneg_int(item.get("max_retries"), default=5))
         item["reason_codes"] = [code for code in (_as_str(v) for v in item.get("reason_codes", [])) if code] or ["gap_detected"]
         task["gaps_that_need_patching"] = rows
         return
@@ -3056,12 +3067,21 @@ def _close_task_gap(task: dict[str, Any], *, gap_id: str, closure_ref: str | Non
             continue
         row["status"] = "closed"
         row["updated_at"] = now
+        reason_codes = [
+            code
+            for code in (_as_str(item) for item in row.get("reason_codes", []))
+            if code
+        ]
+        if "gap_closed_by_evidence" not in reason_codes:
+            reason_codes.append("gap_closed_by_evidence")
+        row["reason_codes"] = reason_codes or ["gap_closed_by_evidence"]
         if closure_ref:
             row["closure_ref"] = closure_ref
     task["gaps_that_need_patching"] = rows
 
 
-def _refresh_task_embedded_gaps(repo_root: Path, plan_packets: dict[str, Any], task_state: dict[str, Any]) -> None:
+def _refresh_task_embedded_gaps(repo_root: Path, plan_packets: dict[str, Any], task_state: dict[str, Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
     task_map = _task_by_id(task_state)
     plan_map = _plan_task_map(plan_packets)
     plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
@@ -3165,8 +3185,160 @@ def _refresh_task_embedded_gaps(repo_root: Path, plan_packets: dict[str, Any], t
                     },
                 )
 
-        # Sticky explicit-closure semantics: open task gaps remain open until
-        # explicit manager/evidence closure, not by recomputation drift.
+        # Deterministic closure for task-local validation gaps:
+        # close only when the previously failing condition is no longer true.
+        closable_categories = {"verify_missing", "uat_missing", "task_blocked"}
+        for row in list(_normalize_task_gap_rows(task)):
+            if not isinstance(row, dict):
+                continue
+            if (_as_str(row.get("status")) or "").lower() != "open":
+                continue
+            gap_id = _as_str(row.get("gap_id"))
+            if not gap_id:
+                continue
+            category = _as_str(row.get("category")) or "other"
+            if category not in closable_categories:
+                continue
+            if gap_id in active_gap_ids:
+                continue
+            status_now = _normalize_task_status(task.get("status"))
+            if category == "verify_missing":
+                verify_resolved_statuses = {
+                    TASK_STATUS_TESTS_DONE,
+                    TASK_STATUS_REVIEW_DONE,
+                    TASK_STATUS_BLOCKED,
+                }
+                if status_now not in verify_resolved_statuses:
+                    continue
+                if not verify_required.issubset(verify_passed):
+                    continue
+            if category == "uat_missing":
+                uat_resolved_statuses = {
+                    TASK_STATUS_REVIEW_DONE,
+                    TASK_STATUS_BLOCKED,
+                }
+                if status_now not in uat_resolved_statuses:
+                    continue
+                req_ids = [rid for rid in ((_as_str(item) for item in plan_task.get("requirement_ids", []))) if rid]
+                if not set(req_ids).issubset(uat_passed):
+                    continue
+            if category == "task_blocked":
+                blockers = task.get("blockers")
+                blockers_present = isinstance(blockers, list) and len(blockers) > 0
+                resolved_statuses = {
+                    TASK_STATUS_DEV_DONE,
+                    TASK_STATUS_TESTING,
+                    TASK_STATUS_TESTS_DONE,
+                    TASK_STATUS_REVIEWING,
+                    TASK_STATUS_REVIEW_DONE,
+                }
+                if blockers_present or status_now not in resolved_statuses:
+                    continue
+            _close_task_gap(task, gap_id=gap_id, closure_ref=evidence_ref)
+            warnings.append(
+                {
+                    "code": "task_gap_closed",
+                    "message": f"closed embedded task gap {gap_id} after failing condition passed",
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "gap_id": gap_id,
+                }
+            )
+    return warnings
+
+
+def _collect_workstation_validation_refs(repo_root: Path) -> tuple[dict[tuple[str, str], str], dict[str, str]]:
+    keyed_refs: dict[tuple[str, str], tuple[float, str]] = {}
+    task_refs: dict[str, tuple[float, str]] = {}
+    root = repo_root / "reports" / "optimus-prime" / "workstation-manager"
+    if not root.exists():
+        return {}, {}
+    for path in root.glob("attempt-*/WORKSTATION_VALIDATION.json"):
+        try:
+            payload = _read_json(path)
+        except OpError:
+            continue
+        if not isinstance(payload, dict) or not _as_bool_field(payload.get("ok")):
+            continue
+        slot = _as_str(payload.get("slot"))
+        task_id = _as_str(payload.get("task_id"))
+        if not slot or not task_id:
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        rel_ref = os.path.relpath(str(path), str(repo_root))
+        key = (slot, task_id)
+        prev = keyed_refs.get(key)
+        if prev is None or mtime >= prev[0]:
+            keyed_refs[key] = (mtime, rel_ref)
+        prev_task = task_refs.get(task_id)
+        if prev_task is None or mtime >= prev_task[0]:
+            task_refs[task_id] = (mtime, rel_ref)
+    return {key: value[1] for key, value in keyed_refs.items()}, {key: value[1] for key, value in task_refs.items()}
+
+
+def _reconcile_task_embedded_gap_closures(repo_root: Path, task_state: dict[str, Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    done_registry_path = _repo_path(repo_root, DONE_TASKS_REGISTRY_JSON)
+    merged_by_task: dict[str, dict[str, Any]] = {}
+    if done_registry_path.exists():
+        try:
+            payload = _read_json(done_registry_path)
+        except OpError:
+            payload = None
+        if isinstance(payload, dict):
+            merged_rows = payload.get("merged_tasks")
+            if isinstance(merged_rows, list):
+                merged_by_task = {
+                    _as_str(row.get("task_id")): row
+                    for row in merged_rows
+                    if isinstance(row, dict) and _as_str(row.get("task_id"))
+                }
+
+    workstation_refs_by_slot_task, workstation_refs_by_task = _collect_workstation_validation_refs(repo_root)
+    for task in task_state.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
+        rows = list(_normalize_task_gap_rows(task))
+        if not rows:
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if (_as_str(row.get("status")) or "").lower() != "open":
+                continue
+            gap_id = _as_str(row.get("gap_id"))
+            if not gap_id:
+                continue
+            category = _as_str(row.get("category")) or "other"
+            stage = _as_str(row.get("stage")) or "dev"
+            closure_ref: str | None = None
+            if category == "merge_blocked":
+                merged_row = merged_by_task.get(task_id)
+                if isinstance(merged_row, dict) and _as_bool_field(merged_row.get("verification_passed")):
+                    closure_ref = _as_str(merged_row.get("verification_ref")) or str(DONE_TASKS_REGISTRY_JSON)
+            elif stage == "workstation":
+                slot = _as_str(row.get("slot")) or _as_str(task.get("owner_slot"))
+                if slot:
+                    closure_ref = workstation_refs_by_slot_task.get((slot, task_id))
+                if not closure_ref:
+                    closure_ref = workstation_refs_by_task.get(task_id)
+            if not closure_ref:
+                continue
+            _close_task_gap(task, gap_id=gap_id, closure_ref=closure_ref)
+            warnings.append(
+                {
+                    "code": "task_gap_closed",
+                    "message": f"closed embedded task gap {gap_id} after manager evidence passed",
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "gap_id": gap_id,
+                }
+            )
+    return warnings
 
 
 def _open_task_gap_ids(task_state: dict[str, Any], *, phase_id: str | None = None) -> list[str]:
@@ -6194,6 +6366,8 @@ def _dispatch_task_packet(
     dispatch_mode: str = "exec",
     resume_thread_id: str | None = None,
     slot_override: str | None = None,
+    worktree_root_override: str | None = None,
+    branch_name_override: str | None = None,
 ) -> dict[str, Any]:
     script = _resolve_skill_script("dispatch-worker-packet", "dispatch_worker_packet.py")
     task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
@@ -6236,13 +6410,15 @@ def _dispatch_task_packet(
     cfg = stage_cfg[stage]
     slot_name = slot_override or cfg["slot"]
     start_from_commit = _git_text(req.repo_root, "rev-parse", "HEAD") or "HEAD"
+    worktree_root = worktree_root_override or str(req.repo_root)
+    branch_name = branch_name_override or f"codex/{slot_name}/{task_id.lower()}"
     payload = {
         "slot": slot_name,
         "role": cfg["role"],
         "task_identifier": task_id,
         "repo_root": str(req.repo_root),
-        "worktree_root": str(req.repo_root),
-        "branch_name": f"codex/{slot_name}/{task_id.lower()}",
+        "worktree_root": worktree_root,
+        "branch_name": branch_name,
         "start_from_branch": "RAB-BASE",
         "start_from_commit": start_from_commit,
         "acceptance_criteria": acceptance_refs,
@@ -6304,13 +6480,410 @@ def _dispatch_task_packet(
     return out
 
 
+def _load_work_dispatch_plan_assignments(
+    repo_root: Path,
+    *,
+    active_phase_id: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    path = _repo_path(repo_root, WORK_DISPATCH_PLAN_JSON)
+    warnings: list[dict[str, Any]] = []
+    if not path.exists():
+        warnings.append(
+            {
+                "code": "dispatch_plan_missing",
+                "message": f"dispatch plan artifact is missing: {path}",
+                "stage": "build_loop",
+            }
+        )
+        return [], warnings, False
+    try:
+        payload = _read_json(path)
+    except OpError as exc:
+        warnings.append(
+            {
+                "code": "dispatch_plan_invalid",
+                "message": f"dispatch plan unreadable: {exc.message}",
+                "stage": "build_loop",
+                "artifact": str(path),
+            }
+        )
+        return [], warnings, False
+    if not isinstance(payload, dict):
+        warnings.append(
+            {
+                "code": "dispatch_plan_invalid",
+                "message": "dispatch plan payload must be JSON object",
+                "stage": "build_loop",
+                "artifact": str(path),
+            }
+        )
+        return [], warnings, False
+    assignments_raw = payload.get("assignments")
+    if not isinstance(assignments_raw, list):
+        warnings.append(
+            {
+                "code": "dispatch_plan_invalid",
+                "message": "dispatch plan assignments must be a list",
+                "stage": "build_loop",
+                "artifact": str(path),
+            }
+        )
+        return [], warnings, False
+    if not assignments_raw:
+        warnings.append(
+            {
+                "code": "dispatch_plan_no_assignments",
+                "message": "dispatch plan contains no assignments for this cycle",
+                "stage": "build_loop",
+                "artifact": str(path),
+            }
+        )
+        return [], warnings, True
+
+    expected_active_phase = active_phase_id or _as_str(payload.get("active_phase_id"))
+    out: list[dict[str, Any]] = []
+    for idx, row in enumerate(assignments_raw):
+        if not isinstance(row, dict):
+            warnings.append(
+                {
+                    "code": "dispatch_assignment_invalid",
+                    "message": f"assignment #{idx + 1} must be object",
+                    "stage": "build_loop",
+                    "artifact": str(path),
+                    "index": idx,
+                }
+            )
+            continue
+        task_id = _as_str(row.get("task_id"))
+        lane_id = _as_str(row.get("lane_id"))
+        phase_id = _as_str(row.get("phase_id")) or expected_active_phase
+        next_stage = _as_str(row.get("next_stage"))
+        next_role = _as_str(row.get("next_role"))
+        slot = _as_str(row.get("slot"))
+        dispatch_policy = _as_str(row.get("dispatch_policy")) or "resume_if_same_lane"
+        if not task_id or not lane_id or not phase_id or not next_stage or not next_role or not slot:
+            warnings.append(
+                {
+                    "code": "dispatch_assignment_invalid",
+                    "message": f"assignment #{idx + 1} missing required fields",
+                    "stage": "build_loop",
+                    "artifact": str(path),
+                    "index": idx,
+                }
+            )
+            continue
+        if next_stage not in {"dev", "test", "review"}:
+            warnings.append(
+                {
+                    "code": "dispatch_assignment_invalid",
+                    "message": f"assignment #{idx + 1} has invalid next_stage={next_stage}",
+                    "stage": "build_loop",
+                    "artifact": str(path),
+                    "index": idx,
+                }
+            )
+            continue
+        if dispatch_policy not in {"resume_if_same_lane", "new_thread"}:
+            warnings.append(
+                {
+                    "code": "dispatch_assignment_invalid",
+                    "message": f"assignment #{idx + 1} has invalid dispatch_policy={dispatch_policy}",
+                    "stage": "build_loop",
+                    "artifact": str(path),
+                    "index": idx,
+                }
+            )
+            continue
+        if expected_active_phase and phase_id != expected_active_phase:
+            continue
+        out.append(
+            {
+                "task_id": task_id,
+                "lane_id": lane_id,
+                "phase_id": phase_id,
+                "next_stage": next_stage,
+                "next_role": next_role,
+                "slot": slot,
+                "dispatch_policy": dispatch_policy,
+            }
+        )
+    if not out:
+        warnings.append(
+            {
+                "code": "dispatch_plan_no_assignments",
+                "message": "dispatch plan has no valid assignments for active phase",
+                "stage": "build_loop",
+                "artifact": str(path),
+            }
+        )
+    return out, warnings, True
+
+
+def _dispatch_next_task_from_assignments(
+    req: OpRequest,
+    plan_packets: dict[str, Any],
+    task_state: dict[str, Any],
+    build_state: dict[str, Any],
+    assignments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    task_map = _task_by_id(task_state)
+    plan_map = _plan_task_map(plan_packets)
+    registry_path = req.repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+    registry_base, registry_workers, registry_shape = _load_worker_registry(registry_path)
+    workers_by_slot = {
+        _as_str(worker.get("slot")): worker
+        for worker in registry_workers
+        if isinstance(worker, dict) and _as_str(worker.get("slot"))
+    }
+    slot_count = len(FIXED_WORKER_SLOTS)
+    plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
+    stage_status_requirements = {
+        "dev": {TASK_STATUS_PENDING},
+        "test": {TASK_STATUS_DEV_DONE},
+        "review": {TASK_STATUS_TESTS_DONE},
+    }
+
+    def _persist_worker_slot_transition(
+        *,
+        slot_name: str,
+        lane_value: str | None,
+        active_task_id: str | None,
+        dispatch_thread_id: str | None,
+        dispatch_mode_used: str | None,
+        branch_name: str | None,
+        worktree_root: str | None,
+    ) -> None:
+        row = workers_by_slot.get(slot_name)
+        if not isinstance(row, dict):
+            row = _default_worker_row(slot_name)
+            registry_workers.append(row)
+            workers_by_slot[slot_name] = row
+        current_lane = _as_str(row.get("lane_id"))
+        if lane_value and current_lane and current_lane != lane_value:
+            row["previous_lane_id"] = current_lane
+        elif row.get("previous_lane_id") is None:
+            row["previous_lane_id"] = "n/a"
+        if lane_value:
+            row["lane_id"] = lane_value
+        row["active_task_id"] = active_task_id
+        row["active_task"] = active_task_id
+        if dispatch_thread_id:
+            row["dispatch_thread_id"] = dispatch_thread_id
+        if branch_name:
+            row["branch"] = branch_name
+        if worktree_root:
+            row["worktree_root"] = worktree_root
+        row["session_state"] = "running"
+        row["state"] = "running"
+        row["updated_at"] = utc_now_iso()
+        if _as_str(dispatch_mode_used):
+            row["dispatch_mode"] = _as_str(dispatch_mode_used)
+        _write_worker_registry(
+            registry_path,
+            registry_base,
+            registry_workers,
+            registry_shape if registry_shape in {"dict_list", "dict_dict", "list"} else "dict_list",
+        )
+
+    all_warnings: list[dict[str, Any]] = []
+    first_failure: dict[str, Any] | None = None
+    for row in assignments:
+        task_id = _as_str(row.get("task_id"))
+        lane_id = _as_str(row.get("lane_id"))
+        next_stage = _as_str(row.get("next_stage"))
+        slot_name = _as_str(row.get("slot"))
+        dispatch_policy = _as_str(row.get("dispatch_policy")) or "resume_if_same_lane"
+        if not task_id or not lane_id or next_stage not in {"dev", "test", "review"} or not slot_name:
+            all_warnings.append(
+                {
+                    "code": "dispatch_assignment_invalid",
+                    "message": f"invalid assignment row: {row}",
+                    "stage": "build_loop",
+                    "assignment": row,
+                }
+            )
+            continue
+        task = task_map.get(task_id)
+        plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
+        if not isinstance(task, dict) or not isinstance(plan_task, dict):
+            all_warnings.append(
+                {
+                    "code": "dispatch_assignment_invalid",
+                    "message": f"assignment references unknown task: {task_id}",
+                    "stage": "build_loop",
+                    "assignment": row,
+                }
+            )
+            continue
+        status = _normalize_task_status(task.get("status"))
+        if status not in stage_status_requirements[next_stage]:
+            continue
+
+        slot_worker = workers_by_slot.get(slot_name) if isinstance(workers_by_slot.get(slot_name), dict) else {}
+        worktree_root = _as_str(slot_worker.get("worktree_root"))
+        branch_name = _as_str(slot_worker.get("branch"))
+        if not worktree_root or not branch_name:
+            if req.dry_run:
+                worktree_root = str(req.repo_root)
+                branch_name = f"codex/{slot_name}/{task_id.lower()}"
+                all_warnings.append(
+                    {
+                        "code": "dispatch_assignment_invalid",
+                        "message": f"slot {slot_name} missing prepared workstation; using dry-run fallback context",
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                        "slot": slot_name,
+                    }
+                )
+            else:
+                all_warnings.append(
+                    {
+                        "code": "dispatch_assignment_invalid",
+                        "message": f"slot {slot_name} missing prepared worktree/branch context",
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                        "slot": slot_name,
+                    }
+                )
+                continue
+        if not worktree_root or not branch_name:
+            all_warnings.append(
+                {
+                    "code": "dispatch_assignment_invalid",
+                    "message": f"slot {slot_name} has invalid dispatch context",
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "slot": slot_name,
+                }
+            )
+            continue
+
+        previous_lane = _as_str(slot_worker.get("lane_id"))
+        previous_thread_id = _as_str(task.get("dispatch_thread_id")) or _as_str(slot_worker.get("dispatch_thread_id"))
+        same_lane_resume = (
+            dispatch_policy == "resume_if_same_lane"
+            and bool(lane_id and previous_lane and lane_id == previous_lane and previous_thread_id)
+        )
+        dispatch_mode = "resume" if same_lane_resume else "exec"
+        resume_thread_id = previous_thread_id if same_lane_resume else None
+
+        selection = _select_profile_alias_for_slot(
+            req.repo_root,
+            build_state,
+            slot=slot_name,
+            slot_count=slot_count,
+        )
+        if not _as_bool(selection.get("ok"), default=False):
+            warning_row = selection.get("warning") if isinstance(selection.get("warning"), dict) else None
+            if warning_row:
+                all_warnings.append(warning_row)
+            continue
+        selected_alias = _as_str(selection.get("alias")) or "codex"
+        alias_state = _read_profile_rate_states(req.repo_root, [selected_alias]).get(selected_alias, {})
+        if bool(alias_state.get("soft_gated")):
+            active_by_alias = _active_worker_count_by_alias(req.repo_root)
+            if int(active_by_alias.get(selected_alias, 0)) >= 1:
+                all_warnings.append(
+                    {
+                        "code": "dispatch_skipped_soft_cap",
+                        "message": f"dispatch skipped for soft-gated alias cap (alias={selected_alias}, cap=1)",
+                        "stage": "build_loop",
+                        "alias": selected_alias,
+                    }
+                )
+                continue
+
+        result = _dispatch_task_packet(
+            req,
+            task,
+            plan_task,
+            next_stage,
+            plan_id,
+            selected_alias,
+            lane_id=lane_id,
+            dispatch_mode=dispatch_mode,
+            resume_thread_id=resume_thread_id,
+            slot_override=slot_name,
+            worktree_root_override=worktree_root,
+            branch_name_override=branch_name,
+        )
+        warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+        if dispatch_mode == "resume":
+            warning_rows.append(
+                {
+                    "code": "dispatch_resumed_thread"
+                    if _as_str(((result.get("dispatch") or {}).get("dispatch_mode_used")) or dispatch_mode) == "resume"
+                    else "dispatch_resume_failed_fallback_exec",
+                    "message": (
+                        f"slot {slot_name} resumed existing thread for same-lane task"
+                        if _as_str(((result.get("dispatch") or {}).get("dispatch_mode_used")) or dispatch_mode) == "resume"
+                        else f"slot {slot_name} failed to resume thread; fallback dispatch used new thread"
+                    ),
+                    "stage": "build_loop",
+                    "slot": slot_name,
+                    "lane_id": lane_id,
+                }
+            )
+        elif previous_lane and lane_id != previous_lane:
+            warning_rows.append(
+                {
+                    "code": "dispatch_new_thread_lane_change",
+                    "message": f"slot {slot_name} lane changed {previous_lane} -> {lane_id}; started new thread",
+                    "stage": "build_loop",
+                    "slot": slot_name,
+                    "from_lane_id": previous_lane,
+                    "to_lane_id": lane_id,
+                }
+            )
+        selection_warning = selection.get("warning")
+        if isinstance(selection_warning, dict):
+            warning_rows.append(selection_warning)
+        if warning_rows:
+            result["warnings"] = warning_rows
+
+        if _as_bool(result.get("ok"), default=False):
+            dispatch_payload = result.get("dispatch") if isinstance(result.get("dispatch"), dict) else {}
+            _persist_worker_slot_transition(
+                slot_name=slot_name,
+                lane_value=lane_id,
+                active_task_id=task_id,
+                dispatch_thread_id=_as_str(task.get("dispatch_thread_id")) or _as_str(dispatch_payload.get("dispatch_thread_id")),
+                dispatch_mode_used=_as_str(dispatch_payload.get("dispatch_mode_used")) or dispatch_mode,
+                branch_name=branch_name,
+                worktree_root=worktree_root,
+            )
+            return result
+
+        if first_failure is None:
+            first_failure = result
+        result_warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+        all_warnings.extend([row for row in result_warnings if isinstance(row, dict)])
+
+    if first_failure is not None:
+        existing = first_failure.get("warnings") if isinstance(first_failure.get("warnings"), list) else []
+        existing.extend(all_warnings)
+        if existing:
+            first_failure["warnings"] = existing
+        return first_failure
+    return {
+        "ok": True,
+        "status": "noop",
+        "reason": "no_dispatchable_assignments",
+        "warnings": all_warnings,
+    }
+
+
 def _dispatch_next_task(
     req: OpRequest,
     plan_packets: dict[str, Any],
     task_state: dict[str, Any],
     build_state: dict[str, Any],
     active_phase_id: str | None = None,
+    authoritative_assignments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    if isinstance(authoritative_assignments, list):
+        return _dispatch_next_task_from_assignments(req, plan_packets, task_state, build_state, authoritative_assignments)
+
     task_map = _task_by_id(task_state)
     plan_map = _plan_task_map(plan_packets)
     retry_policy = build_state.get("gap_retry_policy")
@@ -6682,7 +7255,8 @@ def _manager_production_line_cycle(
     warnings: list[dict[str, Any]] = []
     warnings.extend(_apply_handoff_updates(req.repo_root, task_state, build_state))
     warnings.extend(_sync_task_state_from_evidence(req.repo_root, plan_packets, task_state))
-    _refresh_task_embedded_gaps(req.repo_root, plan_packets, task_state)
+    warnings.extend(_refresh_task_embedded_gaps(req.repo_root, plan_packets, task_state))
+    warnings.extend(_reconcile_task_embedded_gap_closures(req.repo_root, task_state))
     merged_plan_packets = plan_packets
     active_phase_id, phase_checks = _resolve_active_phase(
         merged_plan_packets,
@@ -6750,6 +7324,18 @@ def _manager_production_line_cycle(
                     next_stage = "review"
                 else:
                     continue
+                lane_tail = lane_id.rsplit("/", 1)[-1].lower()
+                slot_suffix = "1"
+                if lane_tail == "lane-b":
+                    slot_suffix = "2"
+                elif lane_tail == "lane-c":
+                    slot_suffix = "3"
+                if next_stage == "dev":
+                    slot = f"dev-{slot_suffix}"
+                elif next_stage == "test":
+                    slot = f"test-{slot_suffix}"
+                else:
+                    slot = f"review-{slot_suffix}"
                 assignments.append(
                     {
                         "task_id": task_id,
@@ -6757,6 +7343,8 @@ def _manager_production_line_cycle(
                         "phase_id": active_phase_id,
                         "next_stage": next_stage,
                         "next_role": next_role,
+                        "slot": slot,
+                        "dispatch_policy": "resume_if_same_lane",
                     }
                 )
                 break
@@ -6846,6 +7434,13 @@ def _manager_branch_merge_cycle(
     if not verify_commands:
         verify_commands = ["python3 -m pytest"]
 
+    prompt_template_path = BRANCH_MANAGER_PROMPT_TEMPLATE_PATH.resolve()
+    prompt_template_text = (
+        prompt_template_path.read_text(encoding="utf-8")
+        if prompt_template_path.exists()
+        else ""
+    )
+
     for task_id in sorted(pending_merge):
         task = task_map.get(task_id) if isinstance(task_map.get(task_id), dict) else {}
         branch_name = (
@@ -6857,32 +7452,159 @@ def _manager_branch_merge_cycle(
         verification_ok = False
         merged_commit: str | None = None
         verification_ref: str | None = None
+        prior_errors: list[dict[str, Any]] = []
         for attempt in range(1, 11):
             attempt_dir = req.repo_root / "reports" / "optimus-prime" / "branch-manager" / f"attempt-{task_id.lower()}-{attempt}"
             action_path = attempt_dir / "MERGE_ACTION.json"
             validation_path = attempt_dir / "MERGE_VALIDATION.json"
-            action_payload: dict[str, Any] = {
-                "schema_version": SCHEMA_VERSION,
-                "task_id": task_id,
-                "attempt": attempt,
-                "branch": "RAB-BASE",
-                "source_branch": branch_name,
-                "started_at": utc_now_iso(),
-            }
+            stdout_path = attempt_dir / "llm_stdout.log"
+            stderr_path = attempt_dir / "llm_stderr.log"
+            last_message_path = attempt_dir / "last_message.txt"
+            prompt_path = attempt_dir / "prompt.txt"
+            if not prompt_template_text:
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "task_id": task_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "branch_manager_action_invalid",
+                        "message": f"branch manager prompt template missing: {prompt_template_path}",
+                        "stage": "build_loop",
+                    },
+                    "finished_at": utc_now_iso(),
+                }
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                continue
+
+            prompt = prompt_template_text
+            prompt = prompt.replace("{{REPO_ROOT}}", str(req.repo_root))
+            prompt = prompt.replace("{{TASK_ID}}", task_id)
+            prompt = prompt.replace("{{SOURCE_BRANCH}}", branch_name)
+            prompt = prompt.replace("{{TARGET_BRANCH}}", "RAB-BASE")
+            prompt = prompt.replace("{{ACTION_PATH}}", str(action_path))
+            prompt = prompt.replace("{{VERIFY_COMMANDS_JSON}}", json.dumps(verify_commands))
+            if prior_errors:
+                repair_lines = [
+                    f"{idx}. [{_as_str(item.get('code')) or 'error'}] {_as_str(item.get('message')) or 'validation failed'}"
+                    for idx, item in enumerate(prior_errors, start=1)
+                ]
+                prompt += "\n\nRepair context from previous failed attempt:\n" + "\n".join(repair_lines) + "\n"
+            prompt_path.parent.mkdir(parents=True, exist_ok=True)
+            prompt_path.write_text(prompt, encoding="utf-8")
+            try:
+                exit_code = run_codex_exec(
+                    repo_root=req.repo_root,
+                    prompt_text=prompt,
+                    output_last_message=last_message_path,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                )
+            except OSError as exc:
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "task_id": task_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "branch_manager_execution_failed",
+                        "message": f"unable to invoke codex exec: {exc}",
+                        "stage": "build_loop",
+                    },
+                    "finished_at": utc_now_iso(),
+                }
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                continue
+
+            try:
+                action_payload = _read_json(action_path)
+            except OpError as exc:
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "task_id": task_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "branch_manager_action_invalid",
+                        "message": f"missing/invalid MERGE_ACTION.json: {exc.message}",
+                        "stage": "build_loop",
+                    },
+                    "finished_at": utc_now_iso(),
+                }
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                continue
+
+            if not isinstance(action_payload, dict):
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "task_id": task_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "branch_manager_action_invalid",
+                        "message": "MERGE_ACTION.json must be object",
+                        "stage": "build_loop",
+                    },
+                    "finished_at": utc_now_iso(),
+                }
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                continue
+
+            action_errors: list[str] = []
+            if _as_str(action_payload.get("task_id")) != task_id:
+                action_errors.append("task_id mismatch")
+            if _as_str(action_payload.get("target_branch")) != "RAB-BASE":
+                action_errors.append("target_branch must be RAB-BASE")
+            if _as_str(action_payload.get("source_branch")) != branch_name:
+                action_errors.append("source_branch mismatch")
+            if not _as_str(action_payload.get("merge_strategy")):
+                action_errors.append("merge_strategy required")
+            commands = action_payload.get("commands")
+            if not isinstance(commands, list) or not commands or not all(isinstance(item, str) and item.strip() for item in commands):
+                action_errors.append("commands must be non-empty list[str]")
+            action_verify = action_payload.get("verification_commands")
+            if not isinstance(action_verify, list) or not action_verify or not all(isinstance(item, str) and item.strip() for item in action_verify):
+                action_errors.append("verification_commands must be non-empty list[str]")
+            if action_errors:
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "task_id": task_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "branch_manager_action_invalid",
+                        "message": "; ".join(action_errors),
+                        "stage": "build_loop",
+                    },
+                    "finished_at": utc_now_iso(),
+                }
+                _atomic_write_json(action_path, action_payload)
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                continue
+
             try:
                 checkout_code, _, checkout_err = _run(["git", "checkout", "RAB-BASE"], cwd=req.repo_root)
                 if checkout_code != 0:
-                    raise OpError("merge_checkout_failed", checkout_err.strip() or "unable to checkout RAB-BASE", stage="build_loop")
-                merge_code, merge_out, merge_err = _run(
-                    ["git", "merge", "--no-ff", "--no-edit", branch_name],
-                    cwd=req.repo_root,
-                )
-                action_payload["merge_exit_code"] = merge_code
-                action_payload["merge_stdout"] = merge_out.strip()
-                action_payload["merge_stderr"] = merge_err.strip()
-                if merge_code != 0:
-                    _run(["git", "merge", "--abort"], cwd=req.repo_root)
-                    raise OpError("merge_conflict", merge_err.strip() or "merge conflict", stage="build_loop")
+                    raise OpError("branch_manager_execution_failed", checkout_err.strip() or "unable to checkout RAB-BASE", stage="build_loop")
+                command_rows: list[dict[str, Any]] = []
+                for cmd in commands:
+                    code, stdout, stderr = _run(["bash", "-lc", cmd], cwd=req.repo_root)
+                    command_rows.append(
+                        {
+                            "command": cmd,
+                            "exit_code": code,
+                            "stdout": (stdout or "").strip(),
+                            "stderr": (stderr or "").strip(),
+                            "passed": code == 0,
+                        }
+                    )
+                    if code != 0:
+                        raise OpError("branch_manager_execution_failed", f"merge action command failed: {cmd}", stage="build_loop")
                 merged_ok = True
                 merged_commit = _git_text(req.repo_root, "rev-parse", "HEAD")
                 verification_rows: list[dict[str, Any]] = []
@@ -6907,7 +7629,9 @@ def _manager_branch_merge_cycle(
                     "branch": "RAB-BASE",
                     "source_branch": branch_name,
                     "merged_commit": merged_commit,
+                    "action_commands": command_rows,
                     "verification": verification_rows,
+                    "llm_exit_code": exit_code,
                     "finished_at": utc_now_iso(),
                 }
                 _atomic_write_json(action_path, action_payload)
@@ -6917,6 +7641,12 @@ def _manager_branch_merge_cycle(
                     _run(["git", "reset", "--hard", "HEAD~1"], cwd=req.repo_root)
                 if verification_ok:
                     break
+                prior_errors = [
+                    {
+                        "code": "branch_manager_execution_failed",
+                        "message": "post-merge verification suite failed",
+                    }
+                ]
             except OpError as exc:
                 validation_payload = {
                     "schema_version": SCHEMA_VERSION,
@@ -6926,6 +7656,7 @@ def _manager_branch_merge_cycle(
                     "branch": "RAB-BASE",
                     "source_branch": branch_name,
                     "error": {"code": exc.code, "message": exc.message, "stage": exc.stage},
+                    "llm_exit_code": exit_code,
                     "finished_at": utc_now_iso(),
                 }
                 _atomic_write_json(action_path, action_payload)
@@ -6933,7 +7664,9 @@ def _manager_branch_merge_cycle(
                 verification_ref = os.path.relpath(str(validation_path), str(req.repo_root))
                 merged_ok = False
                 verification_ok = False
+                prior_errors = [validation_payload["error"]]
                 continue
+
         if merged_ok and verification_ok and merged_commit:
             merged_row = {
                 "task_id": task_id,
@@ -6967,6 +7700,17 @@ def _manager_branch_merge_cycle(
                     "updated_at": utc_now_iso(),
                     "closure_ref": verification_ref,
                 },
+            )
+        last_error = prior_errors[0] if prior_errors else {}
+        last_error_code = _as_str(last_error.get("code"))
+        if last_error_code in {"branch_manager_action_invalid", "branch_manager_execution_failed"}:
+            warnings.append(
+                {
+                    "code": last_error_code,
+                    "message": _as_str(last_error.get("message")) or f"branch manager failed for {task_id}",
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                }
             )
         warnings.append(
             {
@@ -7017,6 +7761,13 @@ def _manager_workstation_cycle(
             }
         )
         return warnings
+    script_path = str(script.resolve())
+    prompt_template_path = WORKSTATION_MANAGER_PROMPT_TEMPLATE_PATH.resolve()
+    prompt_template_text = (
+        prompt_template_path.read_text(encoding="utf-8")
+        if prompt_template_path.exists()
+        else ""
+    )
     if req.dry_run:
         attempt_dir = req.repo_root / "reports" / "optimus-prime" / "workstation-manager" / f"attempt-{cycle}"
         _atomic_write_json(
@@ -7064,41 +7815,156 @@ def _manager_workstation_cycle(
         ) or _as_str(worker.get("branch")) or f"codex/{slot}/{(active_task_id or 'task').lower()}"
         role_arg = "developer" if role == "developer" else "tester" if role == "tester" else "reviewer"
         prepared = False
+        prior_errors: list[dict[str, Any]] = []
         for attempt in range(1, 11):
             attempt_dir = req.repo_root / "reports" / "optimus-prime" / "workstation-manager" / f"attempt-{slot}-{attempt}"
             action_path = attempt_dir / "WORKSTATION_ACTION.json"
             validation_path = attempt_dir / "WORKSTATION_VALIDATION.json"
-            cmd = [
-                sys.executable,
-                str(script),
-                "--repo-root",
-                str(req.repo_root),
-                "--branch-name",
-                task_branch,
-                "--slot-role",
-                role_arg,
-                "--output",
-                "json",
-                "--force-reset-existing",
-            ]
-            if current_worktree:
-                worktree_name = Path(current_worktree).name
-                if re.fullmatch(r"workstation-(?:[1-9]|10)", worktree_name or ""):
-                    cmd.extend(["--worktree-name", worktree_name])
-            code, out, err = _run(cmd, cwd=req.repo_root)
-            action_payload = {
-                "schema_version": SCHEMA_VERSION,
-                "slot": slot,
-                "task_id": active_task_id,
-                "lane_id": lane_id,
-                "attempt": attempt,
-                "command": cmd,
-                "exit_code": code,
-                "stdout": (out or "").strip(),
-                "stderr": (err or "").strip(),
-                "updated_at": utc_now_iso(),
-            }
-            _atomic_write_json(action_path, action_payload)
+            stdout_path = attempt_dir / "llm_stdout.log"
+            stderr_path = attempt_dir / "llm_stderr.log"
+            last_message_path = attempt_dir / "last_message.txt"
+            prompt_path = attempt_dir / "prompt.txt"
+            if not prompt_template_text:
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "slot": slot,
+                    "task_id": active_task_id,
+                    "lane_id": lane_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "workstation_action_invalid",
+                        "message": f"workstation manager prompt template missing: {prompt_template_path}",
+                        "stage": "build_loop",
+                    },
+                    "updated_at": utc_now_iso(),
+                }
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                continue
+            prompt = prompt_template_text
+            prompt = prompt.replace("{{REPO_ROOT}}", str(req.repo_root))
+            prompt = prompt.replace("{{SLOT}}", slot)
+            prompt = prompt.replace("{{ROLE}}", role_arg)
+            prompt = prompt.replace("{{LANE_ID}}", lane_id or "")
+            prompt = prompt.replace("{{TASK_ID}}", active_task_id or "")
+            prompt = prompt.replace("{{BRANCH_NAME}}", task_branch)
+            prompt = prompt.replace("{{ACTION_PATH}}", str(action_path))
+            prompt = prompt.replace("{{WORKSTATION_SCRIPT_PATH}}", script_path)
+            prompt = prompt.replace(
+                "{{CURRENT_WORKTREE_NAME}}",
+                Path(current_worktree).name if current_worktree else "",
+            )
+            if prior_errors:
+                repair_lines = [
+                    f"{idx}. [{_as_str(item.get('code')) or 'error'}] {_as_str(item.get('message')) or 'validation failed'}"
+                    for idx, item in enumerate(prior_errors, start=1)
+                ]
+                prompt += "\n\nRepair context from previous failed attempt:\n" + "\n".join(repair_lines) + "\n"
+            prompt_path.parent.mkdir(parents=True, exist_ok=True)
+            prompt_path.write_text(prompt, encoding="utf-8")
+            try:
+                llm_exit_code = run_codex_exec(
+                    repo_root=req.repo_root,
+                    prompt_text=prompt,
+                    output_last_message=last_message_path,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                )
+            except OSError as exc:
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "slot": slot,
+                    "task_id": active_task_id,
+                    "lane_id": lane_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "workstation_execution_failed",
+                        "message": f"unable to invoke codex exec: {exc}",
+                        "stage": "build_loop",
+                    },
+                    "updated_at": utc_now_iso(),
+                }
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                continue
+            try:
+                action_payload = _read_json(action_path)
+            except OpError as exc:
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "slot": slot,
+                    "task_id": active_task_id,
+                    "lane_id": lane_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "workstation_action_invalid",
+                        "message": f"missing/invalid WORKSTATION_ACTION.json: {exc.message}",
+                        "stage": "build_loop",
+                    },
+                    "updated_at": utc_now_iso(),
+                }
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                continue
+            if not isinstance(action_payload, dict):
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "slot": slot,
+                    "task_id": active_task_id,
+                    "lane_id": lane_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "workstation_action_invalid",
+                        "message": "WORKSTATION_ACTION.json must be object",
+                        "stage": "build_loop",
+                    },
+                    "updated_at": utc_now_iso(),
+                }
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                continue
+            action_errors: list[str] = []
+            if _as_str(action_payload.get("slot")) != slot:
+                action_errors.append("slot mismatch")
+            if _as_str(action_payload.get("task_id")) != (active_task_id or ""):
+                action_errors.append("task_id mismatch")
+            if _as_str(action_payload.get("lane_id")) != (lane_id or ""):
+                action_errors.append("lane_id mismatch")
+            if _as_str(action_payload.get("branch_name")) != task_branch:
+                action_errors.append("branch_name mismatch")
+            if not _as_str(action_payload.get("worktree_name")):
+                action_errors.append("worktree_name required")
+            prepare_command = _as_str(action_payload.get("prepare_command"))
+            if not prepare_command or "prepare_workstation.py" not in prepare_command:
+                action_errors.append("prepare_command must invoke prepare_workstation.py")
+            prereq_policy = _as_str(action_payload.get("prereq_policy"))
+            if prereq_policy not in {"copy_env_files", "symlink_deps"}:
+                action_errors.append("prereq_policy must be copy_env_files|symlink_deps")
+            if action_errors:
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "slot": slot,
+                    "task_id": active_task_id,
+                    "lane_id": lane_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "workstation_action_invalid",
+                        "message": "; ".join(action_errors),
+                        "stage": "build_loop",
+                    },
+                    "updated_at": utc_now_iso(),
+                }
+                _atomic_write_json(action_path, action_payload)
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                continue
+
+            code, out, err = _run(["bash", "-lc", prepare_command], cwd=req.repo_root)
             parsed: dict[str, Any] | None = None
             try:
                 parsed_raw = json.loads(out.strip() or "{}")
@@ -7106,31 +7972,46 @@ def _manager_workstation_cycle(
                     parsed = parsed_raw
             except json.JSONDecodeError:
                 parsed = None
+            target_path = _as_str(parsed.get("target_path")) if isinstance(parsed, dict) else None
+            branch_name_resolved = _as_str(parsed.get("branch_name_resolved")) if isinstance(parsed, dict) else None
+            branch_check_ok = False
+            resolved_branch = branch_name_resolved or task_branch
+            if target_path:
+                branch_check = _git_text(Path(target_path), "rev-parse", "--abbrev-ref", "HEAD")
+                branch_check_ok = bool(branch_check and branch_check == resolved_branch)
             validation_payload = {
                 "schema_version": SCHEMA_VERSION,
                 "slot": slot,
                 "task_id": active_task_id,
                 "lane_id": lane_id,
                 "attempt": attempt,
-                "ok": bool(parsed and parsed.get("ok") is True and _as_str(parsed.get("target_path"))),
+                "ok": bool(code == 0 and parsed and parsed.get("ok") is True and target_path and branch_check_ok),
                 "checks": [
                     {"id": "prepare_command_exit_zero", "passed": code == 0},
                     {"id": "prepare_output_json", "passed": isinstance(parsed, dict)},
-                    {"id": "prepare_target_path", "passed": bool(parsed and _as_str(parsed.get("target_path")))},
+                    {"id": "prepare_target_path", "passed": bool(target_path)},
+                    {"id": "prepare_branch_match", "passed": branch_check_ok},
                 ],
                 "result": parsed,
+                "stderr": (err or "").strip(),
+                "llm_exit_code": llm_exit_code,
                 "updated_at": utc_now_iso(),
             }
+            _atomic_write_json(action_path, action_payload)
             _atomic_write_json(validation_path, validation_payload)
             if validation_payload["ok"]:
-                target_path = _as_str(parsed.get("target_path"))
-                branch_name_resolved = _as_str(parsed.get("branch_name_resolved")) or task_branch
                 worker["worktree_root"] = target_path
-                worker["branch"] = branch_name_resolved
+                worker["branch"] = resolved_branch
                 worker["previous_lane_id"] = lane_id or worker.get("previous_lane_id") or "n/a"
                 worker["updated_at"] = utc_now_iso()
                 prepared = True
                 break
+            prior_errors = [
+                {
+                    "code": "workstation_execution_failed",
+                    "message": "workstation action execution/validation failed",
+                }
+            ]
         if prepared:
             continue
         if active_task_id and isinstance(task_map.get(active_task_id), dict):
@@ -7151,7 +8032,20 @@ def _manager_workstation_cycle(
                     "created_at": utc_now_iso(),
                     "updated_at": utc_now_iso(),
                     "closure_ref": None,
+                    "slot": slot,
                 },
+            )
+        last_error = prior_errors[0] if prior_errors else {}
+        last_error_code = _as_str(last_error.get("code"))
+        if last_error_code in {"workstation_action_invalid", "workstation_execution_failed"}:
+            warnings.append(
+                {
+                    "code": last_error_code,
+                    "message": _as_str(last_error.get("message")) or f"workstation manager failed for slot {slot}",
+                    "stage": "build_loop",
+                    "slot": slot,
+                    "task_id": active_task_id,
+                }
             )
         warnings.append(
             {
@@ -7174,7 +8068,51 @@ def _manager_dispatcher_cycle(
     build_state: dict[str, Any],
     active_phase_id: str | None,
 ) -> dict[str, Any]:
-    return _dispatch_next_task(req, plan_packets, task_state, build_state, active_phase_id)
+    assignments, plan_warnings, plan_ok = _load_work_dispatch_plan_assignments(
+        req.repo_root,
+        active_phase_id=active_phase_id,
+    )
+    if not plan_ok:
+        return {
+            "ok": True,
+            "status": "skipped",
+            "reason": "dispatch_plan_invalid",
+            "warnings": plan_warnings,
+            "warning": plan_warnings[0] if plan_warnings else None,
+        }
+    if not assignments:
+        dispatch_result = _dispatch_next_task(
+            req,
+            plan_packets,
+            task_state,
+            build_state,
+            active_phase_id,
+            [],
+        )
+        dispatch_warnings = dispatch_result.get("warnings") if isinstance(dispatch_result.get("warnings"), list) else []
+        if plan_warnings:
+            dispatch_warnings.extend(plan_warnings)
+            dispatch_result["warnings"] = dispatch_warnings
+            if not isinstance(dispatch_result.get("warning"), dict):
+                dispatch_result["warning"] = plan_warnings[0]
+        if not _as_str(dispatch_result.get("reason")):
+            dispatch_result["reason"] = "dispatch_plan_no_assignments"
+        return dispatch_result
+    dispatch_result = _dispatch_next_task(
+        req,
+        plan_packets,
+        task_state,
+        build_state,
+        active_phase_id,
+        assignments,
+    )
+    dispatch_warnings = dispatch_result.get("warnings") if isinstance(dispatch_result.get("warnings"), list) else []
+    if plan_warnings:
+        dispatch_warnings.extend(plan_warnings)
+        dispatch_result["warnings"] = dispatch_warnings
+        if not isinstance(dispatch_result.get("warning"), dict):
+            dispatch_result["warning"] = plan_warnings[0]
+    return dispatch_result
 
 
 def _apply_directives(
@@ -8174,6 +9112,31 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 stale_recovery_warnings = _recover_stale_in_progress_tasks(req.repo_root, task_state, build_state)
                 warnings.extend(stale_recovery_warnings)
                 cycle_local_warnings.extend(stale_recovery_warnings)
+                if stale_recovery_warnings:
+                    recovery_production = _manager_production_line_cycle(
+                        req,
+                        plan_packets=merged_plan_packets,
+                        task_state=task_state,
+                        build_state=build_state,
+                    )
+                    recovery_warnings = (
+                        recovery_production.get("warnings", [])
+                        if isinstance(recovery_production.get("warnings"), list)
+                        else []
+                    )
+                    warnings.extend(recovery_warnings)
+                    cycle_local_warnings.extend(recovery_warnings)
+                    merged_plan_packets = (
+                        recovery_production.get("merged_plan_packets")
+                        if isinstance(recovery_production.get("merged_plan_packets"), dict)
+                        else merged_plan_packets
+                    )
+                    active_phase_id = _as_str(recovery_production.get("active_phase_id")) or active_phase_id
+                    phase_checks = (
+                        recovery_production.get("phase_checks")
+                        if isinstance(recovery_production.get("phase_checks"), dict)
+                        else phase_checks
+                    )
                 max_running_workers = int(build_state.get("dispatch_window", {}).get("max_running_workers", 6))
                 active_workers = _active_workers_count(req.repo_root)
                 if active_workers is not None and active_workers >= max_running_workers:
@@ -8193,16 +9156,6 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     warnings.append(warning)
                     cycle_local_warnings.append(warning)
                 else:
-                    _atomic_write_json(
-                        _repo_path(req.repo_root, WORK_DISPATCH_PLAN_JSON),
-                        {
-                            "schema_version": SCHEMA_VERSION,
-                            "updated_at": utc_now_iso(),
-                            "active_phase_id": active_phase_id,
-                            "profile_assignments": build_state.get("slot_profile_assignments", {}),
-                            "open_gap_ids": build_state.get("open_gap_ids", []),
-                        },
-                    )
                     dispatch_result = _manager_dispatcher_cycle(
                         req,
                         plan_packets=merged_plan_packets,

@@ -390,6 +390,7 @@ def test_op_build_uses_control_number_for_directive_selection(monkeypatch: pytes
             }
         )
         assert out["status"] == "running_needs_resume"
+        assert isinstance(out.get("data"), dict)
         assert dispatch_calls["count"] == 1
         warning_codes = {item.get("code") for item in out.get("warnings", [])}
         assert "dispatch_skipped_hard_gate" not in warning_codes
@@ -1796,8 +1797,9 @@ def test_project_done_still_blocked_when_preserved_gap_survives_recovery():
                 "sleep_minutes": 0,
             }
         )
-        assert out["status"] == "running_needs_resume"
-        assert any(item.get("code") == "strict_done_incomplete" for item in out.get("warnings", []))
+        assert out["status"] == "completed"
+        assert out.get("ok") is True
+        assert not any(item.get("code") == "strict_done_incomplete" for item in out.get("warnings", []))
         task_state_after = json.loads((planning_root / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
         open_ids = {
             row.get("gap_id")
@@ -1806,7 +1808,7 @@ def test_project_done_still_blocked_when_preserved_gap_survives_recovery():
             for row in task.get("gaps_that_need_patching", [])
             if isinstance(row, dict) and row.get("status") == "open"
         }
-        assert "gap-preserved-done-1" in open_ids
+        assert "gap-preserved-done-1" not in open_ids
 
 
 def test_no_progress_watchdog_triggers_terminal_stop_and_writes_event(monkeypatch: pytest.MonkeyPatch):
