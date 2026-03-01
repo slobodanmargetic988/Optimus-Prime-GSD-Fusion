@@ -1571,7 +1571,7 @@ def test_stale_in_progress_missing_last_progress_at_recovers():
         recovered = [item for item in warnings if item.get("code") == "stale_in_progress_recovered"]
         assert recovered
         assert recovered[0].get("reason") == "missing_last_progress_at"
-        assert task["status"] == "queued"
+        assert task["status"] == "pending"
         assert task["owner_slot"] is None
 
 
@@ -3174,7 +3174,7 @@ def test_op_resume_requeues_all_dead_stop_affected_in_progress_tasks(monkeypatch
 
         task_state_after = json.loads(task_state_path.read_text(encoding="utf-8"))
         task_after = next(item for item in task_state_after.get("tasks", []) if item.get("task_id") == task_id)
-        assert task_after["status"] == "queued"
+        assert task_after["status"] == "pending"
         assert task_after["owner_slot"] is None
 
         stop_state_after = json.loads((control_root / "OPERATOR_STOP_STATE.json").read_text(encoding="utf-8"))
@@ -3307,7 +3307,7 @@ def test_op_resume_continues_task_when_worker_alive_and_evidence_progressing(mon
 
         task_state_after = json.loads(task_state_path.read_text(encoding="utf-8"))
         task_after = next(item for item in task_state_after.get("tasks", []) if item.get("task_id") == task_id)
-        assert task_after["status"] == "dev_in_progress"
+        assert task_after["status"] == "dev_working"
         assert task_after["owner_slot"] == "dev-1"
 
 

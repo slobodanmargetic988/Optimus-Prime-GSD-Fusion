@@ -14,7 +14,7 @@ import sys
 import time
 import uuid
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -61,6 +61,9 @@ GAP_CLOSURE_PLAN_PACKETS_JSON = PLANNING_REL / "GAP_CLOSURE_PLAN_PACKETS.json"
 VERIFICATION_MD = PLANNING_REL / "VERIFICATION.md"
 UAT_MD = PLANNING_REL / "UAT.md"
 EVIDENCE_REL = PLANNING_REL / "evidence"
+PRODUCTION_LINE_STATE_JSON = PLANNING_REL / "PRODUCTION_LINE_STATE.json"
+DONE_TASKS_REGISTRY_JSON = PLANNING_REL / "DONE_TASKS_REGISTRY.json"
+WORK_DISPATCH_PLAN_JSON = PLANNING_REL / "WORK_DISPATCH_PLAN.json"
 
 BUILD_STATE_JSON = PLANNING_REL / "BUILD_STATE.json"
 TASK_EXECUTION_STATE_JSON = PLANNING_REL / "TASK_EXECUTION_STATE.json"
@@ -95,8 +98,6 @@ MANDATORY_BUILD_BASELINE = [
     PLAN_CHECK_JSON,
     TEST_CONTRACT_MD,
     PLAYWRIGHT_UAT_MD,
-    GAPS_JSON,
-    GAP_CLOSURE_PLAN_PACKETS_JSON,
     VERIFICATION_MD,
     UAT_MD,
     TASK_EXECUTION_STATE_JSON,
@@ -112,8 +113,9 @@ PLANNING_OVERRIDE_SENTINELS = [
     PLAN_PACKETS_JSON,
     PLAN_CHECK_JSON,
     TASK_EXECUTION_STATE_JSON,
-    GAPS_JSON,
-    GAP_CLOSURE_PLAN_PACKETS_JSON,
+    PRODUCTION_LINE_STATE_JSON,
+    DONE_TASKS_REGISTRY_JSON,
+    WORK_DISPATCH_PLAN_JSON,
 ]
 
 STRATEGY_LADDER = [
@@ -132,6 +134,60 @@ TERMINAL_HARD_STOPS = {
 
 STALE_IN_PROGRESS_TIMEOUT_SEC = 900
 NO_PROGRESS_THRESHOLD_CYCLES = 25
+
+TASK_STATUS_PENDING = "pending"
+TASK_STATUS_DEV_WORKING = "dev_working"
+TASK_STATUS_DEV_DONE = "dev_done"
+TASK_STATUS_TESTING = "testing"
+TASK_STATUS_TESTS_DONE = "tests_done"
+TASK_STATUS_REVIEWING = "reviewing"
+TASK_STATUS_REVIEW_DONE = "review_done"
+TASK_STATUS_BLOCKED = "blocked"
+
+TASK_STATUS_ALLOWED = {
+    TASK_STATUS_PENDING,
+    TASK_STATUS_DEV_WORKING,
+    TASK_STATUS_DEV_DONE,
+    TASK_STATUS_TESTING,
+    TASK_STATUS_TESTS_DONE,
+    TASK_STATUS_REVIEWING,
+    TASK_STATUS_REVIEW_DONE,
+    TASK_STATUS_BLOCKED,
+}
+
+TASK_STATUS_NORMALIZE_MAP = {
+    "queued": TASK_STATUS_PENDING,
+    "dev_in_progress": TASK_STATUS_DEV_WORKING,
+    "dev_done": TASK_STATUS_DEV_DONE,
+    "test_in_progress": TASK_STATUS_TESTING,
+    "test_done": TASK_STATUS_TESTS_DONE,
+    "review_in_progress": TASK_STATUS_REVIEWING,
+    "review_done": TASK_STATUS_REVIEW_DONE,
+    "blocked": TASK_STATUS_BLOCKED,
+    TASK_STATUS_PENDING: TASK_STATUS_PENDING,
+    TASK_STATUS_DEV_WORKING: TASK_STATUS_DEV_WORKING,
+    TASK_STATUS_DEV_DONE: TASK_STATUS_DEV_DONE,
+    TASK_STATUS_TESTING: TASK_STATUS_TESTING,
+    TASK_STATUS_TESTS_DONE: TASK_STATUS_TESTS_DONE,
+    TASK_STATUS_REVIEWING: TASK_STATUS_REVIEWING,
+    TASK_STATUS_REVIEW_DONE: TASK_STATUS_REVIEW_DONE,
+    TASK_STATUS_BLOCKED: TASK_STATUS_BLOCKED,
+}
+
+FIXED_WORKER_TOPOLOGY: list[dict[str, str]] = [
+    {"slot": "dev-1", "role": "developer"},
+    {"slot": "dev-2", "role": "developer"},
+    {"slot": "dev-3", "role": "developer"},
+    {"slot": "test-1", "role": "tester"},
+    {"slot": "test-2", "role": "tester"},
+    {"slot": "test-3", "role": "tester"},
+    {"slot": "review-1", "role": "reviewer"},
+    {"slot": "review-2", "role": "reviewer"},
+    {"slot": "review-3", "role": "reviewer"},
+    {"slot": "production-line-manager-1", "role": "manager"},
+    {"slot": "branch-manager-1", "role": "manager"},
+]
+FIXED_WORKER_SLOTS: list[str] = [row["slot"] for row in FIXED_WORKER_TOPOLOGY]
 
 OPTIMUS_GITIGNORE_BEGIN = "# BEGIN OPTIMUS-PRIME MANAGED REPORT IGNORES"
 OPTIMUS_GITIGNORE_END = "# END OPTIMUS-PRIME MANAGED REPORT IGNORES"
@@ -221,6 +277,11 @@ def _coerce_nonneg_int(value: Any, *, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed >= 0 else default
+
+
+def _normalize_task_status(value: Any) -> str:
+    text = (_as_str(value) or TASK_STATUS_PENDING).lower()
+    return TASK_STATUS_NORMALIZE_MAP.get(text, TASK_STATUS_PENDING)
 
 
 def _as_constraints(value: Any) -> list[str]:
@@ -912,6 +973,95 @@ def _write_worker_registry(path: Path, base_payload: Any, workers: list[dict[str
     _atomic_write_json(path, out)
 
 
+def _default_worker_row(slot: str) -> dict[str, Any]:
+    now = utc_now_iso()
+    if slot.startswith("dev-"):
+        role = "developer"
+    elif slot.startswith("test-"):
+        role = "tester"
+    elif slot.startswith("review-"):
+        role = "reviewer"
+    elif slot.startswith("production-line-manager"):
+        role = "manager"
+    else:
+        role = "manager"
+    manager_type = None
+    if slot == "production-line-manager-1":
+        manager_type = "production_line"
+    elif slot == "branch-manager-1":
+        manager_type = "branch_merge"
+    row: dict[str, Any] = {
+        "slot": slot,
+        "role": role,
+        "session_state": "not_running",
+        "active_task_id": None,
+        "active_task": None,
+        "lane_id": None,
+        "previous_lane_id": "n/a",
+        "branch": "RAB-BASE",
+        "dispatch_pid": None,
+        "dispatch_thread_id": None,
+        "codex_profile_alias": None,
+        "worktree_root": None,
+        "updated_at": now,
+    }
+    if manager_type is not None:
+        row["manager_type"] = manager_type
+        row["active_job_id"] = None
+    return row
+
+
+def _ensure_worker_registry_v2(repo_root: Path, build_state: dict[str, Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    registry_path = repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+    base_payload, workers, shape = _load_worker_registry(registry_path)
+    by_slot: dict[str, dict[str, Any]] = {}
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        slot = _as_str(worker.get("slot"))
+        if not slot:
+            continue
+        row = dict(worker)
+        row.setdefault("active_task_id", _as_str(row.get("active_task")))
+        row.setdefault("lane_id", None)
+        row.setdefault("previous_lane_id", "n/a")
+        row.setdefault("dispatch_thread_id", None)
+        row.setdefault("codex_profile_alias", None)
+        row.setdefault("worktree_root", None)
+        row.setdefault("branch", "RAB-BASE")
+        row.setdefault("session_state", _worker_state(row) or "not_running")
+        if row.get("active_task") is not None and row.get("active_task_id") is None:
+            row["active_task_id"] = _as_str(row.get("active_task"))
+        by_slot[slot] = row
+
+    out_workers: list[dict[str, Any]] = []
+    inserted = 0
+    for slot in FIXED_WORKER_SLOTS:
+        row = by_slot.get(slot)
+        if not isinstance(row, dict):
+            row = _default_worker_row(slot)
+            inserted += 1
+        out_workers.append(row)
+
+    _write_worker_registry(registry_path, base_payload, out_workers, shape if shape in {"dict_list", "dict_dict", "list"} else "dict_list")
+    if inserted > 0:
+        warnings.append(
+            {
+                "code": "worker_registry_initialized",
+                "message": f"initialized/normalized worker registry v2 with fixed slots (inserted={inserted})",
+                "stage": "build_preflight",
+            }
+        )
+    assignments = build_state.get("slot_profile_assignments")
+    if not isinstance(assignments, dict):
+        assignments = {}
+        build_state["slot_profile_assignments"] = assignments
+    for slot in FIXED_WORKER_SLOTS:
+        assignments.setdefault(slot, None)
+    return warnings
+
+
 def _load_operator_stop_request(marker_path: Path) -> tuple[dict[str, Any] | None, str | None, list[dict[str, Any]]]:
     if not marker_path.exists():
         return None, None, []
@@ -1246,8 +1396,8 @@ def _reconcile_post_operator_stop(repo_root: Path) -> tuple[list[dict[str, Any]]
         task = task_map.get(task_id)
         if not isinstance(task, dict):
             continue
-        status = (_as_str(task.get("status")) or "").lower()
-        if status not in {"dev_in_progress", "test_in_progress", "review_in_progress"}:
+        status = _normalize_task_status(task.get("status"))
+        if status not in {TASK_STATUS_DEV_WORKING, TASK_STATUS_TESTING, TASK_STATUS_REVIEWING}:
             reconcile_results.append({"task_id": task_id, "decision": "ignored_not_in_progress"})
             continue
 
@@ -1287,7 +1437,7 @@ def _reconcile_post_operator_stop(repo_root: Path) -> tuple[list[dict[str, Any]]
             )
             continue
 
-        task["status"] = "queued"
+        task["status"] = TASK_STATUS_PENDING
         task["owner_slot"] = None
         task["last_progress_at"] = now_iso
         blockers = task.get("blockers")
@@ -1487,6 +1637,7 @@ def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str,
         if not task_id:
             continue
         phase_id = _as_str(task.get("phase_id")) or "phase-1"
+        lane_id = _as_str(task.get("lane_id")) or f"{phase_id}/lane-a"
         req_ids = []
         for rid in task.get("requirement_ids", []):
             rid_text = _as_str(rid)
@@ -1501,9 +1652,11 @@ def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str,
             {
                 "task_id": task_id,
                 "phase_id": phase_id,
+                "lane_id": lane_id,
                 "requirement_ids": req_ids,
-                "status": "queued",
+                "status": _normalize_task_status(task.get("status")),
                 "owner_slot": None,
+                "dispatch_thread_id": None,
                 "last_progress_at": None,
                 "attempts": {"dev": 0, "test": 0, "review": 0},
                 "evidence": {
@@ -1512,6 +1665,7 @@ def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str,
                     "verify_results": [],
                     "uat_results": [],
                 },
+                "gaps_that_need_patching": task.get("gaps_that_need_patching", []) if isinstance(task.get("gaps_that_need_patching"), list) else [],
                 "blockers": [],
             }
         )
@@ -1529,16 +1683,7 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
     if not isinstance(tasks, list):
         errors.append({"code": "task_state_invalid", "message": "TASK_EXECUTION_STATE.tasks must be a list"})
         return errors
-    allowed = {
-        "queued",
-        "dev_in_progress",
-        "dev_done",
-        "test_in_progress",
-        "test_done",
-        "review_in_progress",
-        "review_done",
-        "blocked",
-    }
+    allowed = TASK_STATUS_ALLOWED
     seen: set[str] = set()
     plan_phase_ids: set[str] = set()
     for phase in plan_packets.get("phases", []):
@@ -1556,7 +1701,8 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
             errors.append({"code": "task_state_invalid", "message": "task_id is required"})
             continue
         seen.add(task_id)
-        status = _as_str(item.get("status")) or ""
+        status = _normalize_task_status(item.get("status"))
+        item["status"] = status
         if status not in allowed:
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} has invalid status {status}"})
         phase_id = _as_str(item.get("phase_id"))
@@ -1564,6 +1710,14 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} phase_id is required"})
         elif plan_phase_ids and phase_id not in plan_phase_ids:
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} phase_id not found in plan phases"})
+        lane_id = _as_str(item.get("lane_id"))
+        if not lane_id:
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} lane_id is required"})
+        elif not lane_id.startswith(f"{phase_id}/lane-"):
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} lane_id must be phase-scoped"})
+        dispatch_thread_id = item.get("dispatch_thread_id")
+        if dispatch_thread_id is not None and not _as_str(dispatch_thread_id):
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} dispatch_thread_id must be string|null"})
         attempts = item.get("attempts")
         if not isinstance(attempts, dict):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} attempts must be object"})
@@ -1583,6 +1737,9 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
             val = evidence.get(key)
             if not isinstance(val, list):
                 errors.append({"code": "task_state_invalid", "message": f"task {task_id} evidence.{key} must be list"})
+        gaps = item.get("gaps_that_need_patching")
+        if not isinstance(gaps, list):
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} gaps_that_need_patching must be list"})
     expected_task_ids = []
     for task in plan_packets.get("tasks", []):
         if isinstance(task, dict):
@@ -1631,6 +1788,17 @@ def _task_by_id(task_state: dict[str, Any]) -> dict[str, dict[str, Any]]:
         if task_id:
             out[task_id] = item
     return out
+
+
+def _status_counts(task_state: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    rows = task_state.get("tasks") if isinstance(task_state.get("tasks"), list) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = _normalize_task_status(row.get("status"))
+        counts[status] = counts.get(status, 0) + 1
+    return counts
 
 
 def _run_tool_json(script: Path, payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
@@ -1916,25 +2084,29 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         review = payload["review"]
         summary = payload["summary"]
         if _as_bool_field(gate.get("ready_for_review")):
-            task["status"] = "test_done"
+            task["status"] = TASK_STATUS_TESTS_DONE
             task["owner_slot"] = None
         if (_as_str(review.get("decision")) or "").lower() in {"accepted", "approved", "ready_for_merge", "pass"}:
-            task["status"] = "review_done"
+            task["status"] = TASK_STATUS_REVIEW_DONE
             task["owner_slot"] = None
         if (_as_str(review.get("status")) or "").lower() in {"done", "completed", "review_done"}:
-            task["status"] = "review_done"
+            task["status"] = TASK_STATUS_REVIEW_DONE
             task["owner_slot"] = None
-        if _as_bool_field(gate.get("ready_for_test")) and (_as_str(task.get("status")) or "") in {"queued", "dev_in_progress", "blocked"}:
-            task["status"] = "dev_done"
+        if _as_bool_field(gate.get("ready_for_test")) and _normalize_task_status(task.get("status")) in {
+            TASK_STATUS_PENDING,
+            TASK_STATUS_DEV_WORKING,
+            TASK_STATUS_BLOCKED,
+        }:
+            task["status"] = TASK_STATUS_DEV_DONE
             task["owner_slot"] = None
         summary_result = (_as_str(summary.get("result")) or "").lower()
         reason_codes = summary.get("reason_codes") if isinstance(summary.get("reason_codes"), list) else []
         is_not_started_placeholder = summary_result == "blocked" and any(
             _as_str(item) == "not_started" for item in reason_codes
         )
-        if summary_result in {"fail", "blocked"} and not is_not_started_placeholder and (_as_str(task.get("status")) or "") not in {"review_done"}:
+        if summary_result in {"fail", "blocked"} and not is_not_started_placeholder and _normalize_task_status(task.get("status")) != TASK_STATUS_REVIEW_DONE:
             if not _as_bool_field(gate.get("ready_for_test")) and not _as_bool_field(gate.get("ready_for_review")):
-                task["status"] = "blocked"
+                task["status"] = TASK_STATUS_BLOCKED
                 task["owner_slot"] = None
 
         plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
@@ -2528,7 +2700,7 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
         if bool(task.get("is_gap_closure")) or bool(plan_task.get("is_gap_closure")):
             continue
         phase_id = _as_str(plan_task.get("phase_id")) or _as_str(task.get("phase_id")) or "phase-1"
-        task_status = _as_str(task.get("status")) or "queued"
+        task_status = _normalize_task_status(task.get("status"))
         evidence = task.get("evidence") if isinstance(task.get("evidence"), dict) else {}
         evidence_ref = _as_str(evidence.get("task_evidence_ref")) or str(_canonical_task_evidence_rel(task_id))
         verify_required = {
@@ -2546,7 +2718,7 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
                 cmd = _as_str(item.get("command"))
                 if cmd:
                     verify_passed.add(cmd)
-        if task_status in {"test_done", "review_done", "blocked"}:
+        if task_status in {TASK_STATUS_TESTS_DONE, TASK_STATUS_REVIEW_DONE, TASK_STATUS_BLOCKED}:
             for cmd in sorted(verify_required - verify_passed):
                 gap_id = _gap_id(plan_id, phase_id, task_id, f"verify:{cmd}", "fail")
                 active_rows[gap_id] = _default_gap_row(
@@ -2580,7 +2752,7 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
                     rid_text = _as_str(rid_item)
                     if rid_text:
                         passed_uat.add(rid_text)
-        if task_status in {"review_done", "blocked"}:
+        if task_status in {TASK_STATUS_REVIEW_DONE, TASK_STATUS_BLOCKED}:
             for rid in sorted(set(requirement_ids) - passed_uat):
                 gap_id = _gap_id(plan_id, phase_id, task_id, f"uat:{rid}", "blocked")
                 active_rows[gap_id] = _default_gap_row(
@@ -2596,7 +2768,7 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
                     reason_codes=["uat_requirement_not_passed"],
                 )
 
-        if (_as_str(task.get("status")) or "") == "blocked":
+        if _normalize_task_status(task.get("status")) == TASK_STATUS_BLOCKED:
             gap_id = _gap_id(plan_id, phase_id, task_id, "task:blocked", "blocked")
             active_rows[gap_id] = _default_gap_row(
                 plan_id=plan_id,
@@ -2775,7 +2947,7 @@ def _ensure_gap_closure_task_state(repo_root: Path, task_state: dict[str, Any], 
                 "source_gap_id": _as_str(task.get("source_gap_id")),
                 "requirement_ids": req_ids,
                 "requirement_fallback_used": _as_bool_field(task.get("requirement_fallback_used")),
-                "status": "queued",
+                "status": TASK_STATUS_PENDING,
                 "owner_slot": None,
                 "last_progress_at": None,
                 "attempts": {"dev": 0, "test": 0, "review": 0},
@@ -2789,6 +2961,72 @@ def _ensure_gap_closure_task_state(repo_root: Path, task_state: dict[str, Any], 
                 "is_gap_closure": True,
             }
         )
+
+
+def _normalize_task_gap_rows(task: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = task.get("gaps_that_need_patching")
+    if not isinstance(raw, list):
+        task["gaps_that_need_patching"] = []
+        return []
+    out: list[dict[str, Any]] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        gap_id = _as_str(row.get("gap_id"))
+        if not gap_id:
+            continue
+        status = (_as_str(row.get("status")) or "open").lower()
+        reason_codes_raw = row.get("reason_codes")
+        reason_codes = (
+            [code for code in (_as_str(item) for item in reason_codes_raw) if code]
+            if isinstance(reason_codes_raw, list)
+            else []
+        )
+        if not reason_codes:
+            reason_codes = ["gap_detected"]
+        normalized = dict(row)
+        normalized["gap_id"] = gap_id
+        normalized["status"] = status
+        normalized["reason_codes"] = reason_codes
+        out.append(normalized)
+    task["gaps_that_need_patching"] = out
+    return out
+
+
+def _sync_task_embedded_gaps_from_payload(task_state: dict[str, Any], gaps_payload: dict[str, Any]) -> None:
+    task_map = _task_by_id(task_state)
+    gap_rows = gaps_payload.get("gaps") if isinstance(gaps_payload.get("gaps"), list) else []
+    by_task: dict[str, list[dict[str, Any]]] = {}
+    for row in gap_rows:
+        if not isinstance(row, dict):
+            continue
+        task_id = _as_str(row.get("task_id"))
+        if not task_id:
+            continue
+        by_task.setdefault(task_id, []).append(dict(row))
+    for task_id, task in task_map.items():
+        if not isinstance(task, dict):
+            continue
+        task["gaps_that_need_patching"] = by_task.get(task_id, [])
+        _normalize_task_gap_rows(task)
+
+
+def _open_task_gap_ids(task_state: dict[str, Any], *, phase_id: str | None = None) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for task in task_state.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        if phase_id and (_as_str(task.get("phase_id")) or "phase-1") != phase_id:
+            continue
+        for row in _normalize_task_gap_rows(task):
+            if (_as_str(row.get("status")) or "").lower() != "open":
+                continue
+            gap_id = _as_str(row.get("gap_id"))
+            if gap_id and gap_id not in seen:
+                seen.add(gap_id)
+                out.append(gap_id)
+    return sorted(out)
 
 
 def _phase_exit_checks(repo_root: Path, phase_id: str, plan_packets: dict[str, Any], task_state: dict[str, Any], gaps_payload: dict[str, Any]) -> dict[str, Any]:
@@ -2808,7 +3046,7 @@ def _phase_exit_checks(repo_root: Path, phase_id: str, plan_packets: dict[str, A
             all_tasks_review_done = False
             continue
         status = _as_str(task.get("status")) or ""
-        if status != "review_done":
+        if _normalize_task_status(status) != TASK_STATUS_REVIEW_DONE:
             all_tasks_review_done = False
         for cmd in plan_task.get("verify_commands", []):
             cmd_text = _as_str(cmd)
@@ -2828,14 +3066,16 @@ def _phase_exit_checks(repo_root: Path, phase_id: str, plan_packets: dict[str, A
             rid_text = _as_str(rid)
             if rid_text:
                 uat_required.add(rid_text)
-    open_gap_ids = [
-        _as_str(item.get("gap_id"))
-        for item in gaps_payload.get("gaps", [])
-        if isinstance(item, dict)
-        and _as_str(item.get("status")) == "open"
-        and (_as_str(item.get("phase_id")) or "phase-1") == phase_id
-        and _as_str(item.get("gap_id"))
-    ]
+    open_gap_ids = _open_task_gap_ids(task_state, phase_id=phase_id)
+    if not open_gap_ids:
+        open_gap_ids = [
+            _as_str(item.get("gap_id"))
+            for item in gaps_payload.get("gaps", [])
+            if isinstance(item, dict)
+            and _as_str(item.get("status")) == "open"
+            and (_as_str(item.get("phase_id")) or "phase-1") == phase_id
+            and _as_str(item.get("gap_id"))
+        ]
     verify_commands_passed = verify_required.issubset(verify_passed)
     uat_matrix_passed = uat_required.issubset(uat_passed)
     checks = {
@@ -3131,6 +3371,129 @@ def _select_profile_alias_for_slot(
     return {"ok": True, "alias": selected_alias, "warning": warning}
 
 
+def _manager_profile_cycle(
+    req: OpRequest,
+    *,
+    build_state: dict[str, Any],
+    profile_selection: dict[str, Any],
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    seed_warnings = _seed_rate_registry_if_missing(
+        req.repo_root,
+        force_refresh=True,
+        emit_success_warning=False,
+        profile_selection=profile_selection,
+    )
+    warnings.extend(seed_warnings)
+
+    selected_aliases = [
+        alias for alias in (_as_str(item) for item in profile_selection.get("selected_aliases", [])) if alias
+    ]
+    if not selected_aliases:
+        warnings.append(
+            {
+                "code": "profile_selection_invalid",
+                "message": "PROFILE_SELECTION has no selected aliases",
+                "stage": "build_loop",
+            }
+        )
+        return warnings
+
+    rate_states = _read_profile_rate_states(req.repo_root, selected_aliases)
+    non_gated = [
+        alias
+        for alias in selected_aliases
+        if not bool(rate_states.get(alias, {}).get("hard_gated"))
+        and not bool(rate_states.get(alias, {}).get("soft_gated"))
+    ]
+    soft_gated = [
+        alias
+        for alias in selected_aliases
+        if not bool(rate_states.get(alias, {}).get("hard_gated"))
+        and bool(rate_states.get(alias, {}).get("soft_gated"))
+    ]
+    preferred_pool = non_gated or soft_gated
+    if not preferred_pool:
+        build_state["rate_gate_state"] = {
+            "hard_gated": True,
+            "min_reset_at": None,
+            "sleep_until": None,
+            "manual_rerun_required": False,
+        }
+        warnings.append(
+            {
+                "code": "profile_assignment_all_hard_gated",
+                "message": "all selected profiles are hard-gated; dispatch will be skipped",
+                "stage": "build_loop",
+                "profiles": selected_aliases,
+            }
+        )
+        return warnings
+
+    primary_alias = preferred_pool[0]
+    assignments = build_state.get("slot_profile_assignments")
+    if not isinstance(assignments, dict):
+        assignments = {}
+        build_state["slot_profile_assignments"] = assignments
+
+    for slot in ("production-line-manager-1", "branch-manager-1", "dev-1", "test-1", "review-1"):
+        previous = _as_str(assignments.get(slot))
+        assignments[slot] = primary_alias
+        if previous != primary_alias:
+            warnings.append(
+                {
+                    "code": "profile_assignment_reassigned",
+                    "message": f"slot {slot} reassigned profile alias: {previous or 'unset'} -> {primary_alias}",
+                    "stage": "build_loop",
+                    "slot": slot,
+                    "from_alias": previous,
+                    "to_alias": primary_alias,
+                }
+            )
+
+    triads = [
+        ("dev-2", "test-2", "review-2"),
+        ("dev-3", "test-3", "review-3"),
+    ]
+    triad_alias_candidates = [alias for alias in preferred_pool if alias != primary_alias]
+    if not triad_alias_candidates:
+        triad_alias_candidates = [primary_alias]
+    for idx, triad in enumerate(triads):
+        alias = triad_alias_candidates[idx % len(triad_alias_candidates)]
+        for slot in triad:
+            previous = _as_str(assignments.get(slot))
+            assignments[slot] = alias
+            if previous != alias:
+                warnings.append(
+                    {
+                        "code": "profile_assignment_reassigned",
+                        "message": f"slot {slot} reassigned profile alias: {previous or 'unset'} -> {alias}",
+                        "stage": "build_loop",
+                        "slot": slot,
+                        "from_alias": previous,
+                        "to_alias": alias,
+                    }
+                )
+
+    registry_path = req.repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+    base_payload, workers, shape = _load_worker_registry(registry_path)
+    by_slot = {
+        _as_str(worker.get("slot")): worker
+        for worker in workers
+        if isinstance(worker, dict) and _as_str(worker.get("slot"))
+    }
+    out_workers: list[dict[str, Any]] = []
+    for slot in FIXED_WORKER_SLOTS:
+        row = by_slot.get(slot)
+        if not isinstance(row, dict):
+            row = _default_worker_row(slot)
+        row["codex_profile_alias"] = _as_str(assignments.get(slot))
+        row["updated_at"] = utc_now_iso()
+        out_workers.append(row)
+    _write_worker_registry(registry_path, base_payload, out_workers, shape if shape in {"dict_list", "dict_dict", "list"} else "dict_list")
+    return warnings
+
+
 def _resolve_test_train_mode(repo_root: Path) -> str:
     path = repo_root / "reports" / "optimus-prime" / "TEST_TRAIN_STATE.json"
     if not path.exists():
@@ -3353,6 +3716,39 @@ def _active_worker_slots(repo_root: Path) -> set[str]:
     return out
 
 
+def _active_worker_count_by_alias(repo_root: Path) -> dict[str, int]:
+    reports = repo_root / "reports" / "optimus-prime"
+    registry_path = reports / "WORKER_REGISTRY.json"
+    if not registry_path.exists():
+        return {}
+    try:
+        registry = _read_json(registry_path)
+    except OpError:
+        return {}
+    workers: list[dict[str, Any]] = []
+    if isinstance(registry, dict):
+        raw = registry.get("workers")
+        if isinstance(raw, list):
+            workers = [item for item in raw if isinstance(item, dict)]
+        elif isinstance(raw, dict):
+            workers = [item for item in raw.values() if isinstance(item, dict)]
+    elif isinstance(registry, list):
+        workers = [item for item in registry if isinstance(item, dict)]
+    counts: dict[str, int] = {}
+    for worker in workers:
+        state = _worker_state(worker)
+        if state not in {"running", "active", "busy"}:
+            continue
+        pid = worker.get("dispatch_pid")
+        if isinstance(pid, int) and not _pid_is_running(pid):
+            continue
+        alias = _as_str(worker.get("codex_profile_alias"))
+        if not alias:
+            continue
+        counts[alias] = counts.get(alias, 0) + 1
+    return counts
+
+
 def _recover_stale_in_progress_tasks(repo_root: Path, task_state: dict[str, Any], build_state: dict[str, Any]) -> list[dict[str, Any]]:
     warnings: list[dict[str, Any]] = []
     policy = build_state.get("stale_in_progress_policy")
@@ -3366,8 +3762,8 @@ def _recover_stale_in_progress_tasks(repo_root: Path, task_state: dict[str, Any]
         if not isinstance(task, dict):
             continue
         task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
-        status = (_as_str(task.get("status")) or "").lower()
-        if status not in {"dev_in_progress", "test_in_progress", "review_in_progress"}:
+        status = _normalize_task_status(task.get("status"))
+        if status not in {TASK_STATUS_DEV_WORKING, TASK_STATUS_TESTING, TASK_STATUS_REVIEWING}:
             continue
         owner_slot = _as_str(task.get("owner_slot"))
         progress_at_raw = _as_str(task.get("last_progress_at")) or _as_str(task.get("updated_at"))
@@ -3396,9 +3792,9 @@ def _recover_stale_in_progress_tasks(repo_root: Path, task_state: dict[str, Any]
             )
             continue
         recovered_status = {
-            "dev_in_progress": "queued",
-            "test_in_progress": "dev_done",
-            "review_in_progress": "test_done",
+            TASK_STATUS_DEV_WORKING: TASK_STATUS_PENDING,
+            TASK_STATUS_TESTING: TASK_STATUS_DEV_DONE,
+            TASK_STATUS_REVIEWING: TASK_STATUS_TESTS_DONE,
         }[status]
         task["status"] = recovered_status
         task["owner_slot"] = None
@@ -3446,6 +3842,27 @@ def _git_branch_and_clean(repo_root: Path) -> tuple[str, bool]:
 def _is_git_work_tree(repo_root: Path) -> bool:
     code, out, _ = _run(["git", "rev-parse", "--is-inside-work-tree"], cwd=repo_root)
     return code == 0 and out.strip().lower() == "true"
+
+
+def _ensure_rab_base_checked_out(repo_root: Path) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    if not _is_git_work_tree(repo_root):
+        return warnings
+    current = _git_text(repo_root, "branch", "--show-current")
+    if current == "RAB-BASE":
+        return warnings
+    has_branch = _run(["git", "show-ref", "--verify", "--quiet", "refs/heads/RAB-BASE"], cwd=repo_root)[0] == 0
+    checkout_cmd = ["git", "checkout", "RAB-BASE"] if has_branch else ["git", "checkout", "-b", "RAB-BASE"]
+    code, _, err = _run(checkout_cmd, cwd=repo_root)
+    if code != 0:
+        warnings.append(
+            {
+                "code": "rab_base_checkout_failed",
+                "message": f"unable to checkout RAB-BASE: {err.strip() or 'unknown error'}",
+                "stage": "build_preflight",
+            }
+        )
+    return warnings
 
 
 def _git_bootstrap_prompt_text(
@@ -4317,6 +4734,7 @@ def _planner_validate_bundle(req: OpRequest, bundle_path: Path) -> tuple[dict[st
 
     task_ids: list[str] = []
     covered_ids: set[str] = set()
+    phase_lanes: dict[str, set[str]] = {}
     for task in tasks:
         if not isinstance(task, dict):
             errors.append({"code": "planner_bundle_schema_error", "message": "PLAN_PACKETS.tasks rows must be objects"})
@@ -4324,8 +4742,11 @@ def _planner_validate_bundle(req: OpRequest, bundle_path: Path) -> tuple[dict[st
         task_id = _as_str(task.get("task_id"))
         title = _as_str(task.get("title"))
         phase_id = _as_str(task.get("phase_id"))
+        lane_id = _as_str(task.get("lane_id"))
+        status = _normalize_task_status(task.get("status"))
         req_ids = task.get("requirement_ids")
         deps = task.get("depends_on")
+        gaps = task.get("gaps_that_need_patching")
         if not task_id:
             errors.append({"code": "planner_bundle_schema_error", "message": "task_id is required"})
         else:
@@ -4334,6 +4755,17 @@ def _planner_validate_bundle(req: OpRequest, bundle_path: Path) -> tuple[dict[st
             errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id or 'unknown'} title is required"})
         if not phase_id:
             errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id or 'unknown'} phase_id is required"})
+        if not lane_id:
+            lane_id = f"{phase_id or 'phase-1'}/lane-a"
+            task["lane_id"] = lane_id
+        elif phase_id and not lane_id.startswith(f"{phase_id}/lane-"):
+            task["lane_id"] = f"{phase_id}/lane-a"
+            lane_id = task["lane_id"]
+        if _as_str(task.get("status")) is None:
+            task["status"] = TASK_STATUS_PENDING
+            status = TASK_STATUS_PENDING
+        elif status != TASK_STATUS_PENDING:
+            errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id or 'unknown'} status must be pending in initial plan"})
         if not isinstance(req_ids, list) or not [_as_str(item) for item in req_ids if _as_str(item)]:
             errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id or 'unknown'} requirement_ids must be non-empty list"})
         else:
@@ -4343,6 +4775,20 @@ def _planner_validate_bundle(req: OpRequest, bundle_path: Path) -> tuple[dict[st
                     covered_ids.add(rid_text)
         if not isinstance(deps, list):
             errors.append({"code": "planner_bundle_schema_error", "message": f"task {task_id or 'unknown'} depends_on must be list"})
+        if not isinstance(gaps, list):
+            task["gaps_that_need_patching"] = []
+        if phase_id and lane_id:
+            phase_lanes.setdefault(phase_id, set()).add(lane_id)
+
+    for phase_id, lanes in phase_lanes.items():
+        if len(lanes) > 3:
+            errors.append(
+                {
+                    "code": "planner_bundle_schema_error",
+                    "message": f"phase {phase_id} has more than 3 lanes",
+                    "lane_ids": sorted(lanes),
+                }
+            )
 
     for rid in requirement_ids:
         if rid not in covered_ids:
@@ -4396,7 +4842,9 @@ def _planner_validate_bundle(req: OpRequest, bundle_path: Path) -> tuple[dict[st
                 errors.append({"code": "planner_bundle_schema_error", "message": "TASK_EXECUTION_STATE missing plan task IDs", "missing_task_ids": missing_state_ids})
 
     for name, key in (("GAPS.json", "gaps"), ("GAP_CLOSURE_PLAN_PACKETS.json", "tasks")):
-        artifact = bundle[name]
+        artifact = bundle.get(name)
+        if artifact is None:
+            continue
         if not isinstance(artifact.content, dict):
             errors.append({"code": "planner_bundle_schema_error", "message": f"{name} must be object JSON"})
             continue
@@ -5593,6 +6041,7 @@ def _dispatch_task_packet(
     stage: str,
     plan_id: str,
     codex_profile_alias: str,
+    slot_override: str | None = None,
 ) -> dict[str, Any]:
     script = _resolve_skill_script("dispatch-worker-packet", "dispatch_worker_packet.py")
     task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
@@ -5628,19 +6077,20 @@ def _dispatch_task_packet(
     task.setdefault("evidence", {})["dev_ready_evidence_ref"] = evidence_ref
 
     stage_cfg = {
-        "dev": {"slot": "dev-1", "role": "developer", "status": "dev_in_progress", "attempt_key": "dev"},
-        "test": {"slot": "test-1", "role": "tester", "status": "test_in_progress", "attempt_key": "test"},
-        "review": {"slot": "review-1", "role": "reviewer", "status": "review_in_progress", "attempt_key": "review"},
+        "dev": {"slot": "dev-1", "role": "developer", "status": TASK_STATUS_DEV_WORKING, "attempt_key": "dev"},
+        "test": {"slot": "test-1", "role": "tester", "status": TASK_STATUS_TESTING, "attempt_key": "test"},
+        "review": {"slot": "review-1", "role": "reviewer", "status": TASK_STATUS_REVIEWING, "attempt_key": "review"},
     }
     cfg = stage_cfg[stage]
+    slot_name = slot_override or cfg["slot"]
     start_from_commit = _git_text(req.repo_root, "rev-parse", "HEAD") or "HEAD"
     payload = {
-        "slot": cfg["slot"],
+        "slot": slot_name,
         "role": cfg["role"],
         "task_identifier": task_id,
         "repo_root": str(req.repo_root),
         "worktree_root": str(req.repo_root),
-        "branch_name": f"codex/{cfg['slot']}/{task_id.lower()}",
+        "branch_name": f"codex/{slot_name}/{task_id.lower()}",
         "start_from_branch": "main",
         "start_from_commit": start_from_commit,
         "acceptance_criteria": acceptance_refs,
@@ -5662,7 +6112,10 @@ def _dispatch_task_packet(
     result = _run_tool_json(script, payload, req.repo_root)
     if _as_bool_field(result.get("ok")):
         task["status"] = cfg["status"]
-        task["owner_slot"] = cfg["slot"]
+        task["owner_slot"] = slot_name
+        task["dispatch_thread_id"] = _as_str(result.get("dispatch_thread_id")) or _as_str(
+            (result.get("dispatch") or {}).get("dispatch_thread_id")
+        )
         task["last_progress_at"] = utc_now_iso()
         attempts = task.get("attempts")
         if not isinstance(attempts, dict):
@@ -5724,8 +6177,13 @@ def _dispatch_next_task(
         for task_id in plan_map.keys()
         if not active_phase_id or (_as_str(plan_map.get(task_id, {}).get("phase_id")) or "phase-1") == active_phase_id
     ]
+    in_progress_states = {
+        TASK_STATUS_DEV_WORKING,
+        TASK_STATUS_TESTING,
+        TASK_STATUS_REVIEWING,
+    }
     has_in_progress = any(
-        (_as_str(task_map.get(task_id, {}).get("status")) or "").endswith("_in_progress")
+        _normalize_task_status(task_map.get(task_id, {}).get("status")) in in_progress_states
         for task_id in ordered_ids
     )
     if has_in_progress:
@@ -5734,11 +6192,28 @@ def _dispatch_next_task(
     carried_warning: dict[str, Any] | None = None
 
     stage_cfg = {
-        "dev": {"slot": "dev-1", "role": "developer"},
-        "test": {"slot": "test-1", "role": "tester"},
-        "review": {"slot": "review-1", "role": "reviewer"},
+        "dev": {"role": "developer"},
+        "test": {"role": "tester"},
+        "review": {"role": "reviewer"},
     }
-    slot_count = len({cfg["slot"] for cfg in stage_cfg.values()})
+    slot_count = len(FIXED_WORKER_SLOTS)
+
+    def _lane_slot_suffix(task_payload: dict[str, Any], plan_task_payload: dict[str, Any]) -> str:
+        lane_id = _as_str(task_payload.get("lane_id")) or _as_str(plan_task_payload.get("lane_id")) or ""
+        tail = lane_id.rsplit("/", 1)[-1].lower()
+        if tail == "lane-b":
+            return "2"
+        if tail == "lane-c":
+            return "3"
+        return "1"
+
+    def _slot_for_stage(stage_name: str, task_payload: dict[str, Any], plan_task_payload: dict[str, Any]) -> str:
+        suffix = _lane_slot_suffix(task_payload, plan_task_payload)
+        if stage_name == "dev":
+            return f"dev-{suffix}"
+        if stage_name == "test":
+            return f"test-{suffix}"
+        return f"review-{suffix}"
 
     def _dispatch_for_stage(
         task_payload: dict[str, Any],
@@ -5746,10 +6221,11 @@ def _dispatch_next_task(
         stage_name: str,
         local_plan_id: str,
     ) -> dict[str, Any]:
+        slot_name = _slot_for_stage(stage_name, task_payload, plan_task_payload)
         selection = _select_profile_alias_for_slot(
             req.repo_root,
             build_state,
-            slot=stage_cfg[stage_name]["slot"],
+            slot=slot_name,
             slot_count=slot_count,
         )
         if not _as_bool(selection.get("ok"), default=False):
@@ -5759,13 +6235,29 @@ def _dispatch_next_task(
                 "reason": _as_str(selection.get("reason")) or "profile_selection_invalid",
                 "warning": selection.get("warning"),
             }
+        selected_alias = _as_str(selection.get("alias")) or "codex"
+        alias_state = _read_profile_rate_states(req.repo_root, [selected_alias]).get(selected_alias, {})
+        if bool(alias_state.get("soft_gated")):
+            active_by_alias = _active_worker_count_by_alias(req.repo_root)
+            if int(active_by_alias.get(selected_alias, 0)) >= 1:
+                return {
+                    "ok": True,
+                    "status": "skipped",
+                    "reason": "profile_soft_gated_alias_cap",
+                    "warning": {
+                        "code": "dispatch_skipped_soft_cap",
+                        "message": f"dispatch skipped for soft-gated alias cap (alias={selected_alias}, cap=1)",
+                        "stage": "build_loop",
+                        "alias": selected_alias,
+                    },
+                }
         result = _dispatch_task_packet(
             req,
             task_payload,
             plan_task_payload,
             stage_name,
             local_plan_id,
-            _as_str(selection.get("alias")) or "codex",
+            selected_alias,
         )
         selection_warning = selection.get("warning")
         if isinstance(selection_warning, dict):
@@ -5782,11 +6274,11 @@ def _dispatch_next_task(
         plan_task = plan_map.get(task_id) or {}
         if not isinstance(task, dict):
             continue
-        status = _as_str(task.get("status")) or "queued"
-        if status == "review_done":
+        status = _normalize_task_status(task.get("status"))
+        if status == TASK_STATUS_REVIEW_DONE:
             continue
         build_state["current_task_pointer"] = task_id
-        if status == "queued":
+        if status == TASK_STATUS_PENDING:
             result = _dispatch_for_stage(task, plan_task, "dev", plan_id)
             if carried_warning:
                 warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
@@ -5795,7 +6287,7 @@ def _dispatch_next_task(
                 if not isinstance(result.get("warning"), dict):
                     result["warning"] = carried_warning
             return result
-        if status == "blocked" and bool(task.get("is_gap_closure")):
+        if status == TASK_STATUS_BLOCKED and bool(task.get("is_gap_closure")):
             source_gap_id = _as_str(task.get("source_gap_id")) or _as_str(plan_task.get("source_gap_id")) or f"gap:{task_id}"
             retries = _coerce_nonneg_int(retry_attempts.get(source_gap_id, 0), default=0)
             if source_gap_id in exhausted_set:
@@ -5856,7 +6348,7 @@ def _dispatch_next_task(
                     "max_attempts": max_retry_attempts,
                 }
                 continue
-            task["status"] = "queued"
+            task["status"] = TASK_STATUS_PENDING
             task["owner_slot"] = None
             result = _dispatch_for_stage(task, plan_task, "dev", plan_id)
             if carried_warning:
@@ -5866,7 +6358,7 @@ def _dispatch_next_task(
                 if not isinstance(result.get("warning"), dict):
                     result["warning"] = carried_warning
             return result
-        if status == "dev_done":
+        if status == TASK_STATUS_DEV_DONE:
             evidence_path = _task_evidence_path(req.repo_root, task)
             if not evidence_path.exists():
                 return {
@@ -5891,7 +6383,7 @@ def _dispatch_next_task(
                 if not isinstance(result.get("warning"), dict):
                     result["warning"] = carried_warning
             return result
-        if status == "test_done":
+        if status == TASK_STATUS_TESTS_DONE:
             evidence_path = _task_evidence_path(req.repo_root, task)
             if not evidence_path.exists():
                 return {
@@ -5921,6 +6413,142 @@ def _dispatch_next_task(
             deferred_block["warning"] = carried_warning
         return deferred_block
     return {"ok": True, "status": "noop", "reason": "no dispatchable tasks", "warning": carried_warning}
+
+
+def _manager_production_line_cycle(
+    req: OpRequest,
+    *,
+    plan_packets: dict[str, Any],
+    task_state: dict[str, Any],
+    build_state: dict[str, Any],
+) -> dict[str, Any]:
+    warnings: list[dict[str, Any]] = []
+    warnings.extend(_apply_handoff_updates(req.repo_root, task_state, build_state))
+    warnings.extend(_sync_task_state_from_evidence(req.repo_root, plan_packets, task_state))
+    gaps_payload, gap_closure_payload = _refresh_gap_artifacts(req.repo_root, plan_packets, task_state, build_state)
+    _ensure_gap_closure_task_state(
+        req.repo_root,
+        task_state,
+        gap_closure_payload,
+        _as_str(plan_packets.get("plan_id")) or "plan-unknown",
+    )
+    merged_plan_packets = _merge_plan_with_gap_closure(plan_packets, gap_closure_payload)
+    active_phase_id, phase_checks = _resolve_active_phase(
+        merged_plan_packets,
+        task_state,
+        gaps_payload,
+        req.repo_root,
+    )
+    _sync_task_embedded_gaps_from_payload(task_state, gaps_payload)
+    build_state["open_gap_ids"] = _open_task_gap_ids(task_state)
+    build_state["current_phase_id"] = active_phase_id
+    build_state["phase_exit_checks"] = phase_checks
+    build_state["last_gap_generation_at"] = utc_now_iso()
+    production_line_state = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "active_phase_id": active_phase_id,
+        "open_gap_ids": build_state.get("open_gap_ids", []),
+        "phase_exit_checks": phase_checks,
+        "task_counts_by_status": _status_counts(task_state),
+    }
+    _atomic_write_json(_repo_path(req.repo_root, PRODUCTION_LINE_STATE_JSON), production_line_state)
+    return {
+        "warnings": warnings,
+        "merged_plan_packets": merged_plan_packets,
+        "gaps_payload": gaps_payload,
+        "active_phase_id": active_phase_id,
+        "phase_checks": phase_checks,
+    }
+
+
+def _manager_branch_merge_cycle(
+    req: OpRequest,
+    *,
+    task_state: dict[str, Any],
+    build_state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    registry_path = _repo_path(req.repo_root, DONE_TASKS_REGISTRY_JSON)
+    if registry_path.exists():
+        payload = _read_json(registry_path)
+        done_registry = payload if isinstance(payload, dict) else {}
+    else:
+        done_registry = {}
+    merged_ids = {
+        _as_str(item)
+        for item in (done_registry.get("merged_task_ids") if isinstance(done_registry.get("merged_task_ids"), list) else [])
+        if _as_str(item)
+    }
+    review_done = [
+        _as_str(task.get("task_id"))
+        for task in task_state.get("tasks", [])
+        if isinstance(task, dict) and _normalize_task_status(task.get("status")) == TASK_STATUS_REVIEW_DONE and _as_str(task.get("task_id"))
+    ]
+    pending_merge = [task_id for task_id in review_done if task_id not in merged_ids]
+    out = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "review_done_task_ids": sorted(review_done),
+        "merged_task_ids": sorted(merged_ids),
+        "pending_merge_task_ids": sorted(pending_merge),
+        "branch": "RAB-BASE",
+    }
+    _atomic_write_json(registry_path, out)
+    if pending_merge:
+        warnings.append(
+            {
+                "code": "branch_merge_pending_tasks",
+                "message": f"{len(pending_merge)} review_done task(s) pending branch merge on RAB-BASE",
+                "stage": "build_loop",
+                "task_ids": pending_merge,
+            }
+        )
+    return warnings
+
+
+def _manager_workstation_cycle(
+    req: OpRequest,
+    *,
+    build_state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    cycle = int(build_state.get("last_cycle", 0))
+    attempt_dir = req.repo_root / "reports" / "optimus-prime" / "workstation-manager" / f"attempt-{cycle}"
+    action_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "cycle": cycle,
+        "updated_at": utc_now_iso(),
+        "status": "noop",
+        "reason": "lane-aware workstation preparation is deferred to dispatcher-managed packet dispatch in this runtime",
+    }
+    validation_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "cycle": cycle,
+        "updated_at": utc_now_iso(),
+        "ok": True,
+        "status": "passed",
+        "checks": [
+            {
+                "id": "workstation_manager_noop",
+                "passed": True,
+            }
+        ],
+    }
+    _atomic_write_json(attempt_dir / "WORKSTATION_ACTION.json", action_payload)
+    _atomic_write_json(attempt_dir / "WORKSTATION_VALIDATION.json", validation_payload)
+    return warnings
+
+
+def _manager_dispatcher_cycle(
+    req: OpRequest,
+    *,
+    plan_packets: dict[str, Any],
+    task_state: dict[str, Any],
+    build_state: dict[str, Any],
+    active_phase_id: str | None,
+) -> dict[str, Any]:
+    return _dispatch_next_task(req, plan_packets, task_state, build_state, active_phase_id)
 
 
 def _apply_directives(
@@ -6138,8 +6766,8 @@ def _evaluate_strict_done(
             all_review_done = False
             all_dev_refs = False
             continue
-        status = _as_str(task.get("status")) or ""
-        if status != "review_done":
+        status = _normalize_task_status(task.get("status"))
+        if status != TASK_STATUS_REVIEW_DONE:
             all_review_done = False
         evidence = task.get("evidence") if isinstance(task.get("evidence"), dict) else {}
         dev_ref = _as_str(evidence.get("task_evidence_ref")) or _as_str(evidence.get("dev_ready_evidence_ref"))
@@ -6175,11 +6803,13 @@ def _evaluate_strict_done(
     verify_commands_passed = required_verify_cmds.issubset(passed_verify_cmds)
     uat_passed = required_uat_ids.issubset(passed_uat_reqs)
     final_state_ok = bool(verification and verification.get("ok") is True)
-    open_gap_ids = [
-        _as_str(item.get("gap_id"))
-        for item in (gaps_payload or {}).get("gaps", [])
-        if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
-    ]
+    open_gap_ids = _open_task_gap_ids(task_state)
+    if not open_gap_ids:
+        open_gap_ids = [
+            _as_str(item.get("gap_id"))
+            for item in (gaps_payload or {}).get("gaps", [])
+            if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
+        ]
     phase_checks: dict[str, Any] = {}
     for phase_id in _ordered_phase_ids(plan_packets):
         phase_checks[phase_id] = _phase_exit_checks(repo_root, phase_id, plan_packets, task_state, gaps_payload or {"gaps": []})
@@ -6324,7 +6954,62 @@ def _preflight_build(
 
 
 def command_build(req: OpRequest) -> dict[str, Any]:
+    auto_init_warnings: list[dict[str, Any]] = []
+    mission_scope_supplied = bool(req.mission or req.mission_file or req.scope or req.scope_file)
+    if mission_scope_supplied:
+        state_path = _repo_path(req.repo_root, STATE_JSON)
+        baseline_missing = any(
+            not _repo_path(req.repo_root, rel).exists()
+            for rel in MANDATORY_BUILD_BASELINE
+        )
+        strict_done_complete = False
+        build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
+        if build_state_path.exists():
+            try:
+                build_state_probe = _load_build_state(build_state_path)
+            except OpError:
+                build_state_probe = {}
+            checks = build_state_probe.get("strict_done_checks") if isinstance(build_state_probe.get("strict_done_checks"), dict) else {}
+            strict_done_complete = bool(checks.get("all_passed")) or (_as_str((build_state_probe.get("terminal_state") or {}).get("reason")) == "project_done")
+
+        if baseline_missing or not state_path.exists():
+            init_result = command_initialize(req)
+            auto_init_warnings.extend(init_result.get("warnings", []) if isinstance(init_result.get("warnings"), list) else [])
+            if not bool(init_result.get("ok")):
+                return init_result
+        else:
+            if strict_done_complete:
+                init_req = replace(req, command="op-initialize", override_old_plan=True)
+                init_result = command_initialize(init_req)
+                auto_init_warnings.extend(init_result.get("warnings", []) if isinstance(init_result.get("warnings"), list) else [])
+                if not bool(init_result.get("ok")):
+                    return init_result
+            elif req.override_old_plan:
+                init_req = replace(req, command="op-initialize", override_old_plan=True)
+                init_result = command_initialize(init_req)
+                auto_init_warnings.extend(init_result.get("warnings", []) if isinstance(init_result.get("warnings"), list) else [])
+                if not bool(init_result.get("ok")):
+                    return init_result
+            else:
+                return _response(
+                    req,
+                    ok=False,
+                    status="blocked_preflight",
+                    summary="Build blocked: baseline exists and active plan is not strictly done.",
+                    errors=[
+                        {
+                            "code": "resume_or_override_required",
+                            "message": "Use /op-resume to continue existing run, or pass --override-old-plan with mission/scope to re-initialize.",
+                            "stage": "build_preflight",
+                        }
+                    ],
+                    next_action="Run /op-resume, or rerun /op-build with --override-old-plan and mission/scope.",
+                    state_ref=str(state_path),
+                )
+
     warnings, missing, _, plan_packets, task_state, profile_selection = _preflight_build(req)
+    if auto_init_warnings:
+        warnings = [*auto_init_warnings, *warnings]
     preflight_failed = bool(missing) or any(
         item.get("code")
         in {
@@ -6439,25 +7124,23 @@ def command_build(req: OpRequest) -> dict[str, Any]:
         watchdog_event_path = _repo_path(req.repo_root, NO_PROGRESS_WATCHDOG_EVENT_JSON)
         plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
         resume_cmd = "/op-resume" if req.command == "op-resume" else "/op-build"
-
-        gaps_path = _repo_path(req.repo_root, GAPS_JSON)
-        gap_closure_path = _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)
-        gaps_payload, gaps_read_warnings = _load_gaps_payload_strict(
-            gaps_path,
+        warnings.extend(_ensure_worker_registry_v2(req.repo_root, build_state))
+        warnings.extend(_ensure_rab_base_checked_out(req.repo_root))
+        gaps_payload, gap_integrity_warnings = _load_gaps_payload_strict(
+            _repo_path(req.repo_root, GAPS_JSON),
             plan_id,
             code="gaps_artifact_invalid",
             stage="build_preflight",
         )
-        gap_closure_payload, gap_closure_read_warnings = _load_gap_closure_payload_strict(
-            gap_closure_path,
+        gap_closure_payload, gap_closure_integrity_warnings = _load_gap_closure_payload_strict(
+            _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON),
             plan_id,
             code="gap_closure_artifact_invalid",
             stage="build_preflight",
         )
-        gap_artifact_invalid = bool(gaps_read_warnings) or bool(gap_closure_read_warnings)
-        warnings.extend(gaps_read_warnings)
-        warnings.extend(gap_closure_read_warnings)
-        if gap_artifact_invalid:
+        warnings.extend(gap_integrity_warnings)
+        warnings.extend(gap_closure_integrity_warnings)
+        if gap_integrity_warnings or gap_closure_integrity_warnings:
             try:
                 gaps_payload, gap_closure_payload, recovery_warnings = _recover_gap_artifacts_for_build(
                     req.repo_root,
@@ -6465,22 +7148,19 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     task_state,
                     build_state,
                     plan_id,
-                    bool(gaps_read_warnings),
-                    bool(gap_closure_read_warnings),
+                    bool(gap_integrity_warnings),
+                    bool(gap_closure_integrity_warnings),
                 )
+                warnings.extend(recovery_warnings)
             except OpError as exc:
-                warnings.append(
-                    {
-                        "code": "gap_artifact_recovery_failed",
-                        "message": exc.message,
-                        "stage": "build_preflight",
-                    }
-                )
+                build_state["updated_at"] = utc_now_iso()
+                _atomic_write_json(build_state_path, build_state)
+                _atomic_write_json(task_state_path, {**task_state, "updated_at": utc_now_iso()})
                 return _response(
                     req,
                     ok=False,
                     status="blocked_preflight",
-                    summary="Build blocked: failed to recover malformed gap artifacts.",
+                    summary="Build blocked: gap artifact recovery failed.",
                     warnings=warnings,
                     errors=[
                         {
@@ -6489,10 +7169,9 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                             "stage": "build_preflight",
                         }
                     ],
-                    next_action="Repair malformed gap artifacts or rerun /op-initialize, then rerun /op-build.",
                     state_ref=str(build_state_path),
+                    next_action="Repair malformed gap artifacts and rerun /op-build.",
                 )
-            warnings.extend(recovery_warnings)
 
         cycles = 0
         history: list[dict[str, Any]] = build_state.get("history", [])
@@ -6522,27 +7201,39 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 remediation_state["active"] = False
                 remediation_state["reason"] = None
 
-            rate_seed_warnings = _seed_rate_registry_if_missing(
-                req.repo_root,
-                force_refresh=True,
-                emit_success_warning=False,
+            profile_warnings = _manager_profile_cycle(
+                req,
+                build_state=build_state,
                 profile_selection=profile_selection,
             )
-            warnings.extend(rate_seed_warnings)
-            cycle_local_warnings.extend(rate_seed_warnings)
+            warnings.extend(profile_warnings)
+            cycle_local_warnings.extend(profile_warnings)
 
-            handoff_warnings = _apply_handoff_updates(req.repo_root, task_state, build_state)
-            warnings.extend(handoff_warnings)
-            cycle_local_warnings.extend(handoff_warnings)
-            evidence_warnings = _sync_task_state_from_evidence(req.repo_root, plan_packets, task_state)
-            warnings.extend(evidence_warnings)
-            cycle_local_warnings.extend(evidence_warnings)
-            gaps_payload, gap_closure_payload = _refresh_gap_artifacts(req.repo_root, plan_packets, task_state, build_state)
-            _ensure_gap_closure_task_state(req.repo_root, task_state, gap_closure_payload, plan_id)
-            merged_plan_packets = _merge_plan_with_gap_closure(plan_packets, gap_closure_payload)
-            active_phase_id, phase_checks = _resolve_active_phase(merged_plan_packets, task_state, gaps_payload, req.repo_root)
-            build_state["current_phase_id"] = active_phase_id
-            build_state["phase_exit_checks"] = phase_checks
+            production_out = _manager_production_line_cycle(
+                req,
+                plan_packets=plan_packets,
+                task_state=task_state,
+                build_state=build_state,
+            )
+            production_warnings = production_out.get("warnings", []) if isinstance(production_out.get("warnings"), list) else []
+            warnings.extend(production_warnings)
+            cycle_local_warnings.extend(production_warnings)
+            merged_plan_packets = production_out.get("merged_plan_packets") if isinstance(production_out.get("merged_plan_packets"), dict) else plan_packets
+            gaps_payload = production_out.get("gaps_payload") if isinstance(production_out.get("gaps_payload"), dict) else _default_gaps_payload(plan_id)
+            active_phase_id = _as_str(production_out.get("active_phase_id"))
+            phase_checks = production_out.get("phase_checks") if isinstance(production_out.get("phase_checks"), dict) else {}
+
+            branch_warnings = _manager_branch_merge_cycle(
+                req,
+                task_state=task_state,
+                build_state=build_state,
+            )
+            warnings.extend(branch_warnings)
+            cycle_local_warnings.extend(branch_warnings)
+
+            workstation_warnings = _manager_workstation_cycle(req, build_state=build_state)
+            warnings.extend(workstation_warnings)
+            cycle_local_warnings.extend(workstation_warnings)
 
             if operator_stop_path.exists():
                 stop_summary: dict[str, Any] = {}
@@ -6633,18 +7324,19 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     }
                     warnings.append(warning)
                     cycle_local_warnings.append(warning)
-            handoff_warnings = _apply_handoff_updates(req.repo_root, task_state, build_state)
-            warnings.extend(handoff_warnings)
-            cycle_local_warnings.extend(handoff_warnings)
-            evidence_warnings = _sync_task_state_from_evidence(req.repo_root, merged_plan_packets, task_state)
-            warnings.extend(evidence_warnings)
-            cycle_local_warnings.extend(evidence_warnings)
-            gaps_payload, gap_closure_payload = _refresh_gap_artifacts(req.repo_root, merged_plan_packets, task_state, build_state)
-            _ensure_gap_closure_task_state(req.repo_root, task_state, gap_closure_payload, plan_id)
-            merged_plan_packets = _merge_plan_with_gap_closure(plan_packets, gap_closure_payload)
-            active_phase_id, phase_checks = _resolve_active_phase(merged_plan_packets, task_state, gaps_payload, req.repo_root)
-            build_state["current_phase_id"] = active_phase_id
-            build_state["phase_exit_checks"] = phase_checks
+            production_out = _manager_production_line_cycle(
+                req,
+                plan_packets=merged_plan_packets,
+                task_state=task_state,
+                build_state=build_state,
+            )
+            production_warnings = production_out.get("warnings", []) if isinstance(production_out.get("warnings"), list) else []
+            warnings.extend(production_warnings)
+            cycle_local_warnings.extend(production_warnings)
+            merged_plan_packets = production_out.get("merged_plan_packets") if isinstance(production_out.get("merged_plan_packets"), dict) else merged_plan_packets
+            gaps_payload = production_out.get("gaps_payload") if isinstance(production_out.get("gaps_payload"), dict) else gaps_payload
+            active_phase_id = _as_str(production_out.get("active_phase_id"))
+            phase_checks = production_out.get("phase_checks") if isinstance(production_out.get("phase_checks"), dict) else phase_checks
 
             history.append(
                 {
@@ -6873,7 +7565,23 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     warnings.append(warning)
                     cycle_local_warnings.append(warning)
                 else:
-                    dispatch_result = _dispatch_next_task(req, merged_plan_packets, task_state, build_state, active_phase_id)
+                    _atomic_write_json(
+                        _repo_path(req.repo_root, WORK_DISPATCH_PLAN_JSON),
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "updated_at": utc_now_iso(),
+                            "active_phase_id": active_phase_id,
+                            "profile_assignments": build_state.get("slot_profile_assignments", {}),
+                            "open_gap_ids": build_state.get("open_gap_ids", []),
+                        },
+                    )
+                    dispatch_result = _manager_dispatcher_cycle(
+                        req,
+                        plan_packets=merged_plan_packets,
+                        task_state=task_state,
+                        build_state=build_state,
+                        active_phase_id=active_phase_id,
+                    )
                     dispatch_warning = dispatch_result.get("warning") if isinstance(dispatch_result, dict) else None
                     dispatch_warning_rows = dispatch_result.get("warnings") if isinstance(dispatch_result, dict) else None
                     appended_warning_keys: set[tuple[str, str]] = set()
@@ -7250,8 +7958,6 @@ def command_health(req: OpRequest) -> dict[str, Any]:
                 str(_repo_path(req.repo_root, PLAN_PACKETS_JSON)),
                 str(_repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)),
                 str(_repo_path(req.repo_root, BUILD_STATE_JSON)),
-                str(_repo_path(req.repo_root, GAPS_JSON)),
-                str(_repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)),
             ],
             state_ref=str(_repo_path(req.repo_root, BUILD_STATE_JSON)),
             data={"checks": checks, "open_gap_ids": []},
@@ -7326,6 +8032,25 @@ def command_health(req: OpRequest) -> dict[str, Any]:
             evidence_errors.append({"task_id": task_id, "error": "schema_invalid", "details": schema_errors, "path": str(evidence_path)})
     checks.append({"id": "task_evidence_integrity", "passed": len(evidence_errors) == 0, "errors": evidence_errors})
 
+    gap_schema_errors: list[dict[str, Any]] = []
+    for task in task_state.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
+        gaps = task.get("gaps_that_need_patching")
+        if gaps is None:
+            continue
+        if not isinstance(gaps, list):
+            gap_schema_errors.append({"task_id": task_id, "error": "gaps_not_list"})
+            continue
+        for idx, row in enumerate(gaps):
+            if not isinstance(row, dict):
+                gap_schema_errors.append({"task_id": task_id, "error": "gap_not_object", "index": idx})
+                continue
+            if not _as_str(row.get("gap_id")):
+                gap_schema_errors.append({"task_id": task_id, "error": "gap_id_missing", "index": idx})
+            if not _as_str(row.get("status")):
+                gap_schema_errors.append({"task_id": task_id, "error": "status_missing", "index": idx})
     plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
     gaps_payload, gaps_integrity_warnings = _load_gaps_payload_strict(
         _repo_path(req.repo_root, GAPS_JSON),
@@ -7341,25 +8066,31 @@ def command_health(req: OpRequest) -> dict[str, Any]:
     )
     warnings.extend(gaps_integrity_warnings)
     warnings.extend(gap_closure_integrity_warnings)
-    gap_artifact_integrity_passed = len(gaps_integrity_warnings) == 0 and len(gap_closure_integrity_warnings) == 0
+    gap_artifact_integrity_passed = (
+        len(gap_schema_errors) == 0
+        and len(gaps_integrity_warnings) == 0
+        and len(gap_closure_integrity_warnings) == 0
+    )
     checks.append(
         {
             "id": "gap_artifact_integrity",
             "passed": gap_artifact_integrity_passed,
-            "errors": gaps_integrity_warnings + gap_closure_integrity_warnings,
+            "errors": gap_schema_errors + gaps_integrity_warnings + gap_closure_integrity_warnings,
         }
     )
-    open_gap_ids = [
-        _as_str(item.get("gap_id"))
-        for item in gaps_payload.get("gaps", [])
-        if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
-    ]
+    open_gap_ids = _open_task_gap_ids(task_state)
+    if not open_gap_ids:
+        open_gap_ids = [
+            _as_str(item.get("gap_id"))
+            for item in gaps_payload.get("gaps", [])
+            if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
+        ]
     closure_task_ids = {
         _as_str(task.get("source_gap_id"))
         for task in gap_closure_payload.get("tasks", [])
         if isinstance(task, dict) and _as_str(task.get("source_gap_id"))
     }
-    gap_closure_ready = gap_artifact_integrity_passed and set(open_gap_ids).issubset(closure_task_ids)
+    gap_closure_ready = set(gap_id for gap_id in open_gap_ids if gap_id).issubset(closure_task_ids)
     checks.append(
         {
             "id": "gap_closure_readiness",
@@ -7377,7 +8108,7 @@ def command_health(req: OpRequest) -> dict[str, Any]:
             errors.append(
                 {
                     "code": "gap_artifact_integrity_blocked",
-                    "message": "gap artifacts are malformed or missing; run /op-build to auto-heal then rerun /op-health",
+                    "message": "task-embedded gap payloads are malformed; run /op-build to re-normalize then rerun /op-health",
                     "stage": "health",
                 }
             )
@@ -7485,119 +8216,56 @@ def command_status(req: OpRequest) -> dict[str, Any]:
     else:
         build_state = _fresh_build_state_payload()
 
-    gaps_path = _repo_path(req.repo_root, GAPS_JSON)
+    gap_schema_errors: list[dict[str, Any]] = []
+    for task in task_state.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
+        gaps = task.get("gaps_that_need_patching")
+        if gaps is None:
+            continue
+        if not isinstance(gaps, list):
+            gap_schema_errors.append({"task_id": task_id, "error": "gaps_not_list"})
+            continue
+        for idx, row in enumerate(gaps):
+            if not isinstance(row, dict):
+                gap_schema_errors.append({"task_id": task_id, "error": "gap_not_object", "index": idx})
+                continue
+            if not _as_str(row.get("gap_id")):
+                gap_schema_errors.append({"task_id": task_id, "error": "gap_id_missing", "index": idx})
+            if not _as_str(row.get("status")):
+                gap_schema_errors.append({"task_id": task_id, "error": "status_missing", "index": idx})
+    if gap_schema_errors:
+        warnings.append(
+            {
+                "code": "status_artifact_invalid",
+                "message": "TASK_EXECUTION_STATE embedded gap rows are malformed",
+                "stage": "status",
+                "details": gap_schema_errors,
+            }
+        )
+        status_degraded = True
+
     plan_id_for_gaps = _as_str((plan_packets or {}).get("plan_id")) or "plan-unknown"
-    if gaps_path.exists():
-        try:
-            gaps_raw = _read_json(gaps_path)
-        except OpError as exc:
-            warnings.append(
-                {
-                    "code": "status_artifact_invalid",
-                    "message": f"GAPS.json unreadable: {exc.message}",
-                    "stage": "status",
-                    "artifact": str(gaps_path),
-                }
-            )
-            gaps_raw = {
-                "schema_version": SCHEMA_VERSION,
-                "plan_id": plan_id_for_gaps,
-                "updated_at": utc_now_iso(),
-                "gaps": [],
-            }
-            status_degraded = True
-    else:
-        gaps_raw = {
-            "schema_version": SCHEMA_VERSION,
-            "plan_id": plan_id_for_gaps,
-            "updated_at": utc_now_iso(),
-            "gaps": [],
-        }
-    if isinstance(gaps_raw, dict):
-        gaps_payload = dict(gaps_raw)
-    else:
-        warnings.append(
-            {
-                "code": "status_artifact_invalid",
-                "message": "GAPS.json must be a JSON object",
-                "stage": "status",
-                "artifact": str(gaps_path),
-            }
-        )
+    gaps_payload, gap_integrity_warnings = _load_gaps_payload_strict(
+        _repo_path(req.repo_root, GAPS_JSON),
+        plan_id_for_gaps,
+        code="status_artifact_invalid",
+        stage="status",
+    )
+    gap_closure_payload, gap_closure_integrity_warnings = _load_gap_closure_payload_strict(
+        _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON),
+        plan_id_for_gaps,
+        code="status_artifact_invalid",
+        stage="status",
+    )
+    if gap_integrity_warnings or gap_closure_integrity_warnings:
         status_degraded = True
-        gaps_payload = {
-            "schema_version": SCHEMA_VERSION,
-            "plan_id": plan_id_for_gaps,
-            "updated_at": utc_now_iso(),
-            "gaps": [],
-        }
-    if not isinstance(gaps_payload.get("gaps"), list):
-        warnings.append(
-            {
-                "code": "status_artifact_invalid",
-                "message": "GAPS.json field 'gaps' must be a list",
-                "stage": "status",
-                "artifact": str(gaps_path),
-            }
-        )
-        status_degraded = True
-        gaps_payload["gaps"] = []
-    gaps_payload.setdefault("schema_version", SCHEMA_VERSION)
-    gaps_payload["plan_id"] = _as_str(gaps_payload.get("plan_id")) or plan_id_for_gaps
-    gaps_payload["updated_at"] = utc_now_iso()
-    gap_closure_path = _repo_path(req.repo_root, GAP_CLOSURE_PLAN_PACKETS_JSON)
-    if gap_closure_path.exists():
-        try:
-            gap_closure_raw = _read_json(gap_closure_path)
-        except OpError as exc:
-            warnings.append(
-                {
-                    "code": "status_artifact_invalid",
-                    "message": f"GAP_CLOSURE_PLAN_PACKETS.json unreadable: {exc.message}",
-                    "stage": "status",
-                    "artifact": str(gap_closure_path),
-                }
-            )
-            gap_closure_raw = {"tasks": []}
-            status_degraded = True
-    else:
-        gap_closure_raw = {"tasks": []}
-    gap_closure_payload = gap_closure_raw if isinstance(gap_closure_raw, dict) else {"tasks": []}
-    if not isinstance(gap_closure_raw, dict):
-        warnings.append(
-            {
-                "code": "status_artifact_invalid",
-                "message": "GAP_CLOSURE_PLAN_PACKETS.json must be a JSON object",
-                "stage": "status",
-                "artifact": str(gap_closure_path),
-            }
-        )
-        status_degraded = True
-    if not isinstance(gap_closure_payload.get("tasks"), list):
-        warnings.append(
-            {
-                "code": "status_artifact_invalid",
-                "message": "GAP_CLOSURE_PLAN_PACKETS.json field 'tasks' must be a list",
-                "stage": "status",
-                "artifact": str(gap_closure_path),
-            }
-        )
-        status_degraded = True
-        gap_closure_payload["tasks"] = []
-    if not _as_str(gap_closure_payload.get("plan_id")):
-        warnings.append(
-            {
-                "code": "status_artifact_invalid",
-                "message": "GAP_CLOSURE_PLAN_PACKETS.json field 'plan_id' must be a non-empty string",
-                "stage": "status",
-                "artifact": str(gap_closure_path),
-            }
-        )
-        status_degraded = True
-    gap_closure_payload["plan_id"] = _as_str(gap_closure_payload.get("plan_id")) or plan_id_for_gaps
+    warnings.extend(gap_integrity_warnings)
+    warnings.extend(gap_closure_integrity_warnings)
 
     merged_plan = _merge_plan_with_gap_closure(
-        plan_packets if isinstance(plan_packets, dict) else {},
+        plan_packets if isinstance(plan_packets, dict) else {"tasks": [], "phases": []},
         gap_closure_payload,
     )
     active_phase_id, phase_checks = _resolve_active_phase(
@@ -7613,11 +8281,13 @@ def command_status(req: OpRequest) -> dict[str, Any]:
             continue
         status = _as_str(task.get("status")) or "unknown"
         counts_by_status[status] = counts_by_status.get(status, 0) + 1
-    open_gap_ids = [
-        _as_str(item.get("gap_id"))
-        for item in gaps_payload.get("gaps", [])
-        if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
-    ]
+    open_gap_ids = _open_task_gap_ids(task_state)
+    if not open_gap_ids:
+        open_gap_ids = [
+            _as_str(item.get("gap_id"))
+            for item in gaps_payload.get("gaps", [])
+            if isinstance(item, dict) and _as_str(item.get("status")) == "open" and _as_str(item.get("gap_id"))
+        ]
     next_command = (
         "/op-initialize"
         if not _repo_path(req.repo_root, STATE_JSON).exists()
@@ -7718,8 +8388,12 @@ def command_report(req: OpRequest) -> dict[str, Any]:
         except (TypeError, ValueError):
             continue
     total_tasks = sum(max(0, val) for val in counts.values())
-    done_tasks = max(0, counts.get("review_done", 0))
-    in_progress_tasks = sum(max(0, val) for key, val in counts.items() if key.endswith("_in_progress"))
+    done_tasks = max(0, counts.get(TASK_STATUS_REVIEW_DONE, 0))
+    in_progress_tasks = (
+        max(0, counts.get(TASK_STATUS_DEV_WORKING, 0))
+        + max(0, counts.get(TASK_STATUS_TESTING, 0))
+        + max(0, counts.get(TASK_STATUS_REVIEWING, 0))
+    )
 
     phase_id = _as_str(status_data.get("active_phase_id")) or _as_str(build_state.get("current_phase_id")) or "n/a"
     try:

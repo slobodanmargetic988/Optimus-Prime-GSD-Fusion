@@ -124,6 +124,17 @@ This runs autonomous execution with strict gates until:
 - done with full evidence, or
 - deterministic hard stop condition is reached.
 
+Build cycle manager order:
+1. `profile-manager`
+2. `production-line-manager`
+3. `branch-merge-manager`
+4. `workstation-manager`
+5. controller tick
+6. `work-dispatcher`
+
+Canonical runtime task statuses:
+- `pending`, `dev_working`, `dev_done`, `testing`, `tests_done`, `reviewing`, `review_done`, `blocked`
+
 ### Monitor / Recover
 
 ```bash

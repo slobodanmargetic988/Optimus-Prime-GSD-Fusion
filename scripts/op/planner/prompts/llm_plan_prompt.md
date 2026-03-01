@@ -25,8 +25,6 @@ Required artifacts in bundle:
 - PLAN_PACKETS.json
 - PLAN_CHECK.json
 - TASK_EXECUTION_STATE.json
-- GAPS.json
-- GAP_CLOSURE_PLAN_PACKETS.json
 - TEST_CONTRACT.md
 - PLAYWRIGHT_UAT_MATRIX.md
 - VERIFICATION.md
@@ -35,14 +33,23 @@ Required artifacts in bundle:
 - STATE.md
 - evidence/<task_id>/TASK_EVIDENCE.json for every task in PLAN_PACKETS.tasks
 
+Optional compatibility artifacts (not required):
+- GAPS.json
+- GAP_CLOSURE_PLAN_PACKETS.json
+
 Planning requirements:
 1. Build a parallelizable task DAG with explicit dependencies.
 2. Every task has non-empty requirement_ids.
-3. Phase graph must be acyclic and task phase_id must map to a valid phase.
-4. TDD-first: each requirement and task must include verification intent.
-5. For each functionality tree with more than 2 tasks, include at least 2 terminal hardening/review tasks.
-6. PLAN_CHECK.passed must be true.
-7. Keep plan quality high enough for autonomous op-build execution.
+3. Every task must include lane-aware runtime metadata:
+   - lane_id in format <phase_id>/lane-[a-c]
+   - status set to pending
+   - gaps_that_need_patching as a list (default empty)
+4. Phase graph must be acyclic and task phase_id must map to a valid phase.
+5. Per phase, use at most 3 distinct lanes.
+6. TDD-first: each requirement and task must include verification intent.
+7. For each functionality tree with more than 2 tasks, include at least 2 terminal hardening/review tasks.
+8. PLAN_CHECK.passed must be true.
+9. Keep plan quality high enough for autonomous op-build execution.
 
 Strict output discipline:
 - Write only the required JSONL bundle file + required artifact content.

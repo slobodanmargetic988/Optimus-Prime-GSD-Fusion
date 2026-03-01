@@ -21,14 +21,17 @@ REQUIRED_STATIC = {
     "PLAN_PACKETS.json",
     "PLAN_CHECK.json",
     "TASK_EXECUTION_STATE.json",
-    "GAPS.json",
-    "GAP_CLOSURE_PLAN_PACKETS.json",
     "TEST_CONTRACT.md",
     "PLAYWRIGHT_UAT_MATRIX.md",
     "VERIFICATION.md",
     "UAT.md",
     "STATE.json",
     "STATE.md",
+}
+
+OPTIONAL_STATIC = {
+    "GAPS.json",
+    "GAP_CLOSURE_PLAN_PACKETS.json",
 }
 
 TEXT_HEADINGS = {
@@ -40,11 +43,16 @@ TEXT_HEADINGS = {
 }
 
 TASK_STATUS = {
+    "pending",
     "queued",
+    "dev_working",
     "dev_in_progress",
     "dev_done",
+    "testing",
     "test_in_progress",
+    "tests_done",
     "test_done",
+    "reviewing",
     "review_in_progress",
     "review_done",
     "blocked",
@@ -229,6 +237,7 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
     task_ids: list[str] = []
     covered: set[str] = set()
     task_dep_map: dict[str, list[str]] = {}
+    lane_members: dict[str, set[str]] = {}
     if isinstance(tasks_raw, list) and tasks_raw:
         for idx, row in enumerate(tasks_raw):
             if not isinstance(row, dict):
@@ -237,8 +246,16 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
             _strict_keys(
                 row,
                 label=f"PLAN_PACKETS.tasks[{idx}]",
-                required={"task_id", "title", "phase_id", "requirement_ids", "depends_on", "must_haves", "verify_commands"},
-                optional=set(),
+                required={
+                    "task_id",
+                    "title",
+                    "phase_id",
+                    "requirement_ids",
+                    "depends_on",
+                    "must_haves",
+                    "verify_commands",
+                },
+                optional={"lane_id", "status", "gaps_that_need_patching"},
                 errors=errors,
             )
             task_id = _require_nonempty_str(row.get("task_id"), label=f"PLAN_PACKETS.tasks[{idx}].task_id", errors=errors)
@@ -248,12 +265,75 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
             phase_id = _require_nonempty_str(row.get("phase_id"), label=f"PLAN_PACKETS.tasks[{idx}].phase_id", errors=errors)
             if phase_id and phase_ids and phase_id not in phase_ids:
                 _err(errors, "planner_bundle_schema_error", f"task {task_id or idx} references unknown phase_id", phase_id=phase_id)
+            lane_id = _as_str(row.get("lane_id")) or f"{phase_id or 'phase-1'}/lane-a"
+            row["lane_id"] = lane_id
+            if lane_id and phase_id:
+                expected_prefix = f"{phase_id}/lane-"
+                if not lane_id.startswith(expected_prefix):
+                    lane_id = f"{phase_id}/lane-a"
+                    row["lane_id"] = lane_id
+                lane_members.setdefault(phase_id, set()).add(lane_id)
+            status = _as_str(row.get("status")) or "pending"
+            row["status"] = status
+            if status != "pending":
+                _err(errors, "planner_bundle_schema_error", f"PLAN_PACKETS.tasks[{idx}].status must be 'pending'")
             req_ids = _require_str_list(row.get("requirement_ids"), label=f"PLAN_PACKETS.tasks[{idx}].requirement_ids", errors=errors, min_items=1)
             for rid in req_ids:
                 covered.add(rid)
             deps = _require_str_list(row.get("depends_on"), label=f"PLAN_PACKETS.tasks[{idx}].depends_on", errors=errors)
             _require_str_list(row.get("must_haves"), label=f"PLAN_PACKETS.tasks[{idx}].must_haves", errors=errors, min_items=1)
             _require_str_list(row.get("verify_commands"), label=f"PLAN_PACKETS.tasks[{idx}].verify_commands", errors=errors, min_items=1)
+            gaps = row.get("gaps_that_need_patching")
+            if gaps is None:
+                gaps = []
+                row["gaps_that_need_patching"] = gaps
+            if not isinstance(gaps, list):
+                _err(errors, "planner_bundle_schema_error", f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching must be list")
+            else:
+                for gidx, gap in enumerate(gaps):
+                    if not isinstance(gap, dict):
+                        _err(
+                            errors,
+                            "planner_bundle_schema_error",
+                            f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}] must be object",
+                        )
+                        continue
+                    _strict_keys(
+                        gap,
+                        label=f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}]",
+                        required={
+                            "gap_id",
+                            "category",
+                            "severity",
+                            "stage",
+                            "status",
+                            "reason_codes",
+                            "retry_count",
+                            "max_retries",
+                            "created_at",
+                            "updated_at",
+                            "closure_ref",
+                        },
+                        optional=set(),
+                        errors=errors,
+                    )
+                    _require_nonempty_str(gap.get("gap_id"), label=f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].gap_id", errors=errors)
+                    _require_nonempty_str(gap.get("category"), label=f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].category", errors=errors)
+                    _require_nonempty_str(gap.get("severity"), label=f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].severity", errors=errors)
+                    _require_nonempty_str(gap.get("stage"), label=f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].stage", errors=errors)
+                    _require_nonempty_str(gap.get("status"), label=f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].status", errors=errors)
+                    _require_str_list(gap.get("reason_codes"), label=f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].reason_codes", errors=errors, min_items=1)
+                    retry_count = gap.get("retry_count")
+                    max_retries = gap.get("max_retries")
+                    if not isinstance(retry_count, int) or retry_count < 0:
+                        _err(errors, "planner_bundle_schema_error", f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].retry_count must be non-negative int")
+                    if not isinstance(max_retries, int) or max_retries < 1:
+                        _err(errors, "planner_bundle_schema_error", f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].max_retries must be positive int")
+                    if not _is_iso8601(gap.get("created_at")):
+                        _err(errors, "planner_bundle_schema_error", f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].created_at must be ISO-8601")
+                    if not _is_iso8601(gap.get("updated_at")):
+                        _err(errors, "planner_bundle_schema_error", f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].updated_at must be ISO-8601")
+                    _require_str_or_none(gap.get("closure_ref"), label=f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].closure_ref", errors=errors)
             if task_id:
                 task_dep_map[task_id] = deps
     else:
@@ -339,6 +419,16 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
         for rid in requirement_ids:
             if rid not in covered:
                 _err(errors, "planner_bundle_schema_error", "requirement id not covered by any task", requirement_id=rid)
+
+    for phase_id, lanes in lane_members.items():
+        if len(lanes) > 3:
+            _err(
+                errors,
+                "planner_bundle_schema_error",
+                f"phase {phase_id} has more than 3 lanes",
+                lane_count=len(lanes),
+                lanes=sorted(lanes),
+            )
 
     return plan_id, task_ids, requirement_ids, covered
 
@@ -454,8 +544,17 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
         _strict_keys(
             row,
             label=f"TASK_EXECUTION_STATE.tasks[{idx}]",
-            required={"task_id", "phase_id", "requirement_ids", "status", "owner_slot", "attempts", "evidence", "blockers"},
-            optional=set(),
+            required={
+                "task_id",
+                "phase_id",
+                "requirement_ids",
+                "status",
+                "owner_slot",
+                "attempts",
+                "evidence",
+                "blockers",
+            },
+            optional={"lane_id", "dispatch_thread_id", "last_progress_at", "gaps_that_need_patching"},
             errors=errors,
         )
         task_id = _require_nonempty_str(row.get("task_id"), label=f"TASK_EXECUTION_STATE.tasks[{idx}].task_id", errors=errors)
@@ -464,6 +563,8 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
             if task_id not in task_ids:
                 _err(errors, "planner_bundle_schema_error", "TASK_EXECUTION_STATE includes unknown task_id", task_id=task_id)
         _require_nonempty_str(row.get("phase_id"), label=f"TASK_EXECUTION_STATE.tasks[{idx}].phase_id", errors=errors)
+        lane_id = _as_str(row.get("lane_id")) or f"{_as_str(row.get('phase_id')) or 'phase-1'}/lane-a"
+        row["lane_id"] = lane_id
         _require_str_list(row.get("requirement_ids"), label=f"TASK_EXECUTION_STATE.tasks[{idx}].requirement_ids", errors=errors, min_items=1)
 
         status = _as_str(row.get("status"))
@@ -472,6 +573,9 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
 
         owner_slot = row.get("owner_slot")
         _require_str_or_none(owner_slot, label=f"TASK_EXECUTION_STATE.tasks[{idx}].owner_slot", errors=errors)
+        _require_str_or_none(row.get("dispatch_thread_id"), label=f"TASK_EXECUTION_STATE.tasks[{idx}].dispatch_thread_id", errors=errors)
+        if row.get("last_progress_at") is not None and not _is_iso8601(row.get("last_progress_at")):
+            _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].last_progress_at must be ISO-8601|null")
 
         attempts = _require_object(row.get("attempts"), label=f"TASK_EXECUTION_STATE.tasks[{idx}].attempts", errors=errors)
         if attempts is not None:
@@ -503,6 +607,12 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
             if not isinstance(evidence.get("uat_results"), list):
                 _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].evidence.uat_results must be list")
 
+        gaps = row.get("gaps_that_need_patching")
+        if gaps is None:
+            gaps = []
+            row["gaps_that_need_patching"] = gaps
+        if not isinstance(gaps, list):
+            _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].gaps_that_need_patching must be list")
         if not isinstance(row.get("blockers"), list):
             _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].blockers must be list")
 
@@ -821,7 +931,11 @@ def validate_bundle_contract(bundle_path: Path, planning_root: Path) -> tuple[di
         _err(errors, "planner_bundle_schema_error", "planner bundle missing required artifacts", missing=missing)
 
     unexpected = sorted(
-        path for path in keys if path not in REQUIRED_STATIC and not (path.startswith("evidence/") and path.endswith("/TASK_EVIDENCE.json"))
+        path
+        for path in keys
+        if path not in REQUIRED_STATIC
+        and path not in OPTIONAL_STATIC
+        and not (path.startswith("evidence/") and path.endswith("/TASK_EVIDENCE.json"))
     )
     if unexpected:
         _err(errors, "planner_bundle_schema_error", "planner bundle has unexpected artifacts", extra=unexpected)
@@ -832,8 +946,10 @@ def validate_bundle_contract(bundle_path: Path, planning_root: Path) -> tuple[di
     plan_packets = _require_object(bundle["PLAN_PACKETS.json"].content, label="PLAN_PACKETS.json", errors=errors)
     plan_check = _require_object(bundle["PLAN_CHECK.json"].content, label="PLAN_CHECK.json", errors=errors)
     task_state = _require_object(bundle["TASK_EXECUTION_STATE.json"].content, label="TASK_EXECUTION_STATE.json", errors=errors)
-    gaps = _require_object(bundle["GAPS.json"].content, label="GAPS.json", errors=errors)
-    gap_closure = _require_object(bundle["GAP_CLOSURE_PLAN_PACKETS.json"].content, label="GAP_CLOSURE_PLAN_PACKETS.json", errors=errors)
+    gaps_artifact = bundle.get("GAPS.json")
+    gap_closure_artifact = bundle.get("GAP_CLOSURE_PLAN_PACKETS.json")
+    gaps = _require_object(gaps_artifact.content, label="GAPS.json", errors=errors) if isinstance(gaps_artifact, BundleArtifact) else None
+    gap_closure = _require_object(gap_closure_artifact.content, label="GAP_CLOSURE_PLAN_PACKETS.json", errors=errors) if isinstance(gap_closure_artifact, BundleArtifact) else None
     state_json = _require_object(bundle["STATE.json"].content, label="STATE.json", errors=errors)
 
     for text_path in TEXT_HEADINGS:

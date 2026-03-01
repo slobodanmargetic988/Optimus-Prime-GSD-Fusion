@@ -1397,7 +1397,7 @@ def test_stale_in_progress_blocked_then_recovers_when_slot_clears(monkeypatch: p
         assert any(item.get("code") == "stale_in_progress_recovered" for item in second.get("warnings", []))
         task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
         row = next(item for item in task_state["tasks"] if item.get("task_id") == task_id)
-        assert row["status"] == "queued"
+        assert row["status"] == "pending"
 
 
 def test_stale_recovery_advances_state_and_enables_dispatch(monkeypatch: pytest.MonkeyPatch):
@@ -1449,7 +1449,7 @@ def test_stale_recovery_advances_state_and_enables_dispatch(monkeypatch: pytest.
         assert any(item.get("code") == "stale_in_progress_recovered" for item in out.get("warnings", []))
         task_state = json.loads((root / "reports" / "optimus-prime" / "planning" / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
         row = next(item for item in task_state["tasks"] if item.get("task_id") == task_id)
-        assert row["status"] == "test_done"
+        assert row["status"] == "tests_done"
 
 
 def test_gap_closure_does_not_generate_recursive_gapfix_tasks():

@@ -196,6 +196,22 @@ Diagram reference:
   - repeated identical evidence failures are compacted in-task using blocker fingerprint + occurrence counters (bounded list)
   - known non-canonical evidence summaries (`ready_for_test|ready_for_review|ready_for_phase_exit`) are canonicalized to `pass` with warning `task_evidence_normalized`
   - gap artifacts now enforce/backfill `category` and `reason_codes[]` fields for deterministic gap semantics
+- Lane B addendum managerized runtime (workflow alignment):
+  - `/op-build` supports optional auto-initialize gate when mission/scope is passed and baseline policy allows it
+  - cycle wiring is managerized in deterministic order:
+    1. `profile-manager`
+    2. `production-line-manager`
+    3. `branch-merge-manager`
+    4. `workstation-manager`
+    5. controller tick
+    6. `work-dispatcher`
+  - fixed 11-slot worker registry topology is enforced each build:
+    - `dev-1..3`, `test-1..3`, `review-1..3`, `production-line-manager-1`, `branch-manager-1`
+  - canonical runtime task statuses are active:
+    - `pending`, `dev_working`, `dev_done`, `testing`, `tests_done`, `reviewing`, `review_done`, `blocked`
+  - planner validator now enforces lane-aware task contracts:
+    - `lane_id` (phase-scoped), `status`, and `gaps_that_need_patching[]` task payload support
+  - task-embedded gaps are now authoritative for strict-done and phase gating; external gap artifacts are still integrity-checked/recovered for deterministic safety and audit continuity
 
 ## Runtime + Blocker Artifacts (Canonical)
 

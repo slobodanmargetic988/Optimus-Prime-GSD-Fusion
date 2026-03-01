@@ -18,7 +18,17 @@ TOOL = "dispatch-worker-packet"
 TOOL_VERSION = "0.1.0"
 SCHEMA_VERSION = "1.0"
 
-SLOTS = ["dev-1", "dev-2", "dev-3", "test-1", "test-2", "review-1"]
+SLOTS = [
+    "dev-1",
+    "dev-2",
+    "dev-3",
+    "test-1",
+    "test-2",
+    "test-3",
+    "review-1",
+    "review-2",
+    "review-3",
+]
 ROLES = {"developer", "tester", "reviewer", "flex-tester"}
 MCP_MODES = {"disable-all", "enable-only"}
 FORBIDDEN_WORKER_MCPS = {"linear", "linear_sse"}
@@ -158,8 +168,8 @@ def validate_slot_role(slot: str, role: str) -> None:
         raise ToolError("validation_error", f"slot '{slot}' only supports role 'developer'", stage="validate")
     if slot.startswith("test-") and role not in {"tester", "flex-tester"}:
         raise ToolError("validation_error", f"slot '{slot}' supports only 'tester' or 'flex-tester'", stage="validate")
-    if slot == "review-1" and role != "reviewer":
-        raise ToolError("validation_error", "slot 'review-1' only supports role 'reviewer'", stage="validate")
+    if slot.startswith("review-") and role != "reviewer":
+        raise ToolError("validation_error", f"slot '{slot}' only supports role 'reviewer'", stage="validate")
 
 
 def _read_runtime_health(cfg: DispatchInput) -> dict[str, Any]:
@@ -707,6 +717,14 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
     default_registry = {"workers": []}
     data = read_json_or_default(path, default_registry)
 
+    raw_payload = dispatch.get("raw") if isinstance(dispatch.get("raw"), dict) else {}
+    dispatch_thread_id = None
+    for key in ("thread_id", "session_id", "conversation_id", "thread"):
+        value = raw_payload.get(key) if isinstance(raw_payload, dict) else None
+        if isinstance(value, str) and value.strip():
+            dispatch_thread_id = value.strip()
+            break
+
     worker_entry = {
         "slot": cfg.slot,
         "role": cfg.role,
@@ -714,6 +732,7 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "active_task": cfg.task_identifier,
         "branch": cfg.branch_name,
         "dispatch_pid": dispatch["pid"],
+        "dispatch_thread_id": dispatch_thread_id,
         "dispatch_log": dispatch["dispatch_log"],
         "packet_path": str(packet),
         "packet_version": cfg.packet_version,
@@ -970,11 +989,20 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
     result["dispatch_started"] = bool(dispatch["dispatch_started"])
     result["pid"] = int(dispatch["pid"])
     result["dispatch_log"] = str(dispatch["dispatch_log"])
+    dispatch_thread_id = None
+    raw_dispatch = dispatch.get("raw") if isinstance(dispatch.get("raw"), dict) else {}
+    for key in ("thread_id", "session_id", "conversation_id", "thread"):
+        value = raw_dispatch.get(key) if isinstance(raw_dispatch, dict) else None
+        if isinstance(value, str) and value.strip():
+            dispatch_thread_id = value.strip()
+            break
+    result["dispatch_thread_id"] = dispatch_thread_id
     result["dispatch"] = {
         "attempted": True,
         "status": "started" if dispatch["dispatch_started"] else "failed",
         "pid": int(dispatch["pid"]),
         "dispatch_log": str(dispatch["dispatch_log"]),
+        "dispatch_thread_id": dispatch_thread_id,
     }
     result["status"] = "dispatch_started" if dispatch["dispatch_started"] else "dispatch_failed"
 
@@ -1018,6 +1046,7 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "packet_version": cfg.packet_version,
         "dispatch_pid": dispatch["pid"],
         "dispatch_log": dispatch["dispatch_log"],
+        "dispatch_thread_id": dispatch_thread_id,
         "codex_profile_alias": cfg.codex_profile_alias,
         "mcp_mode": cfg.mcp_mode,
         "mcp_allowlist": cfg.mcp_allowlist,
