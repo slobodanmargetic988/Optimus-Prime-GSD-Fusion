@@ -146,6 +146,15 @@ def _require_object(value: object, *, label: str, errors: list[dict[str, object]
     return value
 
 
+def _require_str_or_none(value: object, *, label: str, errors: list[dict[str, object]]) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        _err(errors, "planner_bundle_schema_error", f"{label} must be string|null")
+        return None
+    return value.strip() or None
+
+
 def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, object]]) -> tuple[str | None, list[str], list[str], set[str]]:
     _strict_keys(
         payload,
@@ -166,6 +175,8 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
     reqs_raw = payload.get("requirements")
 
     phase_ids: list[str] = []
+    phase_deps: dict[str, list[str]] = {}
+    phase_task_ids: dict[str, list[str]] = {}
     if isinstance(phases_raw, list) and phases_raw:
         for idx, row in enumerate(phases_raw):
             if not isinstance(row, dict):
@@ -180,9 +191,14 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
             )
             phase_id = _require_nonempty_str(row.get("phase_id"), label=f"PLAN_PACKETS.phases[{idx}].phase_id", errors=errors)
             if phase_id:
+                if phase_id in phase_ids:
+                    _err(errors, "planner_bundle_schema_error", "PLAN_PACKETS.phases contains duplicate phase_id", phase_id=phase_id)
                 phase_ids.append(phase_id)
-            _require_str_list(row.get("task_ids"), label=f"PLAN_PACKETS.phases[{idx}].task_ids", errors=errors)
-            _require_str_list(row.get("depends_on_phase_ids"), label=f"PLAN_PACKETS.phases[{idx}].depends_on_phase_ids", errors=errors)
+            task_ids_in_phase = _require_str_list(row.get("task_ids"), label=f"PLAN_PACKETS.phases[{idx}].task_ids", errors=errors)
+            dep_ids = _require_str_list(row.get("depends_on_phase_ids"), label=f"PLAN_PACKETS.phases[{idx}].depends_on_phase_ids", errors=errors)
+            if phase_id:
+                phase_task_ids[phase_id] = task_ids_in_phase
+                phase_deps[phase_id] = dep_ids
             _require_str_list(row.get("entry_criteria"), label=f"PLAN_PACKETS.phases[{idx}].entry_criteria", errors=errors, min_items=1)
             _require_str_list(row.get("exit_criteria"), label=f"PLAN_PACKETS.phases[{idx}].exit_criteria", errors=errors, min_items=1)
     else:
@@ -255,6 +271,70 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
             if dep not in task_set:
                 _err(errors, "planner_bundle_schema_error", f"task {tid} depends on unknown task", dependency=dep)
 
+    # Validate task DAG acyclic.
+    indegree: dict[str, int] = {task_id: 0 for task_id in task_set}
+    succs: dict[str, list[str]] = {task_id: [] for task_id in task_set}
+    for task_id, deps in task_dep_map.items():
+        for dep in deps:
+            if dep in task_set:
+                indegree[task_id] += 1
+                succs[dep].append(task_id)
+    queue = [task_id for task_id, value in indegree.items() if value == 0]
+    visited = 0
+    while queue:
+        node = queue.pop()
+        visited += 1
+        for child in succs.get(node, []):
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                queue.append(child)
+    if visited != len(task_set):
+        _err(errors, "planner_bundle_schema_error", "PLAN_PACKETS task DAG contains cycle")
+
+    # Validate phase graph and task<->phase mapping.
+    phase_set = set(phase_ids)
+    for phase_id, deps in phase_deps.items():
+        for dep in deps:
+            if dep not in phase_set:
+                _err(errors, "planner_bundle_schema_error", f"phase {phase_id} depends on unknown phase", dependency=dep)
+            if dep == phase_id:
+                _err(errors, "planner_bundle_schema_error", f"phase {phase_id} must not depend on itself")
+
+    phase_indegree: dict[str, int] = {phase_id: 0 for phase_id in phase_set}
+    phase_succs: dict[str, list[str]] = {phase_id: [] for phase_id in phase_set}
+    for phase_id, deps in phase_deps.items():
+        for dep in deps:
+            if dep in phase_set:
+                phase_indegree[phase_id] += 1
+                phase_succs[dep].append(phase_id)
+    phase_queue = [phase_id for phase_id, value in phase_indegree.items() if value == 0]
+    phase_visited = 0
+    while phase_queue:
+        node = phase_queue.pop()
+        phase_visited += 1
+        for child in phase_succs.get(node, []):
+            phase_indegree[child] -= 1
+            if phase_indegree[child] == 0:
+                phase_queue.append(child)
+    if phase_visited != len(phase_set):
+        _err(errors, "planner_bundle_schema_error", "PLAN_PACKETS phase DAG contains cycle")
+
+    tasks_in_phases: list[str] = []
+    for phase_id, members in phase_task_ids.items():
+        for member in members:
+            if member not in task_set:
+                _err(errors, "planner_bundle_schema_error", f"phase {phase_id} references unknown task_id", task_id=member)
+            tasks_in_phases.append(member)
+    counts: dict[str, int] = {}
+    for task_id in tasks_in_phases:
+        counts[task_id] = counts.get(task_id, 0) + 1
+    for task_id, count in counts.items():
+        if count > 1:
+            _err(errors, "planner_bundle_schema_error", "task_id appears in multiple phases", task_id=task_id, count=count)
+    missing_phase_assignment = sorted(task_set - set(tasks_in_phases))
+    if missing_phase_assignment:
+        _err(errors, "planner_bundle_schema_error", "tasks missing from phase.task_ids mapping", missing_task_ids=missing_phase_assignment)
+
     if requirement_ids:
         for rid in requirement_ids:
             if rid not in covered:
@@ -303,6 +383,17 @@ def _validate_plan_check(payload: dict[str, Any], errors: list[dict[str, object]
             optional=set(),
             errors=errors,
         )
+        total = coverage.get("requirements_total")
+        covered = coverage.get("requirements_covered")
+        missing_ids = coverage.get("missing_requirement_ids")
+        if not isinstance(total, int) or total < 0:
+            _err(errors, "planner_bundle_schema_error", "PLAN_CHECK.coverage.requirements_total must be non-negative int")
+        if not isinstance(covered, int) or covered < 0:
+            _err(errors, "planner_bundle_schema_error", "PLAN_CHECK.coverage.requirements_covered must be non-negative int")
+        if not isinstance(missing_ids, list):
+            _err(errors, "planner_bundle_schema_error", "PLAN_CHECK.coverage.missing_requirement_ids must be list")
+        elif any(not isinstance(item, str) or not item.strip() for item in missing_ids):
+            _err(errors, "planner_bundle_schema_error", "PLAN_CHECK.coverage.missing_requirement_ids entries must be non-empty strings")
     dep_graph = _require_object(payload.get("dependency_graph"), label="PLAN_CHECK.dependency_graph", errors=errors)
     if dep_graph is not None:
         _strict_keys(
@@ -312,6 +403,25 @@ def _validate_plan_check(payload: dict[str, Any], errors: list[dict[str, object]
             optional=set(),
             errors=errors,
         )
+        nodes = dep_graph.get("nodes")
+        edges = dep_graph.get("edges")
+        if not isinstance(nodes, list):
+            _err(errors, "planner_bundle_schema_error", "PLAN_CHECK.dependency_graph.nodes must be list")
+        elif any(not isinstance(item, str) or not item.strip() for item in nodes):
+            _err(errors, "planner_bundle_schema_error", "PLAN_CHECK.dependency_graph.nodes entries must be non-empty strings")
+        if not isinstance(edges, list):
+            _err(errors, "planner_bundle_schema_error", "PLAN_CHECK.dependency_graph.edges must be list")
+        else:
+            for idx, edge in enumerate(edges):
+                if not isinstance(edge, dict):
+                    _err(errors, "planner_bundle_schema_error", f"PLAN_CHECK.dependency_graph.edges[{idx}] must be object")
+                    continue
+                if set(edge.keys()) != {"from", "to"}:
+                    _err(errors, "planner_bundle_schema_error", f"PLAN_CHECK.dependency_graph.edges[{idx}] must have keys from|to only")
+                _require_nonempty_str(edge.get("from"), label=f"PLAN_CHECK.dependency_graph.edges[{idx}].from", errors=errors)
+                _require_nonempty_str(edge.get("to"), label=f"PLAN_CHECK.dependency_graph.edges[{idx}].to", errors=errors)
+        _require_bool(dep_graph.get("cycle_detected"), label="PLAN_CHECK.dependency_graph.cycle_detected", errors=errors)
+        _require_bool(dep_graph.get("valid"), label="PLAN_CHECK.dependency_graph.valid", errors=errors)
     _require_bool(payload.get("verify_contract_completeness"), label="PLAN_CHECK.verify_contract_completeness", errors=errors)
     _require_bool(payload.get("phase_traceability"), label="PLAN_CHECK.phase_traceability", errors=errors)
     if not isinstance(payload.get("blocking_errors"), list):
@@ -361,8 +471,7 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
             _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].status invalid", status=status)
 
         owner_slot = row.get("owner_slot")
-        if owner_slot is not None and _as_str(owner_slot) is None:
-            _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].owner_slot must be string|null")
+        _require_str_or_none(owner_slot, label=f"TASK_EXECUTION_STATE.tasks[{idx}].owner_slot", errors=errors)
 
         attempts = _require_object(row.get("attempts"), label=f"TASK_EXECUTION_STATE.tasks[{idx}].attempts", errors=errors)
         if attempts is not None:
@@ -460,11 +569,15 @@ def _validate_gaps(payload: dict[str, Any], errors: list[dict[str, object]]) -> 
         _require_nonempty_str(row.get("category"), label=f"GAPS.gaps[{idx}].category", errors=errors)
         _require_str_list(row.get("reason_codes"), label=f"GAPS.gaps[{idx}].reason_codes", errors=errors, min_items=1)
         _require_nonempty_str(row.get("closure_task_id"), label=f"GAPS.gaps[{idx}].closure_task_id", errors=errors)
-        _require_bool(row.get("closure_required"), label=f"GAPS.gaps[{idx}].closure_required", errors=errors)
-        if row.get("opened_at") is not None and not _is_iso8601(row.get("opened_at")):
+        closure_required = _require_bool(row.get("closure_required"), label=f"GAPS.gaps[{idx}].closure_required", errors=errors)
+        if closure_required is False:
+            _err(errors, "planner_bundle_schema_error", f"GAPS.gaps[{idx}].closure_required must be true")
+        if not _is_iso8601(row.get("opened_at")):
             _err(errors, "planner_bundle_schema_error", f"GAPS.gaps[{idx}].opened_at must be ISO-8601")
-        if row.get("last_seen_open_at") is not None and not _is_iso8601(row.get("last_seen_open_at")):
+        if not _is_iso8601(row.get("last_seen_open_at")):
             _err(errors, "planner_bundle_schema_error", f"GAPS.gaps[{idx}].last_seen_open_at must be ISO-8601")
+        _require_str_or_none(row.get("closure_evidence_ref"), label=f"GAPS.gaps[{idx}].closure_evidence_ref", errors=errors)
+        _require_str_or_none(row.get("closed_by_task_id"), label=f"GAPS.gaps[{idx}].closed_by_task_id", errors=errors)
         if row.get("closed_at") is not None and not _is_iso8601(row.get("closed_at")):
             _err(errors, "planner_bundle_schema_error", f"GAPS.gaps[{idx}].closed_at must be ISO-8601|null")
         if row.get("resolution_candidate_at") is not None and not _is_iso8601(row.get("resolution_candidate_at")):
@@ -520,6 +633,8 @@ def _validate_gap_closure(payload: dict[str, Any], errors: list[dict[str, object
         is_gap = _require_bool(row.get("is_gap_closure"), label=f"GAP_CLOSURE.tasks[{idx}].is_gap_closure", errors=errors)
         if is_gap is False:
             _err(errors, "planner_bundle_schema_error", f"GAP_CLOSURE.tasks[{idx}].is_gap_closure must be true")
+        if "requirement_fallback_used" in row:
+            _require_bool(row.get("requirement_fallback_used"), label=f"GAP_CLOSURE.tasks[{idx}].requirement_fallback_used", errors=errors)
 
 
 def _validate_state_json(payload: dict[str, Any], errors: list[dict[str, object]]) -> str | None:
@@ -553,14 +668,52 @@ def _validate_state_json(payload: dict[str, Any], errors: list[dict[str, object]
         _err(errors, "planner_bundle_schema_error", "STATE.updated_at must be ISO-8601")
     _require_nonempty_str(payload.get("mission"), label="STATE.mission", errors=errors)
     _require_nonempty_str(payload.get("scope"), label="STATE.scope", errors=errors)
-    if not isinstance(payload.get("mission_source"), dict):
+    mission_source = payload.get("mission_source")
+    if not isinstance(mission_source, dict):
         _err(errors, "planner_bundle_schema_error", "STATE.mission_source must be object")
-    if not isinstance(payload.get("scope_source"), dict):
+    else:
+        _strict_keys(
+            mission_source,
+            label="STATE.mission_source",
+            required={"mode", "value", "path", "display"},
+            optional=set(),
+            errors=errors,
+        )
+        mode = _require_nonempty_str(mission_source.get("mode"), label="STATE.mission_source.mode", errors=errors)
+        if mode not in {"inline", "file"}:
+            _err(errors, "planner_bundle_schema_error", "STATE.mission_source.mode must be inline|file")
+        _require_nonempty_str(mission_source.get("display"), label="STATE.mission_source.display", errors=errors)
+        _require_str_or_none(mission_source.get("value"), label="STATE.mission_source.value", errors=errors)
+        _require_str_or_none(mission_source.get("path"), label="STATE.mission_source.path", errors=errors)
+    scope_source = payload.get("scope_source")
+    if not isinstance(scope_source, dict):
         _err(errors, "planner_bundle_schema_error", "STATE.scope_source must be object")
-    if not isinstance(payload.get("constraints"), list):
+    else:
+        _strict_keys(
+            scope_source,
+            label="STATE.scope_source",
+            required={"mode", "value", "path", "display"},
+            optional=set(),
+            errors=errors,
+        )
+        mode = _require_nonempty_str(scope_source.get("mode"), label="STATE.scope_source.mode", errors=errors)
+        if mode not in {"inline", "file"}:
+            _err(errors, "planner_bundle_schema_error", "STATE.scope_source.mode must be inline|file")
+        _require_nonempty_str(scope_source.get("display"), label="STATE.scope_source.display", errors=errors)
+        _require_str_or_none(scope_source.get("value"), label="STATE.scope_source.value", errors=errors)
+        _require_str_or_none(scope_source.get("path"), label="STATE.scope_source.path", errors=errors)
+    constraints = payload.get("constraints")
+    if not isinstance(constraints, list):
         _err(errors, "planner_bundle_schema_error", "STATE.constraints must be list")
-    if not isinstance(payload.get("requirements"), list):
+    elif any(not isinstance(item, str) for item in constraints):
+        _err(errors, "planner_bundle_schema_error", "STATE.constraints entries must be strings")
+    requirements = payload.get("requirements")
+    if not isinstance(requirements, list):
         _err(errors, "planner_bundle_schema_error", "STATE.requirements must be list")
+    elif any(not isinstance(item, dict) for item in requirements):
+        _err(errors, "planner_bundle_schema_error", "STATE.requirements entries must be objects")
+    _require_nonempty_str(payload.get("map_fingerprint"), label="STATE.map_fingerprint", errors=errors)
+    _require_nonempty_str(payload.get("repo_fingerprint"), label="STATE.repo_fingerprint", errors=errors)
     _require_bool(payload.get("baseline_ready"), label="STATE.baseline_ready", errors=errors)
     _require_bool(payload.get("plan_ready"), label="STATE.plan_ready", errors=errors)
     _require_bool(payload.get("build_ready"), label="STATE.build_ready", errors=errors)
@@ -619,9 +772,7 @@ def _validate_evidence(path: str, payload: dict[str, Any], errors: list[dict[str
         _strict_keys(review, label=f"{path}.review", required={"status", "decision", "blockers", "artifacts"}, optional=set(), errors=errors)
         if _as_str(review.get("status")) not in EVIDENCE_STATUS:
             _err(errors, "planner_bundle_schema_error", f"{path}.review.status invalid")
-        decision = review.get("decision")
-        if decision is not None and _as_str(decision) is None:
-            _err(errors, "planner_bundle_schema_error", f"{path}.review.decision must be string|null")
+        _require_str_or_none(review.get("decision"), label=f"{path}.review.decision", errors=errors)
         for key in ("blockers", "artifacts"):
             if not isinstance(review.get(key), list):
                 _err(errors, "planner_bundle_schema_error", f"{path}.review.{key} must be list")

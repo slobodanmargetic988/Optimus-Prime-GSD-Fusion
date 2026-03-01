@@ -4205,3 +4205,186 @@ def test_planner_validator_rejects_non_string_task_fields():
         assert payload is None
         assert any(item.get("code") == "planner_bundle_schema_error" for item in errors)
         assert any("task_id must be string" in str(item.get("message")) for item in errors)
+
+
+def test_planner_validator_rejects_non_string_owner_slot_and_review_decision():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        rows = [json.loads(line) for line in bundle_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        for row in rows:
+            if row.get("artifact_path") == "TASK_EXECUTION_STATE.json":
+                row["content"]["tasks"][0]["owner_slot"] = 123
+                row["checksum_sha256"] = planner_checksum("json", row["content"])
+            if row.get("artifact_path") == "evidence/TASK-001/TASK_EVIDENCE.json":
+                row["content"]["review"]["decision"] = 456
+                row["checksum_sha256"] = planner_checksum("json", row["content"])
+        write_planner_bundle(bundle_path, rows)
+
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any("owner_slot must be string|null" in str(item.get("message")) for item in errors)
+        assert any("review.decision must be string|null" in str(item.get("message")) for item in errors)
+
+
+def test_planner_validator_enforces_gap_closure_required_true_and_gap_optional_field_types():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        rows = [json.loads(line) for line in bundle_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        for row in rows:
+            if row.get("artifact_path") == "GAPS.json":
+                row["content"]["gaps"] = [
+                    {
+                        "gap_id": "gap-x",
+                        "phase_id": "phase-1",
+                        "severity": "high",
+                        "result": "blocked",
+                        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+                        "opened_at": "2026-01-01T00:00:00Z",
+                        "status": "open",
+                        "category": "task_blocked",
+                        "reason_codes": ["task_state_blocked"],
+                        "closure_task_id": "GAPFIX-XXXX",
+                        "last_seen_open_at": "2026-01-01T00:00:00Z",
+                        "closure_required": False,
+                        "closure_evidence_ref": 123,
+                        "closed_by_task_id": 456,
+                        "closed_at": None,
+                        "resolution_candidate_at": None,
+                    }
+                ]
+                row["checksum_sha256"] = planner_checksum("json", row["content"])
+        write_planner_bundle(bundle_path, rows)
+
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any("closure_required must be true" in str(item.get("message")) for item in errors)
+        assert any("closure_evidence_ref must be string|null" in str(item.get("message")) for item in errors)
+        assert any("closed_by_task_id must be string|null" in str(item.get("message")) for item in errors)
+
+
+def test_planner_validator_rejects_phase_cycle_and_phase_task_mismatch():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        rows = [json.loads(line) for line in bundle_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        for row in rows:
+            if row.get("artifact_path") == "PLAN_PACKETS.json":
+                row["content"]["phases"] = [
+                    {
+                        "phase_id": "phase-1",
+                        "task_ids": ["TASK-001"],
+                        "depends_on_phase_ids": ["phase-2"],
+                        "entry_criteria": ["phase_dependencies_done"],
+                        "exit_criteria": ["all_tasks_review_done"],
+                    },
+                    {
+                        "phase_id": "phase-2",
+                        "task_ids": ["TASK-002"],
+                        "depends_on_phase_ids": ["phase-1"],
+                        "entry_criteria": ["phase_dependencies_done"],
+                        "exit_criteria": ["all_tasks_review_done"],
+                    },
+                ]
+                row["checksum_sha256"] = planner_checksum("json", row["content"])
+                break
+        write_planner_bundle(bundle_path, rows)
+
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any("phase DAG contains cycle" in str(item.get("message")) for item in errors)
+        assert any("tasks missing from phase.task_ids mapping" in str(item.get("message")) for item in errors)
+
+
+def test_planner_validator_rejects_invalid_state_source_shapes():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        rows = [json.loads(line) for line in bundle_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        for row in rows:
+            if row.get("artifact_path") == "STATE.json":
+                row["content"]["mission_source"] = {"mode": "inline", "display": "x"}
+                row["content"]["scope_source"] = "invalid"
+                row["checksum_sha256"] = planner_checksum("json", row["content"])
+                break
+        write_planner_bundle(bundle_path, rows)
+
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any("STATE.mission_source missing required keys" in str(item.get("message")) for item in errors)
+        assert any("STATE.scope_source must be object" in str(item.get("message")) for item in errors)
