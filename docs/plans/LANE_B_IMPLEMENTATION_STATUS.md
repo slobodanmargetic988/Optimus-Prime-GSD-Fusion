@@ -2,6 +2,20 @@
 
 Updated: 2026-02-28
 
+## Vision Lock (for future reviews)
+1. `/op-initialize` is planning bootstrap only:
+   - ensures git repo baseline (LLM bootstrap + deterministic verification when git is missing),
+   - maps codebase,
+   - builds project baseline,
+   - generates strict validated plan artifacts.
+2. `/op-build` is autonomous executor only:
+   - runs until strict completion or deterministic terminal stop condition,
+   - does not require phase-by-phase manual driving.
+3. New-only contracts:
+   - no backward-compat branches,
+   - deterministic artifacts/codes,
+   - strict gates are authoritative.
+
 ## Implemented (Batch 1 Runtime Pipeline + Hard Gate Remediation)
 
 - Added repo-tracked shared pipeline contract:
@@ -65,6 +79,10 @@ Updated: 2026-02-28
 - Added strict override gate for planning regeneration:
   - `/op-new-project`, `/op-plan`, `/op-initialize` return `override_required` when planning artifacts already exist
   - `--override-old-plan` archives prior planning artifacts and allows regeneration
+- Added deterministic git bootstrap gate in `/op-initialize`:
+  - if repo is not a git work tree, OP invokes foreground LLM bootstrap flow for first commit and required branch (`RAB-BASE`)
+  - OP and LLM use the same deterministic verifier contract (`scripts/op/planner/validate_git_bootstrap.py`)
+  - initialize fails if verifier does not pass (no partial silent proceed)
 - Added profile autodetection in `/op-initialize`:
   - scans parent of `CODEX_HOME` (fallback `~`) for `.codex*` directories with first-level `auth.json`
   - writes canonical profile artifact `reports/optimus-prime/planning/PROFILE_SELECTION.json`
@@ -211,5 +229,6 @@ python3 -m pytest \
 
 ## Lane B Status (Hardening Complete)
 
-- Lane B hardening matrix is green for the new-only model, including corruption drills for status/health/build/resume and gap artifact recovery paths.
+- Lane B baseline vision is implemented for new-only autonomous planning/build and deterministic control contracts.
+- Ongoing work is incremental hardening and review-driven remediations, not workflow redesign.
 - Remaining roadmap work is Lane C packaging/installer and polished product command UX.

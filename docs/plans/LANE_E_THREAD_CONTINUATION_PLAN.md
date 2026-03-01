@@ -9,6 +9,10 @@ Primary outcome:
 3. Let `/op-build` choose continue-vs-new dispatch mode automatically.
 4. Add automatic profile recognition so `/op-build` uses all available Codex profiles by default.
 
+Vision boundary:
+1. Lane E is an optimization lane on top of Lane B behavior.
+2. It must not change the two-step contract (`/op-initialize` then `/op-build`) or relax strict completion/safety gates.
+
 ## Implemented Baseline (Profile Wiring)
 1. `/op-initialize` now performs deterministic profile autodetection from `.codex*` folders (first-level `auth.json` required).
 2. Detected profiles are persisted in `reports/optimus-prime/planning/PROFILE_SELECTION.json`.

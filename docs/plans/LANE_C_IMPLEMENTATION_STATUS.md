@@ -2,6 +2,13 @@
 
 Updated: 2026-02-27
 
+## Vision Alignment
+1. Lane C does not redefine planning/build behavior from Lane B.
+2. Installed product must preserve the same two-step operator flow:
+   - `/op-initialize` for bootstrap/planning,
+   - `/op-build` for autonomous execution.
+3. Lane C scope is packaging/distribution/installer reliability, not runtime policy drift.
+
 ## Implemented
 
 - Deterministic release bundle builder:
