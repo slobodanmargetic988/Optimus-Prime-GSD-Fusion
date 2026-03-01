@@ -1,0 +1,58 @@
+<mxfile host="app.diagrams.net" modified="2026-03-01T11:05:00.000Z" agent="Codex" version="24.7.17" compressed="false">
+  <diagram id="lane-b-flow" name="Lane-B-Initialize-Build-Flow">
+    <mxGraphModel dx="2400" dy="1400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="2" value="/op-initialize" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="40" y="200" width="170" height="60" as="geometry"/></mxCell>
+        <mxCell id="3" value="check-or-initialize-git" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="260" y="200" width="220" height="60" as="geometry"/></mxCell>
+        <mxCell id="4" value="/op-map-codebase" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="530" y="200" width="180" height="60" as="geometry"/></mxCell>
+        <mxCell id="5" value="/op-new-project" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="760" y="200" width="170" height="60" as="geometry"/></mxCell>
+        <mxCell id="6" value="Profile autodetect&#xa;PROFILE_SELECTION.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="980" y="190" width="210" height="80" as="geometry"/></mxCell>
+        <mxCell id="7" value="/op-plan&#xa;(LLM planner attempt)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="1240" y="190" width="200" height="80" as="geometry"/></mxCell>
+        <mxCell id="8" value="PLAN_BUNDLE +&#xa;validation pass?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="1495" y="180" width="170" height="100" as="geometry"/></mxCell>
+        <mxCell id="9" value="Fail: planner_retry_exhausted" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="1510" y="40" width="220" height="60" as="geometry"/></mxCell>
+        <mxCell id="10" value="Atomic write canonical&#xa;planning artifacts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="1720" y="190" width="220" height="80" as="geometry"/></mxCell>
+        <mxCell id="11" value="/op-build" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="1990" y="200" width="140" height="60" as="geometry"/></mxCell>
+
+        <mxCell id="12" value="/op-resume" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="390" y="340" width="150" height="60" as="geometry"/></mxCell>
+        <mxCell id="13" value="Reconcile stop&#xa;ledger/tasks/workers" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="600" y="330" width="220" height="80" as="geometry"/></mxCell>
+
+        <mxCell id="14" value="Preflight: lock + required artifacts +&#xa;recover malformed gap artifacts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="2190" y="190" width="330" height="80" as="geometry"/></mxCell>
+        <mxCell id="15" value="Preflight OK?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="2570" y="185" width="150" height="90" as="geometry"/></mxCell>
+        <mxCell id="16" value="blocked_preflight" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="2610" y="50" width="170" height="60" as="geometry"/></mxCell>
+
+        <mxCell id="17" value="Cycle: refresh profile rates -&gt; controller tick -&gt; directives by control id/run id -&gt; handoff/evidence sync -&gt; gaps refresh -&gt; phase/gate checks -&gt; dispatch/skip -&gt; watchdog update -&gt; persist state -&gt; sleep" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="2780" y="160" width="530" height="140" as="geometry"/></mxCell>
+        <mxCell id="18" value="Terminal condition?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="3360" y="185" width="170" height="90" as="geometry"/></mxCell>
+        <mxCell id="19" value="completed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="3580" y="110" width="130" height="60" as="geometry"/></mxCell>
+        <mxCell id="20" value="stopped/blocked terminal" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="3580" y="250" width="190" height="60" as="geometry"/></mxCell>
+
+        <mxCell id="100" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="101" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="102" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="103" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="104" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="105" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="7" target="8"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="106" value="No (&lt;10)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="8" target="7"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1580" y="320"/></Array></mxGeometry></mxCell>
+        <mxCell id="107" value="No (=10)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="8" target="9"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="108" value="Yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="8" target="10"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="109" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="10" target="11"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="110" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="12" target="13"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="111" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="13" target="11"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="900" y="230"/></Array></mxGeometry></mxCell>
+
+        <mxCell id="112" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="11" target="14"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="113" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="14" target="15"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="114" value="No" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="15" target="16"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="115" value="Yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="15" target="17"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="116" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="17" target="18"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="117" value="No" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="18" target="17"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="3440" y="340"/></Array></mxGeometry></mxCell>
+        <mxCell id="118" value="Strict done" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="18" target="19"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="119" value="Stop condition" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="18" target="20"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

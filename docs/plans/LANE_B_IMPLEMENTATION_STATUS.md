@@ -2,6 +2,10 @@
 
 Updated: 2026-02-28
 
+Diagram reference:
+1. [Lane B diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_B_FLOW_DIAGRAMS.md)
+2. If behavior diverges from diagrams, add explicit `diagram drift` note until reconciled.
+
 ## Vision Lock (for future reviews)
 1. `/op-initialize` is planning bootstrap only:
    - ensures git repo baseline (LLM bootstrap + deterministic verification when git is missing),

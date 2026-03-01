@@ -43,3 +43,15 @@ Installable product packaging, command UX, diagnostics, docs, and release framew
 
 ## Sequencing Rule
 Lane A -> Lane B -> Lane C, with Lane D and Lane E as post-core extension lanes.
+
+## Diagrams
+1. [Diagram index](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/README.md)
+2. [Lane A diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_A_FLOW_DIAGRAMS.md)
+3. [Lane B diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_B_FLOW_DIAGRAMS.md)
+4. [Lane C diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_C_FLOW_DIAGRAMS.md)
+5. [Lane D diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_D_FLOW_DIAGRAMS.md)
+6. [Lane E diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_E_FLOW_DIAGRAMS.md)
+
+Policy:
+1. Behavior-changing lane PRs must update the corresponding diagram file in the same PR.
+2. If not updated yet, lane status must carry a `diagram drift` note.
