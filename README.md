@@ -144,9 +144,9 @@ opctl /op-resume --json-pretty
 ```
 
 Runtime reliability notes:
-- Gap-closure packets always carry non-empty `requirement_ids` (no OP packet contract deadloop on GAPFIX dispatch).
-- If gap metadata is too malformed to derive requirement linkage, OP uses deterministic fallback `REQ-GAP-CLOSURE` and emits `gap_closure_requirement_fallback`.
-- If one gap closure is retry-exhausted, build continues scanning and can dispatch other queued tasks in the same cycle.
+- Runtime decisions are now based on task-embedded gaps (`tasks[].gaps_that_need_patching`); external `GAPS.json` / `GAP_CLOSURE_PLAN_PACKETS.json` are not decision inputs.
+- Strict completion requires merge evidence: `review_done` tasks must be merged into `RAB-BASE` with verification pass data.
+- Dispatcher supports same-lane thread continuation (`codex resume`) with deterministic fallback to fresh dispatch on resume failure.
 - Dead running worker PIDs are normalized before dispatch gating, so stale registry entries do not block dispatch capacity.
 - If `WORKER_REGISTRY.json` is unreadable, OP attempts auto-recovery; if recovery fails, it emits `worker_registry_recovery_failed_dispatch_allowed` and continues dispatch by policy.
 

@@ -111,10 +111,9 @@ Diagram reference:
 - Added canonical artifact-first task evidence contract:
   - per-task `reports/optimus-prime/planning/evidence/<task_id>/TASK_EVIDENCE.json`
   - `/op-build` stage progression now consumes canonical evidence artifacts (not handoff-inline fallback)
-- Added B4 autonomous gap-closure loop:
-  - `GAPS.json` open/closed tracking
-  - `GAP_CLOSURE_PLAN_PACKETS.json` deterministic closure packet generation
-  - open gaps hard-block strict completion (no waiver path)
+- Added task-embedded gap canonical model:
+  - open/closed gap state now lives on `TASK_EXECUTION_STATE.json.tasks[].gaps_that_need_patching`
+  - open embedded gaps hard-block phase exit and strict completion (no waiver path)
 - Added strict build preflight gate:
   - `/op-build` blocks when baseline artifacts are missing, `plan_ready=false`, or task-state contract is missing/invalid
   - blocked build response explicitly recommends `/op-initialize`
@@ -128,10 +127,8 @@ Diagram reference:
   - malformed `RUNTIME_HEALTH.json` no longer crashes build loop; blocker fingerprint falls back to `unknown-fingerprint` with deterministic warning
   - handoff ingestion auto-recovers from log truncation by resetting stale offsets with deterministic warning/event
   - directive tool failures queue deterministic remediation and suppress feature dispatch for that cycle
-  - gap closure is convergent: no recursive gap generation from closure tasks; retries are bounded (max 5) then escalated/suppressed
-  - sticky explicit closure semantics: open gaps never auto-close from recomputation drift; explicit `GAPFIX-*` closure evidence is required
-  - lock-safe pre-loop: malformed gap artifacts no longer leave orphan `BUILD_LOOP.lock`
-  - malformed `GAPS.json` / `GAP_CLOSURE_PLAN_PACKETS.json` in `/op-build` auto-heals via deterministic backup + rebuild and records recovery metadata in `BUILD_STATE.json`
+  - gap lifecycle is convergent: retries are bounded (max 5) and explicit closure evidence is required
+  - lock-safe pre-loop: malformed planning/runtime artifacts do not leave orphan `BUILD_LOOP.lock`
 - Added autonomous recovery state machine in `/op-build`:
   - recoverable blocker attempts tracked per `(strategy,fingerprint)`
   - strategy escalates after 5 attempts only for concrete fingerprints (no synthetic escalation on `unknown-fingerprint`)
@@ -139,6 +136,7 @@ Diagram reference:
   - hard stops enforced for `insurmountable_blocker|all_rate_gates_blocking|operator_stop`
 - Strict done gate enforced for completion:
   - all plan tasks present and `review_done`
+  - all `review_done` tasks must be merged into `RAB-BASE` with verification pass evidence
   - per-task canonical task evidence present and valid
   - required verify commands recorded as passed
   - UAT requirement coverage recorded as passed
@@ -147,9 +145,9 @@ Diagram reference:
   - final-state authorization passes via `--verify-final-state`
 - `/op-health` now enforces strict build-readiness semantics:
   - preflight blockers (`plan_ready=false`, invalid/missing strict artifacts, invalid plan/task state) fail health checks
-  - malformed `GAPS.json` / `GAP_CLOSURE_PLAN_PACKETS.json` blocks health with deterministic `gap_artifact_integrity_blocked`
+  - malformed task-embedded gap rows block health with deterministic `gap_artifact_integrity_blocked`
 - `/op-status` is crash-safe on malformed planning/build artifacts:
-  - malformed `PLAN_PACKETS.json`, `TASK_EXECUTION_STATE.json`, `BUILD_STATE.json`, `GAPS.json`, or `GAP_CLOSURE_PLAN_PACKETS.json` yields deterministic blocked snapshot (no exception)
+  - malformed `PLAN_PACKETS.json`, `TASK_EXECUTION_STATE.json`, or `BUILD_STATE.json` yields deterministic blocked snapshot (no exception)
   - warning/error codes: `status_artifact_invalid`, `status_snapshot_degraded`
 - `/op-resume` auto-recovers malformed build state:
   - malformed/non-object/non-numeric-cycle `BUILD_STATE.json` is backed up to `BUILD_STATE.corrupt.<timestamp>.json`
@@ -158,13 +156,6 @@ Diagram reference:
 - malformed rate registry handling in `all_rate_gates_blocking` branch:
   - invalid `PROFILE_RATE_REGISTRY.json` no longer crashes or forces stop/wait
   - cycle continues with warning code `rate_registry_invalid_ignored`
-- new gap artifact integrity/recovery codes:
-  - `gaps_artifact_invalid`
-  - `gap_closure_artifact_invalid`
-  - `gaps_artifact_recovered`
-  - `gap_closure_artifact_recovered`
-  - `gap_artifact_recovery_failed`
-  - `gap_artifact_integrity_blocked`
 - Extended dispatch packet contract for OP build packets:
   - `op_build_mode`
   - `plan_id`
@@ -186,9 +177,7 @@ Diagram reference:
     - `no_progress_watchdog_marker_write_failed`
     - `no_progress_watchdog_event_write_failed`
 - Lane B critical gap/dispatch reliability remediation:
-  - gap closure packet generation now enforces non-empty `requirement_ids` for all `GAPFIX-*` tasks (including recovery rebuild path)
-  - if gap linkage metadata is missing, fallback requirement `REQ-GAP-CLOSURE` is applied with warning `gap_closure_requirement_fallback`
-  - dispatch queue fairness fixed: exhausted gap-closure retries no longer starve remaining dispatchable tasks in the same cycle
+  - dispatch queue fairness fixed: exhausted retries on one blocked item no longer starve other dispatchable tasks in the same cycle
   - build loop pre-dispatch now normalizes dead running worker PIDs in `WORKER_REGISTRY.json`, with warning `worker_registry_dead_pid_normalized`
   - active worker counting ignores dead PID entries, preventing false `dispatch_window_cap` gating
   - unreadable/invalid `WORKER_REGISTRY.json` now triggers deterministic auto-recovery warning (`worker_registry_recovered`) or permissive warning fallback (`worker_registry_recovery_failed_dispatch_allowed`) without hard-stop
@@ -211,7 +200,10 @@ Diagram reference:
     - `pending`, `dev_working`, `dev_done`, `testing`, `tests_done`, `reviewing`, `review_done`, `blocked`
   - planner validator now enforces lane-aware task contracts:
     - `lane_id` (phase-scoped), `status`, and `gaps_that_need_patching[]` task payload support
-  - task-embedded gaps are now authoritative for strict-done and phase gating; external gap artifacts are still integrity-checked/recovered for deterministic safety and audit continuity
+  - task-embedded gaps are authoritative for strict-done, phase gating, status, and health; external gap artifacts are no longer runtime decision inputs
+  - dispatcher supports same-lane thread continuation (`codex resume`) with deterministic fallback to fresh dispatch
+  - branch manager executes merges and verification; merge evidence is now a strict completion gate
+  - workstation manager executes lane-change preparation with validator/retry semantics
 
 ## Runtime + Blocker Artifacts (Canonical)
 
@@ -225,8 +217,9 @@ Diagram reference:
 - `reports/optimus-prime/planning/BUILD_LOOP.lock`
 - `reports/optimus-prime/planning/BUILD_STATE.json` (`cycle_gate_decision`, `remediation_state`, `offset_recovery`, `current_phase_id`, `phase_exit_checks`, `open_gap_ids`)
 - `reports/optimus-prime/planning/evidence/<task_id>/TASK_EVIDENCE.json`
-- `reports/optimus-prime/planning/GAPS.json`
-- `reports/optimus-prime/planning/GAP_CLOSURE_PLAN_PACKETS.json`
+- `reports/optimus-prime/planning/DONE_TASKS_REGISTRY.json`
+- `reports/optimus-prime/planning/PRODUCTION_LINE_STATE.json`
+- `reports/optimus-prime/planning/WORK_DISPATCH_PLAN.json`
 - `reports/optimus-prime/BLOCKER_ADAPTATION_CANDIDATES.md`
 - `reports/optimus-prime/BLOCKER_INDEX.json`
 - `reports/optimus-prime/BLOCKERS.jsonl`

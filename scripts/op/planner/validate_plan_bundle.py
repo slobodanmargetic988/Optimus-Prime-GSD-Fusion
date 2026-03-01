@@ -250,12 +250,15 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
                     "task_id",
                     "title",
                     "phase_id",
+                    "lane_id",
+                    "status",
                     "requirement_ids",
                     "depends_on",
                     "must_haves",
                     "verify_commands",
+                    "gaps_that_need_patching",
                 },
-                optional={"lane_id", "status", "gaps_that_need_patching"},
+                optional=set(),
                 errors=errors,
             )
             task_id = _require_nonempty_str(row.get("task_id"), label=f"PLAN_PACKETS.tasks[{idx}].task_id", errors=errors)
@@ -265,16 +268,13 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
             phase_id = _require_nonempty_str(row.get("phase_id"), label=f"PLAN_PACKETS.tasks[{idx}].phase_id", errors=errors)
             if phase_id and phase_ids and phase_id not in phase_ids:
                 _err(errors, "planner_bundle_schema_error", f"task {task_id or idx} references unknown phase_id", phase_id=phase_id)
-            lane_id = _as_str(row.get("lane_id")) or f"{phase_id or 'phase-1'}/lane-a"
-            row["lane_id"] = lane_id
+            lane_id = _require_nonempty_str(row.get("lane_id"), label=f"PLAN_PACKETS.tasks[{idx}].lane_id", errors=errors)
             if lane_id and phase_id:
                 expected_prefix = f"{phase_id}/lane-"
                 if not lane_id.startswith(expected_prefix):
-                    lane_id = f"{phase_id}/lane-a"
-                    row["lane_id"] = lane_id
+                    _err(errors, "planner_bundle_schema_error", f"PLAN_PACKETS.tasks[{idx}].lane_id must be phase-scoped", expected_prefix=expected_prefix)
                 lane_members.setdefault(phase_id, set()).add(lane_id)
-            status = _as_str(row.get("status")) or "pending"
-            row["status"] = status
+            status = _require_nonempty_str(row.get("status"), label=f"PLAN_PACKETS.tasks[{idx}].status", errors=errors)
             if status != "pending":
                 _err(errors, "planner_bundle_schema_error", f"PLAN_PACKETS.tasks[{idx}].status must be 'pending'")
             req_ids = _require_str_list(row.get("requirement_ids"), label=f"PLAN_PACKETS.tasks[{idx}].requirement_ids", errors=errors, min_items=1)
@@ -284,9 +284,6 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
             _require_str_list(row.get("must_haves"), label=f"PLAN_PACKETS.tasks[{idx}].must_haves", errors=errors, min_items=1)
             _require_str_list(row.get("verify_commands"), label=f"PLAN_PACKETS.tasks[{idx}].verify_commands", errors=errors, min_items=1)
             gaps = row.get("gaps_that_need_patching")
-            if gaps is None:
-                gaps = []
-                row["gaps_that_need_patching"] = gaps
             if not isinstance(gaps, list):
                 _err(errors, "planner_bundle_schema_error", f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching must be list")
             else:
@@ -547,14 +544,18 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
             required={
                 "task_id",
                 "phase_id",
+                "lane_id",
                 "requirement_ids",
                 "status",
                 "owner_slot",
+                "dispatch_thread_id",
+                "last_progress_at",
                 "attempts",
                 "evidence",
+                "gaps_that_need_patching",
                 "blockers",
             },
-            optional={"lane_id", "dispatch_thread_id", "last_progress_at", "gaps_that_need_patching"},
+            optional=set(),
             errors=errors,
         )
         task_id = _require_nonempty_str(row.get("task_id"), label=f"TASK_EXECUTION_STATE.tasks[{idx}].task_id", errors=errors)
@@ -563,8 +564,10 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
             if task_id not in task_ids:
                 _err(errors, "planner_bundle_schema_error", "TASK_EXECUTION_STATE includes unknown task_id", task_id=task_id)
         _require_nonempty_str(row.get("phase_id"), label=f"TASK_EXECUTION_STATE.tasks[{idx}].phase_id", errors=errors)
-        lane_id = _as_str(row.get("lane_id")) or f"{_as_str(row.get('phase_id')) or 'phase-1'}/lane-a"
-        row["lane_id"] = lane_id
+        lane_id = _require_nonempty_str(row.get("lane_id"), label=f"TASK_EXECUTION_STATE.tasks[{idx}].lane_id", errors=errors)
+        phase_id = _as_str(row.get("phase_id")) or "phase-1"
+        if lane_id and not lane_id.startswith(f"{phase_id}/lane-"):
+            _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].lane_id must be phase-scoped")
         _require_str_list(row.get("requirement_ids"), label=f"TASK_EXECUTION_STATE.tasks[{idx}].requirement_ids", errors=errors, min_items=1)
 
         status = _as_str(row.get("status"))
@@ -608,9 +611,6 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
                 _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].evidence.uat_results must be list")
 
         gaps = row.get("gaps_that_need_patching")
-        if gaps is None:
-            gaps = []
-            row["gaps_that_need_patching"] = gaps
         if not isinstance(gaps, list):
             _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].gaps_that_need_patching must be list")
         if not isinstance(row.get("blockers"), list):

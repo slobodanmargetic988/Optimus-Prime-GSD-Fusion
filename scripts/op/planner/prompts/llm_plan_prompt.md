@@ -33,14 +33,10 @@ Required artifacts in bundle:
 - STATE.md
 - evidence/<task_id>/TASK_EVIDENCE.json for every task in PLAN_PACKETS.tasks
 
-Optional compatibility artifacts (not required):
-- GAPS.json
-- GAP_CLOSURE_PLAN_PACKETS.json
-
 Planning requirements:
 1. Build a parallelizable task DAG with explicit dependencies.
 2. Every task has non-empty requirement_ids.
-3. Every task must include lane-aware runtime metadata:
+3. Every task must include lane-aware runtime metadata (required, no defaults):
    - lane_id in format <phase_id>/lane-[a-c]
    - status set to pending
    - gaps_that_need_patching as a list (default empty)

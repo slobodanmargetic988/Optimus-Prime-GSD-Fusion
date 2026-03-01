@@ -34,6 +34,7 @@ MCP_MODES = {"disable-all", "enable-only"}
 FORBIDDEN_WORKER_MCPS = {"linear", "linear_sse"}
 SANDBOX_MODES = {"workspace-write", "danger-full-access"}
 TEST_TRAIN_MODES = {"off", "final-stage", "forced-shared-env"}
+DISPATCH_MODES = {"exec", "resume"}
 
 
 class ToolError(Exception):
@@ -76,6 +77,9 @@ class DispatchInput:
     requirement_ids: list[str]
     task_acceptance_refs: list[str]
     dev_ready_evidence_ref: str | None
+    dispatch_mode: str
+    resume_thread_id: str | None
+    lane_id: str | None
     dry_run: bool
     cycle_note: str | None
 
@@ -316,6 +320,11 @@ def validate_policy(cfg: DispatchInput) -> None:
                 "op-build mode packets require dev_ready_evidence_ref",
                 stage="validate",
             )
+    if cfg.dispatch_mode not in DISPATCH_MODES:
+        raise ToolError("validation_error", "dispatch_mode must be exec|resume", stage="validate")
+    if cfg.dispatch_mode == "resume":
+        if not isinstance(cfg.resume_thread_id, str) or not cfg.resume_thread_id.strip():
+            raise ToolError("validation_error", "resume dispatch mode requires resume_thread_id", stage="validate")
 
 
 
@@ -409,6 +418,9 @@ def config_from_args(args: argparse.Namespace) -> DispatchInput:
             else [item.strip() for item in args.task_acceptance_refs if item.strip()]
         ),
         dev_ready_evidence_ref=((args.dev_ready_evidence_ref or data.get("dev_ready_evidence_ref") or "").strip() or None),
+        dispatch_mode=((args.dispatch_mode or data.get("dispatch_mode") or "exec").strip() or "exec"),
+        resume_thread_id=((args.resume_thread_id or data.get("resume_thread_id") or "").strip() or None),
+        lane_id=((args.lane_id or data.get("lane_id") or "").strip() or None),
         dry_run=bool(data.get("dry_run", False) or args.dry_run),
         cycle_note=(args.cycle_note if args.cycle_note is not None else data.get("cycle_note")),
     )
@@ -611,6 +623,8 @@ class ThreadDispatchRunner:
             str(packet_path),
             "--background",
         ]
+        if cfg.dispatch_mode == "resume" and cfg.resume_thread_id:
+            cmd.extend(["--resume-session-id", cfg.resume_thread_id])
 
         # `codex exec --full-auto` currently forces workspace-write sandboxing.
         # For worker packets that require danger-full-access, disable the helper
@@ -637,6 +651,34 @@ class ThreadDispatchRunner:
             cmd.extend([f"--extra-arg=--add-dir", f"--extra-arg={d}"])
 
         run = subprocess.run(cmd, cwd=str(cfg.repo_root), capture_output=True, text=True, check=False)
+        fallback_used = False
+        if run.returncode != 0 and cfg.dispatch_mode == "resume" and cfg.resume_thread_id:
+            fallback_cmd = [
+                "python3",
+                str(script),
+                "--cwd",
+                str(cfg.worktree_root),
+                "--prompt-file",
+                str(packet_path),
+                "--background",
+            ]
+            if use_danger_full_access:
+                fallback_cmd.append("--no-full-auto")
+            if codex_home is not None:
+                fallback_cmd.extend(["--codex-home", str(codex_home)])
+            if cfg.mcp_mode == "disable-all":
+                fallback_cmd.append("--disable-all-mcp")
+            else:
+                for mcp in cfg.mcp_allowlist:
+                    fallback_cmd.extend(["--enable-only-mcp", mcp])
+            if use_danger_full_access:
+                fallback_cmd.extend(["--extra-arg=--dangerously-bypass-approvals-and-sandbox"])
+            else:
+                fallback_cmd.extend([f"--extra-arg=--sandbox", f"--extra-arg={cfg.sandbox_mode}"])
+            for d in cfg.sandbox_add_dirs:
+                fallback_cmd.extend([f"--extra-arg=--add-dir", f"--extra-arg={d}"])
+            run = subprocess.run(fallback_cmd, cwd=str(cfg.repo_root), capture_output=True, text=True, check=False)
+            fallback_used = True
         if run.returncode != 0:
             stderr = (run.stderr or "").strip()
             stdout = (run.stdout or "").strip()
@@ -659,6 +701,7 @@ class ThreadDispatchRunner:
             "dispatch_started": bool(payload.get("status") == "started" or pid > 0),
             "pid": pid,
             "dispatch_log": str(Path(log_path).expanduser().resolve()),
+            "dispatch_mode_used": "exec" if fallback_used else ("resume" if cfg.dispatch_mode == "resume" and cfg.resume_thread_id else "exec"),
             "raw": payload,
         }
 
@@ -733,6 +776,7 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "branch": cfg.branch_name,
         "dispatch_pid": dispatch["pid"],
         "dispatch_thread_id": dispatch_thread_id,
+        "dispatch_mode": dispatch.get("dispatch_mode_used", "exec"),
         "dispatch_log": dispatch["dispatch_log"],
         "packet_path": str(packet),
         "packet_version": cfg.packet_version,
@@ -758,6 +802,7 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "requirement_ids": cfg.requirement_ids,
         "task_acceptance_refs": cfg.task_acceptance_refs,
         "dev_ready_evidence_ref": cfg.dev_ready_evidence_ref,
+        "lane_id": cfg.lane_id,
         "worktree_root": str(cfg.worktree_root),
         "updated_at": utc_now_iso(),
     }
@@ -1003,6 +1048,7 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "pid": int(dispatch["pid"]),
         "dispatch_log": str(dispatch["dispatch_log"]),
         "dispatch_thread_id": dispatch_thread_id,
+        "dispatch_mode_used": dispatch.get("dispatch_mode_used", "exec"),
     }
     result["status"] = "dispatch_started" if dispatch["dispatch_started"] else "dispatch_failed"
 
@@ -1047,6 +1093,8 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "dispatch_pid": dispatch["pid"],
         "dispatch_log": dispatch["dispatch_log"],
         "dispatch_thread_id": dispatch_thread_id,
+        "dispatch_mode_used": dispatch.get("dispatch_mode_used", "exec"),
+        "lane_id": cfg.lane_id,
         "codex_profile_alias": cfg.codex_profile_alias,
         "mcp_mode": cfg.mcp_mode,
         "mcp_allowlist": cfg.mcp_allowlist,
@@ -1182,6 +1230,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--requirement-ids", action="append")
     parser.add_argument("--task-acceptance-refs", action="append")
     parser.add_argument("--dev-ready-evidence-ref")
+    parser.add_argument("--dispatch-mode")
+    parser.add_argument("--resume-thread-id")
+    parser.add_argument("--lane-id")
     parser.add_argument("--cycle-note")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json-pretty", action="store_true")

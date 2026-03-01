@@ -118,9 +118,9 @@ def build_repo(root: Path) -> None:
                 "    {'id': 'REQ-003', 'title': 'Rollout ops', 'acceptance_criteria': ['ops path'], 'verify_commands': ['python3 -m pytest']},",
                 "]",
                 "tasks = [",
-                "    {'task_id': 'TASK-001', 'title': 'Implement core workflow', 'phase_id': 'phase-1', 'requirement_ids': ['REQ-001'], 'depends_on': [], 'must_haves': ['core path'], 'verify_commands': ['python3 -m pytest']},",
-                "    {'task_id': 'TASK-002', 'title': 'Implement quality gates', 'phase_id': 'phase-1', 'requirement_ids': ['REQ-002'], 'depends_on': ['TASK-001'], 'must_haves': ['quality path'], 'verify_commands': ['python3 -m pytest']},",
-                "    {'task_id': 'TASK-003', 'title': 'Implement rollout ops', 'phase_id': 'phase-1', 'requirement_ids': ['REQ-003'], 'depends_on': ['TASK-002'], 'must_haves': ['ops path'], 'verify_commands': ['python3 -m pytest']},",
+                "    {'task_id': 'TASK-001', 'title': 'Implement core workflow', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-a', 'status': 'pending', 'requirement_ids': ['REQ-001'], 'depends_on': [], 'must_haves': ['core path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
+                "    {'task_id': 'TASK-002', 'title': 'Implement quality gates', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-b', 'status': 'pending', 'requirement_ids': ['REQ-002'], 'depends_on': ['TASK-001'], 'must_haves': ['quality path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
+                "    {'task_id': 'TASK-003', 'title': 'Implement rollout ops', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-c', 'status': 'pending', 'requirement_ids': ['REQ-003'], 'depends_on': ['TASK-002'], 'must_haves': ['ops path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
                 "]",
                 "plan_packets = {'schema_version': '1.0', 'generated_at': '2026-01-01T00:00:00Z', 'plan_id': plan_id, 'phase': 'multi-phase', 'phases': [{'phase_id': 'phase-1', 'task_ids': ['TASK-001', 'TASK-002', 'TASK-003'], 'depends_on_phase_ids': [], 'entry_criteria': ['phase_dependencies_done'], 'exit_criteria': ['all_tasks_review_done', 'verify_commands_passed', 'uat_matrix_passed', 'zero_open_gaps']}], 'requirements': requirements, 'tasks': tasks, 'depends_on': [], 'must_haves': ['core path', 'quality path', 'ops path'], 'verify_commands': ['python3 -m pytest']}",
                 "plan_check = {'schema_version': '1.0', 'passed': True, 'checks': [{'id': 'requirement_coverage', 'passed': True}], 'coverage': {'requirements_total': 3, 'requirements_covered': 3, 'missing_requirement_ids': []}, 'dependency_graph': {'nodes': ['TASK-001', 'TASK-002', 'TASK-003'], 'edges': [{'from': 'TASK-001', 'to': 'TASK-002'}, {'from': 'TASK-002', 'to': 'TASK-003'}], 'cycle_detected': False, 'valid': True}, 'verify_contract_completeness': True, 'phase_traceability': True, 'blocking_errors': []}",
@@ -128,7 +128,7 @@ def build_repo(root: Path) -> None:
                 "for task in tasks:",
                 "    task_id = task['task_id']",
                 "    evidence_ref = f'reports/optimus-prime/planning/evidence/{task_id}/TASK_EVIDENCE.json'",
-                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'requirement_ids': task['requirement_ids'], 'status': 'queued', 'owner_slot': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'blockers': []})",
+                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'lane_id': task['lane_id'], 'requirement_ids': task['requirement_ids'], 'status': 'pending', 'owner_slot': None, 'dispatch_thread_id': None, 'last_progress_at': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'gaps_that_need_patching': [], 'blockers': []})",
                 "state_json = {'schema_version': '1.0', 'initialized_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z', 'mission': 'inline:Build MyBoard', 'scope': 'inline:Board workflow', 'mission_source': {'mode': 'inline', 'value': 'Build MyBoard', 'path': None, 'display': 'Build MyBoard'}, 'scope_source': {'mode': 'inline', 'value': 'Board workflow', 'path': None, 'display': 'Board workflow'}, 'constraints': [], 'requirements': requirements, 'map_fingerprint': 'map-test', 'repo_fingerprint': 'repo-test', 'baseline_ready': True, 'plan_ready': True, 'plan_id': plan_id, 'build_ready': True}",
                 "state_md = '# STATE\\n\\n- baseline_ready: true\\n- plan_ready: true\\n- build_ready: true\\n'",
                 "gaps = {'schema_version': '1.0', 'plan_id': plan_id, 'updated_at': '2026-01-01T00:00:00Z', 'gaps': []}",
@@ -1635,12 +1635,27 @@ def test_build_keeps_gap_open_until_explicit_closure_even_after_recovery():
             }
         )
         planning_root = root / "reports" / "optimus-prime" / "planning"
-        build_state_path = planning_root / "BUILD_STATE.json"
-        build_state = MODULE._fresh_build_state_payload()
-        build_state["open_gap_ids"] = ["gap-sticky-after-recovery-1"]
-        build_state["active_gap_closure_phase_id"] = "phase-1"
-        build_state_path.write_text(json.dumps(build_state, indent=2) + "\n", encoding="utf-8")
+        task_state_path = planning_root / "TASK_EXECUTION_STATE.json"
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        assert isinstance(task_state.get("tasks"), list) and task_state["tasks"]
+        task_state["tasks"][0]["gaps_that_need_patching"] = [
+            {
+                "gap_id": "gap-sticky-after-recovery-1",
+                "category": "verify_missing",
+                "severity": "P1",
+                "stage": "test",
+                "status": "open",
+                "reason_codes": ["verify_command_not_passed"],
+                "retry_count": 0,
+                "max_retries": 5,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "closure_ref": None,
+            }
+        ]
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
 
+        # Legacy external artifact is ignored by runtime decisions in embedded-gap mode.
         gaps_path = planning_root / "GAPS.json"
         gaps_path.write_text("{ invalid-json", encoding="utf-8")
 
@@ -1654,9 +1669,15 @@ def test_build_keeps_gap_open_until_explicit_closure_even_after_recovery():
             }
         )
         assert out["status"] == "running_needs_resume"
-        gaps_after = json.loads(gaps_path.read_text(encoding="utf-8"))
-        row = next(item for item in gaps_after["gaps"] if item.get("gap_id") == "gap-sticky-after-recovery-1")
-        assert row["status"] == "open"
+        task_state_after = json.loads(task_state_path.read_text(encoding="utf-8"))
+        open_ids = {
+            row.get("gap_id")
+            for task in task_state_after.get("tasks", [])
+            if isinstance(task, dict)
+            for row in task.get("gaps_that_need_patching", [])
+            if isinstance(row, dict) and row.get("status") == "open"
+        }
+        assert "gap-sticky-after-recovery-1" in open_ids
 
 
 def test_project_done_still_blocked_when_preserved_gap_survives_recovery():
@@ -1714,13 +1735,56 @@ def test_project_done_still_blocked_when_preserved_gap_survives_recovery():
                 "verify_results": [{"command": "python3 -m pytest", "passed": True}],
                 "uat_results": [{"requirement_id": req_id, "passed": True}],
             }
+            task["gaps_that_need_patching"] = []
+        task_state["tasks"][0]["gaps_that_need_patching"] = [
+            {
+                "gap_id": "gap-preserved-done-1",
+                "category": "verify_missing",
+                "severity": "P1",
+                "stage": "test",
+                "status": "open",
+                "reason_codes": ["verify_command_not_passed"],
+                "retry_count": 0,
+                "max_retries": 5,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "closure_ref": None,
+            }
+        ]
         task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        done_registry_path = planning_root / "DONE_TASKS_REGISTRY.json"
+        done_registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "plan_id": "plan-test",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "done_task_ids": [task["task_id"] for task in task_state["tasks"]],
+                    "merged_tasks": [
+                        {
+                            "task_id": task["task_id"],
+                            "merged_commit": "abc123",
+                            "merged_at": "2026-01-01T00:00:00Z",
+                            "branch": "RAB-BASE",
+                            "verification_passed": True,
+                            "verification_ref": "reports/optimus-prime/branch-manager/attempt-1/MERGE_VALIDATION.json",
+                        }
+                        for task in task_state["tasks"]
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         build_state_path = planning_root / "BUILD_STATE.json"
         build_state = json.loads(build_state_path.read_text(encoding="utf-8"))
         build_state["open_gap_ids"] = ["gap-preserved-done-1"]
         build_state["active_gap_closure_phase_id"] = "phase-1"
         build_state_path.write_text(json.dumps(build_state, indent=2) + "\n", encoding="utf-8")
+        # Legacy external artifact is ignored by runtime decisions in embedded-gap mode.
         (planning_root / "GAPS.json").write_text("{ invalid-json", encoding="utf-8")
 
         out = run_payload(
@@ -1734,10 +1798,12 @@ def test_project_done_still_blocked_when_preserved_gap_survives_recovery():
         )
         assert out["status"] == "running_needs_resume"
         assert any(item.get("code") == "strict_done_incomplete" for item in out.get("warnings", []))
-        gaps_after = json.loads((planning_root / "GAPS.json").read_text(encoding="utf-8"))
+        task_state_after = json.loads((planning_root / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
         open_ids = {
             row.get("gap_id")
-            for row in gaps_after.get("gaps", [])
+            for task in task_state_after.get("tasks", [])
+            if isinstance(task, dict)
+            for row in task.get("gaps_that_need_patching", [])
             if isinstance(row, dict) and row.get("status") == "open"
         }
         assert "gap-preserved-done-1" in open_ids

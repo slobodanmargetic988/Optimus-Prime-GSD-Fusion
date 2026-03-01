@@ -76,6 +76,10 @@ def parse_args() -> argparse.Namespace:
             "(same effect as prefixing the command with CODEX_HOME=...)"
         ),
     )
+    parser.add_argument(
+        "--resume-session-id",
+        help="If provided, dispatch uses 'codex resume <session_id> <prompt>' instead of 'codex exec'.",
+    )
     mcp_group = parser.add_mutually_exclusive_group()
     mcp_group.add_argument(
         "--disable-all-mcp",
@@ -196,6 +200,17 @@ def build_command(
     prompt_text: str,
     mcp_disable_overrides: list[str] | None = None,
 ) -> list[str]:
+    if args.resume_session_id:
+        cmd = ["codex", "resume", args.resume_session_id]
+        cmd.extend(["--cd", str(Path(args.cwd).expanduser().resolve())])
+        if mcp_disable_overrides:
+            for override in mcp_disable_overrides:
+                cmd.extend(["-c", override])
+        if args.extra_arg:
+            cmd.extend(args.extra_arg)
+        cmd.append(prompt_text)
+        return cmd
+
     cmd = ["codex", "exec"]
     use_full_auto = args.full_auto and not args.no_full_auto
     if use_full_auto:
