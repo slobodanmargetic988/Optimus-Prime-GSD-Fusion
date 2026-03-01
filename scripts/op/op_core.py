@@ -343,6 +343,40 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _emit_build_progress(req: OpRequest, message: str) -> None:
+    if not sys.stdout.isatty():
+        return
+    stamp = datetime.now().astimezone().strftime("%H:%M:%S")
+    print(f"[op-build {stamp}] {message}", flush=True)
+
+
+def _task_status_counts(task_state: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in task_state.get("tasks", []):
+        if not isinstance(row, dict):
+            continue
+        status = _normalize_task_status(row.get("status"))
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def _summarize_assignment_observations(rows: list[dict[str, Any]]) -> str:
+    counts = {"dispatched": 0, "skipped": 0, "failed": 0, "invalid": 0}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = _as_str(row.get("status"))
+        if status in counts:
+            counts[status] += 1
+    return (
+        "dispatch observations: "
+        f"dispatched={counts['dispatched']}, "
+        f"skipped={counts['skipped']}, "
+        f"failed={counts['failed']}, "
+        f"invalid={counts['invalid']}"
+    )
+
+
 def _resolve_profile_detection_root() -> Path:
     codex_home = _as_str(os.environ.get("CODEX_HOME"))
     if codex_home:
@@ -8181,6 +8215,10 @@ def _manager_workstation_cycle(
         if not needs_prep:
             continue
         active_task_id = _as_str(worker.get("active_task_id")) or _as_str(worker.get("active_task"))
+        _emit_build_progress(
+            req,
+            f"workstation-manager: preparing slot={slot} role={role} lane={lane_id or '-'} task={active_task_id or '-'}",
+        )
         task_branch = (
             _as_str((task_map.get(active_task_id) or {}).get("active_branch"))
             if active_task_id
@@ -8190,6 +8228,7 @@ def _manager_workstation_cycle(
         prepared = False
         prior_errors: list[dict[str, Any]] = []
         for attempt in range(1, 11):
+            _emit_build_progress(req, f"workstation-manager: slot={slot} attempt {attempt}/10")
             attempt_dir = req.repo_root / "reports" / "optimus-prime" / "workstation-manager" / f"attempt-{slot}-{attempt}"
             action_path = attempt_dir / "WORKSTATION_ACTION.json"
             validation_path = attempt_dir / "WORKSTATION_VALIDATION.json"
@@ -8331,6 +8370,10 @@ def _manager_workstation_cycle(
             if prereq_policy not in {"copy_env_files", "symlink_deps"}:
                 action_errors.append("prereq_policy must be copy_env_files|symlink_deps")
             if action_errors:
+                _emit_build_progress(
+                    req,
+                    f"workstation-manager: slot={slot} attempt {attempt} validation failed: {'; '.join(action_errors)}",
+                )
                 validation_payload = {
                     "schema_version": SCHEMA_VERSION,
                     "slot": slot,
@@ -8406,6 +8449,10 @@ def _manager_workstation_cycle(
                 worker["branch"] = resolved_branch
                 worker["previous_lane_id"] = lane_id or worker.get("previous_lane_id") or "n/a"
                 worker["updated_at"] = utc_now_iso()
+                _emit_build_progress(
+                    req,
+                    f"workstation-manager: slot={slot} ready worktree={target_path} branch={resolved_branch}",
+                )
                 prepared = True
                 break
             prior_errors = [
@@ -8417,6 +8464,13 @@ def _manager_workstation_cycle(
                     ),
                 }
             ]
+            _emit_build_progress(
+                req,
+                (
+                    f"workstation-manager: slot={slot} attempt {attempt} execution/validation failed: "
+                    f"{_as_str(prior_errors[0].get('message')) or 'unknown'}"
+                ),
+            )
         if prepared:
             continue
         if active_task_id and isinstance(task_map.get(active_task_id), dict):
@@ -8465,6 +8519,10 @@ def _manager_workstation_cycle(
                 "slot": slot,
                 "task_id": active_task_id,
             }
+        )
+        _emit_build_progress(
+            req,
+            f"workstation-manager: slot={slot} exhausted retries (10/10), task blocked",
         )
     _write_worker_registry(registry_path, registry_base, workers, registry_shape if registry_shape in {"dict_list", "dict_dict", "list"} else "dict_list")
     return out
@@ -8958,6 +9016,7 @@ def _preflight_build(
 
 
 def command_build(req: OpRequest) -> dict[str, Any]:
+    _emit_build_progress(req, f"starting build runtime for {req.repo_root}")
     auto_init_warnings: list[dict[str, Any]] = []
     mission_scope_supplied = bool(req.mission or req.mission_file or req.scope or req.scope_file)
     if mission_scope_supplied:
@@ -8977,23 +9036,29 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             strict_done_complete = bool(checks.get("all_passed")) or (_as_str((build_state_probe.get("terminal_state") or {}).get("reason")) == "project_done")
 
         if baseline_missing or not state_path.exists():
+            _emit_build_progress(req, "baseline missing, running /op-initialize (includes planner)")
             init_result = command_initialize(req)
             auto_init_warnings.extend(init_result.get("warnings", []) if isinstance(init_result.get("warnings"), list) else [])
             if not bool(init_result.get("ok")):
                 return init_result
+            _emit_build_progress(req, "auto-initialize completed")
         else:
             if strict_done_complete:
+                _emit_build_progress(req, "strict-done baseline found, refreshing with /op-initialize --override-old-plan")
                 init_req = replace(req, command="op-initialize", override_old_plan=True)
                 init_result = command_initialize(init_req)
                 auto_init_warnings.extend(init_result.get("warnings", []) if isinstance(init_result.get("warnings"), list) else [])
                 if not bool(init_result.get("ok")):
                     return init_result
+                _emit_build_progress(req, "auto-initialize refresh completed")
             elif req.override_old_plan:
+                _emit_build_progress(req, "override requested, running /op-initialize --override-old-plan")
                 init_req = replace(req, command="op-initialize", override_old_plan=True)
                 init_result = command_initialize(init_req)
                 auto_init_warnings.extend(init_result.get("warnings", []) if isinstance(init_result.get("warnings"), list) else [])
                 if not bool(init_result.get("ok")):
                     return init_result
+                _emit_build_progress(req, "override initialize completed")
             else:
                 return _response(
                     req,
@@ -9011,6 +9076,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     state_ref=str(state_path),
                 )
 
+    _emit_build_progress(req, "running preflight checks")
     warnings, missing, _, plan_packets, task_state, profile_selection = _preflight_build(req)
     if auto_init_warnings:
         warnings = [*auto_init_warnings, *warnings]
@@ -9099,6 +9165,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
 
     task_state_path = _repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)
     lock_path = _repo_path(req.repo_root, BUILD_LOOP_LOCK)
+    _emit_build_progress(req, "acquiring build loop lock")
     lock_ok, lock_id, active_pid = _acquire_build_loop_lock(lock_path)
     if not lock_ok:
         return _response(
@@ -9117,6 +9184,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             next_action="Wait for active /op-build to finish, or clear stale lock after confirming owner process is gone.",
             data={"active_pid": active_pid},
         )
+    _emit_build_progress(req, f"build loop lock acquired ({lock_id})")
     build_state["loop_lock_id"] = lock_id
     build_state["updated_at"] = utc_now_iso()
     if not isinstance(build_state.get("last_assignment_observations"), list):
@@ -9138,6 +9206,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
         watchdog_event_path = _repo_path(req.repo_root, NO_PROGRESS_WATCHDOG_EVENT_JSON)
         plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
         resume_cmd = "/op-resume" if req.command == "op-resume" else "/op-build"
+        _emit_build_progress(req, "initializing worker registry and enforcing RAB-BASE")
         warnings.extend(_ensure_worker_registry_v2(req.repo_root, build_state))
         rab_warnings = _ensure_rab_base_checked_out(req.repo_root)
         warnings.extend(rab_warnings)
@@ -9159,6 +9228,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 state_ref=str(build_state_path),
             )
 
+        _emit_build_progress(req, "entering cycle loop")
         cycles = 0
         history: list[dict[str, Any]] = build_state.get("history", [])
         if not isinstance(history, list):
@@ -9168,6 +9238,10 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             cycles += 1
             cycle_local_warnings: list[dict[str, Any]] = []
             build_state["last_cycle"] = int(build_state.get("last_cycle", 0)) + 1
+            _emit_build_progress(
+                req,
+                f"cycle {build_state['last_cycle']} start",
+            )
             build_state["updated_at"] = utc_now_iso()
             build_state["cycle_gate_decision"] = {
                 "dispatch_blocked": False,
@@ -9188,6 +9262,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 remediation_state["active"] = False
                 remediation_state["reason"] = None
 
+            _emit_build_progress(req, f"cycle {build_state['last_cycle']}: profile-manager")
             profile_warnings = _manager_profile_cycle(
                 req,
                 build_state=build_state,
@@ -9196,6 +9271,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             warnings.extend(profile_warnings)
             cycle_local_warnings.extend(profile_warnings)
 
+            _emit_build_progress(req, f"cycle {build_state['last_cycle']}: production-line-manager")
             production_out = _manager_production_line_cycle(
                 req,
                 plan_packets=plan_packets,
@@ -9210,6 +9286,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             active_phase_id = _as_str(production_out.get("active_phase_id"))
             phase_checks = production_out.get("phase_checks") if isinstance(production_out.get("phase_checks"), dict) else {}
 
+            _emit_build_progress(req, f"cycle {build_state['last_cycle']}: branch-merge-manager")
             branch_warnings = _manager_branch_merge_cycle(
                 req,
                 plan_packets=merged_plan_packets,
@@ -9219,6 +9296,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             warnings.extend(branch_warnings)
             cycle_local_warnings.extend(branch_warnings)
 
+            _emit_build_progress(req, f"cycle {build_state['last_cycle']}: workstation-manager")
             workstation_out = _manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
             workstation_warnings = (
                 workstation_out.get("warnings", [])
@@ -9316,6 +9394,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     ),
                 )
 
+            _emit_build_progress(req, f"cycle {build_state['last_cycle']}: controller tick")
             cycle_control_number = int(build_state.get("last_cycle") or 0)
             cycle_control_run_id = _as_str(build_state.get("loop_lock_id")) or lock_id
             cycle_result = _run_controller_cycle(
@@ -9530,7 +9609,9 @@ def command_build(req: OpRequest) -> dict[str, Any]:
 
             dispatch_blocked = bool(directive_state.get("dispatch_blocked"))
             dispatch_block_reason = _as_str(directive_state.get("dispatch_block_reason"))
+            dispatch_reason_for_print: str | None = None
             if active_phase_id is None:
+                dispatch_reason_for_print = "phase_barrier_complete_waiting_terminal"
                 build_state["cycle_gate_decision"] = {
                     "dispatch_blocked": True,
                     "reason": "phase_barrier_complete_waiting_terminal",
@@ -9544,6 +9625,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 warnings.append(warning)
                 cycle_local_warnings.append(warning)
             elif dispatch_blocked:
+                dispatch_reason_for_print = dispatch_block_reason or "dispatch_filter"
                 build_state["cycle_gate_decision"] = {
                     "dispatch_blocked": True,
                     "reason": dispatch_block_reason or "dispatch_filter",
@@ -9601,6 +9683,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 max_running_workers = int(build_state.get("dispatch_window", {}).get("max_running_workers", 6))
                 active_workers = _active_workers_count(req.repo_root)
                 if active_workers is not None and active_workers >= max_running_workers:
+                    dispatch_reason_for_print = "dispatch_window_cap"
                     build_state["cycle_gate_decision"] = {
                         "dispatch_blocked": True,
                         "reason": "dispatch_window_cap",
@@ -9617,6 +9700,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     warnings.append(warning)
                     cycle_local_warnings.append(warning)
                 else:
+                    _emit_build_progress(req, f"cycle {build_state['last_cycle']}: work-dispatcher")
                     dispatch_result = _manager_dispatcher_cycle(
                         req,
                         plan_packets=merged_plan_packets,
@@ -9645,6 +9729,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     )
                     build_state["last_assignment_observations"] = dispatch_observations
                     dispatch_reason = _as_str(dispatch_result.get("reason")) if isinstance(dispatch_result, dict) else None
+                    dispatch_reason_for_print = dispatch_reason
                     if dispatch_reason in {"profile_assignment_all_hard_gated"}:
                         build_state["cycle_gate_decision"] = {
                             "dispatch_blocked": True,
@@ -9663,6 +9748,10 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     handoff_warnings = _apply_handoff_updates(req.repo_root, task_state, build_state)
                     warnings.extend(handoff_warnings)
                     cycle_local_warnings.extend(handoff_warnings)
+                    _emit_build_progress(
+                        req,
+                        f"cycle {build_state['last_cycle']}: {_summarize_assignment_observations(dispatch_observations)}",
+                    )
 
             open_gap_ids = [
                 gap_id
@@ -9934,7 +10023,25 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             _atomic_write_json(build_state_path, build_state)
             cycle_sleep_seconds = int(req.sleep_minutes * 60)
             more_cycles_pending = req.max_build_cycles is None or cycles < req.max_build_cycles
+            status_counts = _task_status_counts(task_state)
+            in_progress_count = (
+                status_counts.get(TASK_STATUS_DEV_WORKING, 0)
+                + status_counts.get(TASK_STATUS_TESTING, 0)
+                + status_counts.get(TASK_STATUS_REVIEWING, 0)
+            )
+            _emit_build_progress(
+                req,
+                (
+                    f"cycle {build_state['last_cycle']} complete: "
+                    f"pending={status_counts.get(TASK_STATUS_PENDING, 0)}, "
+                    f"in_progress={in_progress_count}, "
+                    f"blocked={status_counts.get(TASK_STATUS_BLOCKED, 0)}, "
+                    f"reason={dispatch_reason_for_print or 'none'}, "
+                    f"sleep={req.sleep_minutes}m"
+                ),
+            )
             if more_cycles_pending and not req.dry_run and cycle_sleep_seconds > 0:
+                _emit_build_progress(req, f"sleeping for {req.sleep_minutes} minute(s)")
                 time.sleep(cycle_sleep_seconds)
 
         return _response(
