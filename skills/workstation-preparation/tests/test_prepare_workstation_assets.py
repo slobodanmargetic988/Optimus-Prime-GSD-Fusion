@@ -7,8 +7,8 @@ import pytest
 
 
 SCRIPT_PATH = Path(
-    "/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/workstation-preparation/scripts/prepare_workstation.py"
-)
+    __file__
+).resolve().parents[1] / "scripts" / "prepare_workstation.py"
 
 
 @pytest.fixture

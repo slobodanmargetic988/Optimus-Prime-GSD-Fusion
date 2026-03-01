@@ -6,15 +6,12 @@ This folder stores portable skill definitions used by agents in this repository.
 - `codex-rate-snapshot`
 - `blocker-escalate-to-agents`
 - `cycle-tick`
-- `custom-thread-spawner`
 - `dev-benchmark-runner`
 - `dev-check-bundle`
 - `dev-handoff-summary-builder`
 - `dev-ephemeral-db-runner`
 - `dev-openapi-client-sync`
 - `dispatch-worker-packet`
-- `figma`
-- `figma-implement-design`
 - `linear`
 - `linear-handoff-sync`
 - `optimus-cycle-controller`
@@ -27,19 +24,17 @@ This folder stores portable skill definitions used by agents in this repository.
 - `pdf`
 - `playwright`
 - `runtime-coordinator`
-- `screenshot`
 - `sleep`
-- `speech`
-- `spreadsheet`
 - `test-train-manager`
 - `tester-handoff-summary-builder`
 - `tester-preflight-resolver`
 - `tester-targeted-pytest-runner`
 - `thread-token-audit`
-- `skill-creator`
-- `skill-installer`
 - `thread-dispatch`
 - `workstation-preparation`
+
+> Note: this catalog documents only skills bundled in this repository. External
+> runtime-provided skills can exist in `$CODEX_HOME/skills` but are not listed here.
 
 ## Install To Codex Runtime
 For a missing skill `<skill-name>`, copy its folder into `$CODEX_HOME/skills/` (usually `~/.codex/skills/`):
