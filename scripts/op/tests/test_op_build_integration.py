@@ -2353,12 +2353,94 @@ def test_dispatch_observation_rows_present_after_manager_dispatch_cycle(monkeypa
             }
         )
         assert out["status"] == "running_needs_resume"
+        data = out.get("data") if isinstance(out.get("data"), dict) else {}
+        response_obs = data.get("assignment_observations")
+        assert isinstance(response_obs, list)
+        assert response_obs
         obs_path = planning / "DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl"
         assert obs_path.exists()
         rows = [json.loads(line) for line in obs_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         assert rows
-        assert all("reason_code" in row for row in rows)
+        assert all(isinstance((row.get("reason_code") or ""), str) and row.get("reason_code") for row in rows)
         assert all("duration_ms" in row for row in rows)
+        assert all(isinstance((row.get("duration_ms")), int) and row.get("duration_ms") >= 0 for row in rows)
+        assert all(
+            isinstance((item.get("reason_code") or ""), str) and item.get("reason_code")
+            for item in response_obs
+            if isinstance(item, dict)
+        )
+        assert len(rows) >= len(response_obs)
+
+
+def test_dispatch_no_assignments_cycle_returns_deterministic_reason(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        (planning / "WORK_DISPATCH_PLAN.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "active_phase_id": "phase-1",
+                    "assignments": [],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_manager_production_line_cycle",
+            lambda _req, **_kwargs: {
+                "warnings": [],
+                "merged_plan_packets": plan_packets,
+                "gaps_payload": {"schema_version": "1.0", "gaps": []},
+                "active_phase_id": "phase-1",
+                "phase_checks": {},
+            },
+        )
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        warnings = out.get("warnings", [])
+        assert any(
+            isinstance(item, dict)
+            and item.get("code") == "dispatch_plan_no_assignments"
+            for item in warnings
+        )
 
 
 def test_branch_manager_success_path_does_not_block_unrelated_lanes(monkeypatch: pytest.MonkeyPatch):
@@ -2427,4 +2509,12 @@ def test_branch_manager_success_path_does_not_block_unrelated_lanes(monkeypatch:
         )
         warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
         assert "merge_manager_retry_exhausted" not in warning_codes
+        assert "branch_merge_pending_tasks" not in warning_codes
         assert task_2["status"] == "pending"
+        done_registry = json.loads((planning / "DONE_TASKS_REGISTRY.json").read_text(encoding="utf-8"))
+        merged_rows = done_registry.get("merged_tasks", [])
+        row = next(item for item in merged_rows if isinstance(item, dict) and item.get("task_id") == "TASK-001")
+        assert row.get("verification_passed") is True
+        validation_path = root / str(row.get("verification_ref"))
+        validation_payload = json.loads(validation_path.read_text(encoding="utf-8"))
+        assert validation_payload.get("merge_proof_passed") is True

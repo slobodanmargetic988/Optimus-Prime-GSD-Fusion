@@ -4161,6 +4161,38 @@ def _unwrap_bash_lc(command_text: str) -> str | None:
     return None
 
 
+def _extract_script_path_from_command(
+    command_text: str,
+    *,
+    script_name: str,
+    cwd: Path | None = None,
+) -> Path | None:
+    text = (command_text or "").strip()
+    if not text:
+        return None
+    wrapped = _unwrap_bash_lc(text)
+    if wrapped is not None:
+        return _extract_script_path_from_command(wrapped, script_name=script_name, cwd=cwd)
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        return None
+    for token in tokens:
+        candidate = token
+        if "=" in candidate and not candidate.startswith("-"):
+            _, candidate = candidate.split("=", 1)
+        if not candidate.endswith(script_name):
+            continue
+        path = Path(candidate).expanduser()
+        if not path.is_absolute() and cwd is not None:
+            path = (cwd / path).expanduser()
+        try:
+            return path.resolve()
+        except OSError:
+            return path
+    return None
+
+
 def _validate_manager_command(
     command_text: str,
     *,
@@ -7125,7 +7157,7 @@ def _dispatch_next_task_from_assignments(
     out = {
         "ok": True,
         "status": "noop",
-        "reason": "no_dispatchable_assignments",
+        "reason": "dispatch_plan_no_assignments",
         "warnings": all_warnings,
         "assignment_observations": assignment_observations,
     }
@@ -7893,6 +7925,20 @@ def _manager_branch_merge_cycle(
                         )
                 merged_ok = True
                 merged_commit = _git_text(req.repo_root, "rev-parse", "HEAD")
+                merge_proof_cmd = f"git merge-base --is-ancestor {shlex.quote(branch_name)} HEAD"
+                merge_proof_result = _run_manager_command(
+                    merge_proof_cmd,
+                    cwd=req.repo_root,
+                    timeout_sec=BRANCH_ACTION_COMMAND_TIMEOUT_SEC,
+                    manager="branch",
+                )
+                merge_proof_passed = _as_bool(merge_proof_result.get("ok"), default=False)
+                if not merge_proof_passed:
+                    raise OpError(
+                        "merge_proof_failed",
+                        f"merge proof failed: {branch_name} is not an ancestor of RAB-BASE HEAD",
+                        stage="build_loop",
+                    )
                 verification_rows: list[dict[str, Any]] = []
                 verification_ok = True
                 for cmd in verify_commands:
@@ -7922,6 +7968,7 @@ def _manager_branch_merge_cycle(
                     "branch": "RAB-BASE",
                     "source_branch": branch_name,
                     "merged_commit": merged_commit,
+                    "merge_proof_passed": merge_proof_passed,
                     "action_commands": command_rows,
                     "verification": verification_rows,
                     "llm_exit_code": exit_code,
@@ -7948,6 +7995,7 @@ def _manager_branch_merge_cycle(
                     "ok": False,
                     "branch": "RAB-BASE",
                     "source_branch": branch_name,
+                    "merge_proof_passed": False,
                     "error": {"code": exc.code, "message": exc.message, "stage": exc.stage},
                     "llm_exit_code": exit_code,
                     "finished_at": utc_now_iso(),
@@ -7999,6 +8047,7 @@ def _manager_branch_merge_cycle(
         if last_error_code in {
             "branch_manager_action_invalid",
             "branch_manager_execution_failed",
+            "merge_proof_failed",
             "manager_command_disallowed",
             "manager_command_timeout",
         }:
@@ -8263,8 +8312,21 @@ def _manager_workstation_cycle(
             if not _as_str(action_payload.get("worktree_name")):
                 action_errors.append("worktree_name required")
             prepare_command = _as_str(action_payload.get("prepare_command"))
-            if not prepare_command or "prepare_workstation.py" not in prepare_command:
-                action_errors.append("prepare_command must invoke prepare_workstation.py")
+            if not prepare_command:
+                action_errors.append("prepare_command must invoke bundled prepare_workstation.py")
+            else:
+                prepare_script_path = _extract_script_path_from_command(
+                    prepare_command,
+                    script_name="prepare_workstation.py",
+                    cwd=req.repo_root,
+                )
+                expected_script_path = Path(script_path).resolve()
+                if prepare_script_path is None:
+                    action_errors.append("prepare_command must invoke bundled prepare_workstation.py")
+                elif prepare_script_path != expected_script_path:
+                    action_errors.append(
+                        f"prepare_command must invoke bundled prepare_workstation.py at {expected_script_path}"
+                    )
             prereq_policy = _as_str(action_payload.get("prereq_policy"))
             if prereq_policy not in {"copy_env_files", "symlink_deps"}:
                 action_errors.append("prereq_policy must be copy_env_files|symlink_deps")
@@ -9057,7 +9119,17 @@ def command_build(req: OpRequest) -> dict[str, Any]:
         )
     build_state["loop_lock_id"] = lock_id
     build_state["updated_at"] = utc_now_iso()
+    if not isinstance(build_state.get("last_assignment_observations"), list):
+        build_state["last_assignment_observations"] = []
     _atomic_write_json(build_state_path, build_state)
+
+    def _response_data_with_assignment_observations(
+        base: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = dict(base or {})
+        rows = build_state.get("last_assignment_observations")
+        payload["assignment_observations"] = rows if isinstance(rows, list) else []
+        return payload
 
     try:
         operator_stop_path = _repo_path(req.repo_root, OPERATOR_STOP_JSON)
@@ -9102,6 +9174,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                 "reason": None,
                 "terminal_reason": None,
             }
+            build_state["last_assignment_observations"] = []
             remediation_state = build_state.get("remediation_state")
             if not isinstance(remediation_state, dict):
                 remediation_state = {
@@ -9178,7 +9251,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     ],
                     state_ref=str(build_state_path),
                     next_action="Restore workstation-preparation skill and rerun /op-build.",
-                    data={"terminal_reason": fatal_code},
+                    data=_response_data_with_assignment_observations({"terminal_reason": fatal_code}),
                 )
 
             if operator_stop_path.exists():
@@ -9215,7 +9288,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                         ],
                         state_ref=str(build_state_path),
                         next_action="Fix operator stop/state artifact write failures and rerun /op-build.",
-                        data={"terminal_reason": "operator_stop_apply_failed"},
+                        data=_response_data_with_assignment_observations({"terminal_reason": "operator_stop_apply_failed"}),
                     )
                 build_state["terminal_state"] = {
                     "reason": "operator_stop",
@@ -9238,7 +9311,9 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     ],
                     state_ref=str(build_state_path),
                     next_action=f"Rerun {resume_cmd} to continue with post-stop reconciliation.",
-                    data={"terminal_reason": "operator_stop", "operator_stop": stop_summary},
+                    data=_response_data_with_assignment_observations(
+                        {"terminal_reason": "operator_stop", "operator_stop": stop_summary}
+                    ),
                 )
 
             cycle_control_number = int(build_state.get("last_cycle") or 0)
@@ -9325,12 +9400,14 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                             warnings=warnings,
                             artifacts=[str(build_state_path), str(task_state_path), str(final_state_path)],
                             state_ref=str(build_state_path),
-                            data={
-                                "terminal_reason": "project_done",
-                                "cycles_executed": cycles,
-                                "current_strategy": build_state.get("current_strategy"),
-                                "strict_done_checks": strict_checks,
-                            },
+                            data=_response_data_with_assignment_observations(
+                                {
+                                    "terminal_reason": "project_done",
+                                    "cycles_executed": cycles,
+                                    "current_strategy": build_state.get("current_strategy"),
+                                    "strict_done_checks": strict_checks,
+                                }
+                            ),
                         )
                     warnings.append(
                         {
@@ -9416,11 +9493,13 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                                 if min_reset_at
                                 else "Rerun /op-build after rate gates recover."
                             ),
-                            data={
-                                "terminal_reason": terminal_reason,
-                                "cycles_executed": cycles,
-                                "rate_gate_state": build_state.get("rate_gate_state"),
-                            },
+                            data=_response_data_with_assignment_observations(
+                                {
+                                    "terminal_reason": terminal_reason,
+                                    "cycles_executed": cycles,
+                                    "rate_gate_state": build_state.get("rate_gate_state"),
+                                }
+                            ),
                         )
                 elif terminal_reason in TERMINAL_HARD_STOPS:
                     build_state["terminal_state"] = {
@@ -9444,7 +9523,9 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                             }
                         ],
                         state_ref=str(build_state_path),
-                        data={"terminal_reason": terminal_reason, "cycles_executed": cycles},
+                        data=_response_data_with_assignment_observations(
+                            {"terminal_reason": terminal_reason, "cycles_executed": cycles}
+                        ),
                     )
 
             dispatch_blocked = bool(directive_state.get("dispatch_blocked"))
@@ -9557,6 +9638,12 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                         if warning_key not in appended_warning_keys:
                             warnings.append(dispatch_warning)
                             cycle_local_warnings.append(dispatch_warning)
+                    dispatch_observations = (
+                        dispatch_result.get("assignment_observations")
+                        if isinstance(dispatch_result.get("assignment_observations"), list)
+                        else []
+                    )
+                    build_state["last_assignment_observations"] = dispatch_observations
                     dispatch_reason = _as_str(dispatch_result.get("reason")) if isinstance(dispatch_result, dict) else None
                     if dispatch_reason in {"profile_assignment_all_hard_gated"}:
                         build_state["cycle_gate_decision"] = {
@@ -9753,7 +9840,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                         ],
                         state_ref=str(build_state_path),
                         next_action="Fix operator stop/state artifact write failures and rerun /op-build.",
-                        data={"terminal_reason": "operator_stop_apply_failed"},
+                        data=_response_data_with_assignment_observations({"terminal_reason": "operator_stop_apply_failed"}),
                     )
 
                 watchdog_event = {
@@ -9805,11 +9892,13 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                     ],
                     state_ref=str(build_state_path),
                     next_action=f"Rerun {resume_cmd} after triaging watchdog event evidence.",
-                    data={
-                        "terminal_reason": "no_progress_watchdog",
-                        "cycles_executed": cycles,
-                        "watchdog_event_path": str(watchdog_event_path),
-                    },
+                    data=_response_data_with_assignment_observations(
+                        {
+                            "terminal_reason": "no_progress_watchdog",
+                            "cycles_executed": cycles,
+                            "watchdog_event_path": str(watchdog_event_path),
+                        }
+                    ),
                 )
 
             fingerprint_warnings: list[dict[str, Any]] = []
@@ -9863,13 +9952,15 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             ],
             state_ref=str(build_state_path),
             next_action=f"Rerun {resume_cmd} to continue from BUILD_STATE.json.",
-            data={
-                "cycles_executed": cycles,
-                "current_strategy": build_state.get("current_strategy"),
-                "current_phase_id": build_state.get("current_phase_id"),
-                "open_gap_ids": build_state.get("open_gap_ids", []),
-                "strict_done_checks": build_state.get("strict_done_checks", {}),
-            },
+            data=_response_data_with_assignment_observations(
+                {
+                    "cycles_executed": cycles,
+                    "current_strategy": build_state.get("current_strategy"),
+                    "current_phase_id": build_state.get("current_phase_id"),
+                    "open_gap_ids": build_state.get("open_gap_ids", []),
+                    "strict_done_checks": build_state.get("strict_done_checks", {}),
+                }
+            ),
         )
     finally:
         try:

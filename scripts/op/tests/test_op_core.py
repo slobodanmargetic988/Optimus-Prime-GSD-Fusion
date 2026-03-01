@@ -4604,6 +4604,54 @@ def test_dispatcher_invalid_work_dispatch_plan_returns_deterministic_warning():
         assert "dispatch_plan_invalid" in warning_codes
 
 
+def test_manager_dispatcher_empty_assignments_returns_dispatch_plan_no_assignments():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        (planning / "WORK_DISPATCH_PLAN.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "active_phase_id": "phase-1",
+                    "assignments": [],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        out = MODULE._manager_dispatcher_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+            active_phase_id="phase-1",
+        )
+        warning_codes = {
+            item.get("code")
+            for item in out.get("warnings", [])
+            if isinstance(item, dict)
+        }
+        assert out.get("status") == "noop"
+        assert out.get("reason") == "dispatch_plan_no_assignments"
+        assert "dispatch_plan_no_assignments" in warning_codes
+        assert out.get("assignment_observations") == []
+
+
 def test_dispatch_packet_uses_slot_worktree_root_and_branch(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -5030,11 +5078,104 @@ def test_branch_manager_success_updates_done_registry_with_verification_ref(monk
         )
         warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
         assert "merge_manager_retry_exhausted" not in warning_codes
+        assert "branch_merge_pending_tasks" not in warning_codes
         done_registry = json.loads((planning / "DONE_TASKS_REGISTRY.json").read_text(encoding="utf-8"))
         merged_rows = done_registry.get("merged_tasks", [])
         row = next(item for item in merged_rows if isinstance(item, dict) and item.get("task_id") == "TASK-001")
         assert row["verification_passed"] is True
         assert row["verification_ref"]
+        validation_path = root / MODULE._as_str(row["verification_ref"])
+        validation_payload = json.loads(validation_path.read_text(encoding="utf-8"))
+        assert validation_payload.get("merge_proof_passed") is True
+
+
+def test_branch_manager_merge_proof_required_before_done_registry_update(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "review_done"
+        task["active_branch"] = "codex/dev-1/task-001"
+
+        def fake_codex_exec(**kwargs):
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "task_id": "TASK-001",
+                    "attempt": 1,
+                    "target_branch": "RAB-BASE",
+                    "source_branch": "codex/dev-1/task-001",
+                    "merge_strategy": "no_ff",
+                    "commands": [
+                        "git checkout RAB-BASE",
+                        "git merge --no-ff --no-edit codex/dev-1/task-001",
+                    ],
+                    "verification_commands": ["python3 -m pytest"],
+                },
+            )
+            return 0
+
+        def fake_run_manager_command(command_text, **_kwargs):
+            text = str(command_text).strip()
+            if "merge-base --is-ancestor" in text:
+                return {
+                    "ok": False,
+                    "code": "merge_proof_failed",
+                    "message": "merge proof failed",
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 1,
+                    "timed_out": False,
+                }
+            return {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": "",
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            }
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(MODULE, "_run_manager_command", fake_run_manager_command)
+
+        warnings = MODULE._manager_branch_merge_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+        )
+        warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
+        assert "merge_proof_failed" in warning_codes
+        assert "merge_manager_retry_exhausted" in warning_codes
+        assert task["status"] == "blocked"
+        assert any(
+            isinstance(item, dict) and item.get("category") == "merge_blocked"
+            for item in task.get("gaps_that_need_patching", [])
+        )
+        done_registry = json.loads((planning / "DONE_TASKS_REGISTRY.json").read_text(encoding="utf-8"))
+        merged_task_ids = {
+            item.get("task_id")
+            for item in done_registry.get("merged_tasks", [])
+            if isinstance(item, dict)
+        }
+        assert "TASK-001" not in merged_task_ids
 
 
 def test_workstation_manager_success_updates_slot_worktree_and_branch(monkeypatch: pytest.MonkeyPatch):
@@ -5122,6 +5263,7 @@ def test_workstation_manager_success_updates_slot_worktree_and_branch(monkeypatc
         assert out.get("fatal") is False
         warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
         assert "workstation_manager_retry_exhausted" not in warning_codes
+        assert "workstation_action_invalid" not in warning_codes
         registry_after = json.loads(registry_path.read_text(encoding="utf-8"))
         slot_row = next(item for item in registry_after.get("workers", []) if isinstance(item, dict) and item.get("slot") == "dev-1")
         assert slot_row.get("worktree_root") == str(target_path)
@@ -5169,6 +5311,72 @@ def test_workstation_missing_skill_is_fatal_and_writes_validation_artifact(monke
         assert payload.get("ok") is False
         assert payload.get("status") == "blocked_fatal"
         assert (payload.get("error") or {}).get("code") == "workstation_manager_missing_skill_fatal"
+
+
+def test_workstation_manager_rejects_prepare_command_non_bundled_script_path(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+                row["lane_id"] = "phase-1/lane-a"
+                row["previous_lane_id"] = "phase-1/lane-b"
+                row["branch"] = "codex/dev-1/task-001"
+                row["worktree_root"] = None
+            elif row.get("role") in {"developer", "tester", "reviewer"}:
+                row["lane_id"] = "phase-1/lane-z"
+                row["previous_lane_id"] = "phase-1/lane-z"
+                row["worktree_root"] = str(root / "prepared-worktrees" / str(row.get("slot") or "slot"))
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+
+        def fake_codex_exec(**kwargs):
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "slot": "dev-1",
+                    "lane_id": "phase-1/lane-a",
+                    "task_id": "TASK-001",
+                    "branch_name": "codex/dev-1/task-001",
+                    "worktree_name": "workstation-dev-1",
+                    "prepare_command": "python3 /tmp/prepare_workstation.py --repo-root /tmp",
+                    "prereq_policy": "copy_env_files",
+                },
+            )
+            return 0
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_manager_command",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("prepare command should not execute for non-bundled path")),
+        )
+        out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+        warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
+        assert "workstation_action_invalid" in warning_codes
+        assert "workstation_manager_retry_exhausted" in warning_codes
+        assert task["status"] == "blocked"
 
 
 def test_manager_command_disallowed_fails_attempt_deterministically(monkeypatch: pytest.MonkeyPatch):
@@ -5396,6 +5604,7 @@ def test_dispatch_assignment_observations_written_with_reason_and_duration(monke
         assert "skipped" in statuses
         assert "dispatched" in statuses
         assert all(isinstance(row.get("duration_ms"), int) and row.get("duration_ms") >= 0 for row in observations if isinstance(row, dict))
+        assert all(MODULE._as_str(row.get("reason_code")) for row in observations if isinstance(row, dict))
         obs_path = planning / "DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl"
         assert obs_path.exists()
         persisted_rows = [
@@ -5404,3 +5613,85 @@ def test_dispatch_assignment_observations_written_with_reason_and_duration(monke
             if line.strip()
         ]
         assert len(persisted_rows) >= len(observations)
+
+
+def test_dispatch_observations_exposed_in_build_response_data(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        (planning / "WORK_DISPATCH_PLAN.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "active_phase_id": "phase-1",
+                    "assignments": [
+                        {
+                            "task_id": "TASK-001",
+                            "lane_id": "phase-1/lane-a",
+                            "phase_id": "phase-1",
+                            "next_stage": "dev",
+                            "next_role": "developer",
+                            "slot": "dev-1",
+                            "dispatch_policy": "resume_if_same_lane",
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_dispatch_task_packet",
+            lambda *_args, **_kwargs: {"ok": True, "dispatch": {"dispatch_mode_used": "exec", "dispatch_thread_id": "thread-1"}},
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_select_profile_alias_for_slot",
+            lambda *_args, **_kwargs: {"ok": True, "alias": "codex"},
+        )
+        monkeypatch.setattr(MODULE, "_active_worker_count_by_alias", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(
+            MODULE,
+            "_read_profile_rate_states",
+            lambda *_args, **_kwargs: {"codex": {"soft_gated": False}},
+        )
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        data = out.get("data") if isinstance(out.get("data"), dict) else {}
+        observations = data.get("assignment_observations")
+        assert isinstance(observations, list)
+        assert observations
+        assert all(MODULE._as_str(item.get("reason_code")) for item in observations if isinstance(item, dict))

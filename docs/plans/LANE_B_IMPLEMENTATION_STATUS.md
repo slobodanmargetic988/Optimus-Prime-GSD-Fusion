@@ -202,11 +202,13 @@ Diagram reference:
     - `lane_id` (phase-scoped), `status`, and `gaps_that_need_patching[]` task payload support
   - task-embedded gaps are authoritative for strict-done, phase gating, status, and health; external gap artifacts are no longer runtime decision inputs
   - `WORK_DISPATCH_PLAN.json` is authoritative for dispatch decisions; dispatcher no longer performs direct fallback task scans
+  - empty-assignment dispatch cycles are deterministic (`dispatch_plan_no_assignments`)
   - dispatch packets now consume workstation-prepared slot context (`worktree_root`, `branch`) from worker registry rows
+  - `/op-build` response data includes current-cycle `assignment_observations` (artifact parity with `DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl`)
   - embedded gaps now support deterministic closure/reopen lifecycle with evidence-backed closure refs (`task_gap_closed`)
   - dispatcher supports same-lane thread continuation (`codex resume`) with deterministic fallback to fresh dispatch
-  - branch manager executes LLM-first merge actions with strict schema validation and bounded retries; exhaustion emits `merge_manager_retry_exhausted` and blocks only the affected lane/task
-  - workstation manager executes LLM-first lane-change preparation with strict schema validation and bounded retries; exhaustion emits `workstation_manager_retry_exhausted` and blocks only the affected lane/task
+  - branch manager executes LLM-first merge actions with strict schema validation, explicit merge proof (`source_branch` ancestor of `RAB-BASE` HEAD), and bounded retries; exhaustion emits `merge_manager_retry_exhausted` and blocks only the affected lane/task
+  - workstation manager executes LLM-first lane-change preparation with strict schema validation, exact bundled skill-script path enforcement, and bounded retries; exhaustion emits `workstation_manager_retry_exhausted` and blocks only the affected lane/task
 
 ## Runtime + Blocker Artifacts (Canonical)
 
