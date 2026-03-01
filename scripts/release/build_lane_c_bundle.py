@@ -39,9 +39,21 @@ PAYLOAD_PATHS = [
     "skills/runtime-coordinator",
     "skills/test-train-manager",
     "skills/thread-dispatch",
+    "skills/workstation-preparation",
     "agents/optimus-prime",
     "README.md",
     "VERSION",
+]
+
+# Runtime skills that /op-* execution depends on.
+REQUIRED_RUNTIME_SKILL_DIRS = [
+    "skills/codex-rate-snapshot",
+    "skills/dispatch-worker-packet",
+    "skills/optimus-cycle-controller",
+    "skills/runtime-coordinator",
+    "skills/test-train-manager",
+    "skills/thread-dispatch",
+    "skills/workstation-preparation",
 ]
 
 
@@ -94,6 +106,19 @@ def _collect_payload_files(repo_root: Path) -> list[str]:
                 continue
             out.append(str(child.relative_to(repo_root)))
     return sorted(set(out))
+
+
+def _validate_required_runtime_skills(repo_root: Path, managed_files: list[str]) -> None:
+    missing_paths = [rel for rel in REQUIRED_RUNTIME_SKILL_DIRS if not (repo_root / rel).is_dir()]
+    if missing_paths:
+        raise RuntimeError(f"missing required runtime skill directories: {', '.join(missing_paths)}")
+    managed_skill_names = _skills_manifest(managed_files)
+    required_skill_names = sorted(Path(rel).name for rel in REQUIRED_RUNTIME_SKILL_DIRS)
+    missing_skills = [name for name in required_skill_names if name not in managed_skill_names]
+    if missing_skills:
+        raise RuntimeError(
+            "bundle missing required runtime skills: " + ", ".join(missing_skills)
+        )
 
 
 def _copy_payload(repo_root: Path, bundle_dir: Path, managed_files: list[str]) -> dict[str, str]:
@@ -164,6 +189,7 @@ def build_bundle(repo_root: Path, out_dir: Path, version: str) -> dict[str, Any]
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     managed_files = _collect_payload_files(repo_root)
+    _validate_required_runtime_skills(repo_root, managed_files)
     checksums = _copy_payload(repo_root, bundle_dir, managed_files)
     _write_checksum_files(bundle_dir, checksums)
     manifest = {

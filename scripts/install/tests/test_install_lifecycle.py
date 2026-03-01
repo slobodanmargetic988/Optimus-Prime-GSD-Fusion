@@ -57,6 +57,7 @@ def test_global_install_and_uninstall_flow():
             "test-train-manager",
             "codex-rate-snapshot",
             "thread-dispatch",
+            "workstation-preparation",
         }
         for skill in required:
             assert (codex_skills / skill).is_dir()

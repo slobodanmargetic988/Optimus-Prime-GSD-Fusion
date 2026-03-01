@@ -184,11 +184,44 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
         return None
 
 
+def _parse_unix_timestamp(raw: int | float) -> datetime | None:
+    # Support both seconds and milliseconds epoch values.
+    seconds = float(raw)
+    if seconds > 10_000_000_000:
+        seconds /= 1000.0
+    try:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def normalize_reset_at(value: Any) -> str | None:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        # Accept ISO strings directly.
+        dt = parse_iso_datetime(text)
+        if dt is not None:
+            return dt.astimezone(timezone.utc).isoformat()
+        # Accept numeric strings as unix timestamps.
+        try:
+            numeric = float(text)
+        except ValueError:
+            return None
+        dt = _parse_unix_timestamp(numeric)
+        return dt.isoformat() if dt is not None else None
+    if isinstance(value, (int, float)):
+        dt = _parse_unix_timestamp(value)
+        return dt.isoformat() if dt is not None else None
+    return None
+
+
 def extract_reset_at(window: dict[str, Any]) -> str | None:
     for key in RESET_KEYS:
-        value = window.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        normalized = normalize_reset_at(window.get(key))
+        if normalized is not None:
+            return normalized
     return None
 
 
@@ -209,9 +242,16 @@ def build_window(window_dict: dict[str, Any] | None, gate_percent: float) -> Win
     reset_at = extract_reset_at(window_dict)
     reset_dt = parse_iso_datetime(reset_at)
     hours_until = None
+    current = now_utc()
     if reset_dt is not None:
-        delta = (reset_dt - now_utc()).total_seconds() / 3600.0
-        hours_until = round(delta, 3)
+        delta = (reset_dt - current).total_seconds() / 3600.0
+        # If the reset moment has passed, treat window usage as refreshed.
+        if delta <= 0:
+            used = 0.0
+            remaining = 100.0
+            hours_until = 0.0
+        else:
+            hours_until = round(delta, 3)
     gated = True if remaining is None else remaining <= gate_percent
     return WindowSnapshot(used, remaining, reset_at, hours_until, gated)
 
