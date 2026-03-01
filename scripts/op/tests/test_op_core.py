@@ -4137,6 +4137,100 @@ def test_planner_prompt_includes_bundled_example_path():
         assert expected in prompt
 
 
+def test_git_bootstrap_prompt_references_shared_validator_script():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        prompt = MODULE._git_bootstrap_prompt_text(req=req, prior_errors=[])
+        validator_script = str((MODULE.SCRIPT_DIR / "planner" / "validate_git_bootstrap.py").resolve())
+        assert validator_script in prompt
+        assert "same verifier OP will run" in prompt
+
+
+def test_git_bootstrap_skips_llm_when_repo_already_initialized(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        called = {"value": False}
+
+        def fake_run_codex_exec(**_kwargs: object) -> int:
+            called["value"] = True
+            return 0
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_run_codex_exec)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        warnings, artifacts = MODULE._ensure_git_initialized_for_initialize(req)
+        assert warnings == []
+        assert artifacts == []
+        assert called["value"] is False
+
+
+def test_git_bootstrap_initializes_non_git_repo_with_llm_then_validates(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        def fake_run_codex_exec(*, repo_root: Path, **_kwargs: object) -> int:
+            subprocess.run(["git", "init", "-b", "main"], cwd=str(repo_root), check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo_root), check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo_root), check=True, capture_output=True, text=True)
+            (repo_root / "README.md").write_text("placeholder\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=str(repo_root), check=True, capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-m", "bootstrap"], cwd=str(repo_root), check=True, capture_output=True, text=True)
+            subprocess.run(["git", "branch", "RAB-BASE"], cwd=str(repo_root), check=True, capture_output=True, text=True)
+            return 0
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_run_codex_exec)
+        warnings, artifacts = MODULE._ensure_git_initialized_for_initialize(req)
+        assert MODULE._is_git_work_tree(root) is True
+        assert MODULE._git_text(root, "rev-parse", "HEAD")
+        assert MODULE._git_text(root, "show-ref", "--verify", "refs/heads/RAB-BASE")
+        assert isinstance(warnings, list)
+        assert artifacts
+
+
+def test_git_bootstrap_raises_when_llm_output_fails_deterministic_validator(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        def fake_run_codex_exec(**_kwargs: object) -> int:
+            return 0
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_run_codex_exec)
+        with pytest.raises(MODULE.OpError) as exc_info:
+            MODULE._ensure_git_initialized_for_initialize(req)
+        assert exc_info.value.code == "git_bootstrap_failed"
+
+
 def test_planner_validator_rejects_unexpected_artifact_rows():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

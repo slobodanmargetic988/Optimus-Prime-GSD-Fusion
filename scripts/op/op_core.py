@@ -32,6 +32,7 @@ from planner.llm_planner import (
     render_prompt,
     run_codex_exec,
 )
+from planner.validate_git_bootstrap import validate_git_bootstrap
 from planner.validate_plan_bundle import validate_bundle_contract
 
 SCHEMA_VERSION = "1.0"
@@ -80,6 +81,9 @@ RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / 
 PLANNER_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "llm_plan_prompt.md"
 PLANNER_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_plan_bundle.py"
 PLANNER_EXAMPLE_ROOT_PATH = SCRIPT_DIR / "llm" / "examples" / "op-plan" / "reports" / "optimus-prime" / "planning"
+GIT_BOOTSTRAP_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "git_bootstrap_prompt.md"
+GIT_BOOTSTRAP_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_git_bootstrap.py"
+GIT_BOOTSTRAP_REQUIRED_BRANCH = "RAB-BASE"
 
 MANDATORY_BUILD_BASELINE = [
     PROJECT_MD,
@@ -3439,6 +3443,102 @@ def _git_branch_and_clean(repo_root: Path) -> tuple[str, bool]:
     return branch, clean
 
 
+def _is_git_work_tree(repo_root: Path) -> bool:
+    code, out, _ = _run(["git", "rev-parse", "--is-inside-work-tree"], cwd=repo_root)
+    return code == 0 and out.strip().lower() == "true"
+
+
+def _git_bootstrap_prompt_text(
+    *,
+    req: OpRequest,
+    prior_errors: list[dict[str, Any]],
+) -> str:
+    template_path = GIT_BOOTSTRAP_PROMPT_TEMPLATE_PATH.resolve()
+    if not template_path.exists():
+        raise OpError("git_bootstrap_execution_failed", f"git bootstrap prompt template not found: {template_path}", stage="initialize")
+    template_text = template_path.read_text(encoding="utf-8")
+    validator_script = GIT_BOOTSTRAP_VALIDATOR_SCRIPT_PATH.resolve()
+    validator_command = (
+        f"python3 {validator_script} --repo-root {req.repo_root} --required-branch {GIT_BOOTSTRAP_REQUIRED_BRANCH} --require-readme"
+    )
+    prompt = template_text
+    replacements = {
+        "{{REPO_ROOT}}": str(req.repo_root),
+        "{{PROJECT_NAME}}": req.repo_root.name,
+        "{{REQUIRED_BRANCH}}": GIT_BOOTSTRAP_REQUIRED_BRANCH,
+        "{{VALIDATOR_COMMAND}}": validator_command,
+    }
+    for key, value in replacements.items():
+        prompt = prompt.replace(key, value)
+    if prior_errors:
+        prompt += "\n\nRepair context from previous failed verification:\n"
+        for idx, row in enumerate(prior_errors, start=1):
+            code = _as_str(row.get("code")) or "unknown"
+            message = _as_str(row.get("message")) or "verification failed"
+            prompt += f"{idx}. [{code}] {message}\n"
+    return prompt
+
+
+def _ensure_git_initialized_for_initialize(req: OpRequest) -> tuple[list[dict[str, Any]], list[str]]:
+    if _is_git_work_tree(req.repo_root):
+        return [], []
+
+    llm_root = _repo_path(req.repo_root, PLANNER_REL) / "git-bootstrap"
+    llm_root.mkdir(parents=True, exist_ok=True)
+    prompt_path = llm_root / "prompt.txt"
+    stdout_path = llm_root / "llm_stdout.log"
+    stderr_path = llm_root / "llm_stderr.log"
+    last_message_path = llm_root / "last_message.txt"
+
+    prompt = _git_bootstrap_prompt_text(req=req, prior_errors=[])
+    prompt_path.write_text(prompt, encoding="utf-8")
+
+    try:
+        exit_code = run_codex_exec(
+            repo_root=req.repo_root,
+            prompt_text=prompt,
+            output_last_message=last_message_path,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+        )
+    except OSError as exc:
+        raise OpError("git_bootstrap_execution_failed", f"unable to invoke codex exec for git bootstrap: {exc}", stage="initialize") from exc
+
+    result = validate_git_bootstrap(
+        repo_root=req.repo_root,
+        required_branch=GIT_BOOTSTRAP_REQUIRED_BRANCH,
+        require_readme=True,
+    )
+    errors = result.get("errors")
+    if not isinstance(errors, list):
+        errors = []
+    if errors:
+        first = errors[0] if isinstance(errors[0], dict) else {}
+        message = _as_str(first.get("message")) or "git bootstrap verification failed"
+        raise OpError("git_bootstrap_failed", message, stage="initialize")
+
+    warnings: list[dict[str, Any]] = []
+    if exit_code != 0:
+        warnings.append(
+            {
+                "code": "git_bootstrap_nonzero_exit",
+                "message": f"codex exec exited with code {exit_code} during git bootstrap; verification still passed",
+                "stage": "initialize",
+            }
+        )
+    for row in result.get("warnings", []):
+        if not isinstance(row, dict):
+            continue
+        code = _as_str(row.get("code")) or "git_bootstrap_warning"
+        message = _as_str(row.get("message")) or "git bootstrap warning"
+        warning: dict[str, Any] = {"code": code, "message": message, "stage": "initialize"}
+        for key in ("details", "remote", "branch"):
+            if key in row:
+                warning[key] = row.get(key)
+        warnings.append(warning)
+    return warnings, [str(prompt_path), str(stdout_path), str(stderr_path), str(last_message_path)]
+
+
 def _list_repo_files(repo_root: Path) -> list[str]:
     paths: list[str] = []
     for path in repo_root.rglob("*"):
@@ -4932,6 +5032,7 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
 def command_initialize(req: OpRequest) -> dict[str, Any]:
     _require_override_if_existing_plan(req, stage="initialize")
     _resolve_mission_scope_sources(req, stage="initialize", required=True)
+    git_bootstrap_warnings, git_bootstrap_artifacts = _ensure_git_initialized_for_initialize(req)
     _ensure_managed_gitignore_block(req.repo_root)
     map_result = command_map_codebase(req)
     new_result = command_new_project(req)
@@ -4965,6 +5066,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
     )
 
     artifacts = []
+    artifacts.extend(git_bootstrap_artifacts)
     artifacts.extend(map_result.get("artifacts", []))
     artifacts.extend(new_result.get("artifacts", []))
     artifacts.extend(plan_result.get("artifacts", []))
@@ -4972,6 +5074,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
     artifacts.append(str(state_path))
 
     warnings = []
+    warnings.extend(git_bootstrap_warnings)
     warnings.extend(map_result.get("warnings", []))
     warnings.extend(rate_seed_warnings)
     warnings.extend(new_result.get("warnings", []))
