@@ -8201,6 +8201,14 @@ def _manager_workstation_cycle(
     registry_path = req.repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
     registry_base, workers, registry_shape = _load_worker_registry(registry_path)
     task_map = _task_by_id(task_state)
+
+    def _payload_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value.strip()
+        return str(value).strip()
+
     for worker in workers:
         if not isinstance(worker, dict):
             continue
@@ -8342,9 +8350,11 @@ def _manager_workstation_cycle(
             action_errors: list[str] = []
             if _as_str(action_payload.get("slot")) != slot:
                 action_errors.append("slot mismatch")
-            if _as_str(action_payload.get("task_id")) != (active_task_id or ""):
+            action_task_id = _payload_text(action_payload.get("task_id"))
+            if action_task_id != (active_task_id or ""):
                 action_errors.append("task_id mismatch")
-            if _as_str(action_payload.get("lane_id")) != (lane_id or ""):
+            action_lane_id = _payload_text(action_payload.get("lane_id"))
+            if action_lane_id != (lane_id or ""):
                 action_errors.append("lane_id mismatch")
             if _as_str(action_payload.get("branch_name")) != task_branch:
                 action_errors.append("branch_name mismatch")
@@ -8367,7 +8377,7 @@ def _manager_workstation_cycle(
                         f"prepare_command must invoke bundled prepare_workstation.py at {expected_script_path}"
                     )
             prereq_policy = _as_str(action_payload.get("prereq_policy"))
-            if prereq_policy not in {"copy_env_files", "symlink_deps"}:
+            if prereq_policy not in {"copy_env_files", "symlink_deps", "copy_env_files|symlink_deps"}:
                 action_errors.append("prereq_policy must be copy_env_files|symlink_deps")
             if action_errors:
                 _emit_build_progress(

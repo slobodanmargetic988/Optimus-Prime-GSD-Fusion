@@ -202,6 +202,24 @@ def run_payload(payload: dict) -> dict:
     return MODULE.execute_request(req)
 
 
+def test_emit_build_progress_prints_only_on_tty(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        monkeypatch.setattr(MODULE.sys.stdout, "isatty", lambda: True)
+        MODULE._emit_build_progress(req, "hello")
+        out = capsys.readouterr().out
+        assert "[op-build " in out
+        assert "hello" in out
+
+        monkeypatch.setattr(MODULE.sys.stdout, "isatty", lambda: False)
+        MODULE._emit_build_progress(req, "hidden")
+        out = capsys.readouterr().out
+        assert out == ""
+
+
 def planner_checksum(content_type: str, content: object) -> str:
     if content_type == "json":
         payload = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -5178,7 +5196,10 @@ def test_branch_manager_merge_proof_required_before_done_registry_update(monkeyp
         assert "TASK-001" not in merged_task_ids
 
 
-def test_workstation_manager_success_updates_slot_worktree_and_branch(monkeypatch: pytest.MonkeyPatch):
+def test_workstation_manager_success_updates_slot_worktree_and_branch(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
@@ -5191,6 +5212,7 @@ def test_workstation_manager_success_updates_slot_worktree_and_branch(monkeypatc
             }
         )
         req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        monkeypatch.setattr(MODULE.sys.stdout, "isatty", lambda: True)
         planning = root / "reports" / "optimus-prime" / "planning"
         task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
         build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
@@ -5260,10 +5282,14 @@ def test_workstation_manager_success_updates_slot_worktree_and_branch(monkeypatc
             lambda repo_root, *args: "codex/dev-1/task-001" if str(repo_root) == str(target_path) else "abc123",
         )
         out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+        logs = capsys.readouterr().out
         assert out.get("fatal") is False
         warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
         assert "workstation_manager_retry_exhausted" not in warning_codes
         assert "workstation_action_invalid" not in warning_codes
+        assert "workstation-manager: preparing slot=dev-1" in logs
+        assert "workstation-manager: slot=dev-1 attempt 1/10" in logs
+        assert "workstation-manager: slot=dev-1 ready worktree=" in logs
         registry_after = json.loads(registry_path.read_text(encoding="utf-8"))
         slot_row = next(item for item in registry_after.get("workers", []) if isinstance(item, dict) and item.get("slot") == "dev-1")
         assert slot_row.get("worktree_root") == str(target_path)
@@ -5377,6 +5403,100 @@ def test_workstation_manager_rejects_prepare_command_non_bundled_script_path(mon
         assert "workstation_action_invalid" in warning_codes
         assert "workstation_manager_retry_exhausted" in warning_codes
         assert task["status"] == "blocked"
+
+
+def test_workstation_manager_accepts_blank_lane_task_with_combined_prereq_policy(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["active_task_id"] = None
+                row["active_task"] = None
+                row["lane_id"] = None
+                row["previous_lane_id"] = "n/a"
+                row["branch"] = "RAB-BASE"
+                row["worktree_root"] = None
+            elif row.get("role") in {"developer", "tester", "reviewer"}:
+                row["lane_id"] = "phase-1/lane-z"
+                row["previous_lane_id"] = "phase-1/lane-z"
+                row["worktree_root"] = str(root / "prepared-worktrees" / str(row.get("slot") or "slot"))
+                row["branch"] = "RAB-BASE"
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        target_path = root / "prepared-worktrees" / "dev-1-blank"
+        target_path.mkdir(parents=True, exist_ok=True)
+
+        def fake_codex_exec(**kwargs):
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "slot": "dev-1",
+                    "lane_id": "",
+                    "task_id": "",
+                    "branch_name": "RAB-BASE",
+                    "worktree_name": "workstation-1",
+                    "prepare_command": (
+                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                        f"--repo-root {root} --branch-name RAB-BASE --slot-role developer --output json "
+                        "--force-reset-existing --worktree-name workstation-1"
+                    ),
+                    "prereq_policy": "copy_env_files|symlink_deps",
+                },
+            )
+            return 0
+
+        def fake_run_manager_command(command_text, **_kwargs):
+            return {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": json.dumps(
+                    {
+                        "ok": True,
+                        "target_path": str(target_path),
+                        "branch_name_resolved": "RAB-BASE",
+                    }
+                ),
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            }
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(MODULE, "_run_manager_command", fake_run_manager_command)
+        monkeypatch.setattr(
+            MODULE,
+            "_git_text",
+            lambda repo_root, *args: "RAB-BASE" if str(repo_root) == str(target_path) else "abc123",
+        )
+
+        out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+        warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
+        assert "workstation_action_invalid" not in warning_codes
+        assert "workstation_manager_retry_exhausted" not in warning_codes
+        registry_after = json.loads(registry_path.read_text(encoding="utf-8"))
+        slot_row = next(item for item in registry_after.get("workers", []) if isinstance(item, dict) and item.get("slot") == "dev-1")
+        assert slot_row.get("worktree_root") == str(target_path)
+        assert slot_row.get("branch") == "RAB-BASE"
 
 
 def test_manager_command_disallowed_fails_attempt_deterministically(monkeypatch: pytest.MonkeyPatch):

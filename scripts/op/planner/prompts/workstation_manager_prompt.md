@@ -22,8 +22,9 @@ Rules:
   "branch_name": "<branch>",
   "worktree_name": "workstation-<1-10>",
   "prepare_command": "python3 {{WORKSTATION_SCRIPT_PATH}} --repo-root {{REPO_ROOT}} --branch-name <branch> --slot-role {{ROLE}} --output json --force-reset-existing --worktree-name <worktree-name>",
-  "prereq_policy": "copy_env_files|symlink_deps"
+  "prereq_policy": "copy_env_files"
 }
 4. prepare_command must invoke prepare_workstation.py directly.
 5. branch_name must be exactly {{BRANCH_NAME}}.
 6. slot and task_id must match the provided values.
+7. prereq_policy must be one of: copy_env_files, symlink_deps, copy_env_files|symlink_deps.
