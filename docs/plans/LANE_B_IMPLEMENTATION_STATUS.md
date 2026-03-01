@@ -227,8 +227,9 @@ python3 -m pytest \
   /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py
 ```
 
-## Lane B Status (Hardening Complete)
+## Lane B Status (Active Redesign + Hardening)
 
 - Lane B baseline vision is implemented for new-only autonomous planning/build and deterministic control contracts.
-- Ongoing work is incremental hardening and review-driven remediations, not workflow redesign.
+- Workflow redesign and hardening are still active, driven by real canary findings.
+- Lane B is treated as fully converged only when repeated canary runs satisfy user vision and expectations.
 - Remaining roadmap work is Lane C packaging/installer and polished product command UX.
