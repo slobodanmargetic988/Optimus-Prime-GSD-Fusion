@@ -16,6 +16,7 @@ Files:
 Draw.io desktop files (Lane B):
 1. [LANE_B_INITIALIZE_BUILD_FLOW.drawio](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_B_INITIALIZE_BUILD_FLOW.drawio)
 2. [LANE_B_TASK_LIFECYCLE.drawio](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_B_TASK_LIFECYCLE.drawio)
+3. [LANE_B_BUILD_CYCLE_FLOW.drawio](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_B_BUILD_CYCLE_FLOW.drawio)
 
 Draw.io desktop files (Lane A):
 1. [LANE_A_CONTROLLER_TICK_FLOW.drawio](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_A_CONTROLLER_TICK_FLOW.drawio)

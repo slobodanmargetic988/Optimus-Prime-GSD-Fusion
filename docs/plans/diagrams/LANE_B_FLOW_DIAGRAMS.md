@@ -49,6 +49,29 @@ stateDiagram-v2
   review_done --> [*]
 ```
 
+## Build Cycle Tick Flow
+
+```mermaid
+flowchart LR
+  A["Cycle start (last_cycle + 1)"] --> B["Refresh profile rate snapshot (selected aliases)"]
+  B --> C["Run controller tick (max_cycles=1, control_number/run_id)"]
+  C --> D["Load correlated directives"]
+  D --> E["Apply directives (runtime/test-train/dispatch filters)"]
+  E --> F["Handoff ingest + evidence sync + stale task recovery"]
+  F --> G["Refresh gaps + closure packets + phase barrier checks"]
+  G --> H["Normalize worker registry (dead PID cleanup)"]
+  H --> I{"Dispatch decision (caps, gates, retries, profile assignment)"}
+  I -- "dispatch" --> J["Dispatch next eligible task"]
+  I -- "skip" --> K["Skip dispatch (blocked/gated/none eligible)"]
+  J --> L["Re-ingest handoff updates"]
+  K --> L
+  L --> M["Strict-done + watchdog + progress ledger"]
+  M --> N{"Terminal state?"}
+  N -- "yes" --> O["Return terminal (completed/stopped/blocked)"]
+  N -- "no" --> P["Persist state + sleep"]
+  P --> A
+```
+
 ## Sync Contract
 
 1. Update this file in the same PR for behavior changes touching `/op-initialize`, `/op-plan`, `/op-build`, or `/op-resume`.
