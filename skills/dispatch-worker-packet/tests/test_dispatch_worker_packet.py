@@ -132,6 +132,7 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("output must pass the canonical schema validator", content)
             self.assertIn("satisfies that validator and regression-test contract", content)
             self.assertIn("absolute path:", content)
+            self.assertIn("create parent directories for evidence path before writing TASK_EVIDENCE.json", content)
             self.assertIn(str(MODULE.TASK_EVIDENCE_TEMPLATE_REF), content)
 
     def test_packet_render_requires_canonical_task_evidence_contract(self):
@@ -348,6 +349,36 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("dispatch_resume_notty_detected", warning_codes)
             self.assertIn("dispatch_resume_failed_fallback_exec", warning_codes)
             self.assertEqual(len(calls), 2)
+
+    def test_thread_dispatch_runner_exec_early_exit_auth_failure_is_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = make_cfg(root, dispatch_mode="exec")
+            packet = root / "packet.md"
+            packet.write_text("test", encoding="utf-8")
+            log_path = root / "dispatch-exec.log"
+            log_path.write_text("refresh_token_reused\n", encoding="utf-8")
+
+            def fake_run(cmd, **_kwargs):
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    stdout=json.dumps({"status": "started", "pid": 33333, "log_file": str(log_path)}),
+                    stderr="",
+                )
+
+            def fake_kill(pid, _sig):
+                if pid == 33333:
+                    raise OSError("dead")
+                return None
+
+            with mock.patch.object(MODULE.subprocess, "run", side_effect=fake_run), mock.patch.object(
+                MODULE.os, "kill", side_effect=fake_kill
+            ), mock.patch.object(MODULE.time, "sleep", return_value=None):
+                with self.assertRaises(MODULE.ToolError) as ctx:
+                    MODULE.ThreadDispatchRunner(repo_root=root).dispatch(cfg, packet)
+            self.assertEqual(ctx.exception.code, "dispatch_failed")
+            self.assertIn("dispatch_auth_failed", ctx.exception.message)
 
     def test_registry_update_supports_workers_dict_shape(self):
         with tempfile.TemporaryDirectory() as tmp:

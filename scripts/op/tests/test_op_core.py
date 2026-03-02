@@ -2040,6 +2040,49 @@ def test_select_profile_alias_returns_all_hard_gated_reason():
         assert result["reason"] == "profile_assignment_all_hard_gated"
 
 
+def test_select_profile_alias_excludes_profiles_with_snapshot_errors():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.parent.mkdir(parents=True, exist_ok=True)
+        rate_path.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "codex": {
+                            "five_hour": {"remaining_percent": 90},
+                            "weekly": {"remaining_percent": 90},
+                            "recommended_action": "continue",
+                            "errors": ["token_count_event_not_found"],
+                        },
+                        "codex-second": {
+                            "five_hour": {"remaining_percent": 80},
+                            "weekly": {"remaining_percent": 80},
+                            "recommended_action": "continue",
+                            "errors": [],
+                        },
+                    }
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        build_state = {
+            "profile_aliases": ["codex", "codex-second"],
+            "slot_profile_assignments": {},
+        }
+        result = MODULE._select_profile_alias_for_slot(
+            root,
+            build_state,
+            slot="dev-1",
+            slot_count=3,
+        )
+        assert result["ok"] is True
+        assert result["alias"] == "codex-second"
+
+
 def test_build_seeds_rate_registry_before_controller_cycle(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -5781,6 +5824,8 @@ def test_dead_pid_missing_completion_artifact_blocks_after_threshold():
 
         MODULE._ensure_worker_registry_v2(root, build_state)
         registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        dispatch_log_path = root / "reports" / "optimus-prime" / "dispatch-dev-1.log"
+        dispatch_log_path.write_text("refresh_token_reused\n", encoding="utf-8")
         registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
         for row in registry_payload.get("workers", []):
             if row.get("slot") == "dev-1":
@@ -5789,6 +5834,7 @@ def test_dead_pid_missing_completion_artifact_blocks_after_threshold():
                 row["dispatch_pid"] = None
                 row["active_task_id"] = "TASK-001"
                 row["active_task"] = "TASK-001"
+                row["dispatch_log"] = str(dispatch_log_path)
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
 
         assignments, warnings = MODULE._prepare_dead_pid_redispatch_assignments(
@@ -5801,9 +5847,15 @@ def test_dead_pid_missing_completion_artifact_blocks_after_threshold():
         assert assignments == []
         assert task.get("status") == "blocked"
         assert "worker_completion_artifact_missing" in warning_codes
+        assert "worker_dispatch_auth_failed" in warning_codes
         gap_rows = task.get("gaps_that_need_patching")
         assert isinstance(gap_rows, list) and gap_rows
         assert any((row.get("status") == "open" and row.get("stage") == "dev") for row in gap_rows if isinstance(row, dict))
+        assert any(
+            "worker_dispatch_auth_failed" in (row.get("reason_codes") or [])
+            for row in gap_rows
+            if isinstance(row, dict)
+        )
 
 
 def test_fan_in_merges_handoff_rows_without_duplicates():

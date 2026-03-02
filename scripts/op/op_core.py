@@ -3814,6 +3814,16 @@ def _read_profile_rate_states(repo_root: Path, aliases: list[str]) -> dict[str, 
         recommended_action = (_as_str(data.get("recommended_action")) or "").lower()
         if recommended_action in {"wind_down", "wait_until_reset"}:
             hard_gated = True
+        errors_raw = data.get("errors")
+        error_codes = [
+            (_as_str(item) or "").strip()
+            for item in (errors_raw if isinstance(errors_raw, list) else [])
+            if _as_str(item)
+        ]
+        unhealthy = bool(error_codes)
+        if unhealthy:
+            # Profiles with snapshot/runtime errors are excluded from fresh dispatch selection.
+            hard_gated = True
         reset_at = (
             _as_str(data.get("reset_at"))
             or _as_str(data.get("next_reset_at"))
@@ -3832,6 +3842,8 @@ def _read_profile_rate_states(repo_root: Path, aliases: list[str]) -> dict[str, 
             "soft_gated": soft_gated,
             "score": float(score),
             "reset_at": reset_at,
+            "unhealthy": unhealthy,
+            "errors": error_codes,
         }
     return states
 
@@ -3861,13 +3873,24 @@ def _select_profile_alias_for_slot(
         }
 
     rate_states = _read_profile_rate_states(repo_root, aliases)
-    non_gated_aliases = [alias for alias in aliases if not rate_states.get(alias, {}).get("hard_gated")]
+    non_gated_aliases = [
+        alias
+        for alias in aliases
+        if not bool(rate_states.get(alias, {}).get("hard_gated"))
+        and not bool(rate_states.get(alias, {}).get("unhealthy"))
+    ]
     if not non_gated_aliases:
         reset_candidates = [
             _as_str(rate_states.get(alias, {}).get("reset_at"))
             for alias in aliases
             if _as_str(rate_states.get(alias, {}).get("reset_at"))
         ]
+        error_rows = {
+            alias: list(rate_states.get(alias, {}).get("errors") or [])
+            for alias in aliases
+            if isinstance(rate_states.get(alias, {}).get("errors"), list)
+            and list(rate_states.get(alias, {}).get("errors") or [])
+        }
         return {
             "ok": False,
             "reason": "profile_assignment_all_hard_gated",
@@ -3877,6 +3900,7 @@ def _select_profile_alias_for_slot(
                 "stage": "build_loop",
                 "profiles": aliases,
                 "reset_at_candidates": reset_candidates,
+                "profile_errors": error_rows,
             },
         }
 
@@ -4363,6 +4387,36 @@ def _recover_stale_in_progress_tasks(repo_root: Path, task_state: dict[str, Any]
     return warnings
 
 
+def _infer_dispatch_failure_reason_from_worker_log(worker_row: dict[str, Any] | None) -> dict[str, str] | None:
+    if not isinstance(worker_row, dict):
+        return None
+    log_path_raw = _as_str(worker_row.get("dispatch_log"))
+    if not log_path_raw:
+        return None
+    log_path = Path(log_path_raw).expanduser()
+    try:
+        if not log_path.exists() or not log_path.is_file():
+            return None
+        excerpt = log_path.read_text(encoding="utf-8", errors="ignore")[-8000:].lower()
+    except OSError:
+        return None
+    patterns: tuple[tuple[str, str, str], ...] = (
+        ("refresh_token_reused", "worker_dispatch_auth_failed", "dispatch log shows refresh_token_reused auth failure"),
+        ("invalid_grant", "worker_dispatch_auth_failed", "dispatch log shows invalid_grant auth failure"),
+        ("token refresh failed", "worker_dispatch_auth_failed", "dispatch log shows token refresh failure"),
+        ("unauthorized", "worker_dispatch_auth_failed", "dispatch log shows unauthorized auth failure"),
+        ("stdin is not a terminal", "dispatch_resume_notty_detected", "dispatch log shows non-tty resume failure"),
+    )
+    for needle, code, summary in patterns:
+        if needle in excerpt:
+            return {
+                "code": code,
+                "message": summary,
+                "log_path": str(log_path),
+            }
+    return None
+
+
 def _prepare_dead_pid_redispatch_assignments(
     repo_root: Path,
     task_state: dict[str, Any],
@@ -4372,6 +4426,13 @@ def _prepare_dead_pid_redispatch_assignments(
     warnings: list[dict[str, Any]] = []
     assignments: list[dict[str, Any]] = []
     active_slots = _active_worker_slots(repo_root)
+    registry_path = repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+    _, registry_workers, _ = _load_worker_registry(registry_path)
+    workers_by_slot = {
+        _as_str(row.get("slot")): row
+        for row in registry_workers
+        if isinstance(row, dict) and _as_str(row.get("slot"))
+    }
     plan_map = _plan_task_map(plan_packets)
     retry_counts = build_state.get("dead_pid_retry_counts")
     if not isinstance(retry_counts, dict):
@@ -4401,6 +4462,25 @@ def _prepare_dead_pid_redispatch_assignments(
         owner_slot = _as_str(task.get("owner_slot"))
         if not owner_slot or owner_slot in active_slots:
             continue
+        worker_row = workers_by_slot.get(owner_slot)
+        dispatch_failure_hint = _infer_dispatch_failure_reason_from_worker_log(worker_row)
+        dispatch_failure_code = _as_str((dispatch_failure_hint or {}).get("code"))
+        dispatch_failure_message = _as_str((dispatch_failure_hint or {}).get("message"))
+        dispatch_failure_log = _as_str((dispatch_failure_hint or {}).get("log_path"))
+        if dispatch_failure_code:
+            warnings.append(
+                {
+                    "code": dispatch_failure_code,
+                    "message": (
+                        f"task {task_id} slot {owner_slot}: {dispatch_failure_message or dispatch_failure_code}"
+                        + (f" (log={dispatch_failure_log})" if dispatch_failure_log else "")
+                    ),
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "slot": owner_slot,
+                    "artifact": dispatch_failure_log or None,
+                }
+            )
 
         evidence_path = _task_evidence_path(repo_root, task)
         evidence_payload: dict[str, Any] = {}
@@ -4422,17 +4502,24 @@ def _prepare_dead_pid_redispatch_assignments(
             evidence_issue_code = "worker_completion_artifact_missing"
             evidence_issue_message = "completion artifact missing after worker dispatch"
         if evidence_issue_code:
+            issue_message = evidence_issue_message or evidence_issue_code
+            if dispatch_failure_code:
+                issue_message = (
+                    f"{issue_message}; likely cause: {dispatch_failure_code}"
+                    + (f" ({dispatch_failure_message})" if dispatch_failure_message else "")
+                )
             warnings.append(
                 {
                     "code": evidence_issue_code,
                     "message": (
-                        f"task {task_id} slot {owner_slot}: {evidence_issue_message or evidence_issue_code} "
+                        f"task {task_id} slot {owner_slot}: {issue_message} "
                         f"(artifact={evidence_path})"
                     ),
                     "stage": "build_loop",
                     "task_id": task_id,
                     "slot": owner_slot,
                     "artifact": str(evidence_path),
+                    "likely_cause_code": dispatch_failure_code or None,
                 }
             )
         gate = evidence_payload.get("gate") if isinstance(evidence_payload.get("gate"), dict) else {}
@@ -4503,6 +4590,9 @@ def _prepare_dead_pid_redispatch_assignments(
         if retry_count >= missing_threshold:
             task["status"] = TASK_STATUS_BLOCKED
             gap_code = evidence_issue_code or "worker_completion_artifact_missing"
+            gap_reason_codes = [gap_code, "dead_pid_retry_threshold_reached"]
+            if dispatch_failure_code and dispatch_failure_code not in gap_reason_codes:
+                gap_reason_codes.insert(0, dispatch_failure_code)
             _upsert_task_gap(
                 task,
                 {
@@ -4511,7 +4601,7 @@ def _prepare_dead_pid_redispatch_assignments(
                     "severity": "P1",
                     "stage": stage_name,
                     "status": "open",
-                    "reason_codes": [gap_code, "dead_pid_retry_threshold_reached"],
+                    "reason_codes": gap_reason_codes,
                     "retry_count": retry_count,
                     "max_retries": max(5, missing_threshold),
                     "closure_ref": str(evidence_path),
@@ -4532,6 +4622,7 @@ def _prepare_dead_pid_redispatch_assignments(
                     "retry_count": retry_count,
                     "threshold": missing_threshold,
                     "artifact": str(evidence_path),
+                    "likely_cause_code": dispatch_failure_code or None,
                 }
             )
             warnings.append(
@@ -4542,6 +4633,7 @@ def _prepare_dead_pid_redispatch_assignments(
                     "task_id": task_id,
                     "slot": owner_slot,
                     "retry_count": retry_count,
+                    "likely_cause_code": dispatch_failure_code or None,
                 }
             )
             continue
@@ -4567,6 +4659,7 @@ def _prepare_dead_pid_redispatch_assignments(
                 "task_id": task_id,
                 "slot": owner_slot,
                 "retry_count": retry_count,
+                "likely_cause_code": dispatch_failure_code or None,
             }
         )
         if retry_count >= 3:

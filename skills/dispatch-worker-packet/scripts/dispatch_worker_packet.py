@@ -44,6 +44,14 @@ RESUME_FAILURE_LOG_PATTERNS: tuple[tuple[str, str], ...] = (
     ("no such session", "dispatch_resume_early_exit"),
     ("session not found", "dispatch_resume_early_exit"),
 )
+STARTUP_EARLY_EXIT_PROBE_SECONDS = 2.0
+STARTUP_EARLY_EXIT_POLL_SECONDS = 0.1
+STARTUP_FAILURE_LOG_PATTERNS: tuple[tuple[str, str], ...] = RESUME_FAILURE_LOG_PATTERNS + (
+    ("refresh_token_reused", "dispatch_auth_failed"),
+    ("invalid_grant", "dispatch_auth_failed"),
+    ("token refresh failed", "dispatch_auth_failed"),
+    ("unauthorized", "dispatch_auth_failed"),
+)
 TASK_EVIDENCE_VALIDATOR_REF = (
     Path(__file__).resolve().parents[3] / "scripts" / "op" / "op_core.py"
 ).resolve()
@@ -592,6 +600,7 @@ def render_packet(cfg: DispatchInput) -> str:
         f"- required top-level fields:\n"
         f"  - schema_version, plan_id, phase_id, task_id, requirement_ids, role, slot, updated_at\n"
         f"  - dev (object), test (object), review (object), gate (object), summary (object)\n"
+        f"- create parent directories for evidence path before writing TASK_EVIDENCE.json\n"
         f"- required section fields:\n"
         f"  - dev.checks[], dev.verify_results[], dev.blockers[], dev.artifacts[]\n"
         f"  - test.checks[], test.verify_results[], test.uat_results[], test.blockers[], test.artifacts[]\n"
@@ -751,7 +760,14 @@ class ThreadDispatchRunner:
                 return ""
             return text[-max_chars:]
 
-        def _detect_resume_early_exit(payload: dict[str, Any]) -> tuple[bool, str | None]:
+        def _detect_startup_early_exit(
+            payload: dict[str, Any],
+            *,
+            probe_seconds: float,
+            poll_seconds: float,
+            patterns: tuple[tuple[str, str], ...],
+            default_code: str,
+        ) -> tuple[bool, str | None]:
             pid = payload.get("pid")
             log_file = payload.get("log_file")
             if not isinstance(pid, int):
@@ -759,15 +775,15 @@ class ThreadDispatchRunner:
             if not isinstance(log_file, str) or not log_file.strip():
                 return False, None
             log_path = Path(log_file).expanduser().resolve()
-            deadline = time.monotonic() + RESUME_EARLY_EXIT_PROBE_SECONDS
+            deadline = time.monotonic() + probe_seconds
             while time.monotonic() < deadline:
                 if not _pid_is_running(pid):
                     excerpt_lower = _read_log_excerpt(log_path).lower()
-                    for needle, code in RESUME_FAILURE_LOG_PATTERNS:
+                    for needle, code in patterns:
                         if needle in excerpt_lower:
                             return True, code
-                    return True, "dispatch_resume_early_exit"
-                time.sleep(RESUME_EARLY_EXIT_POLL_SECONDS)
+                    return True, default_code
+                time.sleep(poll_seconds)
             return False, None
 
         warnings: list[dict[str, Any]] = []
@@ -776,7 +792,13 @@ class ThreadDispatchRunner:
         fallback_reason_code: str | None = None
         if run.returncode == 0 and cfg.dispatch_mode == "resume" and cfg.resume_thread_id:
             first_payload = parse_dispatch_json(run.stdout)
-            early_exit, early_exit_code = _detect_resume_early_exit(first_payload)
+            early_exit, early_exit_code = _detect_startup_early_exit(
+                first_payload,
+                probe_seconds=RESUME_EARLY_EXIT_PROBE_SECONDS,
+                poll_seconds=RESUME_EARLY_EXIT_POLL_SECONDS,
+                patterns=RESUME_FAILURE_LOG_PATTERNS,
+                default_code="dispatch_resume_early_exit",
+            )
             if early_exit:
                 fallback_used = True
                 fallback_reason_code = early_exit_code or "dispatch_resume_early_exit"
@@ -823,6 +845,24 @@ class ThreadDispatchRunner:
         log_path = payload.get("log_file")
         if not isinstance(log_path, str) or not log_path.strip():
             raise ToolError("dispatch_failed", "dispatcher payload missing log_file", stage="dispatch")
+
+        startup_failed, startup_failure_code = _detect_startup_early_exit(
+            payload,
+            probe_seconds=STARTUP_EARLY_EXIT_PROBE_SECONDS,
+            poll_seconds=STARTUP_EARLY_EXIT_POLL_SECONDS,
+            patterns=STARTUP_FAILURE_LOG_PATTERNS,
+            default_code="dispatch_startup_early_exit",
+        )
+        if startup_failed:
+            raise ToolError(
+                "dispatch_failed",
+                (
+                    "dispatch process exited during startup probe "
+                    f"({startup_failure_code or 'dispatch_startup_early_exit'}); "
+                    f"log_file={Path(log_path).expanduser().resolve()}"
+                ),
+                stage="dispatch",
+            )
 
         return {
             "dispatch_started": bool(payload.get("status") == "started" or pid > 0),
