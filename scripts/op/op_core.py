@@ -2234,9 +2234,7 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
             task["owner_slot"] = None
         summary_result = (_as_str(summary.get("result")) or "").lower()
         reason_codes = summary.get("reason_codes") if isinstance(summary.get("reason_codes"), list) else []
-        is_not_started_placeholder = summary_result == "blocked" and any(
-            _as_str(item) == "not_started" for item in reason_codes
-        )
+        is_not_started_placeholder = _is_not_started_evidence_placeholder(payload, summary_result, reason_codes)
         if summary_result in {"fail", "blocked"} and not is_not_started_placeholder and _normalize_task_status(task.get("status")) != TASK_STATUS_REVIEW_DONE:
             if not _as_bool_field(gate.get("ready_for_test")) and not _as_bool_field(gate.get("ready_for_review")):
                 task["status"] = TASK_STATUS_BLOCKED
@@ -2445,23 +2443,104 @@ def _normalize_task_evidence_payload(payload: dict[str, Any]) -> bool:
     summary = payload.get("summary")
     if not isinstance(summary, dict):
         return False
+    changed = False
     result = (_as_str(summary.get("result")) or "").lower()
     canonical = {
         "ready_for_test": "pass",
         "ready_for_review": "pass",
         "ready_for_phase_exit": "pass",
     }.get(result)
-    if not canonical:
-        return False
-    summary["result"] = canonical
+    if canonical and canonical != result:
+        summary["result"] = canonical
+        changed = True
     reason_codes = summary.get("reason_codes")
     if not isinstance(reason_codes, list):
         reason_codes = []
-    cleaned = [code for code in (_as_str(item) for item in reason_codes) if code]
-    if "normalized_noncanonical_result" not in cleaned:
+        changed = True
+    cleaned: list[str] = []
+    placeholder_aliases = {
+        "awaiting_execution",
+        "awaiting_start",
+        "pending_execution",
+        "not_executed",
+        "not_started",
+    }
+    map_placeholder_aliases = result == "blocked"
+    for item in reason_codes:
+        raw = _as_str(item).strip()
+        if not raw:
+            changed = True
+            continue
+        normalized = raw.lower().replace("-", "_").replace(" ", "_")
+        code = "not_started" if map_placeholder_aliases and normalized in placeholder_aliases else raw
+        if code in cleaned:
+            if code != raw:
+                changed = True
+            continue
+        if code != raw:
+            changed = True
+        cleaned.append(code)
+    if canonical and "normalized_noncanonical_result" not in cleaned:
         cleaned.append("normalized_noncanonical_result")
+        changed = True
+    if summary.get("reason_codes") != cleaned:
+        changed = True
     summary["reason_codes"] = cleaned
     payload["summary"] = summary
+    return changed
+
+
+def _is_not_started_evidence_placeholder(payload: dict[str, Any], summary_result: str, reason_codes: list[Any]) -> bool:
+    if summary_result != "blocked":
+        return False
+    normalized_codes = [
+        _as_str(item).strip().lower().replace("-", "_").replace(" ", "_")
+        for item in reason_codes
+        if _as_str(item).strip()
+    ]
+    if not normalized_codes:
+        return False
+    not_started_codes = {
+        "not_started",
+        "awaiting_execution",
+        "awaiting_start",
+        "pending_execution",
+        "not_executed",
+    }
+    if any(code not in not_started_codes for code in normalized_codes):
+        return False
+
+    gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
+    if _as_bool_field(gate.get("ready_for_test")) or _as_bool_field(gate.get("ready_for_review")) or _as_bool_field(gate.get("ready_for_phase_exit")):
+        return False
+
+    dev = payload.get("dev") if isinstance(payload.get("dev"), dict) else {}
+    test = payload.get("test") if isinstance(payload.get("test"), dict) else {}
+    review = payload.get("review") if isinstance(payload.get("review"), dict) else {}
+
+    activity_fields = (
+        dev.get("checks"),
+        dev.get("verify_results"),
+        dev.get("blockers"),
+        dev.get("artifacts"),
+        test.get("checks"),
+        test.get("verify_results"),
+        test.get("uat_results"),
+        test.get("blockers"),
+        test.get("artifacts"),
+        review.get("blockers"),
+        review.get("artifacts"),
+    )
+    for field in activity_fields:
+        if isinstance(field, list) and field:
+            return False
+
+    review_decision = (_as_str(review.get("decision")) or "").strip().lower()
+    review_status = (_as_str(review.get("status")) or "").strip().lower()
+    if review_decision in {"accepted", "approved", "ready_for_merge", "pass"}:
+        return False
+    if review_status in {"done", "completed", "review_done"}:
+        return False
     return True
 
 
@@ -11452,17 +11531,29 @@ def command_status(req: OpRequest) -> dict[str, Any]:
         status = _as_str(task.get("status")) or "unknown"
         counts_by_status[status] = counts_by_status.get(status, 0) + 1
     open_gap_ids = _open_task_gap_ids(task_state)
+    lock_snapshot = _load_build_lock_snapshot(req.repo_root)
+    build_active = bool(lock_snapshot.get("exists")) and bool(lock_snapshot.get("pid_alive"))
     next_command = (
         "/op-initialize"
         if not _repo_path(req.repo_root, STATE_JSON).exists()
         else "/op-resume" if _repo_path(req.repo_root, BUILD_STATE_JSON).exists() else "/op-build"
     )
-    next_action_text = (
-        "Repair malformed planning/build artifacts or rerun /op-initialize, then rerun /op-status."
-        if status_degraded
-        else f"Use {next_command} for the next autonomous step."
-    )
-    data_next_action = next_action_text if status_degraded else next_command
+    if status_degraded:
+        next_action_text = "Repair malformed planning/build artifacts or rerun /op-initialize, then rerun /op-status."
+        data_next_action = next_action_text
+    elif build_active:
+        next_action_text = "Build is active; wait for cycle progress or inspect with /op-report."
+        data_next_action = "wait (build active)"
+        warnings.append(
+            {
+                "code": "status_build_running",
+                "message": "build loop lock is active; /op-build is currently running",
+                "stage": "status",
+            }
+        )
+    else:
+        next_action_text = f"Use {next_command} for the next autonomous step."
+        data_next_action = next_command
     if status_degraded:
         warnings.append(
             {
@@ -11500,6 +11591,8 @@ def command_status(req: OpRequest) -> dict[str, Any]:
             "gap_retry_attempts": (build_state or {}).get("gap_retry_attempts", {}),
             "gap_retry_exhausted_ids": (build_state or {}).get("gap_retry_exhausted_ids", []),
             "next_action": data_next_action,
+            "build": "running" if build_active else "not_running",
+            "lock": lock_snapshot,
         },
     )
 

@@ -2685,6 +2685,36 @@ def test_op_status_ignores_malformed_legacy_gaps_artifact():
         assert not any(item.get("code") == "status_snapshot_degraded" for item in out.get("warnings", []))
 
 
+def test_op_status_reports_active_build_lock_as_running_wait_action():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        lock_path = root / "reports" / "optimus-prime" / "planning" / "BUILD_LOOP.lock"
+        lock_payload = {
+            "schema_version": "1.0",
+            "lock_id": "test-lock-id",
+            "pid": os.getpid(),
+            "acquired_at": "2026-03-02T00:00:00Z",
+        }
+        lock_path.write_text(json.dumps(lock_payload, indent=2) + "\n", encoding="utf-8")
+
+        out = run_payload({"command": "/op-status", "repo_root": str(root)})
+        assert out["ok"] is True
+        assert out["status"] == "completed"
+        assert out.get("data", {}).get("build") == "running"
+        assert out.get("data", {}).get("next_action") == "wait (build active)"
+        assert "Build is active" in (out.get("next_action") or "")
+        assert any(item.get("code") == "status_build_running" for item in out.get("warnings", []))
+
+
 def test_status_ignores_legacy_gap_closure_schema_invalid_tasks_field():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -3769,6 +3799,46 @@ def test_task_evidence_summary_ready_for_test_normalized_to_pass():
         assert any(item.get("code") == "task_evidence_normalized" for item in warnings)
         after = json.loads(evidence_path.read_text(encoding="utf-8"))
         assert after["summary"]["result"] == "pass"
+
+
+def test_task_evidence_summary_awaiting_execution_stays_not_started_and_not_blocked():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = task_state["tasks"][0]
+        task["status"] = "pending"
+        evidence_path = root / task["evidence"]["task_evidence_ref"]
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["summary"]["result"] = "blocked"
+        payload["summary"]["reason_codes"] = ["awaiting_execution"]
+        payload["gate"]["ready_for_test"] = False
+        payload["gate"]["ready_for_review"] = False
+        payload["gate"]["ready_for_phase_exit"] = False
+        payload["dev"]["checks"] = []
+        payload["dev"]["verify_results"] = []
+        payload["test"]["checks"] = []
+        payload["test"]["verify_results"] = []
+        payload["test"]["uat_results"] = []
+        payload["review"]["decision"] = "pending"
+        payload["review"]["status"] = "pending"
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
+        assert not any(item.get("code") == "task_evidence_invalid" for item in warnings)
+        assert task["status"] == "pending"
+        normalized_payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        assert "not_started" in normalized_payload["summary"]["reason_codes"]
 
 
 def test_task_evidence_unknown_summary_result_still_invalid():
