@@ -6,6 +6,8 @@ Role: {{ROLE}}
 Lane ID: {{LANE_ID}}
 Task ID: {{TASK_ID}}
 Branch name: {{BRANCH_NAME}}
+Base ref: {{BASE_REF}}
+Source branch (test/review): {{SOURCE_BRANCH}}
 Current worktree name: {{CURRENT_WORKTREE_NAME}}
 Workstation preparation script: {{WORKSTATION_SCRIPT_PATH}}
 Write JSON action file to: {{ACTION_PATH}}
@@ -20,14 +22,15 @@ Rules:
   "lane_id": "<lane id>",
   "task_id": "<task id>",
   "branch_name": "<branch>",
+  "source_branch": "<source branch or empty for dev>",
   "worktree_name": "{{EXPECTED_WORKTREE_NAME}}",
-  "prepare_command": "python3 {{WORKSTATION_SCRIPT_PATH}} --repo-root {{REPO_ROOT}} --base-ref RAB-BASE --branch-name <branch> --slot-role {{ROLE}} --output json --worktree-name {{EXPECTED_WORKTREE_NAME}}",
+  "prepare_command": "python3 {{WORKSTATION_SCRIPT_PATH}} --repo-root {{REPO_ROOT}} --base-ref {{BASE_REF}} --branch-name <branch> --slot-role {{ROLE}} --output json --worktree-name {{EXPECTED_WORKTREE_NAME}}",
   "prereq_policy": "copy_env_files"
 }
 4. prepare_command must invoke prepare_workstation.py directly.
 5. branch_name must be exactly {{BRANCH_NAME}}.
 6. slot and task_id must match the provided values.
 7. prereq_policy must be one of: copy_env_files, symlink_deps, copy_env_files|symlink_deps.
-8. prepare_command must include --base-ref RAB-BASE.
+8. prepare_command must include --base-ref {{BASE_REF}}.
 9. worktree_name must be exactly {{EXPECTED_WORKTREE_NAME}}.
 10. Do not use generic names like workstation-1/workstation-2/workstation-3.

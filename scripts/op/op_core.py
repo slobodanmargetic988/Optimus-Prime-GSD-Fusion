@@ -1101,6 +1101,25 @@ def _default_slot_branch(slot: str, *, role: str | None = None) -> str:
     return "RAB-BASE"
 
 
+def _branch_name_for_stage(slot: str, task_id: str, stage: str) -> str:
+    base = f"codex/{slot}/{task_id.lower()}"
+    if stage == "test":
+        return f"{base}-test"
+    if stage == "review":
+        return f"{base}-review"
+    return base
+
+
+def _developer_source_branch(task: dict[str, Any]) -> str | None:
+    branch = _as_str(task.get("developer_branch"))
+    if branch:
+        return branch
+    active_branch = _as_str(task.get("active_branch"))
+    if active_branch and active_branch.startswith("codex/dev-"):
+        return active_branch
+    return None
+
+
 def _expected_slot_worktree_name(slot: str) -> str | None:
     if slot.startswith("dev-") or slot.startswith("test-") or slot.startswith("review-"):
         return f"workstation-{slot}"
@@ -7196,7 +7215,7 @@ def _dispatch_task_packet(
     if not start_from_commit:
         start_from_commit = _git_text(req.repo_root, "rev-parse", "HEAD") or "HEAD"
     worktree_root = worktree_root_override or str(req.repo_root)
-    branch_name = branch_name_override or f"codex/{slot_name}/{task_id.lower()}"
+    branch_name = branch_name_override or _branch_name_for_stage(slot_name, task_id, stage)
     payload = {
         "slot": slot_name,
         "role": cfg["role"],
@@ -7237,6 +7256,12 @@ def _dispatch_task_packet(
             (result.get("dispatch") or {}).get("dispatch_thread_id")
         )
         task["active_branch"] = _as_str(payload.get("branch_name"))
+        if stage == "dev":
+            task["developer_branch"] = _as_str(payload.get("branch_name"))
+        else:
+            source_branch_for_stage = _as_str(start_from_branch_override)
+            if source_branch_for_stage.startswith("codex/dev-") and not _as_str(task.get("developer_branch")):
+                task["developer_branch"] = source_branch_for_stage
         task["last_progress_at"] = utc_now_iso()
         attempts = task.get("attempts")
         if not isinstance(attempts, dict):
@@ -7648,13 +7673,16 @@ def _dispatch_next_task_from_assignments(
         start_from_commit_override: str | None = None
         test_source_branch_override: str | None = None
         test_source_commit_override: str | None = None
-        if next_stage == "test":
-            source_branch = _as_str(task.get("active_branch"))
+        if next_stage in {"test", "review"}:
+            source_branch = _developer_source_branch(task)
             if not source_branch:
                 all_warnings.append(
                     {
                         "code": "dispatch_assignment_missing_dev_branch",
-                        "message": f"task {task_id} missing active developer branch for test-stage dispatch",
+                        "message": (
+                            f"task {task_id} missing developer source branch "
+                            f"for {next_stage}-stage dispatch"
+                        ),
                         "stage": "build_loop",
                         "task_id": task_id,
                         "slot": slot_name,
@@ -7673,7 +7701,9 @@ def _dispatch_next_task_from_assignments(
                 all_warnings.append(
                     {
                         "code": "dispatch_assignment_missing_dev_branch",
-                        "message": f"unable to resolve HEAD commit for developer branch {source_branch}",
+                        "message": (
+                            f"unable to resolve HEAD commit for developer source branch {source_branch}"
+                        ),
                         "stage": "build_loop",
                         "task_id": task_id,
                         "slot": slot_name,
@@ -7689,9 +7719,10 @@ def _dispatch_next_task_from_assignments(
                 continue
             start_from_branch_override = source_branch
             start_from_commit_override = source_commit
-            test_source_branch_override = source_branch
-            test_source_commit_override = source_commit
-            branch_name = f"codex/{slot_name}/{task_id.lower()}-test"
+            branch_name = _branch_name_for_stage(slot_name, task_id, next_stage)
+            if next_stage == "test":
+                test_source_branch_override = source_branch
+                test_source_commit_override = source_commit
 
         previous_lane = _as_str(slot_worker.get("lane_id"))
         previous_thread_id = _as_str(task.get("dispatch_thread_id")) or _as_str(slot_worker.get("dispatch_thread_id"))
@@ -8111,8 +8142,9 @@ def _dispatch_next_task(
         start_from_commit_override: str | None = None
         test_source_branch_override: str | None = None
         test_source_commit_override: str | None = None
-        if stage_name == "test":
-            source_branch = _as_str(task_payload.get("active_branch"))
+        branch_name_override: str | None = None
+        if stage_name in {"test", "review"}:
+            source_branch = _developer_source_branch(task_payload)
             if not source_branch:
                 return {
                     "ok": True,
@@ -8120,7 +8152,10 @@ def _dispatch_next_task(
                     "reason": "dispatch_assignment_missing_dev_branch",
                     "warning": {
                         "code": "dispatch_assignment_missing_dev_branch",
-                        "message": f"task {_as_str(task_payload.get('task_id')) or 'TASK-UNKNOWN'} missing active developer branch for test-stage dispatch",
+                        "message": (
+                            f"task {_as_str(task_payload.get('task_id')) or 'TASK-UNKNOWN'} "
+                            f"missing developer source branch for {stage_name}-stage dispatch"
+                        ),
                         "stage": "build_loop",
                     },
                 }
@@ -8132,14 +8167,20 @@ def _dispatch_next_task(
                     "reason": "dispatch_assignment_missing_dev_branch",
                     "warning": {
                         "code": "dispatch_assignment_missing_dev_branch",
-                        "message": f"unable to resolve HEAD commit for developer branch {source_branch}",
+                        "message": f"unable to resolve HEAD commit for developer source branch {source_branch}",
                         "stage": "build_loop",
                     },
                 }
             start_from_branch_override = source_branch
             start_from_commit_override = source_commit
-            test_source_branch_override = source_branch
-            test_source_commit_override = source_commit
+            branch_name_override = _branch_name_for_stage(
+                slot_name,
+                _as_str(task_payload.get("task_id")) or "TASK-UNKNOWN",
+                stage_name,
+            )
+            if stage_name == "test":
+                test_source_branch_override = source_branch
+                test_source_commit_override = source_commit
         result = _dispatch_task_packet(
             req,
             task_payload,
@@ -8150,6 +8191,7 @@ def _dispatch_next_task(
             lane_id=lane_value,
             dispatch_mode=dispatch_mode,
             resume_thread_id=resume_thread_id,
+            branch_name_override=branch_name_override,
             start_from_branch_override=start_from_branch_override,
             start_from_commit_override=start_from_commit_override,
             test_source_branch_override=test_source_branch_override,
@@ -9155,17 +9197,41 @@ def _manager_workstation_cycle(
             and current_worktree_resolved
             and current_worktree_resolved == expected_worktree_path
         )
-        task_status = _normalize_task_status((task_map.get(active_task_id) or {}).get("status")) if active_task_id else None
+        task_row = task_map.get(active_task_id) if isinstance(task_map.get(active_task_id), dict) else {}
+        task_status = _normalize_task_status(task_row.get("status")) if active_task_id else None
         current_branch = _as_str(worker.get("branch"))
         branch_prefix = f"codex/{slot}/"
         current_branch_prefix_ok = bool(current_branch and current_branch.startswith(branch_prefix))
-        task_branch = _as_str((task_map.get(active_task_id) or {}).get("active_branch")) if active_task_id else None
-        if not task_branch and active_task_id:
-            next_stage = _as_str((assignment or {}).get("next_stage"))
-            if next_stage == "test":
-                task_branch = f"codex/{slot}/{active_task_id.lower()}-test"
-            elif next_stage == "review":
-                task_branch = f"codex/{slot}/{active_task_id.lower()}-review"
+        slot_stage = _as_str((assignment or {}).get("next_stage"))
+        if slot_stage not in {"dev", "test", "review"}:
+            if role == "tester":
+                slot_stage = "test"
+            elif role == "reviewer":
+                slot_stage = "review"
+            else:
+                slot_stage = "dev"
+        task_branch = (
+            _branch_name_for_stage(slot, active_task_id, slot_stage)
+            if active_task_id
+            else _default_slot_branch(slot, role=role)
+        )
+        source_branch = _developer_source_branch(task_row) if slot_stage in {"test", "review"} else None
+        task_base_ref = source_branch or "RAB-BASE"
+        if slot_stage in {"test", "review"} and active_task_id and not source_branch:
+            warnings.append(
+                {
+                    "code": "workstation_assignment_missing_dev_branch",
+                    "message": (
+                        f"slot {slot} missing developer source branch for {slot_stage}-stage workstation prep "
+                        f"(task={active_task_id})"
+                    ),
+                    "stage": "build_loop",
+                    "slot": slot,
+                    "task_id": active_task_id,
+                }
+            )
+            continue
+        current_branch_exact_match = bool(current_branch and task_branch and current_branch == task_branch)
         if (
             active_task_id
             and task_status in {TASK_STATUS_DEV_WORKING, TASK_STATUS_TESTING, TASK_STATUS_REVIEWING}
@@ -9174,6 +9240,7 @@ def _manager_workstation_cycle(
             and lane_id == prev_lane_id
             and current_worktree_matches_slot
             and current_branch_prefix_ok
+            and current_branch_exact_match
         ):
             warnings.append(
                 {
@@ -9186,12 +9253,6 @@ def _manager_workstation_cycle(
                 }
             )
             continue
-        if not task_branch:
-            worker_branch = _as_str(worker.get("branch"))
-            if worker_branch and worker_branch != "RAB-BASE":
-                task_branch = worker_branch
-        if not task_branch:
-            task_branch = _default_slot_branch(slot, role=role)
         branch_mismatch = bool(current_branch and task_branch and current_branch != task_branch)
         branch_prefix_mismatch = bool(current_branch and not current_branch_prefix_ok)
         lane_transition = bool(lane_id and prev_lane_id and lane_id != prev_lane_id)
@@ -9259,6 +9320,8 @@ def _manager_workstation_cycle(
             prompt = prompt.replace("{{LANE_ID}}", lane_id or "")
             prompt = prompt.replace("{{TASK_ID}}", active_task_id or "")
             prompt = prompt.replace("{{BRANCH_NAME}}", task_branch)
+            prompt = prompt.replace("{{BASE_REF}}", task_base_ref)
+            prompt = prompt.replace("{{SOURCE_BRANCH}}", source_branch or "")
             prompt = prompt.replace("{{ACTION_PATH}}", str(action_path))
             prompt = prompt.replace("{{WORKSTATION_SCRIPT_PATH}}", script_path)
             prompt = prompt.replace("{{EXPECTED_WORKTREE_NAME}}", expected_worktree_name or "")
@@ -9370,6 +9433,8 @@ def _manager_workstation_cycle(
                 action_errors.append("lane_id mismatch")
             if _as_str(action_payload.get("branch_name")) != task_branch:
                 action_errors.append("branch_name mismatch")
+            if source_branch and _as_str(action_payload.get("source_branch")) != source_branch:
+                action_errors.append("source_branch mismatch")
             action_worktree_name = _as_str(action_payload.get("worktree_name"))
             if not action_worktree_name:
                 action_errors.append("worktree_name required")
@@ -9403,8 +9468,8 @@ def _manager_workstation_cycle(
                     "--base-ref",
                     cwd=req.repo_root,
                 )
-                if prepare_base_ref != "RAB-BASE":
-                    action_errors.append("prepare_command must include --base-ref RAB-BASE")
+                if prepare_base_ref != task_base_ref:
+                    action_errors.append(f"prepare_command --base-ref mismatch (expected {task_base_ref})")
                 prepare_worktree_name = _extract_command_option_value(
                     prepare_command,
                     "--worktree-name",
