@@ -197,3 +197,17 @@ def test_hydrate_is_idempotent(mod, tmp_path):
     assert first.ok is True
     assert second.ok is True
     assert any(item["status"] == "already_ok" for item in second.applied_assets)
+
+
+def test_slot_name_for_path_accepts_manager_role_slots(mod):
+    assert mod.slot_name_for_path(Path("/tmp/workstation-dev-1")) == "workstation-dev-1"
+    assert mod.slot_name_for_path(Path("/tmp/workstation-test-2")) == "workstation-test-2"
+    assert mod.slot_name_for_path(Path("/tmp/workstation-review-3")) == "workstation-review-3"
+    assert mod.slot_name_for_path(Path("/tmp/workstation-10")) == "workstation-10"
+
+
+def test_slot_name_for_path_rejects_invalid_names(mod):
+    assert mod.slot_name_for_path(Path("/tmp/workstation-dev-4")) is None
+    assert mod.slot_name_for_path(Path("/tmp/workstation-11")) is None
+    assert mod.slot_name_for_path(Path("/tmp/workstation")) is None
+    assert mod.slot_name_for_path(Path("/tmp/workstation-random")) is None

@@ -17,7 +17,12 @@ from typing import Any
 
 
 MAX_WORKSTATIONS = 10
-SLOT_RE = re.compile(r"^workstation-(?:[1-9]|10)$")
+LEGACY_SLOT_RE = re.compile(r"^workstation-(?:[1-9]|10)$")
+MANAGER_SLOT_RE = re.compile(r"^workstation-(?:dev|test|review)-[1-3]$")
+WORKTREE_NAME_ERROR = (
+    "worktree name must be workstation-1 through workstation-10 "
+    "or workstation-(dev|test|review)-[1-3]"
+)
 DEFAULT_ASSETS_MANIFEST_REL = Path("reports/optimus-prime/config/WORKSTATION_ASSETS.json")
 DEFAULT_ASSETS_STATE_REL = Path("reports/optimus-prime/WORKSTATION_ASSET_STATE.json")
 ROLE_VALUES = {"all", "developer", "tester", "reviewer"}
@@ -97,11 +102,16 @@ def list_worktrees(repo_root: Path) -> list[WorktreeEntry]:
 
 def slot_name_for_path(path: Path) -> str | None:
     name = path.name
-    return name if SLOT_RE.fullmatch(name) else None
+    return name if (LEGACY_SLOT_RE.fullmatch(name) or MANAGER_SLOT_RE.fullmatch(name)) else None
 
 
-def slot_sort_key(slot_name: str) -> int:
-    return int(slot_name.rsplit("-", 1)[1])
+def slot_sort_key(slot_name: str) -> tuple[int, str]:
+    suffix = slot_name.rsplit("-", 1)[-1]
+    try:
+        order = int(suffix)
+    except ValueError:
+        order = 999
+    return (order, slot_name)
 
 
 def default_base_ref(repo_root: Path) -> str:
@@ -911,8 +921,8 @@ def main() -> int:
         )
 
     if args.worktree_name:
-        if not SLOT_RE.fullmatch(args.worktree_name):
-            return fail("worktree name must be workstation-1 through workstation-10", args.output, context_common)
+        if not (LEGACY_SLOT_RE.fullmatch(args.worktree_name) or MANAGER_SLOT_RE.fullmatch(args.worktree_name)):
+            return fail(WORKTREE_NAME_ERROR, args.output, context_common)
         worktree_name = args.worktree_name
     else:
         worktree_name = ""
