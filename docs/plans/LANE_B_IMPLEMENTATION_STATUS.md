@@ -208,9 +208,9 @@ Diagram reference:
   - `/op-build` response data includes current-cycle `assignment_observations` (artifact parity with `DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl`)
   - embedded gaps now support deterministic closure/reopen lifecycle with evidence-backed closure refs (`task_gap_closed`)
   - dispatcher supports same-lane thread continuation (`codex resume`) with deterministic fallback to fresh dispatch
-  - branch manager executes LLM-first merge actions with strict schema validation, explicit merge proof (`source_branch` ancestor of `RAB-BASE` HEAD), and bounded retries; exhaustion emits `merge_manager_retry_exhausted` and blocks only the affected lane/task
-  - workstation manager executes LLM-first lane-change preparation with strict schema validation, exact bundled skill-script path enforcement, and bounded retries; exhaustion emits `workstation_manager_retry_exhausted` and blocks only the affected lane/task
-  - workstation manager now enforces slot-specific worktree names (`workstation-dev-*`, `workstation-test-*`, `workstation-review-*`) and skips destructive prep for same-lane in-progress slots
+  - branch manager executes LLM-first merge actions with strict schema validation, explicit merge proof (`source_branch` ancestor of `RAB-BASE` HEAD), deterministic rollback to captured pre-merge HEAD on verification failure, and bounded retries; exhaustion emits `merge_manager_retry_exhausted` and blocks only the affected lane/task
+  - workstation manager executes LLM-first lane-change preparation with strict schema validation, exact bundled skill-script path enforcement, exact deterministic slot target path enforcement, and bounded retries; exhaustion emits `workstation_manager_retry_exhausted` and blocks only the affected lane/task
+  - workstation manager enforces slot-specific worktree names (`workstation-dev-*`, `workstation-test-*`, `workstation-review-*`) and skips destructive prep only for same-lane in-progress slots with deterministic slot path + branch prefix `codex/<slot>/...`
   - production-line manager performs artifact fan-in from worker worktrees (`TASK_EVIDENCE.json` + handoff rows) before state reconciliation
   - dead PID recovery is evidence-first: reconcile from evidence when present, otherwise queue same-cycle same-slot redispatch with retry-watchdog metadata
 

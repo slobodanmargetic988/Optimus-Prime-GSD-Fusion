@@ -5997,6 +5997,196 @@ def test_branch_manager_merge_proof_required_before_done_registry_update(
         assert "TASK-001" not in merged_task_ids
 
 
+def test_branch_manager_rollback_uses_pre_merge_head_not_head_parent(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "review_done"
+        task["active_branch"] = "codex/dev-1/task-001"
+
+        def fake_codex_exec(**kwargs):
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "task_id": "TASK-001",
+                    "attempt": 1,
+                    "target_branch": "RAB-BASE",
+                    "source_branch": "codex/dev-1/task-001",
+                    "merge_strategy": "no_ff",
+                    "commands": [
+                        "git checkout RAB-BASE",
+                        "git merge --no-ff --no-edit codex/dev-1/task-001",
+                    ],
+                    "verification_commands": ["python3 -m pytest"],
+                },
+            )
+            return 0
+
+        command_log: list[str] = []
+        verify_attempts = {"count": 0}
+
+        def fake_run_manager_command(command_text, **_kwargs):
+            text = str(command_text).strip()
+            command_log.append(text)
+            if text.startswith("python3 -m pytest"):
+                verify_attempts["count"] += 1
+                if verify_attempts["count"] == 1:
+                    return {
+                        "ok": False,
+                        "code": "branch_manager_execution_failed",
+                        "message": "simulated verify failure",
+                        "stdout": "",
+                        "stderr": "",
+                        "exit_code": 1,
+                        "timed_out": False,
+                    }
+            return {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": "",
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            }
+
+        head_values = iter(["pre-merge-1", "merged-1", "pre-merge-2", "merged-2"])
+
+        def fake_git_text(_repo_root, *args):
+            if args == ("rev-parse", "HEAD"):
+                return next(head_values, "head-final")
+            return "abc123"
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(MODULE, "_run_manager_command", fake_run_manager_command)
+        monkeypatch.setattr(MODULE, "_git_text", fake_git_text)
+
+        warnings = MODULE._manager_branch_merge_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+        )
+        warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
+        assert "merge_manager_retry_exhausted" not in warning_codes
+        assert "git reset --hard pre-merge-1" in command_log
+        assert not any("HEAD~1" in item for item in command_log)
+
+
+def test_branch_manager_validation_records_rollback_metadata_on_verify_fail(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "review_done"
+        task["active_branch"] = "codex/dev-1/task-001"
+
+        def fake_codex_exec(**kwargs):
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "task_id": "TASK-001",
+                    "attempt": 1,
+                    "target_branch": "RAB-BASE",
+                    "source_branch": "codex/dev-1/task-001",
+                    "merge_strategy": "no_ff",
+                    "commands": [
+                        "git checkout RAB-BASE",
+                        "git merge --no-ff --no-edit codex/dev-1/task-001",
+                    ],
+                    "verification_commands": ["python3 -m pytest"],
+                },
+            )
+            return 0
+
+        verify_attempts = {"count": 0}
+
+        def fake_run_manager_command(command_text, **_kwargs):
+            text = str(command_text).strip()
+            if text.startswith("python3 -m pytest"):
+                verify_attempts["count"] += 1
+                if verify_attempts["count"] == 1:
+                    return {
+                        "ok": False,
+                        "code": "branch_manager_execution_failed",
+                        "message": "simulated verify failure",
+                        "stdout": "",
+                        "stderr": "",
+                        "exit_code": 1,
+                        "timed_out": False,
+                    }
+            return {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": "",
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            }
+
+        head_values = iter(["pre-merge-1", "merged-1", "pre-merge-2", "merged-2"])
+
+        def fake_git_text(_repo_root, *args):
+            if args == ("rev-parse", "HEAD"):
+                return next(head_values, "head-final")
+            return "abc123"
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(MODULE, "_run_manager_command", fake_run_manager_command)
+        monkeypatch.setattr(MODULE, "_git_text", fake_git_text)
+
+        MODULE._manager_branch_merge_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+        )
+        validation_path = (
+            root
+            / "reports"
+            / "optimus-prime"
+            / "branch-manager"
+            / "attempt-task-001-1"
+            / "MERGE_VALIDATION.json"
+        )
+        payload = json.loads(validation_path.read_text(encoding="utf-8"))
+        assert payload.get("pre_merge_head") == "pre-merge-1"
+        assert payload.get("rollback_applied") is True
+        assert payload.get("rollback_target") == "pre-merge-1"
+
+
 def test_workstation_manager_success_updates_slot_worktree_and_branch(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -6037,7 +6227,8 @@ def test_workstation_manager_success_updates_slot_worktree_and_branch(
                 row["previous_lane_id"] = "phase-1/lane-z"
                 row["worktree_root"] = str(root / "prepared-worktrees" / str(row.get("slot") or "slot"))
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
-        target_path = root / "prepared-worktrees" / "dev-1"
+        target_path = MODULE._expected_slot_worktree_path(root, "dev-1")
+        assert isinstance(target_path, Path)
         target_path.mkdir(parents=True, exist_ok=True)
 
         def fake_codex_exec(**kwargs):
@@ -6379,6 +6570,117 @@ def test_workstation_manager_nonexistent_target_path_does_not_crash(monkeypatch:
         assert payload.get("branch_check_error")
 
 
+def test_workstation_success_rejects_non_deterministic_target_path(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+                row["lane_id"] = "phase-1/lane-a"
+                row["previous_lane_id"] = "phase-1/lane-b"
+                row["branch"] = "codex/dev-1/task-001"
+                row["worktree_root"] = None
+            elif row.get("role") in {"developer", "tester", "reviewer"}:
+                row["lane_id"] = "phase-1/lane-z"
+                row["previous_lane_id"] = "phase-1/lane-z"
+                row["worktree_root"] = str(root / "prepared-worktrees" / str(row.get("slot") or "slot"))
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        wrong_target = root / ".MyBoard-workstations" / "workstation-wrong-dev-1"
+        wrong_target.mkdir(parents=True, exist_ok=True)
+        expected_target = MODULE._expected_slot_worktree_path(root, "dev-1")
+        assert isinstance(expected_target, Path)
+
+        def fake_codex_exec(**kwargs):
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "slot": "dev-1",
+                    "lane_id": "phase-1/lane-a",
+                    "task_id": "TASK-001",
+                    "branch_name": "codex/dev-1/task-001",
+                    "worktree_name": "workstation-dev-1",
+                    "prepare_command": (
+                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                        f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
+                        "--output json --force-reset-existing --worktree-name workstation-dev-1"
+                    ),
+                    "prereq_policy": "copy_env_files",
+                },
+            )
+            return 0
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_manager_command",
+            lambda *_args, **_kwargs: {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": json.dumps(
+                    {
+                        "ok": True,
+                        "target_path": str(wrong_target),
+                        "branch_name_resolved": "codex/dev-1/task-001",
+                    }
+                ),
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            },
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_git_text",
+            lambda repo_root, *args: "codex/dev-1/task-001" if str(repo_root) == str(wrong_target) else "abc123",
+        )
+
+        out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+        warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
+        assert "workstation_manager_retry_exhausted" in warning_codes
+        assert "workstation_execution_failed" in warning_codes
+        assert task["status"] == "blocked"
+        registry_after = json.loads(registry_path.read_text(encoding="utf-8"))
+        slot_row = next(item for item in registry_after.get("workers", []) if isinstance(item, dict) and item.get("slot") == "dev-1")
+        assert slot_row.get("worktree_root") in {None, ""}
+        validation_path = (
+            root
+            / "reports"
+            / "optimus-prime"
+            / "workstation-manager"
+            / "attempt-dev-1-1"
+            / "WORKSTATION_VALIDATION.json"
+        )
+        payload = json.loads(validation_path.read_text(encoding="utf-8"))
+        checks = payload.get("checks", [])
+        by_id = {item.get("id"): item for item in checks if isinstance(item, dict)}
+        assert by_id.get("prepare_target_path_expected", {}).get("passed") is False
+        assert isinstance(payload.get("branch_check_error"), str)
+        assert str(expected_target) in str(payload.get("branch_check_error"))
+
+
 def test_workstation_manager_surfaces_prepare_script_error_message(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -6504,7 +6806,8 @@ def test_workstation_manager_skips_prepare_for_same_lane_in_progress_slot(
         task["status"] = "dev_working"
         task["owner_slot"] = "dev-1"
         task["lane_id"] = "phase-1/lane-a"
-        stable_worktree = root / ".MyBoard-workstations" / "workstation-dev-1"
+        stable_worktree = MODULE._expected_slot_worktree_path(root, "dev-1")
+        assert isinstance(stable_worktree, Path)
         stable_worktree.mkdir(parents=True, exist_ok=True)
         registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
         for row in registry_payload.get("workers", []):
@@ -6534,6 +6837,190 @@ def test_workstation_manager_skips_prepare_for_same_lane_in_progress_slot(
         slot_row = next(item for item in registry_after.get("workers", []) if isinstance(item, dict) and item.get("slot") == "dev-1")
         assert slot_row.get("worktree_root") == str(stable_worktree)
         assert slot_row.get("branch") == "codex/dev-1/task-001"
+
+
+def test_workstation_same_lane_skip_requires_slot_branch_prefix(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["lane_id"] = "phase-1/lane-a"
+        stable_worktree = MODULE._expected_slot_worktree_path(root, "dev-1")
+        assert isinstance(stable_worktree, Path)
+        stable_worktree.mkdir(parents=True, exist_ok=True)
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+                row["lane_id"] = "phase-1/lane-a"
+                row["previous_lane_id"] = "phase-1/lane-a"
+                row["branch"] = "feature/random"
+                row["worktree_root"] = str(stable_worktree)
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        codex_calls = {"count": 0}
+
+        def fake_codex_exec(**kwargs):
+            codex_calls["count"] += 1
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "slot": "dev-1",
+                    "lane_id": "phase-1/lane-a",
+                    "task_id": "TASK-001",
+                    "branch_name": "feature/random",
+                    "worktree_name": "workstation-dev-1",
+                    "prepare_command": (
+                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                        f"--repo-root {root} --base-ref RAB-BASE --branch-name feature/random --slot-role developer "
+                        "--output json --force-reset-existing --worktree-name workstation-dev-1"
+                    ),
+                    "prereq_policy": "copy_env_files",
+                },
+            )
+            return 0
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_manager_command",
+            lambda *_args, **_kwargs: {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": json.dumps(
+                    {
+                        "ok": True,
+                        "target_path": str(stable_worktree),
+                        "branch_name_resolved": "feature/random",
+                    }
+                ),
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            },
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_git_text",
+            lambda repo_root, *args: "feature/random" if str(repo_root) == str(stable_worktree) else "abc123",
+        )
+        out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+        warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
+        assert codex_calls["count"] >= 1
+        assert "workstation_skip_same_lane_in_progress" not in warning_codes
+        assert "workstation_manager_retry_exhausted" not in warning_codes
+
+
+def test_workstation_same_lane_skip_requires_exact_deterministic_path(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["lane_id"] = "phase-1/lane-a"
+        wrong_worktree = root / ".MyBoard-workstations" / "workstation-dev-x"
+        wrong_worktree.mkdir(parents=True, exist_ok=True)
+        expected_worktree = MODULE._expected_slot_worktree_path(root, "dev-1")
+        assert isinstance(expected_worktree, Path)
+        expected_worktree.mkdir(parents=True, exist_ok=True)
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+                row["lane_id"] = "phase-1/lane-a"
+                row["previous_lane_id"] = "phase-1/lane-a"
+                row["branch"] = "codex/dev-1/task-001"
+                row["worktree_root"] = str(wrong_worktree)
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        codex_calls = {"count": 0}
+
+        def fake_codex_exec(**kwargs):
+            codex_calls["count"] += 1
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "slot": "dev-1",
+                    "lane_id": "phase-1/lane-a",
+                    "task_id": "TASK-001",
+                    "branch_name": "codex/dev-1/task-001",
+                    "worktree_name": "workstation-dev-1",
+                    "prepare_command": (
+                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                        f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
+                        "--output json --force-reset-existing --worktree-name workstation-dev-1"
+                    ),
+                    "prereq_policy": "copy_env_files",
+                },
+            )
+            return 0
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_manager_command",
+            lambda *_args, **_kwargs: {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": json.dumps(
+                    {
+                        "ok": True,
+                        "target_path": str(expected_worktree),
+                        "branch_name_resolved": "codex/dev-1/task-001",
+                    }
+                ),
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            },
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_git_text",
+            lambda repo_root, *args: "codex/dev-1/task-001" if str(repo_root) == str(expected_worktree) else "abc123",
+        )
+        out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+        warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
+        assert codex_calls["count"] >= 1
+        assert "workstation_skip_same_lane_in_progress" not in warning_codes
+        assert "workstation_manager_retry_exhausted" not in warning_codes
 
 
 def test_worker_registry_normalizes_idle_worker_branch_from_rab_base_to_bootstrap():

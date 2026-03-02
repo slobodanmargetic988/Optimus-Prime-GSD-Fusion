@@ -1107,6 +1107,13 @@ def _expected_slot_worktree_name(slot: str) -> str | None:
     return None
 
 
+def _expected_slot_worktree_path(repo_root: Path, slot: str) -> Path | None:
+    worktree_name = _expected_slot_worktree_name(slot)
+    if not worktree_name:
+        return None
+    return (repo_root.parent / f".{repo_root.name}-workstations" / worktree_name).resolve()
+
+
 def _apply_slot_lane_transition(row: dict[str, Any], lane_value: str | None) -> None:
     """Persist deterministic lane transition semantics on worker rows."""
     if not lane_value:
@@ -8302,6 +8309,9 @@ def _manager_branch_merge_cycle(
         verification_ref: str | None = None
         prior_errors: list[dict[str, Any]] = []
         for attempt in range(1, 11):
+            pre_merge_head: str | None = None
+            rollback_applied = False
+            rollback_target: str | None = None
             _emit_build_progress(req, f"branch-merge-manager: task={task_id} attempt {attempt}/10")
             attempt_dir = req.repo_root / "reports" / "optimus-prime" / "branch-manager" / f"attempt-{task_id.lower()}-{attempt}"
             action_path = attempt_dir / "MERGE_ACTION.json"
@@ -8486,6 +8496,13 @@ def _manager_branch_merge_cycle(
                         or "unable to checkout RAB-BASE",
                         stage="build_loop",
                     )
+                pre_merge_head = _git_text(req.repo_root, "rev-parse", "HEAD")
+                if not pre_merge_head:
+                    raise OpError(
+                        "branch_manager_execution_failed",
+                        "unable to resolve pre-merge HEAD on RAB-BASE",
+                        stage="build_loop",
+                    )
                 command_rows: list[dict[str, Any]] = []
                 for cmd in commands:
                     cmd_result = _run_manager_command(
@@ -8552,6 +8569,23 @@ def _manager_branch_merge_cycle(
                     verification_rows.append(row)
                     if not verify_ok:
                         verification_ok = False
+                if not verification_ok and merged_commit:
+                    rollback_target = _as_str(pre_merge_head)
+                    if rollback_target:
+                        rollback_result = _run_manager_command(
+                            f"git reset --hard {rollback_target}",
+                            cwd=req.repo_root,
+                            timeout_sec=BRANCH_ACTION_COMMAND_TIMEOUT_SEC,
+                            manager="branch",
+                        )
+                        rollback_applied = _as_bool(rollback_result.get("ok"), default=False)
+                        if not rollback_applied:
+                            raise OpError(
+                                _as_str(rollback_result.get("code")) or "branch_manager_execution_failed",
+                                _as_str(rollback_result.get("message"))
+                                or f"failed rollback to pre-merge HEAD {rollback_target}",
+                                stage="build_loop",
+                            )
                 validation_payload = {
                     "schema_version": SCHEMA_VERSION,
                     "task_id": task_id,
@@ -8561,6 +8595,9 @@ def _manager_branch_merge_cycle(
                     "source_branch": branch_name,
                     "merged_commit": merged_commit,
                     "merge_proof_passed": merge_proof_passed,
+                    "pre_merge_head": pre_merge_head,
+                    "rollback_applied": rollback_applied,
+                    "rollback_target": rollback_target,
                     "action_commands": command_rows,
                     "verification": verification_rows,
                     "llm_exit_code": exit_code,
@@ -8569,8 +8606,6 @@ def _manager_branch_merge_cycle(
                 _atomic_write_json(action_path, action_payload)
                 _atomic_write_json(validation_path, validation_payload)
                 verification_ref = os.path.relpath(str(validation_path), str(req.repo_root))
-                if not verification_ok and merged_commit:
-                    _run(["git", "reset", "--hard", "HEAD~1"], cwd=req.repo_root)
                 if verification_ok:
                     _emit_build_progress(
                         req,
@@ -8599,6 +8634,9 @@ def _manager_branch_merge_cycle(
                     "branch": "RAB-BASE",
                     "source_branch": branch_name,
                     "merge_proof_passed": False,
+                    "pre_merge_head": pre_merge_head,
+                    "rollback_applied": rollback_applied,
+                    "rollback_target": rollback_target,
                     "error": {"code": exc.code, "message": exc.message, "stage": exc.stage},
                     "llm_exit_code": exit_code,
                     "finished_at": utc_now_iso(),
@@ -8820,13 +8858,31 @@ def _manager_workstation_cycle(
             continue
         current_worktree = _as_str(worker.get("worktree_root"))
         current_worktree_path = Path(current_worktree).expanduser() if current_worktree else None
+        current_worktree_resolved: Path | None = None
+        if current_worktree_path is not None:
+            try:
+                current_worktree_resolved = current_worktree_path.resolve()
+            except OSError:
+                current_worktree_resolved = current_worktree_path
         current_worktree_ok = bool(
             current_worktree_path
             and current_worktree_path.exists()
             and current_worktree_path.is_dir()
         )
+        expected_worktree_name = _expected_slot_worktree_name(slot) or (
+            current_worktree_path.name if current_worktree_path else None
+        )
+        expected_worktree_path = _expected_slot_worktree_path(req.repo_root, slot)
+        current_worktree_matches_slot = bool(
+            current_worktree_ok
+            and expected_worktree_path
+            and current_worktree_resolved
+            and current_worktree_resolved == expected_worktree_path
+        )
         task_status = _normalize_task_status((task_map.get(active_task_id) or {}).get("status")) if active_task_id else None
         current_branch = _as_str(worker.get("branch"))
+        branch_prefix = f"codex/{slot}/"
+        current_branch_prefix_ok = bool(current_branch and current_branch.startswith(branch_prefix))
         task_branch = _as_str((task_map.get(active_task_id) or {}).get("active_branch")) if active_task_id else None
         if not task_branch and active_task_id:
             next_stage = _as_str((assignment or {}).get("next_stage"))
@@ -8840,8 +8896,8 @@ def _manager_workstation_cycle(
             and lane_id
             and prev_lane_id
             and lane_id == prev_lane_id
-            and current_worktree_ok
-            and current_branch
+            and current_worktree_matches_slot
+            and current_branch_prefix_ok
         ):
             warnings.append(
                 {
@@ -8861,13 +8917,24 @@ def _manager_workstation_cycle(
         if not task_branch:
             task_branch = _default_slot_branch(slot, role=role)
         branch_mismatch = bool(current_branch and task_branch and current_branch != task_branch)
+        branch_prefix_mismatch = bool(current_branch and not current_branch_prefix_ok)
         lane_transition = bool(lane_id and prev_lane_id and lane_id != prev_lane_id)
-        needs_prep = lane_transition or not current_worktree_ok or branch_mismatch
+        worktree_path_mismatch = bool(
+            current_worktree_ok
+            and expected_worktree_path
+            and current_worktree_resolved
+            and current_worktree_resolved != expected_worktree_path
+        )
+        needs_prep = (
+            lane_transition
+            or not current_worktree_ok
+            or not current_branch
+            or branch_mismatch
+            or branch_prefix_mismatch
+            or worktree_path_mismatch
+        )
         if not needs_prep:
             continue
-        expected_worktree_name = _expected_slot_worktree_name(slot) or (
-            current_worktree_path.name if current_worktree_path else None
-        )
         _emit_build_progress(
             req,
             f"workstation-manager: preparing slot={slot} role={role} lane={lane_id or '-'} task={active_task_id or '-'}",
@@ -9125,20 +9192,33 @@ def _manager_workstation_cycle(
             branch_name_resolved = _as_str(parsed.get("branch_name_resolved")) if isinstance(parsed, dict) else None
             branch_check_ok = False
             target_path_exists = False
+            target_path_matches_expected = False
+            resolved_target_path: Path | None = None
             branch_check_error: str | None = None
             resolved_branch = branch_name_resolved or task_branch
             if prepare_payload_ok and target_path:
-                target_root = Path(target_path)
-                target_path_exists = target_root.exists() and target_root.is_dir()
-                if target_path_exists:
-                    try:
-                        branch_check = _git_text(target_root, "rev-parse", "--abbrev-ref", "HEAD")
-                        branch_check_ok = bool(branch_check and branch_check == resolved_branch)
-                    except (OSError, ValueError) as exc:
-                        branch_check_error = f"unable to verify prepared worktree branch: {exc}"
-                        branch_check_ok = False
+                target_root = Path(target_path).expanduser()
+                try:
+                    resolved_target_path = target_root.resolve()
+                except OSError:
+                    resolved_target_path = target_root
+                if expected_worktree_path and resolved_target_path != expected_worktree_path:
+                    branch_check_error = (
+                        "prepared target_path mismatch: "
+                        f"expected {expected_worktree_path}, got {resolved_target_path}"
+                    )
                 else:
-                    branch_check_error = f"prepared target_path does not exist: {target_path}"
+                    target_path_matches_expected = True
+                    target_path_exists = target_root.exists() and target_root.is_dir()
+                    if target_path_exists:
+                        try:
+                            branch_check = _git_text(target_root, "rev-parse", "--abbrev-ref", "HEAD")
+                            branch_check_ok = bool(branch_check and branch_check == resolved_branch)
+                        except (OSError, ValueError) as exc:
+                            branch_check_error = f"unable to verify prepared worktree branch: {exc}"
+                            branch_check_ok = False
+                    else:
+                        branch_check_error = f"prepared target_path does not exist: {target_path}"
             elif prepare_payload_error:
                 branch_check_error = f"prepare_workstation failed: {prepare_payload_error}"
             validation_payload = {
@@ -9152,6 +9232,7 @@ def _manager_workstation_cycle(
                     and prepare_payload_ok
                     and parsed
                     and target_path
+                    and target_path_matches_expected
                     and branch_check_ok
                 ),
                 "checks": [
@@ -9159,6 +9240,7 @@ def _manager_workstation_cycle(
                     {"id": "prepare_output_json", "passed": isinstance(parsed, dict)},
                     {"id": "prepare_payload_ok", "passed": prepare_payload_ok},
                     {"id": "prepare_target_path", "passed": bool(target_path)},
+                    {"id": "prepare_target_path_expected", "passed": target_path_matches_expected},
                     {"id": "prepare_target_path_exists", "passed": target_path_exists},
                     {"id": "prepare_branch_match", "passed": branch_check_ok},
                 ],
@@ -9172,7 +9254,7 @@ def _manager_workstation_cycle(
             _atomic_write_json(action_path, action_payload)
             _atomic_write_json(validation_path, validation_payload)
             if validation_payload["ok"]:
-                worker["worktree_root"] = target_path
+                worker["worktree_root"] = str(resolved_target_path or Path(target_path))
                 worker["branch"] = resolved_branch
                 _apply_slot_lane_transition(worker, lane_id)
                 worker["updated_at"] = utc_now_iso()

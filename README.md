@@ -147,6 +147,7 @@ Runtime reliability notes:
 - Runtime decisions are now based on task-embedded gaps (`tasks[].gaps_that_need_patching`); external `GAPS.json` / `GAP_CLOSURE_PLAN_PACKETS.json` are not decision inputs.
 - Strict completion requires merge evidence: `review_done` tasks must be merged into `RAB-BASE` with verification pass data.
 - Branch manager merge completion now also requires explicit merge proof (`source_branch` ancestor of `RAB-BASE` HEAD) before a task is marked merged.
+- On post-merge verification failure, branch manager now rolls back deterministically to captured pre-merge HEAD (never `HEAD~1`).
 - Dispatcher is assignment-driven from `WORK_DISPATCH_PLAN.json`; tasks not present in assignments are not dispatched in that cycle.
 - Empty-assignment cycles are reported deterministically as `dispatch_plan_no_assignments`.
 - Controller `dispatch_filter` is enforced per assignment alias (hard-gated aliases are skipped, non-hard-gated aliases can still dispatch in the same cycle).
@@ -155,7 +156,7 @@ Runtime reliability notes:
 - Dispatcher supports same-lane thread continuation (`codex resume`) with deterministic fallback to fresh dispatch on resume failure.
 - Branch/workstation managers run LLM-first action loops with strict validators and bounded retries (max 10); retry exhaustion blocks only the affected task/lane.
 - Workstation manager accepts only `prepare_command` values that resolve to the bundled `skills/workstation-preparation/scripts/prepare_workstation.py` path.
-- Workstation manager enforces slot-specific worktree names (`workstation-dev-*`, `workstation-test-*`, `workstation-review-*`) and skips destructive prep for same-lane in-progress slots.
+- Workstation manager enforces slot-specific worktree names (`workstation-dev-*`, `workstation-test-*`, `workstation-review-*`), requires prepared `target_path` to match exact deterministic slot path, and skips destructive prep only for same-lane in-progress slots with valid slot-prefixed branches (`codex/<slot>/...`).
 - Production-line manager syncs worker worktree artifacts into canonical reports before applying evidence/handoff state transitions.
 - Embedded gaps close only when explicit closure conditions pass with evidence refs and can reopen on regression.
 - Dead running worker PIDs are normalized before dispatch gating, so stale registry entries do not block dispatch capacity.
