@@ -130,3 +130,27 @@ def test_no_banners_on_non_tty(
         assert "[opctl] /op-plan started" not in out
         payload = json.loads(out.strip())
         assert payload["command"] == command
+
+
+def test_merge_payload_applies_configured_sleep_for_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(MODULE, "_resolve_configured_sleep_minutes", lambda _repo_root: 0.5)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["opctl.py", "--command", "/op-build", "--repo-root", "/tmp/repo"],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("sleep_minutes") == 0.5
+
+
+def test_merge_payload_preserves_explicit_sleep_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(MODULE, "_resolve_configured_sleep_minutes", lambda _repo_root: 0.5)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["opctl.py", "--command", "/op-build", "--repo-root", "/tmp/repo", "--sleep-minutes", "2"],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("sleep_minutes") == 2.0

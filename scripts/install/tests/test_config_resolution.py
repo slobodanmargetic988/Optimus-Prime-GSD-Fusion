@@ -39,7 +39,7 @@ def test_config_precedence_cli_over_project_over_global_over_defaults():
                 json.dumps(
                     {
                         "profile": "budget",
-                        "workflow": {"max_build_cycles": 7, "strict_validation": False},
+                        "workflow": {"max_build_cycles": 7, "strict_validation": False, "sleep_minutes": 3},
                     },
                     indent=2,
                 )
@@ -74,6 +74,7 @@ def test_config_precedence_cli_over_project_over_global_over_defaults():
             assert effective["workflow"]["max_build_cycles"] == 99
             # strict_validation from profile defaults after merges.
             assert effective["workflow"]["strict_validation"] is True
+            assert effective["workflow"]["sleep_minutes"] == 1.0
         finally:
             if old_xdg is None:
                 os.environ.pop("XDG_CONFIG_HOME", None)
@@ -90,7 +91,7 @@ def test_config_validation_reports_fix_guidance():
             "home_override": str(home),
             "config": {
                 "profile": "invalid-profile",
-                "workflow": {"max_build_cycles": -1, "strict_validation": "bad"},
+                "workflow": {"max_build_cycles": -1, "strict_validation": "bad", "sleep_minutes": 0},
                 "rate_gate": {"max_wait_hours": 0},
             },
         }
@@ -101,6 +102,21 @@ def test_config_validation_reports_fix_guidance():
         assert "profile" in fields
         assert "workflow.max_build_cycles" in fields
         assert "workflow.strict_validation" in fields
+        assert "workflow.sleep_minutes" in fields
         assert "rate_gate.max_wait_hours" in fields
         assert all("fix" in item for item in resolved["errors"])
 
+
+def test_cli_sleep_minutes_override_wins():
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp) / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "mode": "global",
+            "home_override": str(home),
+            "sleep_minutes": 0.25,
+        }
+        ctx = COMMON.resolve_context(payload)
+        resolved = CONFIG.resolve_effective_config(payload, ctx)
+        assert resolved["errors"] == []
+        assert resolved["effective_config"]["workflow"]["sleep_minutes"] == 0.25

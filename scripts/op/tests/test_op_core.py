@@ -918,12 +918,12 @@ def test_build_preflight_blocks_when_profile_selection_invalid():
         assert any(item.get("code") == "profile_selection_invalid" for item in out.get("warnings", []))
 
 
-def test_op_build_default_sleep_minutes_is_five():
+def test_op_build_default_sleep_minutes_is_one():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
         req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
-        assert req.sleep_minutes == 5.0
+        assert req.sleep_minutes == 1.0
 
 
 def test_op_plan_emits_task_execution_state():

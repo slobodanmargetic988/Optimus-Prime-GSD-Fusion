@@ -399,6 +399,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--home-override")
     parser.add_argument("--profile", choices=["quality", "balanced", "budget"])
     parser.add_argument("--max-build-cycles", type=int)
+    parser.add_argument("--sleep-minutes", type=float)
     parser.add_argument("--strict-validation", dest="strict_validation", action="store_true")
     parser.add_argument("--no-strict-validation", dest="strict_validation", action="store_false")
     parser.set_defaults(strict_validation=None)
@@ -424,6 +425,7 @@ def main() -> int:
         "home_override": args.home_override,
         "profile": args.profile,
         "max_build_cycles": args.max_build_cycles,
+        "sleep_minutes": args.sleep_minutes,
         "strict_validation": args.strict_validation,
         "repair": args.repair,
     }

@@ -13,15 +13,15 @@ from scripts.install.common import InstallContext, InstallError, as_bool, as_str
 
 PROFILES = {
     "quality": {
-        "workflow": {"max_build_cycles": 50, "strict_validation": True},
+        "workflow": {"max_build_cycles": 50, "strict_validation": True, "sleep_minutes": 1.0},
         "rate_gate": {"max_wait_hours": 2.0},
     },
     "balanced": {
-        "workflow": {"max_build_cycles": 20, "strict_validation": True},
+        "workflow": {"max_build_cycles": 20, "strict_validation": True, "sleep_minutes": 1.0},
         "rate_gate": {"max_wait_hours": 2.0},
     },
     "budget": {
-        "workflow": {"max_build_cycles": 10, "strict_validation": False},
+        "workflow": {"max_build_cycles": 10, "strict_validation": False, "sleep_minutes": 1.0},
         "rate_gate": {"max_wait_hours": 1.0},
     },
 }
@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
     "workflow": {
         "max_build_cycles": 20,
         "strict_validation": True,
+        "sleep_minutes": 1.0,
     },
     "rate_gate": {"max_wait_hours": 2.0},
     "paths": {},
@@ -119,6 +120,16 @@ def _validate_config(config: dict[str, Any]) -> list[dict[str, Any]]:
                     "fix": "Set workflow.strict_validation to true or false.",
                 }
             )
+        sleep_minutes = workflow.get("sleep_minutes")
+        if not isinstance(sleep_minutes, (int, float)) or float(sleep_minutes) <= 0:
+            errors.append(
+                {
+                    "code": "config_validation_error",
+                    "field": "workflow.sleep_minutes",
+                    "message": "workflow.sleep_minutes must be a positive number",
+                    "fix": "Set workflow.sleep_minutes to a number greater than 0.",
+                }
+            )
     rate_gate = config.get("rate_gate")
     if not isinstance(rate_gate, dict):
         errors.append(
@@ -199,6 +210,13 @@ def resolve_effective_config(payload: dict[str, Any], ctx: InstallContext) -> di
         effective["workflow"] = workflow
         sources.append({"source": "cli_strict_validation", "path": None})
 
+    cli_sleep = payload.get("sleep_minutes")
+    if cli_sleep is not None:
+        workflow = effective.get("workflow") if isinstance(effective.get("workflow"), dict) else {}
+        workflow["sleep_minutes"] = float(cli_sleep)
+        effective["workflow"] = workflow
+        sources.append({"source": "cli_sleep_minutes", "path": None})
+
     errors = _validate_config(effective)
     return {
         "effective_config": effective,
@@ -207,4 +225,3 @@ def resolve_effective_config(payload: dict[str, Any], ctx: InstallContext) -> di
         "global_config_path": str(global_path),
         "project_config_path": str(project_path) if project_path is not None else None,
     }
-

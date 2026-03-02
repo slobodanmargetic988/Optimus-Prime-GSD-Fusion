@@ -11979,7 +11979,7 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             raise OpError("input_error", "max_build_cycles must be integer", stage="input") from exc
         max_cycles_out = parsed if parsed > 0 else None
 
-    default_sleep = 5 if command in {"op-build", "op-resume"} else 0
+    default_sleep = 1 if command in {"op-build", "op-resume"} else 0
     sleep_minutes = payload.get("sleep_minutes", default_sleep)
     try:
         sleep_val = float(sleep_minutes)

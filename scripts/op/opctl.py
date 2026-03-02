@@ -10,11 +10,21 @@ from pathlib import Path
 from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+SCRIPTS_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = SCRIPTS_ROOT.parent
+for candidate in (REPO_ROOT, SCRIPTS_ROOT, SCRIPT_DIR):
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 from op_core import OpError, run_from_payload
 from op_router import normalize_command
+
+try:
+    from scripts.install.common import resolve_context
+    from scripts.install.config import resolve_effective_config
+except Exception:  # pragma: no cover - runtime fallback when install modules unavailable
+    resolve_context = None  # type: ignore[assignment]
+    resolve_effective_config = None  # type: ignore[assignment]
 
 
 def _parse_json_input(path: str) -> dict[str, Any]:
@@ -75,6 +85,36 @@ def _emit_start_banner(payload: dict[str, Any]) -> None:
         return
 
 
+def _resolve_configured_sleep_minutes(repo_root: str) -> float | None:
+    if resolve_context is None or resolve_effective_config is None:
+        return None
+    mode_payloads = [
+        {"mode": "local", "repo_root": repo_root},
+        {"mode": "global"},
+    ]
+    for item in mode_payloads:
+        try:
+            ctx = resolve_context(item)
+            resolved = resolve_effective_config({}, ctx)
+        except Exception:
+            continue
+        errors = resolved.get("errors")
+        if isinstance(errors, list) and errors:
+            continue
+        effective = resolved.get("effective_config")
+        workflow = effective.get("workflow") if isinstance(effective, dict) else None
+        if not isinstance(workflow, dict):
+            continue
+        value = workflow.get("sleep_minutes")
+        try:
+            sleep = float(value)
+        except (TypeError, ValueError):
+            continue
+        if sleep > 0:
+            return sleep
+    return None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="OP command surface (map/new-project/plan/initialize/build/health/status/report/resume)")
     parser.add_argument("--input-json", help="JSON payload path or '-' for stdin")
@@ -130,6 +170,17 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
     payload.setdefault("repo_root", str(Path.cwd().resolve()))
     payload.setdefault("non_interactive", True)
     payload.setdefault("output_mode", "json")
+
+    if "sleep_minutes" not in payload:
+        command_raw = str(payload.get("command") or "").strip()
+        try:
+            canonical = normalize_command(command_raw).canonical
+        except ValueError:
+            canonical = ""
+        if canonical in {"op-build", "op-resume"}:
+            configured_sleep = _resolve_configured_sleep_minutes(str(payload["repo_root"]))
+            if configured_sleep is not None:
+                payload["sleep_minutes"] = configured_sleep
     return payload
 
 
