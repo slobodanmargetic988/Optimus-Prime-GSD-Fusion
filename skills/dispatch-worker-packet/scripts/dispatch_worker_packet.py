@@ -44,6 +44,15 @@ RESUME_FAILURE_LOG_PATTERNS: tuple[tuple[str, str], ...] = (
     ("no such session", "dispatch_resume_early_exit"),
     ("session not found", "dispatch_resume_early_exit"),
 )
+TASK_EVIDENCE_VALIDATOR_REF = (
+    Path(__file__).resolve().parents[3] / "scripts" / "op" / "op_core.py"
+).resolve()
+TASK_EVIDENCE_SCHEMA_TEST_REF = (
+    Path(__file__).resolve().parents[1] / "tests" / "test_dispatch_worker_packet.py"
+).resolve()
+TASK_EVIDENCE_TEMPLATE_REF = (
+    Path(__file__).resolve().parents[1] / "assets" / "TASK_EVIDENCE_CANONICAL_TEMPLATE.json"
+).resolve()
 
 
 class ToolError(Exception):
@@ -83,6 +92,7 @@ class DispatchInput:
     test_lane_account: str | None
     op_build_mode: bool
     plan_id: str | None
+    phase_id: str | None
     requirement_ids: list[str]
     task_acceptance_refs: list[str]
     dev_ready_evidence_ref: str | None
@@ -322,6 +332,12 @@ def validate_policy(cfg: DispatchInput) -> None:
                 "op-build mode packets require plan_id",
                 stage="validate",
             )
+        if not isinstance(cfg.phase_id, str) or not cfg.phase_id.strip():
+            raise ToolError(
+                "validation_error",
+                "op-build mode packets require phase_id",
+                stage="validate",
+            )
         if not isinstance(cfg.requirement_ids, list) or not cfg.requirement_ids:
             raise ToolError(
                 "validation_error",
@@ -427,6 +443,7 @@ def config_from_args(args: argparse.Namespace) -> DispatchInput:
             else bool(args.op_build_mode)
         ),
         plan_id=((args.plan_id or data.get("plan_id") or "").strip() or None),
+        phase_id=((args.phase_id or data.get("phase_id") or "").strip() or None),
         requirement_ids=(
             _list_of_str(data, "requirement_ids", required=False)
             if args.requirement_ids is None
@@ -491,9 +508,20 @@ def render_packet(cfg: DispatchInput) -> str:
     requirement_ids = ", ".join(cfg.requirement_ids) if cfg.requirement_ids else "none"
     acceptance_refs = ", ".join(cfg.task_acceptance_refs) if cfg.task_acceptance_refs else "none"
     dev_ready_ref = cfg.dev_ready_evidence_ref or "none"
+    dev_ready_abs_ref = "none"
+    if cfg.dev_ready_evidence_ref:
+        raw = Path(cfg.dev_ready_evidence_ref)
+        if raw.is_absolute():
+            dev_ready_abs_ref = str(raw)
+        else:
+            dev_ready_abs_ref = str((cfg.repo_root / raw).resolve())
     plan_id = cfg.plan_id or "none"
+    phase_id = cfg.phase_id or "none"
     test_source_branch = cfg.test_source_branch or "none"
     test_source_commit = cfg.test_source_commit or "none"
+    validator_ref = str(TASK_EVIDENCE_VALIDATOR_REF)
+    schema_test_ref = str(TASK_EVIDENCE_SCHEMA_TEST_REF)
+    schema_template_ref = str(TASK_EVIDENCE_TEMPLATE_REF)
     test_sync_section = ""
     if cfg.role in {"tester", "flex-tester"} and cfg.test_source_branch:
         test_sync_section = (
@@ -531,6 +559,7 @@ def render_packet(cfg: DispatchInput) -> str:
         f"test_lane_account: {cfg.test_lane_account or 'none'}\n\n"
         f"op_build_mode: {op_build_mode}\n"
         f"plan_id: {plan_id}\n"
+        f"phase_id: {phase_id}\n"
         f"requirement_ids: {requirement_ids}\n"
         f"task_acceptance_refs: {acceptance_refs}\n"
         f"dev_ready_evidence_ref: {dev_ready_ref}\n\n"
@@ -552,14 +581,27 @@ def render_packet(cfg: DispatchInput) -> str:
         f"- blockers\n"
         f"\n"
         f"## Completion Artifact Contract (required)\n"
-        f"- write TASK_EVIDENCE.json to: {dev_ready_ref}\n"
-        f"- required fields:\n"
-        f"  - summary.result: pass|fail|blocked\n"
-        f"  - gate.ready_for_test: boolean\n"
-        f"  - gate.ready_for_review: boolean\n"
-        f"  - verify_results: array\n"
-        f"  - checks: array\n"
-        f"  - updated_at: ISO-8601 UTC timestamp\n"
+        f"- write TASK_EVIDENCE.json to:\n"
+        f"  - relative path: {dev_ready_ref}\n"
+        f"  - absolute path: {dev_ready_abs_ref}\n"
+        f"- canonical template example: {schema_template_ref}\n"
+        f"- your TASK_EVIDENCE output must pass the canonical schema validator used by OP core\n"
+        f"- schema validator reference: {validator_ref}::_validate_task_evidence_payload\n"
+        f"- schema regression test reference: {schema_test_ref}::test_packet_render_requires_canonical_task_evidence_contract\n"
+        f"- treat completion as invalid unless it satisfies that validator and regression-test contract\n"
+        f"- required top-level fields:\n"
+        f"  - schema_version, plan_id, phase_id, task_id, requirement_ids, role, slot, updated_at\n"
+        f"  - dev (object), test (object), review (object), gate (object), summary (object)\n"
+        f"- required section fields:\n"
+        f"  - dev.checks[], dev.verify_results[], dev.blockers[], dev.artifacts[]\n"
+        f"  - test.checks[], test.verify_results[], test.uat_results[], test.blockers[], test.artifacts[]\n"
+        f"  - review.blockers[], review.artifacts[]\n"
+        f"  - gate.ready_for_test(bool), gate.ready_for_review(bool), gate.ready_for_phase_exit(bool)\n"
+        f"  - summary.result(pass|fail|blocked), summary.reason_codes[]\n"
+        f"- role-specific fill requirements:\n"
+        f"  - developer: populate dev.* with concrete changes/tests; keep test/review arrays present (can be empty)\n"
+        f"  - tester/flex-tester: populate test.* and keep dev/review arrays present\n"
+        f"  - reviewer: populate review.* and keep dev/test arrays present\n"
         f"- append completion/update row to reports/optimus-prime/HANDOFF_LOG.jsonl\n"
     )
 
@@ -895,6 +937,7 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "test_lane_account": cfg.test_lane_account,
         "op_build_mode": cfg.op_build_mode,
         "plan_id": cfg.plan_id,
+        "phase_id": cfg.phase_id,
         "requirement_ids": cfg.requirement_ids,
         "task_acceptance_refs": cfg.task_acceptance_refs,
         "dev_ready_evidence_ref": cfg.dev_ready_evidence_ref,
@@ -942,6 +985,7 @@ def update_branch_lineage(path: Path, cfg: DispatchInput, dispatch: dict[str, An
         "worktree_root": str(cfg.worktree_root),
         "op_build_mode": cfg.op_build_mode,
         "plan_id": cfg.plan_id,
+        "phase_id": cfg.phase_id,
         "requirement_ids": cfg.requirement_ids,
         "task_acceptance_refs": cfg.task_acceptance_refs,
         "dev_ready_evidence_ref": cfg.dev_ready_evidence_ref,
@@ -1220,6 +1264,7 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "test_lane_account": cfg.test_lane_account,
         "op_build_mode": cfg.op_build_mode,
         "plan_id": cfg.plan_id,
+        "phase_id": cfg.phase_id,
         "requirement_ids": cfg.requirement_ids,
         "task_acceptance_refs": cfg.task_acceptance_refs,
         "task_evidence_ref": cfg.dev_ready_evidence_ref,
@@ -1335,6 +1380,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-op-build-mode", dest="op_build_mode", action="store_false")
     parser.set_defaults(op_build_mode=None)
     parser.add_argument("--plan-id")
+    parser.add_argument("--phase-id")
     parser.add_argument("--requirement-ids", action="append")
     parser.add_argument("--task-acceptance-refs", action="append")
     parser.add_argument("--dev-ready-evidence-ref")

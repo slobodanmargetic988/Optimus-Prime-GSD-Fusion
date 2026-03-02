@@ -7235,6 +7235,7 @@ def _dispatch_task_packet(
         "test_train_mode": "off",
         "op_build_mode": True,
         "plan_id": plan_id,
+        "phase_id": _as_str(task.get("phase_id")) or _as_str(plan_task.get("phase_id")) or "phase-1",
         "requirement_ids": requirement_ids,
         "task_acceptance_refs": acceptance_refs,
         "dev_ready_evidence_ref": evidence_ref,

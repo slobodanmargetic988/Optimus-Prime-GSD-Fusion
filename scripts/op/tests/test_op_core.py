@@ -4036,6 +4036,49 @@ def test_dispatch_task_packet_emits_gap_requirement_fallback_warning(monkeypatch
         assert "gap_closure_requirement_fallback" in warning_codes
 
 
+def test_dispatch_task_packet_includes_phase_id_in_worker_payload(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+            }
+        )
+
+        task = {
+            "task_id": "TASK-001",
+            "phase_id": "phase-2",
+            "requirement_ids": ["REQ-001"],
+            "evidence": {
+                "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+            },
+            "attempts": {"dev": 0, "test": 0, "review": 0},
+            "blockers": [],
+        }
+        plan_task = {
+            "phase_id": "phase-9",
+            "must_haves": ["Implement feature"],
+            "requirement_ids": ["REQ-001"],
+        }
+
+        captured: dict[str, object] = {}
+
+        def fake_run(_script: Path, payload: dict[str, object], _cwd: Path) -> dict[str, object]:
+            captured.update(payload)
+            return {"ok": True, "status": "dispatch_started"}
+
+        monkeypatch.setattr(MODULE, "_resolve_skill_script", lambda *_args, **_kwargs: Path("/tmp/fake_script.py"))
+        monkeypatch.setattr(MODULE, "_run_tool_json", fake_run)
+        monkeypatch.setattr(MODULE, "_git_text", lambda *_args, **_kwargs: "abc1234")
+
+        MODULE._dispatch_task_packet(req, task, plan_task, "dev", "plan-1", "codex")
+        assert captured.get("phase_id") == "phase-2"
+
+
 def test_append_task_blocker_compacts_duplicates_and_bounds():
     task = {"blockers": []}
     for _ in range(5):

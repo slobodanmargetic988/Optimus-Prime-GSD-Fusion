@@ -66,6 +66,7 @@ def make_cfg(root: Path, **overrides):
         test_source_commit=overrides.get("test_source_commit"),
         op_build_mode=overrides.get("op_build_mode", False),
         plan_id=overrides.get("plan_id"),
+        phase_id=overrides.get("phase_id", "phase-1"),
         requirement_ids=overrides.get("requirement_ids", []),
         task_acceptance_refs=overrides.get("task_acceptance_refs", []),
         dev_ready_evidence_ref=overrides.get("dev_ready_evidence_ref"),
@@ -117,13 +118,38 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             content = MODULE.render_packet(cfg)
             self.assertIn("start_from_branch", content)
             self.assertIn("start_from_commit", content)
+            self.assertIn("phase_id: phase-1", content)
             self.assertIn("developer fallback suffix: -dev", content)
             self.assertIn("tester/flex-tester fallback suffix: -test", content)
             self.assertIn("intended_branch", content)
             self.assertIn("fallback_branch", content)
             self.assertIn("fallback_reason", content)
             self.assertIn("Completion Artifact Contract", content)
-            self.assertIn("summary.result: pass|fail|blocked", content)
+            self.assertIn("summary.result(pass|fail|blocked)", content)
+            self.assertIn("gate.ready_for_phase_exit(bool)", content)
+            self.assertIn("schema validator reference", content)
+            self.assertIn("schema regression test reference", content)
+            self.assertIn("output must pass the canonical schema validator", content)
+            self.assertIn("satisfies that validator and regression-test contract", content)
+            self.assertIn("absolute path:", content)
+            self.assertIn(str(MODULE.TASK_EVIDENCE_TEMPLATE_REF), content)
+
+    def test_packet_render_requires_canonical_task_evidence_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for slot, role, branch in (
+                ("dev-1", "developer", "codex/dev-1/MYO-156"),
+                ("test-1", "tester", "codex/test-1/MYO-156"),
+                ("review-1", "reviewer", "codex/review-1/MYO-156"),
+            ):
+                cfg = make_cfg(root, slot=slot, role=role, branch_name=branch)
+                content = MODULE.render_packet(cfg)
+                self.assertIn("dev.checks[], dev.verify_results[], dev.blockers[], dev.artifacts[]", content)
+                self.assertIn("test.checks[], test.verify_results[], test.uat_results[], test.blockers[], test.artifacts[]", content)
+                self.assertIn("review.blockers[], review.artifacts[]", content)
+                self.assertIn("summary.reason_codes[]", content)
+                self.assertIn(str(MODULE.TASK_EVIDENCE_SCHEMA_TEST_REF), content)
+                self.assertNotIn("  - verify_results: array", content)
 
     def test_packet_render_includes_test_source_sync_section_for_tester(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -693,6 +719,22 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "validation_error")
             self.assertIn("plan_id", ctx.exception.message)
 
+    def test_op_build_mode_requires_phase_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_cfg(
+                Path(tmp),
+                op_build_mode=True,
+                plan_id="plan-20260227T010101Z",
+                phase_id=None,
+                requirement_ids=["REQ-001"],
+                task_acceptance_refs=["AC-001"],
+                dev_ready_evidence_ref="reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+            )
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(cfg)
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("phase_id", ctx.exception.message)
+
     def test_op_build_mode_persists_plan_fields_in_handoff(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -700,6 +742,7 @@ class DispatchWorkerPacketTests(unittest.TestCase):
                 root,
                 op_build_mode=True,
                 plan_id="plan-20260227T010101Z",
+                phase_id="phase-1",
                 requirement_ids=["REQ-001", "REQ-002"],
                 task_acceptance_refs=["AC-001", "AC-002"],
                 dev_ready_evidence_ref="reports/optimus-prime/planning/DEV_READY_EVIDENCE.json",
@@ -713,6 +756,7 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             handoff = json.loads(handoff_line)
             self.assertTrue(handoff["op_build_mode"])
             self.assertEqual(handoff["plan_id"], "plan-20260227T010101Z")
+            self.assertEqual(handoff["phase_id"], "phase-1")
             self.assertEqual(handoff["requirement_ids"], ["REQ-001", "REQ-002"])
             self.assertEqual(handoff["task_acceptance_refs"], ["AC-001", "AC-002"])
             self.assertEqual(

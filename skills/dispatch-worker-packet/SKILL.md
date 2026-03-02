@@ -50,6 +50,7 @@ Use this skill to replace manual multi-step dispatch flow:
   "test_lane_account": "acct-02",
   "op_build_mode": false,
   "plan_id": "plan-20260227T010101Z",
+  "phase_id": "phase-1",
   "requirement_ids": ["REQ-001"],
   "task_acceptance_refs": ["AC-001"],
   "dev_ready_evidence_ref": "reports/optimus-prime/planning/DEV_READY_EVIDENCE.json",
@@ -73,6 +74,7 @@ Optional:
   - non-empty `runtime_base_url`
 - In `op_build_mode=true`, packets must set:
   - non-empty `plan_id`
+  - non-empty `phase_id`
   - non-empty `requirement_ids[]`
   - non-empty `task_acceptance_refs[]`
   - non-empty `dev_ready_evidence_ref`

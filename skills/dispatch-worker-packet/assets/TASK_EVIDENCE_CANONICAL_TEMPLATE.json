@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-<id>",
+  "phase_id": "phase-<n>",
+  "task_id": "TASK-<nnn>",
+  "requirement_ids": [
+    "REQ-001"
+  ],
+  "role": "developer|tester|reviewer|flex-tester",
+  "slot": "dev-1|test-1|review-1",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "dev": {
+    "status": "queued|working|done|blocked",
+    "checks": [],
+    "verify_results": [],
+    "dev_ready": false,
+    "blockers": [],
+    "artifacts": []
+  },
+  "test": {
+    "status": "queued|working|done|blocked",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued|working|done|blocked",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": false,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": []
+  }
+}
