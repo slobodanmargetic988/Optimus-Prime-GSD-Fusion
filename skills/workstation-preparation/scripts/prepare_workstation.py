@@ -115,7 +115,7 @@ def default_base_ref(repo_root: Path) -> str:
 
 
 def default_worktrees_parent(repo_root: Path) -> Path:
-    return (repo_root.parent / f"{repo_root.name}-workstations").resolve()
+    return (repo_root.parent / f".{repo_root.name}-workstations").resolve()
 
 
 def revlist_count(repo_path: Path, revspec: str, right_only: bool) -> int:

@@ -427,6 +427,48 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
                 lanes=sorted(lanes),
             )
 
+    # Keep hardening/review terminal-task enforcement aligned with op_core validation.
+    by_requirement: dict[str, set[str]] = {}
+    task_rows: dict[str, dict[str, Any]] = {}
+    for row in tasks_raw:
+        if not isinstance(row, dict):
+            continue
+        task_id = _as_str(row.get("task_id"))
+        if not task_id:
+            continue
+        task_rows[task_id] = row
+        req_ids = row.get("requirement_ids")
+        if not isinstance(req_ids, list):
+            continue
+        for req in req_ids:
+            req_id = _as_str(req)
+            if not req_id:
+                continue
+            by_requirement.setdefault(req_id, set()).add(task_id)
+
+    for req_id, req_task_ids in by_requirement.items():
+        if len(req_task_ids) <= 2:
+            continue
+        terminals: list[dict[str, Any]] = []
+        for task_id in sorted(req_task_ids):
+            children = succs.get(task_id, [])
+            if any(child in req_task_ids for child in children):
+                continue
+            row = task_rows.get(task_id)
+            if isinstance(row, dict):
+                terminals.append(row)
+        hardening_terminals = 0
+        for row in terminals:
+            title = (_as_str(row.get("title")) or "").lower()
+            if "harden" in title or "hardening" in title or "review" in title:
+                hardening_terminals += 1
+        if hardening_terminals < 2:
+            _err(
+                errors,
+                "planner_bundle_schema_error",
+                f"requirement {req_id} needs at least 2 terminal hardening/review tasks when task count > 2",
+            )
+
     return plan_id, task_ids, requirement_ids, covered
 
 

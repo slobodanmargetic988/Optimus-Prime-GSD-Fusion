@@ -149,13 +149,17 @@ Runtime reliability notes:
 - Branch manager merge completion now also requires explicit merge proof (`source_branch` ancestor of `RAB-BASE` HEAD) before a task is marked merged.
 - Dispatcher is assignment-driven from `WORK_DISPATCH_PLAN.json`; tasks not present in assignments are not dispatched in that cycle.
 - Empty-assignment cycles are reported deterministically as `dispatch_plan_no_assignments`.
+- Controller `dispatch_filter` is enforced per assignment alias (hard-gated aliases are skipped, non-hard-gated aliases can still dispatch in the same cycle).
 - Dispatch packets use workstation-prepared slot context (`worktree_root`, `branch`) from `WORKER_REGISTRY.json`.
 - `/op-build` response data now includes current-cycle `assignment_observations` (same signal persisted to `DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl`).
 - Dispatcher supports same-lane thread continuation (`codex resume`) with deterministic fallback to fresh dispatch on resume failure.
 - Branch/workstation managers run LLM-first action loops with strict validators and bounded retries (max 10); retry exhaustion blocks only the affected task/lane.
 - Workstation manager accepts only `prepare_command` values that resolve to the bundled `skills/workstation-preparation/scripts/prepare_workstation.py` path.
+- Workstation manager enforces slot-specific worktree names (`workstation-dev-*`, `workstation-test-*`, `workstation-review-*`) and skips destructive prep for same-lane in-progress slots.
+- Production-line manager syncs worker worktree artifacts into canonical reports before applying evidence/handoff state transitions.
 - Embedded gaps close only when explicit closure conditions pass with evidence refs and can reopen on regression.
 - Dead running worker PIDs are normalized before dispatch gating, so stale registry entries do not block dispatch capacity.
+- Dead PID recovery is evidence-first: if no new progress is ingested, OP queues immediate same-cycle same-slot redispatch and tracks retry metadata.
 - If `WORKER_REGISTRY.json` is unreadable, OP attempts auto-recovery; if recovery fails, it emits `worker_registry_recovery_failed_dispatch_allowed` and continues dispatch by policy.
 
 Operator stop behavior:

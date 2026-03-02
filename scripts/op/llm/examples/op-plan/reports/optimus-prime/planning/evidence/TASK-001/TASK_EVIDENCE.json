@@ -1,54 +1,39 @@
 {
+  "schema_version": "1.0",
+  "plan_id": "plan-example-20260302T090000Z",
+  "phase_id": "phase-1",
+  "task_id": "TASK-001",
+  "requirement_ids": ["REQ-001"],
+  "updated_at": "2026-03-02T09:00:00Z",
   "dev": {
-    "artifacts": [
-      "app/mcp_api.py",
-      "tests/api/test_mcp_backend.py",
-      "docs/mcp-backend-api.md"
-    ],
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "dev_ready": false,
     "blockers": [],
-    "checks": [
-      "python3 -m pytest tests/api/test_mcp_backend.py -q :: passed (4 passed in 4.32s)",
-      "python3 -m pytest :: passed (227 passed, 10 warnings in 124.15s)"
-    ],
-    "dev_ready": true,
-    "status": "ready_for_test",
-    "verify_results": [
-      "python3 -m pytest :: passed (227 passed, 10 warnings in 124.15s)"
-    ]
+    "artifacts": []
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
   },
   "gate": {
-    "ready_for_phase_exit": false,
+    "ready_for_test": false,
     "ready_for_review": false,
-    "ready_for_test": true
+    "ready_for_phase_exit": false
   },
-  "phase_id": "phase-1",
-  "plan_id": "plan-20260228T204938Z",
-  "requirement_ids": [
-    "REQ-001"
-  ],
-  "review": {
-    "artifacts": [],
-    "blockers": [],
-    "decision": "pending",
-    "status": "pending"
-  },
-  "schema_version": "1.0",
   "summary": {
-    "reason_codes": [
-      "dev_ready",
-      "checks_passed",
-      "normalized_noncanonical_result"
-    ],
-    "result": "pass"
-  },
-  "task_id": "TASK-001",
-  "test": {
-    "artifacts": [],
-    "blockers": [],
-    "checks": [],
-    "status": "pending",
-    "uat_results": [],
-    "verify_results": []
-  },
-  "updated_at": "2026-02-28T21:24:37Z"
+    "result": "blocked",
+    "reason_codes": ["not_started"]
+  }
 }

@@ -122,7 +122,8 @@ Diagram reference:
   - controller directives are auto-applied in-loop (`runtime-coordinator`, `test-train-manager`, dispatch integration)
   - canonical task progression tracked in `TASK_EXECUTION_STATE.json`
   - strict-first gate ordering: hard-gate/terminal decisions are evaluated before any dispatch attempt
-  - dispatch gating honors `dispatch_filter` directives and enforces `dispatch_window.max_running_workers` as hard cap
+  - dispatch gating applies `dispatch_filter` per assignment alias (non-hard-gated assignments may still dispatch in-cycle)
+  - `dispatch_window.max_running_workers` remains enforced as hard cap
   - runtime/test-train adapters resolve `test_train_mode` from `TEST_TRAIN_STATE.json` each cycle (fallback `off`)
   - malformed `RUNTIME_HEALTH.json` no longer crashes build loop; blocker fingerprint falls back to `unknown-fingerprint` with deterministic warning
   - handoff ingestion auto-recovers from log truncation by resetting stale offsets with deterministic warning/event
@@ -209,6 +210,9 @@ Diagram reference:
   - dispatcher supports same-lane thread continuation (`codex resume`) with deterministic fallback to fresh dispatch
   - branch manager executes LLM-first merge actions with strict schema validation, explicit merge proof (`source_branch` ancestor of `RAB-BASE` HEAD), and bounded retries; exhaustion emits `merge_manager_retry_exhausted` and blocks only the affected lane/task
   - workstation manager executes LLM-first lane-change preparation with strict schema validation, exact bundled skill-script path enforcement, and bounded retries; exhaustion emits `workstation_manager_retry_exhausted` and blocks only the affected lane/task
+  - workstation manager now enforces slot-specific worktree names (`workstation-dev-*`, `workstation-test-*`, `workstation-review-*`) and skips destructive prep for same-lane in-progress slots
+  - production-line manager performs artifact fan-in from worker worktrees (`TASK_EVIDENCE.json` + handoff rows) before state reconciliation
+  - dead PID recovery is evidence-first: reconcile from evidence when present, otherwise queue same-cycle same-slot redispatch with retry-watchdog metadata
 
 ## Runtime + Blocker Artifacts (Canonical)
 

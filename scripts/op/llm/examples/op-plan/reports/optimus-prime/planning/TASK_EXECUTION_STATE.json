@@ -1,75 +1,64 @@
 {
-  "plan_id": "plan-20260228T204938Z",
   "schema_version": "1.0",
+  "plan_id": "plan-example-20260302T090000Z",
+  "updated_at": "2026-03-02T09:00:00Z",
   "tasks": [
     {
-      "attempts": {
-        "dev": 3,
-        "review": 0,
-        "test": 8
-      },
-      "blockers": [],
-      "evidence": {
-        "dev_ready_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
-        "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
-        "uat_results": [],
-        "verify_results": [
-          "python3 -m pytest :: passed (227 passed, 10 warnings in 124.15s)"
-        ]
-      },
-      "last_progress_at": "2026-02-28T23:10:24Z",
-      "owner_slot": "test-1",
+      "task_id": "TASK-001",
       "phase_id": "phase-1",
-      "requirement_ids": [
-        "REQ-001"
-      ],
-      "status": "test_in_progress",
-      "task_id": "TASK-001"
+      "lane_id": "phase-1/lane-a",
+      "requirement_ids": ["REQ-001"],
+      "status": "pending",
+      "owner_slot": null,
+      "dispatch_thread_id": null,
+      "last_progress_at": null,
+      "attempts": {"dev": 0, "test": 0, "review": 0},
+      "evidence": {
+        "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+        "dev_ready_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+        "verify_results": [],
+        "uat_results": []
+      },
+      "gaps_that_need_patching": [],
+      "blockers": []
     },
     {
-      "attempts": {
-        "dev": 0,
-        "review": 0,
-        "test": 0
-      },
-      "blockers": [],
-      "evidence": {
-        "dev_ready_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-002/TASK_EVIDENCE.json",
-        "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-002/TASK_EVIDENCE.json",
-        "uat_results": [],
-        "verify_results": []
-      },
-      "last_progress_at": "2026-02-28T20:49:38Z",
-      "owner_slot": null,
+      "task_id": "TASK-002",
       "phase_id": "phase-2",
-      "requirement_ids": [
-        "REQ-002"
-      ],
-      "status": "queued",
-      "task_id": "TASK-002"
+      "lane_id": "phase-2/lane-a",
+      "requirement_ids": ["REQ-002"],
+      "status": "pending",
+      "owner_slot": null,
+      "dispatch_thread_id": null,
+      "last_progress_at": null,
+      "attempts": {"dev": 0, "test": 0, "review": 0},
+      "evidence": {
+        "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-002/TASK_EVIDENCE.json",
+        "dev_ready_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-002/TASK_EVIDENCE.json",
+        "verify_results": [],
+        "uat_results": []
+      },
+      "gaps_that_need_patching": [],
+      "blockers": []
     },
     {
-      "attempts": {
-        "dev": 0,
-        "review": 0,
-        "test": 0
-      },
-      "blockers": [],
-      "evidence": {
-        "dev_ready_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-003/TASK_EVIDENCE.json",
-        "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-003/TASK_EVIDENCE.json",
-        "uat_results": [],
-        "verify_results": []
-      },
-      "last_progress_at": "2026-02-28T20:49:38Z",
-      "owner_slot": null,
+      "task_id": "TASK-003",
       "phase_id": "phase-3",
-      "requirement_ids": [
-        "REQ-003"
-      ],
-      "status": "queued",
-      "task_id": "TASK-003"
+      "lane_id": "phase-3/lane-a",
+      "requirement_ids": ["REQ-003"],
+      "status": "pending",
+      "owner_slot": null,
+      "dispatch_thread_id": null,
+      "last_progress_at": null,
+      "attempts": {"dev": 0, "test": 0, "review": 0},
+      "evidence": {
+        "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-003/TASK_EVIDENCE.json",
+        "dev_ready_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-003/TASK_EVIDENCE.json",
+        "verify_results": [],
+        "uat_results": []
+      },
+      "gaps_that_need_patching": [],
+      "blockers": []
     }
-  ],
-  "updated_at": "2026-02-28T23:15:25Z"
+  ]
 }

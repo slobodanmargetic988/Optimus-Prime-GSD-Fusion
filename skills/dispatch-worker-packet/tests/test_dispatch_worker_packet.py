@@ -60,6 +60,8 @@ def make_cfg(root: Path, **overrides):
         dispatch_mode=overrides.get("dispatch_mode", "exec"),
         resume_thread_id=overrides.get("resume_thread_id"),
         lane_id=overrides.get("lane_id"),
+        test_source_branch=overrides.get("test_source_branch"),
+        test_source_commit=overrides.get("test_source_commit"),
         op_build_mode=overrides.get("op_build_mode", False),
         plan_id=overrides.get("plan_id"),
         requirement_ids=overrides.get("requirement_ids", []),
@@ -118,6 +120,38 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("intended_branch", content)
             self.assertIn("fallback_branch", content)
             self.assertIn("fallback_reason", content)
+
+    def test_packet_render_includes_test_source_sync_section_for_tester(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_cfg(
+                Path(tmp),
+                role="tester",
+                slot="test-1",
+                branch_name="codex/test-1/MYO-156",
+                start_from_branch="codex/dev-1/MYO-156",
+                test_source_branch="codex/dev-1/MYO-156",
+                test_source_commit="a" * 40,
+            )
+            content = MODULE.render_packet(cfg)
+            self.assertIn("## Test Stage Source Sync", content)
+            self.assertIn("merge source branch before running tests", content)
+
+    def test_tester_test_source_branch_must_align_start_from_branch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(
+                    make_cfg(
+                        Path(tmp),
+                        role="tester",
+                        slot="test-1",
+                        branch_name="codex/test-1/MYO-156",
+                        start_from_branch="RAB-BASE",
+                        test_source_branch="codex/dev-1/MYO-156",
+                        test_source_commit="a" * 40,
+                    )
+                )
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("test_source_branch", ctx.exception.message)
 
     def test_optional_bool_coercion_edge_cases(self):
         self.assertTrue(MODULE._optional_bool("ON"))

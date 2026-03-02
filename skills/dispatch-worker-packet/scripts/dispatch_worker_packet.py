@@ -80,6 +80,8 @@ class DispatchInput:
     dispatch_mode: str
     resume_thread_id: str | None
     lane_id: str | None
+    test_source_branch: str | None
+    test_source_commit: str | None
     dry_run: bool
     cycle_note: str | None
 
@@ -294,6 +296,15 @@ def validate_policy(cfg: DispatchInput) -> None:
 
     if not re.fullmatch(r"[0-9a-fA-F]{7,40}", cfg.start_from_commit):
         raise ToolError("validation_error", "start_from_commit must be a git sha (7-40 hex chars)", stage="validate")
+    if cfg.test_source_commit and not re.fullmatch(r"[0-9a-fA-F]{7,40}", cfg.test_source_commit):
+        raise ToolError("validation_error", "test_source_commit must be a git sha (7-40 hex chars)", stage="validate")
+    if cfg.role in {"tester", "flex-tester"} and cfg.test_source_branch:
+        if cfg.start_from_branch != cfg.test_source_branch:
+            raise ToolError(
+                "validation_error",
+                "tester packets with test_source_branch must align start_from_branch to that source branch",
+                stage="validate",
+            )
 
     if cfg.op_build_mode:
         if not isinstance(cfg.plan_id, str) or not cfg.plan_id.strip():
@@ -421,6 +432,8 @@ def config_from_args(args: argparse.Namespace) -> DispatchInput:
         dispatch_mode=((args.dispatch_mode or data.get("dispatch_mode") or "exec").strip() or "exec"),
         resume_thread_id=((args.resume_thread_id or data.get("resume_thread_id") or "").strip() or None),
         lane_id=((args.lane_id or data.get("lane_id") or "").strip() or None),
+        test_source_branch=((args.test_source_branch or data.get("test_source_branch") or "").strip() or None),
+        test_source_commit=((args.test_source_commit or data.get("test_source_commit") or "").strip() or None),
         dry_run=bool(data.get("dry_run", False) or args.dry_run),
         cycle_note=(args.cycle_note if args.cycle_note is not None else data.get("cycle_note")),
     )
@@ -470,6 +483,16 @@ def render_packet(cfg: DispatchInput) -> str:
     acceptance_refs = ", ".join(cfg.task_acceptance_refs) if cfg.task_acceptance_refs else "none"
     dev_ready_ref = cfg.dev_ready_evidence_ref or "none"
     plan_id = cfg.plan_id or "none"
+    test_source_branch = cfg.test_source_branch or "none"
+    test_source_commit = cfg.test_source_commit or "none"
+    test_sync_section = ""
+    if cfg.role in {"tester", "flex-tester"} and cfg.test_source_branch:
+        test_sync_section = (
+            "\n## Test Stage Source Sync\n"
+            f"- merge source branch before running tests: {test_source_branch}\n"
+            f"- expected source commit: {test_source_commit}\n"
+            "- confirm source files are present in worktree before executing test commands\n\n"
+        )
 
     return (
         f"# Worker Packet v{cfg.packet_version}\n"
@@ -504,6 +527,7 @@ def render_packet(cfg: DispatchInput) -> str:
         f"dev_ready_evidence_ref: {dev_ready_ref}\n\n"
         f"## Acceptance Criteria\n"
         f"{criteria_lines}\n\n"
+        f"{test_sync_section}"
         f"## Branch Fallback Policy\n"
         f"- developer fallback suffix: -dev\n"
         f"- tester/flex-tester fallback suffix: -test\n"
@@ -1233,6 +1257,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dispatch-mode")
     parser.add_argument("--resume-thread-id")
     parser.add_argument("--lane-id")
+    parser.add_argument("--test-source-branch")
+    parser.add_argument("--test-source-commit")
     parser.add_argument("--cycle-note")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json-pretty", action="store_true")

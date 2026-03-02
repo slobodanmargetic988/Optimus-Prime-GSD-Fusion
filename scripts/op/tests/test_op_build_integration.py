@@ -769,7 +769,7 @@ def test_op_build_stops_for_manual_rerun_when_rate_reset_exceeds_two_hours(monke
         assert dispatch_calls["count"] == 0
 
 
-def test_dispatch_filter_blocks_dispatch_for_cycle(monkeypatch: pytest.MonkeyPatch):
+def test_dispatch_filter_uses_per_assignment_gating_not_global_cycle_block(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
@@ -831,8 +831,122 @@ def test_dispatch_filter_blocks_dispatch_for_cycle(monkeypatch: pytest.MonkeyPat
             }
         )
         assert out["status"] == "running_needs_resume"
-        assert dispatch_calls["count"] == 0
-        assert any(item.get("code") == "dispatch_skipped_hard_gate" for item in out["warnings"])
+        assert dispatch_calls["count"] == 1
+
+
+def test_dead_pid_without_evidence_triggers_same_cycle_redispatch(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state_path = planning / "TASK_EXECUTION_STATE.json"
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task = next(item for item in task_state.get("tasks", []) if isinstance(item, dict) and item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["lane_id"] = "phase-1/lane-a"
+        task["last_progress_at"] = MODULE.utc_now_iso()
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        (planning / "WORK_DISPATCH_PLAN.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "active_phase_id": "phase-1",
+                    "assignments": [],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        build_state_path = planning / "BUILD_STATE.json"
+        build_state = MODULE._load_build_state(build_state_path)
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        build_state_path.write_text(json.dumps(build_state, indent=2) + "\n", encoding="utf-8")
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["session_state"] = "running"
+                row["state"] = "running"
+                row["dispatch_pid"] = None
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+                row["lane_id"] = "phase-1/lane-a"
+                row["previous_lane_id"] = "phase-1/lane-a"
+                row["branch"] = "codex/dev-1/task-001"
+                row["worktree_root"] = str(root)
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+
+        events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        events_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            MODULE,
+            "_run_controller_cycle",
+            lambda _req, **_kwargs: {
+                "ok": False,
+                "status": "running",
+                "terminal_reason": None,
+                "last_cycle_number": 1,
+                "events_path": str(events_path),
+            },
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_manager_workstation_cycle",
+            lambda *_args, **_kwargs: {"warnings": [], "fatal": False, "fatal_code": None, "fatal_message": None},
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_select_profile_alias_for_slot",
+            lambda *_args, **_kwargs: {"ok": True, "alias": "codex"},
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "_read_profile_rate_states",
+            lambda *_args, **_kwargs: {"codex": {"hard_gated": False, "soft_gated": False}},
+        )
+        monkeypatch.setattr(MODULE, "_active_worker_count_by_alias", lambda *_args, **_kwargs: {})
+        dispatched: list[tuple[str, str]] = []
+
+        def fake_dispatch(_req, task_payload, _plan_task, stage_name, *_args, **_kwargs):
+            dispatched.append((str(task_payload.get("task_id")), stage_name))
+            task_payload["dispatch_thread_id"] = "thread-dead-pid-retry"
+            return {
+                "ok": True,
+                "dispatch": {
+                    "dispatch_mode_used": "exec",
+                    "dispatch_thread_id": "thread-dead-pid-retry",
+                },
+            }
+
+        monkeypatch.setattr(MODULE, "_dispatch_task_packet", fake_dispatch)
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
+        assert out["status"] == "running_needs_resume"
+        assert ("TASK-001", "dev") in dispatched
+        assert "dead_pid_no_evidence_redispatch" in warning_codes
 
 
 def test_runtime_adapter_uses_state_derived_mode(monkeypatch: pytest.MonkeyPatch):
@@ -1926,7 +2040,7 @@ def test_no_progress_watchdog_resets_on_task_state_delta(monkeypatch: pytest.Mon
         watchdog_state_path = root / "reports" / "optimus-prime" / "planning" / "NO_PROGRESS_WATCHDOG_STATE.json"
         watchdog_state = json.loads(watchdog_state_path.read_text(encoding="utf-8"))
         assert watchdog_state["triggered"] is False
-        assert watchdog_state["consecutive_no_progress_cycles"] == 2
+        assert watchdog_state["consecutive_no_progress_cycles"] == 1
         assert watchdog_state["last_progress_at"] is not None
 
         progress_path = root / "reports" / "optimus-prime" / "planning" / "RUN_PROGRESS_LEDGER.jsonl"
@@ -2261,6 +2375,114 @@ def test_build_fails_terminal_when_workstation_skill_missing(monkeypatch: pytest
         )
         assert out["status"] == "blocked_terminal"
         assert any(item.get("code") == "workstation_manager_missing_skill_fatal" for item in out.get("errors", []))
+
+
+def test_build_handles_missing_workstation_target_path_gracefully(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state_path = planning / "TASK_EXECUTION_STATE.json"
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task = next(item for item in task_state.get("tasks", []) if isinstance(item, dict) and item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        build_state_path = planning / "BUILD_STATE.json"
+        build_state = MODULE._load_build_state(build_state_path)
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        build_state_path.write_text(json.dumps(build_state, indent=2) + "\n", encoding="utf-8")
+
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+                row["lane_id"] = "phase-1/lane-a"
+                row["previous_lane_id"] = "phase-1/lane-b"
+                row["branch"] = "codex/dev-1/task-001"
+                row["worktree_root"] = None
+            elif row.get("role") in {"developer", "tester", "reviewer"}:
+                row["lane_id"] = "phase-1/lane-z"
+                row["previous_lane_id"] = "phase-1/lane-z"
+                row["worktree_root"] = str(root / "prepared-worktrees" / str(row.get("slot") or "slot"))
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+
+        missing_target = root / "prepared-worktrees" / "workstation-dev-1"
+
+        def fake_codex_exec(**kwargs):
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "slot": "dev-1",
+                    "lane_id": "phase-1/lane-a",
+                    "task_id": "TASK-001",
+                    "branch_name": "codex/dev-1/task-001",
+                    "worktree_name": "workstation-dev-1",
+                    "prepare_command": (
+                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                        f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
+                        "--output json --force-reset-existing --worktree-name workstation-dev-1"
+                    ),
+                    "prereq_policy": "copy_env_files",
+                },
+            )
+            return 0
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(
+            MODULE,
+            "_run_manager_command",
+            lambda *_args, **_kwargs: {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": json.dumps(
+                    {
+                        "ok": True,
+                        "target_path": str(missing_target),
+                        "branch_name_resolved": "codex/dev-1/task-001",
+                    }
+                ),
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            },
+        )
+
+        out = run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "sleep_minutes": 0,
+            }
+        )
+        assert out["status"] == "running_needs_resume"
+        warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
+        assert "workstation_execution_failed" in warning_codes
+        assert "workstation_manager_retry_exhausted" in warning_codes
+        post_task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        post_task = next(item for item in post_task_state.get("tasks", []) if isinstance(item, dict) and item.get("task_id") == "TASK-001")
+        assert post_task.get("status") == "blocked"
+        validation_path = root / "reports" / "optimus-prime" / "workstation-manager" / "attempt-dev-1-1" / "WORKSTATION_VALIDATION.json"
+        payload = json.loads(validation_path.read_text(encoding="utf-8"))
+        checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
+        by_id = {item.get("id"): item for item in checks if isinstance(item, dict)}
+        assert by_id.get("prepare_target_path_exists", {}).get("passed") is False
+        assert isinstance(payload.get("branch_check_error"), str) and payload.get("branch_check_error")
 
 
 def test_dispatch_observation_rows_present_after_manager_dispatch_cycle(monkeypatch: pytest.MonkeyPatch):

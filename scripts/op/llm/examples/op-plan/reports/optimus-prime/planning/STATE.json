@@ -1,63 +1,56 @@
 {
-  "baseline_ready": true,
-  "build_ready": true,
-  "constraints": [],
-  "initialized_at": "2026-02-28T20:49:38Z",
-  "map_fingerprint": "148240f3c809261a14579983a4e8a727f38acc1984cbc36295302155e8e5fc54",
+  "schema_version": "1.0",
+  "initialized_at": "2026-03-02T09:00:00Z",
+  "updated_at": "2026-03-02T09:00:00Z",
   "mission": "Build MCP backend server",
-  "phase_count": 3,
-  "plan_id": "plan-20260228T204938Z",
-  "plan_ready": true,
-  "profile_aliases": [
-    "codex",
-    "codex-fifth",
-    "codex-first",
-    "codex-fourth",
-    "codex-frank",
-    "codex-saul",
-    "codex-saulgoodman",
-    "codex-second",
-    "codex-slobodan",
-    "codex-third"
-  ],
-  "profile_selection_ref": "/Users/slobodan/Projects/MyBoard/reports/optimus-prime/planning/PROFILE_SELECTION.json",
-  "repo_fingerprint": "c29c6052ccda165e6aee5dec4b0e93102d19303e76329263571d0272f50cb5db",
+  "scope": "Implement and integrate MCP backend API, tests, and docs",
+  "mission_source": {
+    "mode": "inline",
+    "value": "Build MCP backend server",
+    "path": null,
+    "display": "Build MCP backend server"
+  },
+  "scope_source": {
+    "mode": "inline",
+    "value": "Implement and integrate MCP backend API, tests, and docs",
+    "path": null,
+    "display": "Implement and integrate MCP backend API, tests, and docs"
+  },
+  "constraints": [],
   "requirements": [
     {
-      "acceptance_criteria": [
-        "Core workflow is implemented end-to-end.",
-        "Critical errors are handled deterministically."
-      ],
       "id": "REQ-001",
-      "title": "Deliver core functionality for Implement and integrate MCP backend API, tests, and docs",
-      "verify_commands": [
-        "python3 -m pytest"
-      ]
+      "title": "Deliver core MCP backend behavior",
+      "acceptance_criteria": [
+        "Core MCP backend flow is implemented end-to-end.",
+        "Critical failure paths are deterministic."
+      ],
+      "verify_commands": ["python3 -m pytest"]
     },
     {
-      "acceptance_criteria": [
-        "Relevant checks are automated.",
-        "Evidence is persisted in reports artifacts."
-      ],
       "id": "REQ-002",
-      "title": "Verify quality gates for Implement and integrate MCP backend API, tests, and docs",
-      "verify_commands": [
-        "python3 -m pytest"
-      ]
+      "title": "Deliver quality and contract verification",
+      "acceptance_criteria": [
+        "Verification/UAT contracts are defined and executable.",
+        "Evidence is persisted in expected planning artifacts."
+      ],
+      "verify_commands": ["python3 -m pytest"]
     },
     {
-      "acceptance_criteria": [
-        "Runtime/deploy flow is deterministic.",
-        "Recovery path is documented and testable."
-      ],
       "id": "REQ-003",
-      "title": "Operationalize rollout for Implement and integrate MCP backend API, tests, and docs",
-      "verify_commands": [
-        "python3 -m pytest"
-      ]
+      "title": "Deliver rollout-ready operational behavior",
+      "acceptance_criteria": [
+        "Runtime/deploy workflows are deterministic.",
+        "Recovery paths are documented and testable."
+      ],
+      "verify_commands": ["python3 -m pytest"]
     }
   ],
-  "schema_version": "1.0",
-  "scope": "Implement and integrate MCP backend API, tests, and docs",
-  "updated_at": "2026-02-28T20:49:38Z"
+  "map_fingerprint": "map-fingerprint-example",
+  "repo_fingerprint": "repo-fingerprint-example",
+  "baseline_ready": true,
+  "plan_ready": true,
+  "plan_id": "plan-example-20260302T090000Z",
+  "build_ready": true,
+  "phase_count": 3
 }
