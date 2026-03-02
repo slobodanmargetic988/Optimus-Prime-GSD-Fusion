@@ -5945,8 +5945,11 @@ def test_branch_manager_merge_proof_required_before_done_registry_update(
             )
             return 0
 
+        command_log: list[str] = []
+
         def fake_run_manager_command(command_text, **_kwargs):
             text = str(command_text).strip()
+            command_log.append(text)
             if "merge-base --is-ancestor" in text:
                 return {
                     "ok": False,
@@ -5995,6 +5998,20 @@ def test_branch_manager_merge_proof_required_before_done_registry_update(
             if isinstance(item, dict)
         }
         assert "TASK-001" not in merged_task_ids
+        assert any(item.startswith("git reset --hard ") for item in command_log)
+        assert not any("HEAD~1" in item for item in command_log)
+        validation_path = (
+            root
+            / "reports"
+            / "optimus-prime"
+            / "branch-manager"
+            / "attempt-task-001-1"
+            / "MERGE_VALIDATION.json"
+        )
+        payload = json.loads(validation_path.read_text(encoding="utf-8"))
+        assert payload.get("rollback_applied") is True
+        rollback_target = payload.get("rollback_target")
+        assert isinstance(rollback_target, str) and rollback_target.strip()
 
 
 def test_branch_manager_rollback_uses_pre_merge_head_not_head_parent(monkeypatch: pytest.MonkeyPatch):

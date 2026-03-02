@@ -8626,6 +8626,23 @@ def _manager_branch_merge_cycle(
                     ),
                 )
             except OpError as exc:
+                rollback_error: dict[str, Any] | None = None
+                if pre_merge_head and not rollback_applied:
+                    rollback_target = _as_str(pre_merge_head)
+                    if rollback_target:
+                        rollback_result = _run_manager_command(
+                            f"git reset --hard {rollback_target}",
+                            cwd=req.repo_root,
+                            timeout_sec=BRANCH_ACTION_COMMAND_TIMEOUT_SEC,
+                            manager="branch",
+                        )
+                        rollback_applied = _as_bool(rollback_result.get("ok"), default=False)
+                        if not rollback_applied:
+                            rollback_error = {
+                                "code": _as_str(rollback_result.get("code")) or "branch_manager_execution_failed",
+                                "message": _as_str(rollback_result.get("message"))
+                                or f"failed rollback to pre-merge HEAD {rollback_target}",
+                            }
                 validation_payload = {
                     "schema_version": SCHEMA_VERSION,
                     "task_id": task_id,
@@ -8638,6 +8655,7 @@ def _manager_branch_merge_cycle(
                     "rollback_applied": rollback_applied,
                     "rollback_target": rollback_target,
                     "error": {"code": exc.code, "message": exc.message, "stage": exc.stage},
+                    "rollback_error": rollback_error,
                     "llm_exit_code": exit_code,
                     "finished_at": utc_now_iso(),
                 }
