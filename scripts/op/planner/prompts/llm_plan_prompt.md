@@ -40,9 +40,17 @@ Planning requirements:
    - lane_id in format <phase_id>/lane-[a-c]
    - status set to pending
    - gaps_that_need_patching as a list (default empty)
+   - verification_contract object with explicit fields:
+     - mode (tdd_red|implementation_green|hardening)
+     - dev_expectation (expect_fail|expect_pass)
+     - test_expectation (expect_fail|expect_pass)
+     - review_expectation (expect_fail|expect_pass)
+     - expected_failure_reason_codes[] (non-empty)
+     - infra_failure_reason_codes[] (non-empty)
 4. Phase graph must be acyclic and task phase_id must map to a valid phase.
 5. Per phase, use at most 3 distinct lanes.
 6. TDD-first: each requirement and task must include verification intent.
+   - phase-1 seed TDD tasks MUST use verification_contract.mode=tdd_red and expect_fail for dev/test/review.
 7. For each functionality tree with more than 2 tasks, include at least 2 terminal hardening/review tasks.
 8. PLAN_CHECK.passed must be true.
 9. Keep plan quality high enough for autonomous op-build execution.

@@ -3,7 +3,9 @@
   "plan_id": "plan-example-20260302T090000Z",
   "phase_id": "phase-3",
   "task_id": "TASK-003",
-  "requirement_ids": ["REQ-003"],
+  "requirement_ids": [
+    "REQ-003"
+  ],
   "updated_at": "2026-03-02T09:00:00Z",
   "dev": {
     "status": "queued",
@@ -34,6 +36,11 @@
   },
   "summary": {
     "result": "blocked",
-    "reason_codes": ["not_started"]
+    "reason_codes": [
+      "not_started"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": false,
+    "failure_class": "none"
   }
 }

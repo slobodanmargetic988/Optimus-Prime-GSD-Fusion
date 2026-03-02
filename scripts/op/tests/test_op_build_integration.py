@@ -118,9 +118,9 @@ def build_repo(root: Path) -> None:
                 "    {'id': 'REQ-003', 'title': 'Rollout ops', 'acceptance_criteria': ['ops path'], 'verify_commands': ['python3 -m pytest']},",
                 "]",
                 "tasks = [",
-                "    {'task_id': 'TASK-001', 'title': 'Implement core workflow', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-a', 'status': 'pending', 'requirement_ids': ['REQ-001'], 'depends_on': [], 'must_haves': ['core path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
-                "    {'task_id': 'TASK-002', 'title': 'Implement quality gates', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-b', 'status': 'pending', 'requirement_ids': ['REQ-002'], 'depends_on': ['TASK-001'], 'must_haves': ['quality path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
-                "    {'task_id': 'TASK-003', 'title': 'Implement rollout ops', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-c', 'status': 'pending', 'requirement_ids': ['REQ-003'], 'depends_on': ['TASK-002'], 'must_haves': ['ops path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
+                "    {'task_id': 'TASK-001', 'title': 'Implement core workflow', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-a', 'status': 'pending', 'verification_contract': {'mode': 'tdd_red', 'dev_expectation': 'expect_fail', 'test_expectation': 'expect_fail', 'review_expectation': 'expect_fail', 'expected_failure_reason_codes': ['tdd_expected_failure_observed'], 'infra_failure_reason_codes': ['verification_environment_error', 'verification_command_target_missing']}, 'requirement_ids': ['REQ-001'], 'depends_on': [], 'must_haves': ['core path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
+                "    {'task_id': 'TASK-002', 'title': 'Implement quality gates', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-b', 'status': 'pending', 'verification_contract': {'mode': 'tdd_red', 'dev_expectation': 'expect_fail', 'test_expectation': 'expect_fail', 'review_expectation': 'expect_fail', 'expected_failure_reason_codes': ['tdd_expected_failure_observed'], 'infra_failure_reason_codes': ['verification_environment_error', 'verification_command_target_missing']}, 'requirement_ids': ['REQ-002'], 'depends_on': ['TASK-001'], 'must_haves': ['quality path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
+                "    {'task_id': 'TASK-003', 'title': 'Implement rollout ops', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-c', 'status': 'pending', 'verification_contract': {'mode': 'tdd_red', 'dev_expectation': 'expect_fail', 'test_expectation': 'expect_fail', 'review_expectation': 'expect_fail', 'expected_failure_reason_codes': ['tdd_expected_failure_observed'], 'infra_failure_reason_codes': ['verification_environment_error', 'verification_command_target_missing']}, 'requirement_ids': ['REQ-003'], 'depends_on': ['TASK-002'], 'must_haves': ['ops path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
                 "]",
                 "plan_packets = {'schema_version': '1.0', 'generated_at': '2026-01-01T00:00:00Z', 'plan_id': plan_id, 'phase': 'multi-phase', 'phases': [{'phase_id': 'phase-1', 'task_ids': ['TASK-001', 'TASK-002', 'TASK-003'], 'depends_on_phase_ids': [], 'entry_criteria': ['phase_dependencies_done'], 'exit_criteria': ['all_tasks_review_done', 'verify_commands_passed', 'uat_matrix_passed', 'zero_open_gaps']}], 'requirements': requirements, 'tasks': tasks, 'depends_on': [], 'must_haves': ['core path', 'quality path', 'ops path'], 'verify_commands': ['python3 -m pytest']}",
                 "plan_check = {'schema_version': '1.0', 'passed': True, 'checks': [{'id': 'requirement_coverage', 'passed': True}], 'coverage': {'requirements_total': 3, 'requirements_covered': 3, 'missing_requirement_ids': []}, 'dependency_graph': {'nodes': ['TASK-001', 'TASK-002', 'TASK-003'], 'edges': [{'from': 'TASK-001', 'to': 'TASK-002'}, {'from': 'TASK-002', 'to': 'TASK-003'}], 'cycle_detected': False, 'valid': True}, 'verify_contract_completeness': True, 'phase_traceability': True, 'blocking_errors': []}",
@@ -128,7 +128,7 @@ def build_repo(root: Path) -> None:
                 "for task in tasks:",
                 "    task_id = task['task_id']",
                 "    evidence_ref = f'reports/optimus-prime/planning/evidence/{task_id}/TASK_EVIDENCE.json'",
-                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'lane_id': task['lane_id'], 'requirement_ids': task['requirement_ids'], 'status': 'pending', 'owner_slot': None, 'dispatch_thread_id': None, 'last_progress_at': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'gaps_that_need_patching': [], 'blockers': []})",
+                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'lane_id': task['lane_id'], 'requirement_ids': task['requirement_ids'], 'verification_contract': task['verification_contract'], 'status': 'pending', 'owner_slot': None, 'dispatch_thread_id': None, 'last_progress_at': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'gaps_that_need_patching': [], 'blockers': [], 'last_handoff_outcome': {'status': None, 'reason_codes': [], 'timestamp': None}, 'blocking_source': 'none'})",
                 "state_json = {'schema_version': '1.0', 'initialized_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z', 'mission': 'inline:Build MyBoard', 'scope': 'inline:Board workflow', 'mission_source': {'mode': 'inline', 'value': 'Build MyBoard', 'path': None, 'display': 'Build MyBoard'}, 'scope_source': {'mode': 'inline', 'value': 'Board workflow', 'path': None, 'display': 'Board workflow'}, 'constraints': [], 'requirements': requirements, 'map_fingerprint': 'map-test', 'repo_fingerprint': 'repo-test', 'baseline_ready': True, 'plan_ready': True, 'plan_id': plan_id, 'build_ready': True}",
                 "state_md = '# STATE\\n\\n- baseline_ready: true\\n- plan_ready: true\\n- build_ready: true\\n'",
                 "gaps = {'schema_version': '1.0', 'plan_id': plan_id, 'updated_at': '2026-01-01T00:00:00Z', 'gaps': []}",
@@ -148,7 +148,7 @@ def build_repo(root: Path) -> None:
                 "]",
                 "for task in tasks:",
                 "    task_id = task['task_id']",
-                "    ev = {'schema_version': '1.0', 'plan_id': plan_id, 'phase_id': task['phase_id'], 'task_id': task_id, 'requirement_ids': task['requirement_ids'], 'updated_at': '2026-01-01T00:00:00Z', 'dev': {'status': 'queued', 'checks': [], 'verify_results': [], 'dev_ready': False, 'blockers': [], 'artifacts': []}, 'test': {'status': 'queued', 'checks': [], 'verify_results': [], 'uat_results': [], 'blockers': [], 'artifacts': []}, 'review': {'status': 'queued', 'decision': None, 'blockers': [], 'artifacts': []}, 'gate': {'ready_for_test': False, 'ready_for_review': False, 'ready_for_phase_exit': False}, 'summary': {'result': 'pass', 'reason_codes': []}}",
+                "    ev = {'schema_version': '1.0', 'plan_id': plan_id, 'phase_id': task['phase_id'], 'task_id': task_id, 'requirement_ids': task['requirement_ids'], 'updated_at': '2026-01-01T00:00:00Z', 'dev': {'status': 'queued', 'checks': [], 'verify_results': [], 'dev_ready': False, 'blockers': [], 'artifacts': []}, 'test': {'status': 'queued', 'checks': [], 'verify_results': [], 'uat_results': [], 'blockers': [], 'artifacts': []}, 'review': {'status': 'queued', 'decision': None, 'blockers': [], 'artifacts': []}, 'gate': {'ready_for_test': False, 'ready_for_review': False, 'ready_for_phase_exit': False}, 'summary': {'result': 'blocked', 'expectation': 'expect_fail', 'expectation_met': False, 'failure_class': 'none', 'reason_codes': ['not_started']}}",
                 "    rows.append(row(f'evidence/{task_id}/TASK_EVIDENCE.json', 'json', ev))",
                 "bundle_path.write_text('\\n'.join(json.dumps(item) for item in rows) + '\\n', encoding='utf-8')",
                 "if validator_match:",
@@ -2344,6 +2344,25 @@ def _write_manager_action_from_prompt(prompt_text: str, payload: dict[str, objec
     action_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _mark_task_review_done_merge_ready(root: Path, task: dict[str, object]) -> None:
+    task["status"] = "review_done"
+    task["active_branch"] = "codex/dev-1/task-001"
+    evidence = task.get("evidence") if isinstance(task.get("evidence"), dict) else {}
+    evidence_ref = evidence.get("task_evidence_ref")
+    if not isinstance(evidence_ref, str) or not evidence_ref:
+        return
+    evidence_path = root / evidence_ref
+    payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    payload["summary"] = {
+        "result": "fail",
+        "expectation": "expect_fail",
+        "expectation_met": True,
+        "failure_class": "expected_red",
+        "reason_codes": ["tdd_expected_failure_observed"],
+    }
+    evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def test_build_fails_terminal_when_workstation_skill_missing(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -2684,8 +2703,7 @@ def test_branch_manager_success_path_does_not_block_unrelated_lanes(monkeypatch:
         build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
         task_1 = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
         task_2 = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-002")
-        task_1["status"] = "review_done"
-        task_1["active_branch"] = "codex/dev-1/task-001"
+        _mark_task_review_done_merge_ready(root, task_1)
         task_2["status"] = "pending"
 
         def fake_codex_exec(**kwargs):

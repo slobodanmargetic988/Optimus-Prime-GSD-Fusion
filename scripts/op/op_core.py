@@ -182,6 +182,29 @@ TASK_STATUS_NORMALIZE_MAP = {
     TASK_STATUS_BLOCKED: TASK_STATUS_BLOCKED,
 }
 
+VERIFICATION_MODES = {
+    "tdd_red",
+    "implementation_green",
+    "hardening",
+}
+VERIFICATION_EXPECTATIONS = {
+    "expect_fail",
+    "expect_pass",
+}
+EVIDENCE_FAILURE_CLASSES = {
+    "expected_red",
+    "infra",
+    "unexpected",
+    "none",
+}
+DEFAULT_EXPECTED_FAILURE_REASON_CODES = [
+    "tdd_expected_failure_observed",
+]
+DEFAULT_INFRA_FAILURE_REASON_CODES = [
+    "verification_environment_error",
+    "verification_command_target_missing",
+]
+
 FIXED_WORKER_TOPOLOGY: list[dict[str, str]] = [
     {"slot": "dev-1", "role": "developer"},
     {"slot": "dev-2", "role": "developer"},
@@ -290,6 +313,170 @@ def _coerce_nonneg_int(value: Any, *, default: int) -> int:
 def _normalize_task_status(value: Any) -> str:
     text = (_as_str(value) or TASK_STATUS_PENDING).lower()
     return TASK_STATUS_NORMALIZE_MAP.get(text, TASK_STATUS_PENDING)
+
+
+def _normalize_verification_mode(value: Any) -> str:
+    text = (_as_str(value) or "implementation_green").lower()
+    return text if text in VERIFICATION_MODES else "implementation_green"
+
+
+def _normalize_stage_expectation(value: Any) -> str:
+    text = (_as_str(value) or "expect_pass").lower()
+    return text if text in VERIFICATION_EXPECTATIONS else "expect_pass"
+
+
+def _normalize_failure_class(value: Any) -> str:
+    text = (_as_str(value) or "none").lower()
+    return text if text in EVIDENCE_FAILURE_CLASSES else "unexpected"
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = _as_str(item)
+        if text:
+            out.append(text)
+    return out
+
+
+def _default_verification_contract(*, mode: str = "implementation_green") -> dict[str, Any]:
+    normalized_mode = _normalize_verification_mode(mode)
+    expectation = "expect_fail" if normalized_mode == "tdd_red" else "expect_pass"
+    return {
+        "mode": normalized_mode,
+        "dev_expectation": expectation,
+        "test_expectation": expectation,
+        "review_expectation": expectation,
+        "expected_failure_reason_codes": list(DEFAULT_EXPECTED_FAILURE_REASON_CODES),
+        "infra_failure_reason_codes": list(DEFAULT_INFRA_FAILURE_REASON_CODES),
+    }
+
+
+def _normalize_verification_contract(value: Any) -> dict[str, Any]:
+    row = value if isinstance(value, dict) else {}
+    contract = _default_verification_contract(mode=_as_str(row.get("mode")) or "implementation_green")
+    contract["dev_expectation"] = _normalize_stage_expectation(row.get("dev_expectation"))
+    contract["test_expectation"] = _normalize_stage_expectation(row.get("test_expectation"))
+    contract["review_expectation"] = _normalize_stage_expectation(row.get("review_expectation"))
+    expected_failure_reason_codes = _as_str_list(row.get("expected_failure_reason_codes"))
+    infra_failure_reason_codes = _as_str_list(row.get("infra_failure_reason_codes"))
+    if not expected_failure_reason_codes:
+        expected_failure_reason_codes = list(DEFAULT_EXPECTED_FAILURE_REASON_CODES)
+    if not infra_failure_reason_codes:
+        infra_failure_reason_codes = list(DEFAULT_INFRA_FAILURE_REASON_CODES)
+    contract["expected_failure_reason_codes"] = expected_failure_reason_codes
+    contract["infra_failure_reason_codes"] = infra_failure_reason_codes
+    if contract["mode"] == "tdd_red":
+        contract["dev_expectation"] = "expect_fail"
+        contract["test_expectation"] = "expect_fail"
+        contract["review_expectation"] = "expect_fail"
+    return contract
+
+
+def _task_verification_contract(task: dict[str, Any], plan_task: dict[str, Any] | None = None) -> dict[str, Any]:
+    task_contract = task.get("verification_contract") if isinstance(task.get("verification_contract"), dict) else None
+    plan_contract = (
+        plan_task.get("verification_contract")
+        if isinstance(plan_task, dict) and isinstance(plan_task.get("verification_contract"), dict)
+        else None
+    )
+    normalized = _normalize_verification_contract(task_contract or plan_contract or {})
+    task["verification_contract"] = normalized
+    return normalized
+
+
+def _current_stage_for_task_status(status: str, owner_slot: str | None = None) -> str:
+    if status in {TASK_STATUS_PENDING, TASK_STATUS_DEV_WORKING}:
+        return "dev"
+    if status in {TASK_STATUS_DEV_DONE, TASK_STATUS_TESTING}:
+        return "test"
+    if status in {TASK_STATUS_TESTS_DONE, TASK_STATUS_REVIEWING, TASK_STATUS_REVIEW_DONE}:
+        return "review"
+    if owner_slot:
+        if owner_slot.startswith("test-"):
+            return "test"
+        if owner_slot.startswith("review-"):
+            return "review"
+    return "dev"
+
+
+def _expected_for_stage(contract: dict[str, Any], stage: str) -> str:
+    if stage == "test":
+        return _normalize_stage_expectation(contract.get("test_expectation"))
+    if stage == "review":
+        return _normalize_stage_expectation(contract.get("review_expectation"))
+    return _normalize_stage_expectation(contract.get("dev_expectation"))
+
+
+def _task_has_open_embedded_gap(task: dict[str, Any]) -> bool:
+    rows = task.get("gaps_that_need_patching") if isinstance(task.get("gaps_that_need_patching"), list) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = (_as_str(row.get("status")) or "open").lower()
+        if status not in {"closed", "verified", "patched"}:
+            return True
+    return False
+
+
+def _evaluate_evidence_expectation(
+    *,
+    payload: dict[str, Any],
+    expected: str,
+) -> dict[str, Any]:
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    summary_result = (_as_str(summary.get("result")) or "").lower()
+    summary_expectation = _normalize_stage_expectation(summary.get("expectation"))
+    expectation_met = _as_bool_field(summary.get("expectation_met"))
+    failure_class = _normalize_failure_class(summary.get("failure_class"))
+    if summary_expectation != expected:
+        return {
+            "progress": False,
+            "blocked": True,
+            "reason_code": "tdd_expectation_not_met",
+            "message": f"summary.expectation mismatch (expected={expected}, actual={summary_expectation})",
+            "failure_class": failure_class,
+        }
+    if expected == "expect_fail":
+        if expectation_met and summary_result in {"fail", "blocked"} and failure_class == "expected_red":
+            return {
+                "progress": True,
+                "blocked": False,
+                "reason_code": "tdd_expectation_met",
+                "message": "expected failure observed for red-phase task",
+                "failure_class": failure_class,
+            }
+        return {
+            "progress": False,
+            "blocked": True,
+            "reason_code": "tdd_expectation_not_met",
+            "message": "expected red-phase failure was not observed",
+            "failure_class": failure_class,
+        }
+    if expectation_met and summary_result == "pass" and failure_class == "none":
+        return {
+            "progress": True,
+            "blocked": False,
+            "reason_code": "tdd_expectation_met",
+            "message": "expected pass observed for implementation/hardening task",
+            "failure_class": failure_class,
+        }
+    blocked_reason = (
+        "infrastructure verification failure"
+        if failure_class == "infra"
+        else "unexpected verification failure"
+        if failure_class == "unexpected"
+        else "expected pass was not observed"
+    )
+    return {
+        "progress": False,
+        "blocked": True,
+        "reason_code": "tdd_expectation_not_met",
+        "message": blocked_reason,
+        "failure_class": failure_class,
+    }
 
 
 def _as_constraints(value: Any) -> list[str]:
@@ -1714,7 +1901,14 @@ def _canonical_task_evidence_rel(task_id: str) -> Path:
     return EVIDENCE_REL / task_id / "TASK_EVIDENCE.json"
 
 
-def _default_task_evidence(plan_id: str, phase_id: str, task_id: str, requirement_ids: list[str]) -> dict[str, Any]:
+def _default_task_evidence(
+    plan_id: str,
+    phase_id: str,
+    task_id: str,
+    requirement_ids: list[str],
+    *,
+    summary_expectation: str = "expect_pass",
+) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "plan_id": plan_id,
@@ -1751,6 +1945,9 @@ def _default_task_evidence(plan_id: str, phase_id: str, task_id: str, requiremen
         },
         "summary": {
             "result": "blocked",
+            "expectation": _normalize_stage_expectation(summary_expectation),
+            "expectation_met": False,
+            "failure_class": "none",
             "reason_codes": ["not_started"],
         },
     }
@@ -1773,7 +1970,14 @@ def _write_task_evidence_files(repo_root: Path, plan_packets: dict[str, Any]) ->
         ]
         rel = _canonical_task_evidence_rel(task_id)
         abs_path = _repo_path(repo_root, rel)
-        payload = _default_task_evidence(plan_id, phase_id, task_id, req_ids)
+        contract = _normalize_verification_contract(task.get("verification_contract"))
+        payload = _default_task_evidence(
+            plan_id,
+            phase_id,
+            task_id,
+            req_ids,
+            summary_expectation=_expected_for_stage(contract, "dev"),
+        )
         _atomic_write_json(abs_path, payload)
         refs[task_id] = str(rel)
     return refs
@@ -1806,6 +2010,7 @@ def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str,
                 "phase_id": phase_id,
                 "lane_id": lane_id,
                 "requirement_ids": req_ids,
+                "verification_contract": _normalize_verification_contract(task.get("verification_contract")),
                 "status": _normalize_task_status(task.get("status")),
                 "owner_slot": None,
                 "dispatch_thread_id": None,
@@ -1819,6 +2024,8 @@ def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str,
                 },
                 "gaps_that_need_patching": task.get("gaps_that_need_patching", []) if isinstance(task.get("gaps_that_need_patching"), list) else [],
                 "blockers": [],
+                "last_handoff_outcome": {"status": None, "reason_codes": [], "timestamp": None},
+                "blocking_source": "none",
             }
         )
     return {
@@ -1867,6 +2074,11 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} lane_id is required"})
         elif not lane_id.startswith(f"{phase_id}/lane-"):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} lane_id must be phase-scoped"})
+        verification_contract = item.get("verification_contract")
+        if not isinstance(verification_contract, dict):
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} verification_contract must be object"})
+        else:
+            item["verification_contract"] = _normalize_verification_contract(verification_contract)
         dispatch_thread_id = item.get("dispatch_thread_id")
         if dispatch_thread_id is not None and not _as_str(dispatch_thread_id):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} dispatch_thread_id must be string|null"})
@@ -1892,6 +2104,45 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
         gaps = item.get("gaps_that_need_patching")
         if not isinstance(gaps, list):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} gaps_that_need_patching must be list"})
+        blockers = item.get("blockers")
+        if not isinstance(blockers, list):
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} blockers must be list"})
+        handoff_outcome = item.get("last_handoff_outcome")
+        if not isinstance(handoff_outcome, dict):
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} last_handoff_outcome must be object"})
+        else:
+            status_text = handoff_outcome.get("status")
+            if status_text is not None and not _as_str(status_text):
+                errors.append(
+                    {
+                        "code": "task_state_invalid",
+                        "message": f"task {task_id} last_handoff_outcome.status must be string|null",
+                    }
+                )
+            reason_codes = handoff_outcome.get("reason_codes")
+            if not isinstance(reason_codes, list):
+                errors.append(
+                    {
+                        "code": "task_state_invalid",
+                        "message": f"task {task_id} last_handoff_outcome.reason_codes must be list",
+                    }
+                )
+            timestamp = handoff_outcome.get("timestamp")
+            if timestamp is not None and not _parse_iso_utc(timestamp):
+                errors.append(
+                    {
+                        "code": "task_state_invalid",
+                        "message": f"task {task_id} last_handoff_outcome.timestamp must be ISO-8601|null",
+                    }
+                )
+        blocking_source = (_as_str(item.get("blocking_source")) or "").lower()
+        if blocking_source not in {"handoff", "evidence", "merge", "none"}:
+            errors.append(
+                {
+                    "code": "task_state_invalid",
+                    "message": f"task {task_id} blocking_source must be handoff|evidence|merge|none",
+                }
+            )
     expected_task_ids = []
     for task in plan_packets.get("tasks", []):
         if isinstance(task, dict):
@@ -2046,6 +2297,12 @@ def _validate_task_evidence_payload(payload: dict[str, Any], task_id: str, phase
             errors.append(f"gate.{key} must be bool")
     if (_as_str(summary.get("result")) or "").lower() not in {"pass", "fail", "blocked"}:
         errors.append("summary.result must be pass|fail|blocked")
+    if (_as_str(summary.get("expectation")) or "").lower() not in VERIFICATION_EXPECTATIONS:
+        errors.append("summary.expectation must be expect_fail|expect_pass")
+    if not isinstance(summary.get("expectation_met"), bool):
+        errors.append("summary.expectation_met must be bool")
+    if (_as_str(summary.get("failure_class")) or "").lower() not in EVIDENCE_FAILURE_CLASSES:
+        errors.append("summary.failure_class must be expected_red|infra|unexpected|none")
     if not isinstance(summary.get("reason_codes"), list):
         errors.append("summary.reason_codes must be list")
     return errors
@@ -2100,6 +2357,22 @@ def _collect_passed_uat_requirement_ids(evidence_payload: dict[str, Any], fallba
 def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any], task_state: dict[str, Any]) -> list[dict[str, Any]]:
     warnings: list[dict[str, Any]] = []
     plan_map = _plan_task_map(plan_packets)
+    merged_task_ids: set[str] = set()
+    done_registry_path = _repo_path(repo_root, DONE_TASKS_REGISTRY_JSON)
+    if done_registry_path.exists():
+        try:
+            done_registry = _read_json(done_registry_path)
+        except OpError:
+            done_registry = None
+        if isinstance(done_registry, dict):
+            merged_rows = done_registry.get("merged_tasks")
+            if isinstance(merged_rows, list):
+                for row in merged_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    merged_task_id = _as_str(row.get("task_id"))
+                    if merged_task_id:
+                        merged_task_ids.add(merged_task_id)
     for task in task_state.get("tasks", []):
         if not isinstance(task, dict):
             continue
@@ -2107,10 +2380,13 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         phase_id = _as_str(task.get("phase_id")) or "phase-1"
         if not task_id:
             continue
+        plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
+        contract = _task_verification_contract(task, plan_task)
         evidence_path = _task_evidence_path(repo_root, task)
         if not evidence_path.exists():
             task["status"] = "blocked"
             task["owner_slot"] = None
+            task["blocking_source"] = "evidence"
             _append_task_blocker(
                 task,
                 summary=f"task evidence missing for {task_id}",
@@ -2132,6 +2408,7 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         except OpError as exc:
             task["status"] = "blocked"
             task["owner_slot"] = None
+            task["blocking_source"] = "evidence"
             _append_task_blocker(
                 task,
                 summary=f"task evidence invalid for {task_id}",
@@ -2152,6 +2429,7 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         if not isinstance(payload, dict):
             task["status"] = "blocked"
             task["owner_slot"] = None
+            task["blocking_source"] = "evidence"
             _append_task_blocker(
                 task,
                 summary=f"task evidence invalid for {task_id}",
@@ -2193,6 +2471,7 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         if validation_errors:
             task["status"] = "blocked"
             task["owner_slot"] = None
+            task["blocking_source"] = "evidence"
             _append_task_blocker(
                 task,
                 summary=f"task evidence schema invalid for {task_id}",
@@ -2229,37 +2508,98 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         evidence["verify_results"] = verify_results
         test_block = payload.get("test") if isinstance(payload.get("test"), dict) else {}
         evidence["uat_results"] = test_block.get("uat_results") if isinstance(test_block.get("uat_results"), list) else []
-        if not _as_str(task.get("last_progress_at")):
-            task["last_progress_at"] = _as_str(payload.get("updated_at")) or utc_now_iso()
-
-        gate = payload["gate"]
-        review = payload["review"]
+        stage = _current_stage_for_task_status(_normalize_task_status(task.get("status")), _as_str(task.get("owner_slot")))
+        expected = _expected_for_stage(contract, stage)
         summary = payload["summary"]
-        if _as_bool_field(gate.get("ready_for_review")):
-            task["status"] = TASK_STATUS_TESTS_DONE
-            task["owner_slot"] = None
-        if (_as_str(review.get("decision")) or "").lower() in {"accepted", "approved", "ready_for_merge", "pass"}:
-            task["status"] = TASK_STATUS_REVIEW_DONE
-            task["owner_slot"] = None
-        if (_as_str(review.get("status")) or "").lower() in {"done", "completed", "review_done"}:
-            task["status"] = TASK_STATUS_REVIEW_DONE
-            task["owner_slot"] = None
-        if _as_bool_field(gate.get("ready_for_test")) and _normalize_task_status(task.get("status")) in {
-            TASK_STATUS_PENDING,
-            TASK_STATUS_DEV_WORKING,
-            TASK_STATUS_BLOCKED,
-        }:
-            task["status"] = TASK_STATUS_DEV_DONE
-            task["owner_slot"] = None
         summary_result = (_as_str(summary.get("result")) or "").lower()
         reason_codes = summary.get("reason_codes") if isinstance(summary.get("reason_codes"), list) else []
         is_not_started_placeholder = _is_not_started_evidence_placeholder(payload, summary_result, reason_codes)
-        if summary_result in {"fail", "blocked"} and not is_not_started_placeholder and _normalize_task_status(task.get("status")) != TASK_STATUS_REVIEW_DONE:
-            if not _as_bool_field(gate.get("ready_for_test")) and not _as_bool_field(gate.get("ready_for_review")):
+        payload_updated_at = _as_str(payload.get("updated_at")) or utc_now_iso()
+        if not _as_str(task.get("last_progress_at")):
+            task["last_progress_at"] = payload_updated_at
+        if is_not_started_placeholder:
+            if isinstance(plan_task, dict) and not task.get("requirement_ids"):
+                task["requirement_ids"] = [
+                    rid
+                    for rid in ((_as_str(item) for item in plan_task.get("requirement_ids", [])))
+                    if rid
+                ]
+            continue
+
+        expectation_eval = _evaluate_evidence_expectation(payload=payload, expected=expected)
+        if expectation_eval.get("progress"):
+            if stage == "dev":
+                task["status"] = TASK_STATUS_DEV_DONE
+            elif stage == "test":
+                task["status"] = TASK_STATUS_TESTS_DONE
+            else:
+                task["status"] = TASK_STATUS_REVIEW_DONE
+            task["owner_slot"] = None
+            task["blocking_source"] = "none"
+            task["last_progress_at"] = payload_updated_at
+            warnings.append(
+                {
+                    "code": "tdd_expectation_met",
+                    "message": (
+                        f"task {task_id} advanced at stage={stage} with expected={expected} "
+                        f"(failure_class={_as_str(expectation_eval.get('failure_class')) or 'none'})"
+                    ),
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "expected": expected,
+                    "stage_name": stage,
+                }
+            )
+        elif expectation_eval.get("blocked"):
+            normalized_status = _normalize_task_status(task.get("status"))
+            if normalized_status == TASK_STATUS_REVIEW_DONE and task_id in merged_task_ids:
+                warnings.append(
+                    {
+                        "code": "tdd_expectation_not_met",
+                        "message": (
+                            f"task {task_id} has post-merge evidence mismatch but merge already recorded; "
+                            "status kept at review_done"
+                        ),
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                        "expected": expected,
+                        "failure_class": _as_str(expectation_eval.get("failure_class")) or "unexpected",
+                    }
+                )
+            else:
                 task["status"] = TASK_STATUS_BLOCKED
                 task["owner_slot"] = None
+                task["blocking_source"] = "evidence"
+                task["last_progress_at"] = payload_updated_at
+                blocker_reason = _as_str(expectation_eval.get("message")) or "verification expectation mismatch"
+                blocker_code = _as_str(expectation_eval.get("reason_code")) or "tdd_expectation_not_met"
+                _append_task_blocker(
+                    task,
+                    summary=f"task evidence expectation failed for {task_id}",
+                    details={
+                        "code": blocker_code,
+                        "failure_class": _as_str(expectation_eval.get("failure_class")) or "unexpected",
+                        "expected": expected,
+                        "stage": stage,
+                        "reason": blocker_reason,
+                        "evidence_path": str(evidence_path),
+                    },
+                )
+                warnings.append(
+                    {
+                        "code": "tdd_expectation_not_met",
+                        "message": (
+                            f"task {task_id} blocked: stage={stage}, expected={expected}, "
+                            f"failure_class={_as_str(expectation_eval.get('failure_class')) or 'unexpected'}"
+                        ),
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                        "expected": expected,
+                        "stage_name": stage,
+                        "failure_class": _as_str(expectation_eval.get("failure_class")) or "unexpected",
+                    }
+                )
 
-        plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
         if isinstance(plan_task, dict) and not task.get("requirement_ids"):
             task["requirement_ids"] = [
                 rid
@@ -2505,6 +2845,14 @@ def _normalize_task_evidence_payload(payload: dict[str, Any]) -> bool:
     if summary.get("reason_codes") != cleaned:
         changed = True
     summary["reason_codes"] = cleaned
+    expectation = _normalize_stage_expectation(summary.get("expectation"))
+    if summary.get("expectation") != expectation:
+        summary["expectation"] = expectation
+        changed = True
+    failure_class = _normalize_failure_class(summary.get("failure_class"))
+    if summary.get("failure_class") != failure_class:
+        summary["failure_class"] = failure_class
+        changed = True
     payload["summary"] = summary
     return changed
 
@@ -4538,28 +4886,47 @@ def _prepare_dead_pid_redispatch_assignments(
                     "likely_cause_code": dispatch_failure_code or None,
                 }
             )
-        gate = evidence_payload.get("gate") if isinstance(evidence_payload.get("gate"), dict) else {}
-        review = evidence_payload.get("review") if isinstance(evidence_payload.get("review"), dict) else {}
+        stage_name, role_name = status_to_stage[status]
+        plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
+        contract = _task_verification_contract(task, plan_task)
+        expected = _expected_for_stage(contract, stage_name)
+        summary = evidence_payload.get("summary") if isinstance(evidence_payload.get("summary"), dict) else {}
+        summary_result = (_as_str(summary.get("result")) or "").lower()
+        reason_codes = summary.get("reason_codes") if isinstance(summary.get("reason_codes"), list) else []
+        is_not_started_placeholder = _is_not_started_evidence_placeholder(
+            evidence_payload,
+            summary_result,
+            reason_codes,
+        )
         evidence_progress = False
-        if status == TASK_STATUS_DEV_WORKING and _as_bool_field(gate.get("ready_for_test")):
-            evidence_progress = True
-            task["status"] = TASK_STATUS_DEV_DONE
-        elif status == TASK_STATUS_TESTING and _as_bool_field(gate.get("ready_for_review")):
-            evidence_progress = True
-            task["status"] = TASK_STATUS_TESTS_DONE
-        elif status == TASK_STATUS_REVIEWING:
-            review_decision = (_as_str(review.get("decision")) or "").lower()
-            review_status = (_as_str(review.get("status")) or "").lower()
-            if review_decision in {"accepted", "approved", "ready_for_merge", "pass"} or review_status in {
-                "done",
-                "completed",
-                "review_done",
-            }:
+        if evidence_payload and not is_not_started_placeholder:
+            expectation_eval = _evaluate_evidence_expectation(payload=evidence_payload, expected=expected)
+            if expectation_eval.get("progress"):
                 evidence_progress = True
-                task["status"] = TASK_STATUS_REVIEW_DONE
+                if stage_name == "dev":
+                    task["status"] = TASK_STATUS_DEV_DONE
+                elif stage_name == "test":
+                    task["status"] = TASK_STATUS_TESTS_DONE
+                else:
+                    task["status"] = TASK_STATUS_REVIEW_DONE
+            else:
+                warnings.append(
+                    {
+                        "code": "tdd_expectation_not_met",
+                        "message": (
+                            f"task {task_id} dead-pid recovery found non-progress evidence "
+                            f"(stage={stage_name}, expected={expected}, "
+                            f"failure_class={_as_str(expectation_eval.get('failure_class')) or 'unexpected'})"
+                        ),
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                        "slot": owner_slot,
+                    }
+                )
 
         if evidence_progress:
             task["owner_slot"] = None
+            task["blocking_source"] = "none"
             task["last_progress_at"] = utc_now_iso()
             retry_counts.pop(task_id, None)
             warnings.append(
@@ -4589,7 +4956,6 @@ def _prepare_dead_pid_redispatch_assignments(
             )
             continue
 
-        stage_name, role_name = status_to_stage[status]
         redispatch_base_status = {
             TASK_STATUS_DEV_WORKING: TASK_STATUS_PENDING,
             TASK_STATUS_TESTING: TASK_STATUS_DEV_DONE,
@@ -4598,7 +4964,6 @@ def _prepare_dead_pid_redispatch_assignments(
         task["status"] = redispatch_base_status
         task["owner_slot"] = None
         task["last_progress_at"] = utc_now_iso()
-        plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
         lane_id = _as_str(task.get("lane_id")) or _as_str(plan_task.get("lane_id"))
         phase_id = _as_str(task.get("phase_id")) or _as_str(plan_task.get("phase_id")) or "phase-1"
         retry_count = int(retry_counts.get(task_id, 0)) + 1
@@ -7122,18 +7487,31 @@ def _apply_handoff_updates(repo_root: Path, task_state: dict[str, Any], build_st
 
         result = (_as_str(row.get("result")) or _as_str(row.get("status")) or "").lower()
         if result in {"blocked", "failed", "error", "dispatch_failed"}:
-            task["status"] = "blocked"
-            task["owner_slot"] = None
-            blockers = task.get("blockers")
-            if not isinstance(blockers, list):
-                blockers = []
-                task["blockers"] = blockers
-            blockers.append(
+            reason_codes = [
+                code
+                for code in (_as_str(item) for item in (row.get("reason_codes") if isinstance(row.get("reason_codes"), list) else []))
+                if code
+            ]
+            task["last_handoff_outcome"] = {
+                "status": result,
+                "reason_codes": reason_codes,
+                "timestamp": utc_now_iso(),
+            }
+            warnings.append(
                 {
-                    "timestamp": utc_now_iso(),
-                    "summary": _as_str(row.get("reason")) or _as_str(row.get("message")) or "handoff blocked",
+                    "code": "handoff_non_authoritative_state_only",
+                    "message": f"handoff reported blocked result for {task_id}; task status will be decided by evidence contract",
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "reason_codes": reason_codes,
                 }
             )
+        else:
+            task["last_handoff_outcome"] = {
+                "status": result or None,
+                "reason_codes": [],
+                "timestamp": utc_now_iso(),
+            }
     build_state["handoff_log_offset"] = len(rows)
     return warnings
 
@@ -7315,6 +7693,8 @@ def _dispatch_task_packet(
         "test": {"slot": "test-1", "role": "tester", "status": TASK_STATUS_TESTING, "attempt_key": "test"},
         "review": {"slot": "review-1", "role": "reviewer", "status": TASK_STATUS_REVIEWING, "attempt_key": "review"},
     }
+    contract = _task_verification_contract(task, plan_task)
+    stage_expectation = _expected_for_stage(contract, stage)
     cfg = stage_cfg[stage]
     slot_name = slot_override or cfg["slot"]
     start_from_branch = _as_str(start_from_branch_override) or "RAB-BASE"
@@ -7348,6 +7728,10 @@ def _dispatch_task_packet(
         "requirement_ids": requirement_ids,
         "task_acceptance_refs": acceptance_refs,
         "dev_ready_evidence_ref": evidence_ref,
+        "verification_contract": contract,
+        "stage_expectation": stage_expectation,
+        "expected_failure_reason_codes": contract.get("expected_failure_reason_codes", []),
+        "infra_failure_reason_codes": contract.get("infra_failure_reason_codes", []),
         "dispatch_mode": dispatch_mode,
         "resume_thread_id": resume_thread_id,
         "lane_id": lane_id,
@@ -8642,6 +9026,84 @@ def _manager_production_line_cycle(
     }
 
 
+def _verification_command_missing_targets(repo_root: Path, command_text: str) -> list[str]:
+    text = (command_text or "").strip()
+    if not text:
+        return []
+    wrapped = _unwrap_bash_lc(text)
+    if wrapped is not None:
+        return _verification_command_missing_targets(repo_root, wrapped)
+    try:
+        raw_tokens = shlex.split(text)
+    except ValueError:
+        return []
+    tokens = [token for token in raw_tokens if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=.*$", token)]
+    if not tokens:
+        return []
+    candidates: list[str] = []
+    if "pytest" in tokens:
+        pytest_idx = len(tokens) - 1 - tokens[::-1].index("pytest")
+        for token in tokens[pytest_idx + 1 :]:
+            if token.startswith("-") or token.startswith("::"):
+                continue
+            if any(ch in token for ch in ("*", "?", "[")):
+                continue
+            if token.endswith(".py") or "/" in token or token.startswith("tests"):
+                candidates.append(token.split("::", 1)[0])
+    elif tokens[0] in {"python", "python3"} and len(tokens) >= 2 and tokens[1] not in {"-m"}:
+        token = tokens[1]
+        if token and not token.startswith("-") and token.endswith(".py"):
+            candidates.append(token)
+    missing: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        path = Path(candidate).expanduser()
+        if not path.is_absolute():
+            path = (repo_root / path).resolve()
+        if not path.exists():
+            missing.append(candidate)
+    return missing
+
+
+def _task_is_merge_eligible(
+    repo_root: Path,
+    task: dict[str, Any],
+    plan_task: dict[str, Any],
+) -> tuple[bool, str]:
+    if _normalize_task_status(task.get("status")) != TASK_STATUS_REVIEW_DONE:
+        return False, "status_not_review_done"
+    if _task_has_open_embedded_gap(task):
+        return False, "open_task_gap"
+    task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
+    phase_id = _as_str(task.get("phase_id")) or _as_str(plan_task.get("phase_id")) or "phase-1"
+    evidence_path = _task_evidence_path(repo_root, task)
+    if not evidence_path.exists():
+        return False, "task_evidence_missing"
+    try:
+        payload = _read_json(evidence_path)
+    except OpError:
+        return False, "task_evidence_invalid"
+    if not isinstance(payload, dict):
+        return False, "task_evidence_invalid"
+    validation_errors = _validate_task_evidence_payload(payload, task_id, phase_id)
+    if validation_errors:
+        return False, "task_evidence_invalid"
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    summary_result = (_as_str(summary.get("result")) or "").lower()
+    reason_codes = summary.get("reason_codes") if isinstance(summary.get("reason_codes"), list) else []
+    if _is_not_started_evidence_placeholder(payload, summary_result, reason_codes):
+        return False, "tdd_expectation_not_met"
+    contract = _task_verification_contract(task, plan_task)
+    expected = _expected_for_stage(contract, "review")
+    evaluation = _evaluate_evidence_expectation(payload=payload, expected=expected)
+    if evaluation.get("progress"):
+        return True, "eligible"
+    return False, _as_str(evaluation.get("reason_code")) or "tdd_expectation_not_met"
+
+
 def _manager_branch_merge_cycle(
     req: OpRequest,
     *,
@@ -8659,12 +9121,35 @@ def _manager_branch_merge_cycle(
     merged_rows_raw = done_registry.get("merged_tasks") if isinstance(done_registry.get("merged_tasks"), list) else []
     merged_rows = [row for row in merged_rows_raw if isinstance(row, dict) and _as_str(row.get("task_id"))]
     merged_ids = {_as_str(row.get("task_id")) for row in merged_rows if _as_str(row.get("task_id"))}
+    task_map = _task_by_id(task_state)
+    plan_map = _plan_task_map(plan_packets)
     review_done = [
         _as_str(task.get("task_id"))
         for task in task_state.get("tasks", [])
-        if isinstance(task, dict) and _normalize_task_status(task.get("status")) == TASK_STATUS_REVIEW_DONE and _as_str(task.get("task_id"))
+        if isinstance(task, dict)
+        and _normalize_task_status(task.get("status")) == TASK_STATUS_REVIEW_DONE
+        and _as_str(task.get("task_id"))
     ]
-    pending_merge = [task_id for task_id in review_done if task_id not in merged_ids]
+    merge_eligible_ids: list[str] = []
+    for task_id in review_done:
+        task_row = task_map.get(task_id)
+        if not isinstance(task_row, dict):
+            continue
+        plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
+        eligible, reason_code = _task_is_merge_eligible(req.repo_root, task_row, plan_task)
+        if eligible:
+            merge_eligible_ids.append(task_id)
+            continue
+        if reason_code in {"tdd_expectation_not_met", "task_evidence_invalid", "task_evidence_missing"}:
+            warnings.append(
+                {
+                    "code": reason_code,
+                    "message": f"task {task_id} is review_done but not merge-eligible ({reason_code})",
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                }
+            )
+    pending_merge = [task_id for task_id in merge_eligible_ids if task_id not in merged_ids]
     if req.dry_run:
         out = {
             "schema_version": SCHEMA_VERSION,
@@ -8686,7 +9171,6 @@ def _manager_branch_merge_cycle(
                 }
             )
         return warnings
-    task_map = _task_by_id(task_state)
     verify_commands: list[str] = []
     seen_cmds: set[str] = set()
     for plan_task in plan_packets.get("tasks", []):
@@ -8719,6 +9203,9 @@ def _manager_branch_merge_cycle(
         merged_commit: str | None = None
         verification_ref: str | None = None
         prior_errors: list[dict[str, Any]] = []
+        lost_eligibility = False
+        non_retriable_error: dict[str, Any] | None = None
+        retries_exhausted = True
         for attempt in range(1, 11):
             pre_merge_head: str | None = None
             rollback_applied = False
@@ -8731,6 +9218,85 @@ def _manager_branch_merge_cycle(
             stderr_path = attempt_dir / "llm_stderr.log"
             last_message_path = attempt_dir / "last_message.txt"
             prompt_path = attempt_dir / "prompt.txt"
+            refreshed_task = task_map.get(task_id) if isinstance(task_map.get(task_id), dict) else {}
+            refreshed_plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
+            eligible, reason_code = _task_is_merge_eligible(req.repo_root, refreshed_task, refreshed_plan_task)
+            if not eligible:
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "task_id": task_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "merge_candidate_lost_eligibility",
+                        "message": f"merge candidate lost eligibility before attempt ({reason_code})",
+                        "stage": "build_loop",
+                    },
+                    "finished_at": utc_now_iso(),
+                }
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                warnings.append(
+                    {
+                        "code": "merge_candidate_lost_eligibility",
+                        "message": f"task {task_id} no longer eligible for merge ({reason_code})",
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                    }
+                )
+                _emit_build_progress(
+                    req,
+                    f"branch-merge-manager: task={task_id} eligibility lost ({reason_code}); stopping retries",
+                )
+                lost_eligibility = True
+                retries_exhausted = False
+                break
+            missing_targets: list[str] = []
+            for verify_cmd in verify_commands:
+                missing_targets.extend(_verification_command_missing_targets(req.repo_root, verify_cmd))
+            if missing_targets:
+                dedup_targets = sorted(set(missing_targets))
+                validation_payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "task_id": task_id,
+                    "attempt": attempt,
+                    "ok": False,
+                    "error": {
+                        "code": "merge_verification_contract_invalid",
+                        "message": f"verification command target missing: {', '.join(dedup_targets)}",
+                        "stage": "build_loop",
+                    },
+                    "details": {
+                        "code": "verification_command_target_missing",
+                        "missing_targets": dedup_targets,
+                    },
+                    "finished_at": utc_now_iso(),
+                }
+                _atomic_write_json(validation_path, validation_payload)
+                prior_errors = [validation_payload["error"]]
+                warnings.append(
+                    {
+                        "code": "verification_command_target_missing",
+                        "message": f"task {task_id} verification target missing: {', '.join(dedup_targets)}",
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                        "missing_targets": dedup_targets,
+                    }
+                )
+                _emit_build_progress(
+                    req,
+                    (
+                        f"branch-merge-manager: task={task_id} verification contract invalid: "
+                        f"missing targets {', '.join(dedup_targets)}; stopping retries"
+                    ),
+                )
+                non_retriable_error = {
+                    "code": "merge_verification_contract_invalid",
+                    "message": validation_payload["error"]["message"],
+                    "details": validation_payload.get("details"),
+                }
+                retries_exhausted = False
+                break
             if not prompt_template_text:
                 _emit_build_progress(
                     req,
@@ -9022,6 +9588,7 @@ def _manager_branch_merge_cycle(
                         req,
                         f"branch-merge-manager: task={task_id} merged and verified on attempt {attempt}",
                     )
+                    retries_exhausted = False
                     break
                 prior_errors = [
                     {
@@ -9097,12 +9664,20 @@ def _manager_branch_merge_cycle(
             merged_rows.append(merged_row)
             merged_ids.add(task_id)
             continue
+        if lost_eligibility:
+            continue
 
         task_row = task_map.get(task_id)
         if isinstance(task_row, dict):
             task_row["status"] = TASK_STATUS_BLOCKED
             task_row["owner_slot"] = None
+            task_row["blocking_source"] = "merge"
             merge_gap_id = _gap_id(_as_str(plan_packets.get("plan_id")) or "plan-unknown", _as_str(task_row.get("phase_id")) or "phase-1", task_id, "merge:blocked", "blocked")
+            merge_reason_codes = ["merge_or_verification_failed"]
+            if isinstance(non_retriable_error, dict):
+                non_retriable_code = _as_str(non_retriable_error.get("code"))
+                if non_retriable_code:
+                    merge_reason_codes = [non_retriable_code]
             _upsert_task_gap(
                 task_row,
                 {
@@ -9111,8 +9686,8 @@ def _manager_branch_merge_cycle(
                     "severity": "P1",
                     "stage": "merge",
                     "status": "open",
-                    "reason_codes": ["merge_or_verification_failed"],
-                    "retry_count": 10,
+                    "reason_codes": merge_reason_codes,
+                    "retry_count": 10 if retries_exhausted else 1,
                     "max_retries": 10,
                     "created_at": utc_now_iso(),
                     "updated_at": utc_now_iso(),
@@ -9120,6 +9695,8 @@ def _manager_branch_merge_cycle(
                 },
             )
         last_error = prior_errors[0] if prior_errors else {}
+        if isinstance(non_retriable_error, dict):
+            last_error = non_retriable_error
         last_error_code = _as_str(last_error.get("code"))
         if last_error_code in {
             "branch_manager_action_invalid",
@@ -9127,6 +9704,7 @@ def _manager_branch_merge_cycle(
             "merge_proof_failed",
             "manager_command_disallowed",
             "manager_command_timeout",
+            "merge_verification_contract_invalid",
         }:
             warnings.append(
                 {
@@ -9136,18 +9714,24 @@ def _manager_branch_merge_cycle(
                     "task_id": task_id,
                 }
             )
-        warnings.append(
-            {
-                "code": "merge_manager_retry_exhausted",
-                "message": f"branch manager exhausted retries for {task_id}; task blocked with merge gap",
-                "stage": "build_loop",
-                "task_id": task_id,
-            }
-        )
-        _emit_build_progress(
-            req,
-            f"branch-merge-manager: task={task_id} exhausted retries (10/10), task blocked",
-        )
+        if retries_exhausted:
+            warnings.append(
+                {
+                    "code": "merge_manager_retry_exhausted",
+                    "message": f"branch manager exhausted retries for {task_id}; task blocked with merge gap",
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                }
+            )
+            _emit_build_progress(
+                req,
+                f"branch-merge-manager: task={task_id} exhausted retries (10/10), task blocked",
+            )
+        else:
+            _emit_build_progress(
+                req,
+                f"branch-merge-manager: task={task_id} blocked due to non-retriable merge contract failure",
+            )
 
     out = {
         "schema_version": SCHEMA_VERSION,
@@ -11825,6 +12409,61 @@ def command_report(req: OpRequest) -> dict[str, Any]:
         else:
             health_reason = f"resume_failures:max={max_resume_failures}"
 
+    task_expectations: list[dict[str, Any]] = []
+    tdd_mismatch_detected = False
+    task_state_path = _repo_path(req.repo_root, TASK_EXECUTION_STATE_JSON)
+    plan_packets_path = _repo_path(req.repo_root, PLAN_PACKETS_JSON)
+    task_rows: list[dict[str, Any]] = []
+    plan_map: dict[str, dict[str, Any]] = {}
+    if task_state_path.exists():
+        try:
+            task_state_payload = _read_json(task_state_path)
+        except OpError:
+            task_state_payload = None
+        if isinstance(task_state_payload, dict) and isinstance(task_state_payload.get("tasks"), list):
+            task_rows = [row for row in task_state_payload.get("tasks", []) if isinstance(row, dict)]
+    if plan_packets_path.exists():
+        try:
+            plan_payload = _read_json(plan_packets_path)
+        except OpError:
+            plan_payload = None
+        if isinstance(plan_payload, dict):
+            plan_map = _plan_task_map(plan_payload)
+    for task in task_rows:
+        task_id = _as_str(task.get("task_id"))
+        if not task_id:
+            continue
+        plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
+        contract = _task_verification_contract(task, plan_task)
+        stage = _current_stage_for_task_status(_normalize_task_status(task.get("status")), _as_str(task.get("owner_slot")))
+        expected = _expected_for_stage(contract, stage)
+        evidence_path = _task_evidence_path(req.repo_root, task)
+        expectation_met = False
+        failure_class = "none"
+        if evidence_path.exists():
+            try:
+                evidence_payload = _read_json(evidence_path)
+            except OpError:
+                evidence_payload = None
+            if isinstance(evidence_payload, dict):
+                summary = evidence_payload.get("summary") if isinstance(evidence_payload.get("summary"), dict) else {}
+                expectation_met = _as_bool_field(summary.get("expectation_met"))
+                failure_class = _normalize_failure_class(summary.get("failure_class"))
+                if not expectation_met and failure_class in {"infra", "unexpected"}:
+                    tdd_mismatch_detected = True
+        task_expectations.append(
+            {
+                "task_id": task_id,
+                "status": _normalize_task_status(task.get("status")),
+                "expected": expected,
+                "expectation_met": expectation_met,
+                "failure_class": failure_class,
+            }
+        )
+    if health_color == "green" and tdd_mismatch_detected:
+        health_color = "yellow"
+        health_reason = "tdd_expectation_not_met"
+
     counts_raw = status_data.get("task_counts_by_status") if isinstance(status_data.get("task_counts_by_status"), dict) else {}
     counts: dict[str, int] = {}
     for key, value in counts_raw.items():
@@ -11924,6 +12563,7 @@ def command_report(req: OpRequest) -> dict[str, Any]:
             "next": next_action,
             "terminal_state": terminal_state or None,
             "lock": lock_snapshot,
+            "task_expectations": task_expectations,
         },
     )
 

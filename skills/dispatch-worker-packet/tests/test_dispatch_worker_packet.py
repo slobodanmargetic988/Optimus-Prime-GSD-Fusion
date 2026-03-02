@@ -70,6 +70,23 @@ def make_cfg(root: Path, **overrides):
         requirement_ids=overrides.get("requirement_ids", []),
         task_acceptance_refs=overrides.get("task_acceptance_refs", []),
         dev_ready_evidence_ref=overrides.get("dev_ready_evidence_ref"),
+        verification_contract=overrides.get(
+            "verification_contract",
+            {
+                "mode": "implementation_green",
+                "dev_expectation": "expect_pass",
+                "test_expectation": "expect_pass",
+                "review_expectation": "expect_pass",
+                "expected_failure_reason_codes": ["tdd_expected_failure_observed"],
+                "infra_failure_reason_codes": ["verification_environment_error", "verification_command_target_missing"],
+            },
+        ),
+        stage_expectation=overrides.get("stage_expectation", "expect_pass"),
+        expected_failure_reason_codes=overrides.get("expected_failure_reason_codes", ["tdd_expected_failure_observed"]),
+        infra_failure_reason_codes=overrides.get(
+            "infra_failure_reason_codes",
+            ["verification_environment_error", "verification_command_target_missing"],
+        ),
         dry_run=overrides.get("dry_run", False),
         cycle_note=overrides.get("cycle_note", None),
     )
@@ -126,6 +143,9 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("fallback_reason", content)
             self.assertIn("Completion Artifact Contract", content)
             self.assertIn("summary.result(pass|fail|blocked)", content)
+            self.assertIn("summary.expectation(expect_fail|expect_pass)", content)
+            self.assertIn("summary.expectation_met(bool)", content)
+            self.assertIn("summary.failure_class(expected_red|infra|unexpected|none)", content)
             self.assertIn("gate.ready_for_phase_exit(bool)", content)
             self.assertIn("schema validator reference", content)
             self.assertIn("schema regression test reference", content)
@@ -134,6 +154,8 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("absolute path:", content)
             self.assertIn("create parent directories for evidence path before writing TASK_EVIDENCE.json", content)
             self.assertIn(str(MODULE.TASK_EVIDENCE_TEMPLATE_REF), content)
+            self.assertIn("## Verification Contract (authoritative)", content)
+            self.assertIn("stage_expectation:", content)
 
     def test_packet_render_requires_canonical_task_evidence_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -800,6 +822,24 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "validation_error")
             self.assertIn("phase_id", ctx.exception.message)
 
+    def test_op_build_mode_requires_verification_contract_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_cfg(
+                Path(tmp),
+                op_build_mode=True,
+                plan_id="plan-20260227T010101Z",
+                phase_id="phase-1",
+                requirement_ids=["REQ-001"],
+                task_acceptance_refs=["AC-001"],
+                dev_ready_evidence_ref="reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+                verification_contract={},
+                stage_expectation=None,
+            )
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(cfg)
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("verification_contract.mode", ctx.exception.message)
+
     def test_op_build_mode_persists_plan_fields_in_handoff(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -832,6 +872,8 @@ class DispatchWorkerPacketTests(unittest.TestCase):
                 handoff["task_evidence_ref"],
                 "reports/optimus-prime/planning/DEV_READY_EVIDENCE.json",
             )
+            self.assertEqual(handoff["stage_expectation"], "expect_pass")
+            self.assertEqual(handoff["verification_contract"]["mode"], "implementation_green")
 
 
 if __name__ == "__main__":

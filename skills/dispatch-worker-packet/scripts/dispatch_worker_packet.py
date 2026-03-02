@@ -104,6 +104,10 @@ class DispatchInput:
     requirement_ids: list[str]
     task_acceptance_refs: list[str]
     dev_ready_evidence_ref: str | None
+    verification_contract: dict[str, Any]
+    stage_expectation: str | None
+    expected_failure_reason_codes: list[str]
+    infra_failure_reason_codes: list[str]
     dispatch_mode: str
     resume_thread_id: str | None
     lane_id: str | None
@@ -364,6 +368,38 @@ def validate_policy(cfg: DispatchInput) -> None:
                 "op-build mode packets require dev_ready_evidence_ref",
                 stage="validate",
             )
+        if not isinstance(cfg.verification_contract, dict):
+            raise ToolError(
+                "validation_error",
+                "op-build mode packets require verification_contract object",
+                stage="validate",
+            )
+        mode = str(cfg.verification_contract.get("mode") or "").strip().lower()
+        if mode not in {"tdd_red", "implementation_green", "hardening"}:
+            raise ToolError(
+                "validation_error",
+                "op-build mode packets require verification_contract.mode=tdd_red|implementation_green|hardening",
+                stage="validate",
+            )
+        stage_expectation = str(cfg.stage_expectation or "").strip().lower()
+        if stage_expectation not in {"expect_fail", "expect_pass"}:
+            raise ToolError(
+                "validation_error",
+                "op-build mode packets require stage_expectation=expect_fail|expect_pass",
+                stage="validate",
+            )
+        if not isinstance(cfg.expected_failure_reason_codes, list):
+            raise ToolError(
+                "validation_error",
+                "op-build mode packets require expected_failure_reason_codes list",
+                stage="validate",
+            )
+        if not isinstance(cfg.infra_failure_reason_codes, list):
+            raise ToolError(
+                "validation_error",
+                "op-build mode packets require infra_failure_reason_codes list",
+                stage="validate",
+            )
     if cfg.dispatch_mode not in DISPATCH_MODES:
         raise ToolError("validation_error", "dispatch_mode must be exec|resume", stage="validate")
     if cfg.dispatch_mode == "resume":
@@ -463,6 +499,12 @@ def config_from_args(args: argparse.Namespace) -> DispatchInput:
             else [item.strip() for item in args.task_acceptance_refs if item.strip()]
         ),
         dev_ready_evidence_ref=((args.dev_ready_evidence_ref or data.get("dev_ready_evidence_ref") or "").strip() or None),
+        verification_contract=(
+            data.get("verification_contract") if isinstance(data.get("verification_contract"), dict) else {}
+        ),
+        stage_expectation=((data.get("stage_expectation") or "").strip() or None),
+        expected_failure_reason_codes=_list_of_str(data, "expected_failure_reason_codes", required=False),
+        infra_failure_reason_codes=_list_of_str(data, "infra_failure_reason_codes", required=False),
         dispatch_mode=((args.dispatch_mode or data.get("dispatch_mode") or "exec").strip() or "exec"),
         resume_thread_id=((args.resume_thread_id or data.get("resume_thread_id") or "").strip() or None),
         lane_id=((args.lane_id or data.get("lane_id") or "").strip() or None),
@@ -527,6 +569,23 @@ def render_packet(cfg: DispatchInput) -> str:
     phase_id = cfg.phase_id or "none"
     test_source_branch = cfg.test_source_branch or "none"
     test_source_commit = cfg.test_source_commit or "none"
+    verification_mode = str(cfg.verification_contract.get("mode") or "implementation_green").strip() if isinstance(cfg.verification_contract, dict) else "implementation_green"
+    stage_expectation = (cfg.stage_expectation or "expect_pass").strip()
+    expected_fail_codes = (
+        ", ".join(cfg.expected_failure_reason_codes)
+        if cfg.expected_failure_reason_codes
+        else "tdd_expected_failure_observed"
+    )
+    infra_codes = (
+        ", ".join(cfg.infra_failure_reason_codes)
+        if cfg.infra_failure_reason_codes
+        else "verification_environment_error, verification_command_target_missing"
+    )
+    expectation_success = (
+        "success means expected failure is reproduced with failure_class=expected_red"
+        if stage_expectation == "expect_fail"
+        else "success means checks pass with failure_class=none"
+    )
     validator_ref = str(TASK_EVIDENCE_VALIDATOR_REF)
     schema_test_ref = str(TASK_EVIDENCE_SCHEMA_TEST_REF)
     schema_template_ref = str(TASK_EVIDENCE_TEMPLATE_REF)
@@ -579,6 +638,15 @@ def render_packet(cfg: DispatchInput) -> str:
         f"- tester/flex-tester fallback suffix: -test\n"
         f"- role-specific fallback for this packet: {fallback_suffix or 'none'}\n"
         f"- if assigned branch checkout fails because branch is active elsewhere, continue on fallback branch and report mapping\n\n"
+        f"## Verification Contract (authoritative)\n"
+        f"- mode: {verification_mode}\n"
+        f"- stage_expectation: {stage_expectation}\n"
+        f"- expected_failure_reason_codes: {expected_fail_codes}\n"
+        f"- infra_failure_reason_codes: {infra_codes}\n"
+        f"- {expectation_success}\n"
+        f"- if expectation is expect_fail, do not block merely because tests fail for missing functionality; "
+        f"that is successful red-phase output when failure_class=expected_red.\n"
+        f"- infra failures are always blocking and must use reason_codes from infra_failure_reason_codes.\n\n"
         f"## Expected Worker Response Fields\n"
         f"- intended_branch\n"
         f"- fallback_branch\n"
@@ -606,7 +674,9 @@ def render_packet(cfg: DispatchInput) -> str:
         f"  - test.checks[], test.verify_results[], test.uat_results[], test.blockers[], test.artifacts[]\n"
         f"  - review.blockers[], review.artifacts[]\n"
         f"  - gate.ready_for_test(bool), gate.ready_for_review(bool), gate.ready_for_phase_exit(bool)\n"
-        f"  - summary.result(pass|fail|blocked), summary.reason_codes[]\n"
+        f"  - summary.result(pass|fail|blocked), summary.expectation(expect_fail|expect_pass), "
+        f"summary.expectation_met(bool), summary.failure_class(expected_red|infra|unexpected|none), "
+        f"summary.reason_codes[]\n"
         f"- role-specific fill requirements:\n"
         f"  - developer: populate dev.* with concrete changes/tests; keep test/review arrays present (can be empty)\n"
         f"  - tester/flex-tester: populate test.* and keep dev/review arrays present\n"
@@ -992,6 +1062,10 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "requirement_ids": cfg.requirement_ids,
         "task_acceptance_refs": cfg.task_acceptance_refs,
         "dev_ready_evidence_ref": cfg.dev_ready_evidence_ref,
+        "stage_expectation": cfg.stage_expectation,
+        "verification_contract": cfg.verification_contract,
+        "expected_failure_reason_codes": cfg.expected_failure_reason_codes,
+        "infra_failure_reason_codes": cfg.infra_failure_reason_codes,
         "lane_id": cfg.lane_id,
         "worktree_root": str(cfg.worktree_root),
         "updated_at": utc_now_iso(),
@@ -1041,6 +1115,10 @@ def update_branch_lineage(path: Path, cfg: DispatchInput, dispatch: dict[str, An
         "requirement_ids": cfg.requirement_ids,
         "task_acceptance_refs": cfg.task_acceptance_refs,
         "dev_ready_evidence_ref": cfg.dev_ready_evidence_ref,
+        "stage_expectation": cfg.stage_expectation,
+        "verification_contract": cfg.verification_contract,
+        "expected_failure_reason_codes": cfg.expected_failure_reason_codes,
+        "infra_failure_reason_codes": cfg.infra_failure_reason_codes,
         "dispatch_pid": dispatch["pid"],
         "last_dispatch_at": utc_now_iso(),
     }
@@ -1321,6 +1399,10 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "task_acceptance_refs": cfg.task_acceptance_refs,
         "task_evidence_ref": cfg.dev_ready_evidence_ref,
         "dev_ready_evidence_ref": cfg.dev_ready_evidence_ref,
+        "stage_expectation": cfg.stage_expectation,
+        "verification_contract": cfg.verification_contract,
+        "expected_failure_reason_codes": cfg.expected_failure_reason_codes,
+        "infra_failure_reason_codes": cfg.infra_failure_reason_codes,
         "status": "started" if dispatch["dispatch_started"] else "failed",
     }
 

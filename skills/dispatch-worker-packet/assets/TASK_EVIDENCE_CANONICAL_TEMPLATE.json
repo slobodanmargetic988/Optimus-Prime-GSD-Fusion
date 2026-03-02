@@ -38,6 +38,9 @@
   },
   "summary": {
     "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
     "reason_codes": []
   }
 }

@@ -145,9 +145,13 @@ opctl /op-resume --json-pretty
 
 Runtime reliability notes:
 - Runtime decisions are now based on task-embedded gaps (`tasks[].gaps_that_need_patching`); external `GAPS.json` / `GAP_CLOSURE_PLAN_PACKETS.json` are not decision inputs.
+- Planner/runtime use an explicit per-task `verification_contract` (`tdd_red|implementation_green|hardening`) and evidence summary expectation fields (`expectation`, `expectation_met`, `failure_class`).
+- For TDD red stages, `expect_fail` with `failure_class=expected_red` is treated as progress (not false blocking).
+- Handoff is non-authoritative for task blocking; evidence sync is authoritative for state transitions.
 - Strict completion requires merge evidence: `review_done` tasks must be merged into `RAB-BASE` with verification pass data.
 - Branch manager merge completion now also requires explicit merge proof (`source_branch` ancestor of `RAB-BASE` HEAD) before a task is marked merged.
 - On post-merge verification failure, branch manager now rolls back deterministically to captured pre-merge HEAD (never `HEAD~1`).
+- Branch manager retries are eligibility-aware and stop early when merge eligibility is lost (`merge_candidate_lost_eligibility`) or when verification contract mismatch is non-retriable (`merge_verification_contract_invalid`).
 - Dispatcher is assignment-driven from `WORK_DISPATCH_PLAN.json`; tasks not present in assignments are not dispatched in that cycle.
 - Empty-assignment cycles are reported deterministically as `dispatch_plan_no_assignments`.
 - Controller `dispatch_filter` is enforced per assignment alias (hard-gated aliases are skipped, non-hard-gated aliases can still dispatch in the same cycle).

@@ -60,6 +60,9 @@ TASK_STATUS = {
 
 EVIDENCE_RESULT = {"pass", "fail", "blocked"}
 EVIDENCE_STATUS = {"queued", "in_progress", "done", "blocked"}
+VERIFICATION_MODES = {"tdd_red", "implementation_green", "hardening"}
+VERIFICATION_EXPECTATIONS = {"expect_fail", "expect_pass"}
+EVIDENCE_FAILURE_CLASS = {"expected_red", "infra", "unexpected", "none"}
 
 
 def _as_str(value: object) -> str | None:
@@ -163,6 +166,45 @@ def _require_str_or_none(value: object, *, label: str, errors: list[dict[str, ob
     return value.strip() or None
 
 
+def _validate_verification_contract(value: object, *, label: str, errors: list[dict[str, object]]) -> None:
+    contract = _require_object(value, label=label, errors=errors)
+    if contract is None:
+        return
+    _strict_keys(
+        contract,
+        label=label,
+        required={
+            "mode",
+            "dev_expectation",
+            "test_expectation",
+            "review_expectation",
+            "expected_failure_reason_codes",
+            "infra_failure_reason_codes",
+        },
+        optional=set(),
+        errors=errors,
+    )
+    mode = _require_nonempty_str(contract.get("mode"), label=f"{label}.mode", errors=errors)
+    if mode and mode not in VERIFICATION_MODES:
+        _err(errors, "planner_bundle_schema_error", f"{label}.mode must be one of tdd_red|implementation_green|hardening")
+    for key in ("dev_expectation", "test_expectation", "review_expectation"):
+        expectation = _require_nonempty_str(contract.get(key), label=f"{label}.{key}", errors=errors)
+        if expectation and expectation not in VERIFICATION_EXPECTATIONS:
+            _err(errors, "planner_bundle_schema_error", f"{label}.{key} must be expect_fail|expect_pass")
+    _require_str_list(
+        contract.get("expected_failure_reason_codes"),
+        label=f"{label}.expected_failure_reason_codes",
+        errors=errors,
+        min_items=1,
+    )
+    _require_str_list(
+        contract.get("infra_failure_reason_codes"),
+        label=f"{label}.infra_failure_reason_codes",
+        errors=errors,
+        min_items=1,
+    )
+
+
 def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, object]]) -> tuple[str | None, list[str], list[str], set[str]]:
     _strict_keys(
         payload,
@@ -252,6 +294,7 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
                     "phase_id",
                     "lane_id",
                     "status",
+                    "verification_contract",
                     "requirement_ids",
                     "depends_on",
                     "must_haves",
@@ -277,6 +320,11 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
             status = _require_nonempty_str(row.get("status"), label=f"PLAN_PACKETS.tasks[{idx}].status", errors=errors)
             if status != "pending":
                 _err(errors, "planner_bundle_schema_error", f"PLAN_PACKETS.tasks[{idx}].status must be 'pending'")
+            _validate_verification_contract(
+                row.get("verification_contract"),
+                label=f"PLAN_PACKETS.tasks[{idx}].verification_contract",
+                errors=errors,
+            )
             req_ids = _require_str_list(row.get("requirement_ids"), label=f"PLAN_PACKETS.tasks[{idx}].requirement_ids", errors=errors, min_items=1)
             for rid in req_ids:
                 covered.add(rid)
@@ -333,6 +381,24 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
                     _require_str_or_none(gap.get("closure_ref"), label=f"PLAN_PACKETS.tasks[{idx}].gaps_that_need_patching[{gidx}].closure_ref", errors=errors)
             if task_id:
                 task_dep_map[task_id] = deps
+            contract = row.get("verification_contract") if isinstance(row.get("verification_contract"), dict) else {}
+            mode = _as_str(contract.get("mode"))
+            dev_expectation = _as_str(contract.get("dev_expectation"))
+            test_expectation = _as_str(contract.get("test_expectation"))
+            review_expectation = _as_str(contract.get("review_expectation"))
+            if phase_id == "phase-1":
+                if mode != "tdd_red":
+                    _err(
+                        errors,
+                        "planner_bundle_schema_error",
+                        f"PLAN_PACKETS.tasks[{idx}] in phase-1 must use verification_contract.mode=tdd_red",
+                    )
+                if dev_expectation != "expect_fail" or test_expectation != "expect_fail" or review_expectation != "expect_fail":
+                    _err(
+                        errors,
+                        "planner_bundle_schema_error",
+                        f"PLAN_PACKETS.tasks[{idx}] in phase-1 must set dev/test/review expectations to expect_fail",
+                    )
     else:
         _err(errors, "planner_bundle_schema_error", "PLAN_PACKETS.tasks must be non-empty list")
 
@@ -588,6 +654,7 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
                 "phase_id",
                 "lane_id",
                 "requirement_ids",
+                "verification_contract",
                 "status",
                 "owner_slot",
                 "dispatch_thread_id",
@@ -596,6 +663,8 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
                 "evidence",
                 "gaps_that_need_patching",
                 "blockers",
+                "last_handoff_outcome",
+                "blocking_source",
             },
             optional=set(),
             errors=errors,
@@ -615,6 +684,11 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
         status = _as_str(row.get("status"))
         if status not in TASK_STATUS:
             _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].status invalid", status=status)
+        _validate_verification_contract(
+            row.get("verification_contract"),
+            label=f"TASK_EXECUTION_STATE.tasks[{idx}].verification_contract",
+            errors=errors,
+        )
 
         owner_slot = row.get("owner_slot")
         _require_str_or_none(owner_slot, label=f"TASK_EXECUTION_STATE.tasks[{idx}].owner_slot", errors=errors)
@@ -657,6 +731,31 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
             _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].gaps_that_need_patching must be list")
         if not isinstance(row.get("blockers"), list):
             _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].blockers must be list")
+        handoff = _require_object(row.get("last_handoff_outcome"), label=f"TASK_EXECUTION_STATE.tasks[{idx}].last_handoff_outcome", errors=errors)
+        if handoff is not None:
+            _strict_keys(
+                handoff,
+                label=f"TASK_EXECUTION_STATE.tasks[{idx}].last_handoff_outcome",
+                required={"status", "reason_codes", "timestamp"},
+                optional=set(),
+                errors=errors,
+            )
+            _require_str_or_none(
+                handoff.get("status"),
+                label=f"TASK_EXECUTION_STATE.tasks[{idx}].last_handoff_outcome.status",
+                errors=errors,
+            )
+            _require_str_list(
+                handoff.get("reason_codes"),
+                label=f"TASK_EXECUTION_STATE.tasks[{idx}].last_handoff_outcome.reason_codes",
+                errors=errors,
+            )
+            timestamp = handoff.get("timestamp")
+            if timestamp is not None and not _is_iso8601(timestamp):
+                _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].last_handoff_outcome.timestamp must be ISO-8601|null")
+        blocking_source = _as_str(row.get("blocking_source"))
+        if blocking_source not in {"handoff", "evidence", "merge", "none"}:
+            _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].blocking_source must be handoff|evidence|merge|none")
 
     missing = sorted(task_ids - state_ids)
     if missing:
@@ -938,10 +1037,23 @@ def _validate_evidence(path: str, payload: dict[str, Any], errors: list[dict[str
 
     summary = _require_object(payload.get("summary"), label=f"{path}.summary", errors=errors)
     if summary is not None:
-        _strict_keys(summary, label=f"{path}.summary", required={"result", "reason_codes"}, optional=set(), errors=errors)
+        _strict_keys(
+            summary,
+            label=f"{path}.summary",
+            required={"result", "expectation", "expectation_met", "failure_class", "reason_codes"},
+            optional=set(),
+            errors=errors,
+        )
         result = _as_str(summary.get("result"))
         if result not in EVIDENCE_RESULT:
             _err(errors, "planner_bundle_schema_error", f"{path}.summary.result must be one of pass|fail|blocked")
+        expectation = _as_str(summary.get("expectation"))
+        if expectation not in VERIFICATION_EXPECTATIONS:
+            _err(errors, "planner_bundle_schema_error", f"{path}.summary.expectation must be expect_fail|expect_pass")
+        _require_bool(summary.get("expectation_met"), label=f"{path}.summary.expectation_met", errors=errors)
+        failure_class = _as_str(summary.get("failure_class"))
+        if failure_class not in EVIDENCE_FAILURE_CLASS:
+            _err(errors, "planner_bundle_schema_error", f"{path}.summary.failure_class must be expected_red|infra|unexpected|none")
         _require_str_list(summary.get("reason_codes"), label=f"{path}.summary.reason_codes", errors=errors)
 
     return plan_id, task_id
