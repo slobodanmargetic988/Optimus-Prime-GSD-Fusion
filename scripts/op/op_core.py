@@ -3820,9 +3820,18 @@ def _read_profile_rate_states(repo_root: Path, aliases: list[str]) -> dict[str, 
             for item in (errors_raw if isinstance(errors_raw, list) else [])
             if _as_str(item)
         ]
-        unhealthy = bool(error_codes)
+        auth_unhealthy_markers = (
+            "refresh_token",
+            "invalid_grant",
+            "unauthorized",
+            "auth_failed",
+            "auth_error",
+            "token refresh failed",
+            "token_refresh_failed",
+        )
+        unhealthy = any(any(marker in code.lower() for marker in auth_unhealthy_markers) for code in error_codes)
         if unhealthy:
-            # Profiles with snapshot/runtime errors are excluded from fresh dispatch selection.
+            # Auth-unhealthy profiles are excluded from fresh dispatch selection.
             hard_gated = True
         reset_at = (
             _as_str(data.get("reset_at"))
@@ -4396,6 +4405,13 @@ def _infer_dispatch_failure_reason_from_worker_log(worker_row: dict[str, Any] | 
     log_path = Path(log_path_raw).expanduser()
     try:
         if not log_path.exists() or not log_path.is_file():
+            return None
+        log_mtime = datetime.fromtimestamp(log_path.stat().st_mtime, tz=timezone.utc)
+        now = datetime.now(timezone.utc)
+        if (now - log_mtime).total_seconds() > 1800:
+            return None
+        dispatch_started_at = _parse_iso_utc(_as_str(worker_row.get("dispatch_started_at")) or _as_str(worker_row.get("updated_at")))
+        if dispatch_started_at is not None and (log_mtime + timedelta(seconds=5)) < dispatch_started_at:
             return None
         excerpt = log_path.read_text(encoding="utf-8", errors="ignore")[-8000:].lower()
     except OSError:
@@ -7586,6 +7602,7 @@ def _dispatch_next_task_from_assignments(
         row["session_state"] = "running"
         row["state"] = "running"
         row["updated_at"] = utc_now_iso()
+        row["dispatch_started_at"] = row["updated_at"]
         if _as_str(dispatch_mode_used):
             row["dispatch_mode"] = _as_str(dispatch_mode_used)
         _write_worker_registry(

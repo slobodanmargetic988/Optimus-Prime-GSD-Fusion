@@ -767,13 +767,13 @@ class ThreadDispatchRunner:
             poll_seconds: float,
             patterns: tuple[tuple[str, str], ...],
             default_code: str,
-        ) -> tuple[bool, str | None]:
+        ) -> tuple[bool, str | None, bool]:
             pid = payload.get("pid")
             log_file = payload.get("log_file")
             if not isinstance(pid, int):
-                return False, None
+                return False, None, False
             if not isinstance(log_file, str) or not log_file.strip():
-                return False, None
+                return False, None, False
             log_path = Path(log_file).expanduser().resolve()
             deadline = time.monotonic() + probe_seconds
             while time.monotonic() < deadline:
@@ -781,10 +781,10 @@ class ThreadDispatchRunner:
                     excerpt_lower = _read_log_excerpt(log_path).lower()
                     for needle, code in patterns:
                         if needle in excerpt_lower:
-                            return True, code
-                    return True, default_code
+                            return True, code, True
+                    return True, default_code, False
                 time.sleep(poll_seconds)
-            return False, None
+            return False, None, False
 
         warnings: list[dict[str, Any]] = []
         run = _run_dispatch(resume=bool(cfg.dispatch_mode == "resume" and cfg.resume_thread_id))
@@ -792,7 +792,7 @@ class ThreadDispatchRunner:
         fallback_reason_code: str | None = None
         if run.returncode == 0 and cfg.dispatch_mode == "resume" and cfg.resume_thread_id:
             first_payload = parse_dispatch_json(run.stdout)
-            early_exit, early_exit_code = _detect_startup_early_exit(
+            early_exit, early_exit_code, _matched = _detect_startup_early_exit(
                 first_payload,
                 probe_seconds=RESUME_EARLY_EXIT_PROBE_SECONDS,
                 poll_seconds=RESUME_EARLY_EXIT_POLL_SECONDS,
@@ -846,14 +846,14 @@ class ThreadDispatchRunner:
         if not isinstance(log_path, str) or not log_path.strip():
             raise ToolError("dispatch_failed", "dispatcher payload missing log_file", stage="dispatch")
 
-        startup_failed, startup_failure_code = _detect_startup_early_exit(
+        startup_failed, startup_failure_code, startup_failure_classified = _detect_startup_early_exit(
             payload,
             probe_seconds=STARTUP_EARLY_EXIT_PROBE_SECONDS,
             poll_seconds=STARTUP_EARLY_EXIT_POLL_SECONDS,
             patterns=STARTUP_FAILURE_LOG_PATTERNS,
             default_code="dispatch_startup_early_exit",
         )
-        if startup_failed:
+        if startup_failed and startup_failure_classified:
             raise ToolError(
                 "dispatch_failed",
                 (
@@ -862,6 +862,17 @@ class ThreadDispatchRunner:
                     f"log_file={Path(log_path).expanduser().resolve()}"
                 ),
                 stage="dispatch",
+            )
+        if startup_failed and not startup_failure_classified:
+            warnings.append(
+                {
+                    "code": "dispatch_startup_early_exit_unclassified",
+                    "message": (
+                        "dispatch process exited during startup probe without a known failure signature; "
+                        "continuing with dispatch metadata"
+                    ),
+                    "stage": "dispatch",
+                }
             )
 
         return {
@@ -984,6 +995,7 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "lane_id": cfg.lane_id,
         "worktree_root": str(cfg.worktree_root),
         "updated_at": utc_now_iso(),
+        "dispatch_started_at": utc_now_iso(),
     }
 
     if isinstance(data, dict) and isinstance(data.get("workers"), list):
