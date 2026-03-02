@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,14 @@ FORBIDDEN_WORKER_MCPS = {"linear", "linear_sse"}
 SANDBOX_MODES = {"workspace-write", "danger-full-access"}
 TEST_TRAIN_MODES = {"off", "final-stage", "forced-shared-env"}
 DISPATCH_MODES = {"exec", "resume"}
+RESUME_EARLY_EXIT_PROBE_SECONDS = 1.5
+RESUME_EARLY_EXIT_POLL_SECONDS = 0.1
+RESUME_FAILURE_LOG_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("stdin is not a terminal", "dispatch_resume_notty_detected"),
+    ("resume requires", "dispatch_resume_early_exit"),
+    ("no such session", "dispatch_resume_early_exit"),
+    ("session not found", "dispatch_resume_early_exit"),
+)
 
 
 class ToolError(Exception):
@@ -541,6 +550,17 @@ def render_packet(cfg: DispatchInput) -> str:
         f"- head_commit\n"
         f"- checks\n"
         f"- blockers\n"
+        f"\n"
+        f"## Completion Artifact Contract (required)\n"
+        f"- write TASK_EVIDENCE.json to: {dev_ready_ref}\n"
+        f"- required fields:\n"
+        f"  - summary.result: pass|fail|blocked\n"
+        f"  - gate.ready_for_test: boolean\n"
+        f"  - gate.ready_for_review: boolean\n"
+        f"  - verify_results: array\n"
+        f"  - checks: array\n"
+        f"  - updated_at: ISO-8601 UTC timestamp\n"
+        f"- append completion/update row to reports/optimus-prime/HANDOFF_LOG.jsonl\n"
     )
 
 
@@ -638,46 +658,10 @@ class ThreadDispatchRunner:
     def dispatch(self, cfg: DispatchInput, packet_path: Path) -> dict[str, Any]:
         script = self._script_path()
         use_danger_full_access = cfg.sandbox_mode == "danger-full-access"
-        cmd = [
-            "python3",
-            str(script),
-            "--cwd",
-            str(cfg.worktree_root),
-            "--prompt-file",
-            str(packet_path),
-            "--background",
-        ]
-        if cfg.dispatch_mode == "resume" and cfg.resume_thread_id:
-            cmd.extend(["--resume-session-id", cfg.resume_thread_id])
-
-        # `codex exec --full-auto` currently forces workspace-write sandboxing.
-        # For worker packets that require danger-full-access, disable the helper
-        # alias and pass the dedicated bypass flag explicitly so the spawned
-        # worker actually runs unsandboxed as requested.
-        if use_danger_full_access:
-            cmd.append("--no-full-auto")
-
         codex_home = resolve_codex_home_from_alias(cfg.codex_profile_alias)
-        if codex_home is not None:
-            cmd.extend(["--codex-home", str(codex_home)])
 
-        if cfg.mcp_mode == "disable-all":
-            cmd.append("--disable-all-mcp")
-        else:
-            for mcp in cfg.mcp_allowlist:
-                cmd.extend(["--enable-only-mcp", mcp])
-
-        if use_danger_full_access:
-            cmd.extend(["--extra-arg=--dangerously-bypass-approvals-and-sandbox"])
-        else:
-            cmd.extend([f"--extra-arg=--sandbox", f"--extra-arg={cfg.sandbox_mode}"])
-        for d in cfg.sandbox_add_dirs:
-            cmd.extend([f"--extra-arg=--add-dir", f"--extra-arg={d}"])
-
-        run = subprocess.run(cmd, cwd=str(cfg.repo_root), capture_output=True, text=True, check=False)
-        fallback_used = False
-        if run.returncode != 0 and cfg.dispatch_mode == "resume" and cfg.resume_thread_id:
-            fallback_cmd = [
+        def _build_cmd(*, resume: bool) -> list[str]:
+            cmd = [
                 "python3",
                 str(script),
                 "--cwd",
@@ -686,23 +670,100 @@ class ThreadDispatchRunner:
                 str(packet_path),
                 "--background",
             ]
+            if resume and cfg.resume_thread_id:
+                cmd.extend(["--resume-session-id", cfg.resume_thread_id])
             if use_danger_full_access:
-                fallback_cmd.append("--no-full-auto")
+                cmd.append("--no-full-auto")
             if codex_home is not None:
-                fallback_cmd.extend(["--codex-home", str(codex_home)])
+                cmd.extend(["--codex-home", str(codex_home)])
             if cfg.mcp_mode == "disable-all":
-                fallback_cmd.append("--disable-all-mcp")
+                cmd.append("--disable-all-mcp")
             else:
                 for mcp in cfg.mcp_allowlist:
-                    fallback_cmd.extend(["--enable-only-mcp", mcp])
+                    cmd.extend(["--enable-only-mcp", mcp])
             if use_danger_full_access:
-                fallback_cmd.extend(["--extra-arg=--dangerously-bypass-approvals-and-sandbox"])
+                cmd.extend(["--extra-arg=--dangerously-bypass-approvals-and-sandbox"])
             else:
-                fallback_cmd.extend([f"--extra-arg=--sandbox", f"--extra-arg={cfg.sandbox_mode}"])
+                cmd.extend([f"--extra-arg=--sandbox", f"--extra-arg={cfg.sandbox_mode}"])
             for d in cfg.sandbox_add_dirs:
-                fallback_cmd.extend([f"--extra-arg=--add-dir", f"--extra-arg={d}"])
-            run = subprocess.run(fallback_cmd, cwd=str(cfg.repo_root), capture_output=True, text=True, check=False)
+                cmd.extend([f"--extra-arg=--add-dir", f"--extra-arg={d}"])
+            return cmd
+
+        def _run_dispatch(*, resume: bool) -> subprocess.CompletedProcess[str]:
+            cmd = _build_cmd(resume=resume)
+            return subprocess.run(cmd, cwd=str(cfg.repo_root), capture_output=True, text=True, check=False)
+
+        def _pid_is_running(pid: int) -> bool:
+            if pid <= 0:
+                return False
+            try:
+                os.kill(pid, 0)
+                return True
+            except OSError:
+                return False
+
+        def _read_log_excerpt(log_path: Path, max_chars: int = 4000) -> str:
+            try:
+                text = log_path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                return ""
+            return text[-max_chars:]
+
+        def _detect_resume_early_exit(payload: dict[str, Any]) -> tuple[bool, str | None]:
+            pid = payload.get("pid")
+            log_file = payload.get("log_file")
+            if not isinstance(pid, int):
+                return False, None
+            if not isinstance(log_file, str) or not log_file.strip():
+                return False, None
+            log_path = Path(log_file).expanduser().resolve()
+            deadline = time.monotonic() + RESUME_EARLY_EXIT_PROBE_SECONDS
+            while time.monotonic() < deadline:
+                if not _pid_is_running(pid):
+                    excerpt_lower = _read_log_excerpt(log_path).lower()
+                    for needle, code in RESUME_FAILURE_LOG_PATTERNS:
+                        if needle in excerpt_lower:
+                            return True, code
+                    return True, "dispatch_resume_early_exit"
+                time.sleep(RESUME_EARLY_EXIT_POLL_SECONDS)
+            return False, None
+
+        warnings: list[dict[str, Any]] = []
+        run = _run_dispatch(resume=bool(cfg.dispatch_mode == "resume" and cfg.resume_thread_id))
+        fallback_used = False
+        fallback_reason_code: str | None = None
+        if run.returncode == 0 and cfg.dispatch_mode == "resume" and cfg.resume_thread_id:
+            first_payload = parse_dispatch_json(run.stdout)
+            early_exit, early_exit_code = _detect_resume_early_exit(first_payload)
+            if early_exit:
+                fallback_used = True
+                fallback_reason_code = early_exit_code or "dispatch_resume_early_exit"
+                run = _run_dispatch(resume=False)
+                warnings.append(
+                    {
+                        "code": fallback_reason_code,
+                        "message": "resume dispatch exited immediately; switching to fresh exec dispatch",
+                        "stage": "dispatch",
+                    }
+                )
+                warnings.append(
+                    {
+                        "code": "dispatch_resume_failed_fallback_exec",
+                        "message": "resume dispatch failed and fallback exec was attempted",
+                        "stage": "dispatch",
+                    }
+                )
+        if run.returncode != 0 and cfg.dispatch_mode == "resume" and cfg.resume_thread_id:
             fallback_used = True
+            fallback_reason_code = "dispatch_resume_failed_fallback_exec"
+            run = _run_dispatch(resume=False)
+            warnings.append(
+                {
+                    "code": "dispatch_resume_failed_fallback_exec",
+                    "message": "resume dispatch failed; fallback exec was attempted",
+                    "stage": "dispatch",
+                }
+            )
         if run.returncode != 0:
             stderr = (run.stderr or "").strip()
             stdout = (run.stdout or "").strip()
@@ -726,6 +787,8 @@ class ThreadDispatchRunner:
             "pid": pid,
             "dispatch_log": str(Path(log_path).expanduser().resolve()),
             "dispatch_mode_used": "exec" if fallback_used else ("resume" if cfg.dispatch_mode == "resume" and cfg.resume_thread_id else "exec"),
+            "fallback_reason_code": fallback_reason_code,
+            "warnings": warnings,
             "raw": payload,
         }
 
@@ -766,6 +829,8 @@ def append_thread_history(path: Path, cfg: DispatchInput, dispatch: dict[str, An
             if isinstance(value, str) and value.strip():
                 thread_id = value.strip()
                 break
+    if not thread_id and cfg.dispatch_mode == "resume" and isinstance(cfg.resume_thread_id, str) and cfg.resume_thread_id.strip():
+        thread_id = cfg.resume_thread_id.strip()
     if not thread_id:
         thread_id = "unknown"
 
@@ -791,6 +856,13 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         if isinstance(value, str) and value.strip():
             dispatch_thread_id = value.strip()
             break
+    if (
+        dispatch_thread_id is None
+        and cfg.dispatch_mode == "resume"
+        and isinstance(cfg.resume_thread_id, str)
+        and cfg.resume_thread_id.strip()
+    ):
+        dispatch_thread_id = cfg.resume_thread_id.strip()
 
     worker_entry = {
         "slot": cfg.slot,
@@ -1055,6 +1127,10 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         result["errors"].append({"code": exc.code, "message": exc.message, "stage": exc.stage})
         return result
 
+    dispatch_warning_rows = dispatch.get("warnings") if isinstance(dispatch.get("warnings"), list) else []
+    if dispatch_warning_rows:
+        result["warnings"].extend([item for item in dispatch_warning_rows if isinstance(item, dict)])
+
     result["dispatch_started"] = bool(dispatch["dispatch_started"])
     result["pid"] = int(dispatch["pid"])
     result["dispatch_log"] = str(dispatch["dispatch_log"])
@@ -1065,6 +1141,13 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         if isinstance(value, str) and value.strip():
             dispatch_thread_id = value.strip()
             break
+    if (
+        dispatch_thread_id is None
+        and cfg.dispatch_mode == "resume"
+        and isinstance(cfg.resume_thread_id, str)
+        and cfg.resume_thread_id.strip()
+    ):
+        dispatch_thread_id = cfg.resume_thread_id.strip()
     result["dispatch_thread_id"] = dispatch_thread_id
     result["dispatch"] = {
         "attempted": True,
@@ -1073,6 +1156,7 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "dispatch_log": str(dispatch["dispatch_log"]),
         "dispatch_thread_id": dispatch_thread_id,
         "dispatch_mode_used": dispatch.get("dispatch_mode_used", "exec"),
+        "fallback_reason_code": dispatch.get("fallback_reason_code"),
     }
     result["status"] = "dispatch_started" if dispatch["dispatch_started"] else "dispatch_failed"
 

@@ -1,9 +1,11 @@
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "dispatch_worker_packet.py"
 SPEC = importlib.util.spec_from_file_location("dispatch_worker_packet", SCRIPT_PATH)
@@ -120,6 +122,8 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("intended_branch", content)
             self.assertIn("fallback_branch", content)
             self.assertIn("fallback_reason", content)
+            self.assertIn("Completion Artifact Contract", content)
+            self.assertIn("summary.result: pass|fail|blocked", content)
 
     def test_packet_render_includes_test_source_sync_section_for_tester(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -227,6 +231,97 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             thread_history = (root / "reports" / "optimus-prime" / "THREAD_HISTORY.log").read_text(encoding="utf-8")
             self.assertIn("slot | worker type | thread-id", thread_history)
             self.assertIn("dev-1 | developer | unknown", thread_history)
+
+    def test_resume_dispatch_preserves_existing_thread_id_when_dispatch_payload_omits_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = make_cfg(
+                root,
+                dispatch_mode="resume",
+                resume_thread_id="019caf43-0c03-7de0-b5a4-424935c63c33",
+            )
+
+            class ResumeDispatcher:
+                def dispatch(self, *_args, **_kwargs):
+                    return {
+                        "dispatch_started": True,
+                        "pid": 4243,
+                        "dispatch_log": "/tmp/dispatch.log",
+                        "dispatch_mode_used": "resume",
+                        "raw": {"status": "started"},
+                    }
+
+            out = MODULE.run_dispatch_worker_packet(cfg, dispatcher=ResumeDispatcher())
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["dispatch_thread_id"], cfg.resume_thread_id)
+            self.assertEqual(out["dispatch"]["dispatch_thread_id"], cfg.resume_thread_id)
+
+            registry = json.loads((root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json").read_text(encoding="utf-8"))
+            self.assertEqual(registry["workers"][0]["dispatch_thread_id"], cfg.resume_thread_id)
+
+            handoff_line = (
+                root / "reports" / "optimus-prime" / "HANDOFF_LOG.jsonl"
+            ).read_text(encoding="utf-8").strip().splitlines()[-1]
+            handoff = json.loads(handoff_line)
+            self.assertEqual(handoff["dispatch_thread_id"], cfg.resume_thread_id)
+
+            thread_history = (root / "reports" / "optimus-prime" / "THREAD_HISTORY.log").read_text(encoding="utf-8")
+            self.assertIn(cfg.resume_thread_id, thread_history)
+
+    def test_thread_dispatch_runner_resume_early_exit_uses_exec_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = make_cfg(
+                root,
+                dispatch_mode="resume",
+                resume_thread_id="019caf43-0c03-7de0-b5a4-424935c63c33",
+            )
+            packet = root / "packet.md"
+            packet.write_text("test", encoding="utf-8")
+            log_path = root / "dispatch-resume.log"
+            log_path.write_text("Error: stdin is not a terminal\n", encoding="utf-8")
+            exec_log_path = root / "dispatch-exec.log"
+            exec_log_path.write_text("", encoding="utf-8")
+
+            calls: list[list[str]] = []
+
+            def fake_run(cmd, **_kwargs):
+                calls.append(list(cmd))
+                if len(calls) == 1:
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=json.dumps({"status": "started", "pid": 11111, "log_file": str(log_path)}),
+                        stderr="",
+                    )
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    stdout=json.dumps({"status": "started", "pid": 22222, "log_file": str(exec_log_path)}),
+                    stderr="",
+                )
+
+            def fake_kill(pid, _sig):
+                if pid == 11111:
+                    raise OSError("dead")
+                return None
+
+            with mock.patch.object(MODULE.subprocess, "run", side_effect=fake_run), mock.patch.object(
+                MODULE.os, "kill", side_effect=fake_kill
+            ), mock.patch.object(MODULE.time, "sleep", return_value=None):
+                out = MODULE.ThreadDispatchRunner(repo_root=root).dispatch(cfg, packet)
+
+            self.assertEqual(out["dispatch_mode_used"], "exec")
+            self.assertEqual(out["pid"], 22222)
+            self.assertEqual(out["fallback_reason_code"], "dispatch_resume_notty_detected")
+            warning_codes = {
+                item.get("code")
+                for item in out.get("warnings", [])
+                if isinstance(item, dict)
+            }
+            self.assertIn("dispatch_resume_notty_detected", warning_codes)
+            self.assertIn("dispatch_resume_failed_fallback_exec", warning_codes)
+            self.assertEqual(len(calls), 2)
 
     def test_registry_update_supports_workers_dict_shape(self):
         with tempfile.TemporaryDirectory() as tmp:

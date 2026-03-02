@@ -4279,6 +4279,12 @@ def _prepare_dead_pid_redispatch_assignments(
     if not isinstance(retry_counts, dict):
         retry_counts = {}
         build_state["dead_pid_retry_counts"] = retry_counts
+    completion_policy = build_state.get("worker_completion_policy")
+    if not isinstance(completion_policy, dict):
+        completion_policy = {"missing_threshold": 3}
+    missing_threshold = max(1, _coerce_nonneg_int(completion_policy.get("missing_threshold"), default=3))
+    build_state["worker_completion_policy"] = {"missing_threshold": missing_threshold}
+    plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
 
     status_to_stage: dict[str, tuple[str, str]] = {
         TASK_STATUS_DEV_WORKING: ("dev", "developer"),
@@ -4299,13 +4305,38 @@ def _prepare_dead_pid_redispatch_assignments(
             continue
 
         evidence_path = _task_evidence_path(repo_root, task)
-        evidence_payload = {}
+        evidence_payload: dict[str, Any] = {}
+        evidence_issue_code: str | None = None
+        evidence_issue_message: str | None = None
         if evidence_path.exists():
             try:
                 raw_payload = _read_json(evidence_path)
-                evidence_payload = raw_payload if isinstance(raw_payload, dict) else {}
-            except OpError:
+                if isinstance(raw_payload, dict):
+                    evidence_payload = raw_payload
+                else:
+                    evidence_issue_code = "worker_completion_artifact_invalid"
+                    evidence_issue_message = "completion artifact is not a JSON object"
+            except OpError as exc:
                 evidence_payload = {}
+                evidence_issue_code = "worker_completion_artifact_invalid"
+                evidence_issue_message = exc.message
+        else:
+            evidence_issue_code = "worker_completion_artifact_missing"
+            evidence_issue_message = "completion artifact missing after worker dispatch"
+        if evidence_issue_code:
+            warnings.append(
+                {
+                    "code": evidence_issue_code,
+                    "message": (
+                        f"task {task_id} slot {owner_slot}: {evidence_issue_message or evidence_issue_code} "
+                        f"(artifact={evidence_path})"
+                    ),
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "slot": owner_slot,
+                    "artifact": str(evidence_path),
+                }
+            )
         gate = evidence_payload.get("gate") if isinstance(evidence_payload.get("gate"), dict) else {}
         review = evidence_payload.get("review") if isinstance(evidence_payload.get("review"), dict) else {}
         evidence_progress = False
@@ -4332,6 +4363,19 @@ def _prepare_dead_pid_redispatch_assignments(
             retry_counts.pop(task_id, None)
             warnings.append(
                 {
+                    "code": "worker_completion_artifact_applied",
+                    "message": (
+                        f"task {task_id} progressed from completion artifact after dead-pid recovery "
+                        f"(artifact={evidence_path})"
+                    ),
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "slot": owner_slot,
+                    "artifact": str(evidence_path),
+                }
+            )
+            warnings.append(
+                {
                     "code": "dead_pid_evidence_reconciled",
                     "message": (
                         f"task {task_id} advanced from evidence after dead pid recovery; "
@@ -4356,6 +4400,53 @@ def _prepare_dead_pid_redispatch_assignments(
         plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
         lane_id = _as_str(task.get("lane_id")) or _as_str(plan_task.get("lane_id"))
         phase_id = _as_str(task.get("phase_id")) or _as_str(plan_task.get("phase_id")) or "phase-1"
+        retry_count = int(retry_counts.get(task_id, 0)) + 1
+        retry_counts[task_id] = retry_count
+        if retry_count >= missing_threshold:
+            task["status"] = TASK_STATUS_BLOCKED
+            gap_code = evidence_issue_code or "worker_completion_artifact_missing"
+            _upsert_task_gap(
+                task,
+                {
+                    "gap_id": _gap_id(plan_id, phase_id, task_id, f"completion:{stage_name}", "blocked"),
+                    "category": "task_blocked",
+                    "severity": "P1",
+                    "stage": stage_name,
+                    "status": "open",
+                    "reason_codes": [gap_code, "dead_pid_retry_threshold_reached"],
+                    "retry_count": retry_count,
+                    "max_retries": max(5, missing_threshold),
+                    "closure_ref": str(evidence_path),
+                },
+            )
+            warnings.append(
+                {
+                    "code": "worker_completion_artifact_missing"
+                    if gap_code == "worker_completion_artifact_missing"
+                    else "worker_completion_artifact_invalid",
+                    "message": (
+                        f"task {task_id} blocked after repeated missing/invalid completion artifact "
+                        f"(retry={retry_count}, threshold={missing_threshold})"
+                    ),
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "slot": owner_slot,
+                    "retry_count": retry_count,
+                    "threshold": missing_threshold,
+                    "artifact": str(evidence_path),
+                }
+            )
+            warnings.append(
+                {
+                    "code": "dead_pid_retry_watchdog_warning",
+                    "message": f"task {task_id} hit repeated dead-pid redispatch retries ({retry_count}); task blocked",
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "slot": owner_slot,
+                    "retry_count": retry_count,
+                }
+            )
+            continue
         assignments.append(
             {
                 "task_id": task_id,
@@ -4367,8 +4458,6 @@ def _prepare_dead_pid_redispatch_assignments(
                 "dispatch_policy": "resume_if_same_lane",
             }
         )
-        retry_count = int(retry_counts.get(task_id, 0)) + 1
-        retry_counts[task_id] = retry_count
         warnings.append(
             {
                 "code": "dead_pid_no_evidence_redispatch",
@@ -6423,6 +6512,9 @@ def _fresh_build_state_payload() -> dict[str, Any]:
             "triggered": False,
             "triggered_at": None,
         },
+        "slot_resume_policy": {},
+        "resume_fail_counts_by_slot": {},
+        "last_dispatch_cycle_summary": {},
         "state_recovery": {
             "last_recovery_at": None,
             "reason": None,
@@ -6502,6 +6594,15 @@ def _load_build_state(path: Path) -> dict[str, Any]:
             "triggered_at": None,
         },
     )
+    payload.setdefault("slot_resume_policy", {})
+    payload.setdefault("resume_fail_counts_by_slot", {})
+    payload.setdefault("last_dispatch_cycle_summary", {})
+    if not isinstance(payload.get("slot_resume_policy"), dict):
+        payload["slot_resume_policy"] = {}
+    if not isinstance(payload.get("resume_fail_counts_by_slot"), dict):
+        payload["resume_fail_counts_by_slot"] = {}
+    if not isinstance(payload.get("last_dispatch_cycle_summary"), dict):
+        payload["last_dispatch_cycle_summary"] = {}
     payload.setdefault(
         "state_recovery",
         {
@@ -7249,6 +7350,16 @@ def _dispatch_next_task_from_assignments(
         "test": {TASK_STATUS_DEV_DONE},
         "review": {TASK_STATUS_TESTS_DONE},
     }
+    dispatch_window = build_state.get("dispatch_window") if isinstance(build_state.get("dispatch_window"), dict) else {}
+    max_dispatch_per_cycle = max(1, _coerce_nonneg_int(dispatch_window.get("max_assignments_per_cycle"), default=3))
+    slot_resume_policy = build_state.get("slot_resume_policy")
+    if not isinstance(slot_resume_policy, dict):
+        slot_resume_policy = {}
+        build_state["slot_resume_policy"] = slot_resume_policy
+    resume_fail_counts = build_state.get("resume_fail_counts_by_slot")
+    if not isinstance(resume_fail_counts, dict):
+        resume_fail_counts = {}
+        build_state["resume_fail_counts_by_slot"] = resume_fail_counts
 
     def _persist_worker_slot_transition(
         *,
@@ -7288,6 +7399,8 @@ def _dispatch_next_task_from_assignments(
 
     all_warnings: list[dict[str, Any]] = []
     first_failure: dict[str, Any] | None = None
+    dispatch_successes: list[dict[str, Any]] = []
+    dispatched_count = 0
     assignment_observations: list[dict[str, Any]] = []
     observations_path = _repo_path(req.repo_root, DISPATCH_ASSIGNMENT_OBSERVATIONS_JSONL)
 
@@ -7345,6 +7458,14 @@ def _dispatch_next_task_from_assignments(
         next_stage = _as_str(row.get("next_stage"))
         slot_name = _as_str(row.get("slot"))
         dispatch_policy = _as_str(row.get("dispatch_policy")) or "resume_if_same_lane"
+        if dispatched_count >= max_dispatch_per_cycle:
+            _record_assignment_observation(
+                row=row,
+                status="skipped",
+                reason_code="dispatch_cycle_cap_reached",
+                started_at=started,
+            )
+            continue
         if not task_id or not lane_id or next_stage not in {"dev", "test", "review"} or not slot_name:
             _record_assignment_observation(
                 row=row,
@@ -7495,8 +7616,10 @@ def _dispatch_next_task_from_assignments(
 
         previous_lane = _as_str(slot_worker.get("lane_id"))
         previous_thread_id = _as_str(task.get("dispatch_thread_id")) or _as_str(slot_worker.get("dispatch_thread_id"))
+        slot_resume_mode = (_as_str(slot_resume_policy.get(slot_name)) or "resume_allowed").lower()
         same_lane_resume = (
             dispatch_policy == "resume_if_same_lane"
+            and slot_resume_mode != "exec_only"
             and bool(lane_id and previous_lane and lane_id == previous_lane and previous_thread_id)
         )
         dispatch_mode = "resume" if same_lane_resume else "exec"
@@ -7584,16 +7707,24 @@ def _dispatch_next_task_from_assignments(
             test_source_branch_override=test_source_branch_override,
             test_source_commit_override=test_source_commit_override,
         )
+        dispatch_payload_for_warnings = result.get("dispatch") if isinstance(result.get("dispatch"), dict) else {}
         warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+        tool_warning_rows = (
+            dispatch_payload_for_warnings.get("warnings")
+            if isinstance(dispatch_payload_for_warnings.get("warnings"), list)
+            else []
+        )
+        warning_rows.extend([item for item in tool_warning_rows if isinstance(item, dict)])
+        effective_mode_hint = _as_str(dispatch_payload_for_warnings.get("dispatch_mode_used")) or dispatch_mode
         if dispatch_mode == "resume":
             warning_rows.append(
                 {
                     "code": "dispatch_resumed_thread"
-                    if _as_str(((result.get("dispatch") or {}).get("dispatch_mode_used")) or dispatch_mode) == "resume"
+                    if effective_mode_hint == "resume"
                     else "dispatch_resume_failed_fallback_exec",
                     "message": (
                         f"slot {slot_name} resumed existing thread for same-lane task"
-                        if _as_str(((result.get("dispatch") or {}).get("dispatch_mode_used")) or dispatch_mode) == "resume"
+                        if effective_mode_hint == "resume"
                         else f"slot {slot_name} failed to resume thread; fallback dispatch used new thread"
                     ),
                     "stage": "build_loop",
@@ -7621,6 +7752,11 @@ def _dispatch_next_task_from_assignments(
         if _as_bool(result.get("ok"), default=False):
             dispatch_payload = result.get("dispatch") if isinstance(result.get("dispatch"), dict) else {}
             effective_mode = _as_str(dispatch_payload.get("dispatch_mode_used")) or dispatch_mode
+            warning_codes = [
+                _as_str(item.get("code"))
+                for item in warning_rows
+                if isinstance(item, dict) and _as_str(item.get("code"))
+            ]
             _record_assignment_observation(
                 row=row,
                 status="dispatched",
@@ -7628,12 +7764,40 @@ def _dispatch_next_task_from_assignments(
                 started_at=started,
                 selected_alias=selected_alias,
                 dispatch_mode=effective_mode,
-                warning_codes=[
-                    _as_str(item.get("code"))
-                    for item in warning_rows
-                    if isinstance(item, dict) and _as_str(item.get("code"))
-                ],
+                warning_codes=warning_codes,
             )
+            all_warnings.extend([item for item in warning_rows if isinstance(item, dict)])
+            if dispatch_mode == "resume":
+                resume_failure_codes = {
+                    "dispatch_resume_early_exit",
+                    "dispatch_resume_notty_detected",
+                    "dispatch_resume_failed_fallback_exec",
+                }
+                if any(code in resume_failure_codes for code in warning_codes):
+                    retry_value = _coerce_nonneg_int(resume_fail_counts.get(slot_name), default=0) + 1
+                    resume_fail_counts[slot_name] = retry_value
+                    slot_resume_policy[slot_name] = "exec_only"
+                    all_warnings.append(
+                        {
+                            "code": "dispatch_resume_temporarily_disabled_slot",
+                            "message": (
+                                f"slot {slot_name} switched to exec_only after resume startup failure "
+                                f"(count={retry_value})"
+                            ),
+                            "stage": "build_loop",
+                            "slot": slot_name,
+                            "retry_count": retry_value,
+                        }
+                    )
+                elif effective_mode == "resume":
+                    resume_fail_counts[slot_name] = 0
+            if (
+                dispatch_mode != "resume"
+                and effective_mode == "exec"
+                and _as_str(dispatch_payload.get("dispatch_thread_id"))
+            ):
+                slot_resume_policy[slot_name] = "resume_allowed"
+                resume_fail_counts[slot_name] = 0
             _persist_worker_slot_transition(
                 slot_name=slot_name,
                 lane_value=lane_id,
@@ -7643,9 +7807,9 @@ def _dispatch_next_task_from_assignments(
                 branch_name=branch_name,
                 worktree_root=worktree_root,
             )
-            _persist_assignment_observations(all_warnings)
-            result["assignment_observations"] = assignment_observations
-            return result
+            dispatch_successes.append(result)
+            dispatched_count += 1
+            continue
 
         _record_assignment_observation(
             row=row,
@@ -7664,6 +7828,21 @@ def _dispatch_next_task_from_assignments(
             first_failure = result
         result_warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
         all_warnings.extend([row for row in result_warnings if isinstance(row, dict)])
+
+    if dispatch_successes:
+        status = "completed" if dispatched_count > 0 else "noop"
+        reason = "dispatch_ok" if dispatched_count > 0 else "dispatch_plan_no_assignments"
+        out = {
+            "ok": True,
+            "status": status,
+            "reason": reason,
+            "warnings": all_warnings,
+            "assignment_observations": assignment_observations,
+            "dispatch_count": dispatched_count,
+            "dispatch_results": dispatch_successes,
+        }
+        _persist_assignment_observations(all_warnings)
+        return out
 
     if first_failure is not None:
         existing = first_failure.get("warnings") if isinstance(first_failure.get("warnings"), list) else []
@@ -9384,7 +9563,10 @@ def _manager_dispatcher_cycle(
         }
     combined_assignments: list[dict[str, Any]] = []
     seen_assignment_keys: set[tuple[str, str, str]] = set()
-    for row in forced_rows + assignments:
+    ordered_rows = [dict(row) | {"_forced": False} for row in assignments] + [
+        dict(row) | {"_forced": True} for row in forced_rows
+    ]
+    for row in ordered_rows:
         task_id = _as_str(row.get("task_id"))
         slot = _as_str(row.get("slot"))
         stage = _as_str(row.get("next_stage"))
@@ -10589,6 +10771,20 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                         else []
                     )
                     build_state["last_assignment_observations"] = dispatch_observations
+                    status_counts = {"dispatched": 0, "skipped": 0, "failed": 0, "invalid": 0}
+                    for obs in dispatch_observations:
+                        if not isinstance(obs, dict):
+                            continue
+                        status_key = _as_str(obs.get("status"))
+                        if status_key in status_counts:
+                            status_counts[status_key] += 1
+                    build_state["last_dispatch_cycle_summary"] = {
+                        "cycle": int(build_state.get("last_cycle", 0)),
+                        "reason": _as_str(dispatch_result.get("reason")) or None,
+                        "counts": status_counts,
+                        "observations": len(dispatch_observations),
+                        "updated_at": utc_now_iso(),
+                    }
                     dispatch_reason = _as_str(dispatch_result.get("reason")) if isinstance(dispatch_result, dict) else None
                     dispatch_reason_for_print = dispatch_reason
                     if dispatch_reason in {"profile_assignment_all_hard_gated"}:
@@ -11345,6 +11541,20 @@ def command_report(req: OpRequest) -> dict[str, Any]:
         run_state = "not_started"
 
     health_color = "green" if (health_ok and status_ok) else "yellow" if health_ok else "red"
+    health_reason: str | None = None
+    no_progress_watchdog = build_state.get("no_progress_watchdog") if isinstance(build_state.get("no_progress_watchdog"), dict) else {}
+    no_progress_cycles = _coerce_nonneg_int(no_progress_watchdog.get("consecutive_no_progress_cycles"), default=0)
+    degrade_threshold = max(1, _coerce_nonneg_int(no_progress_watchdog.get("degrade_threshold_cycles"), default=3))
+    resume_fail_counts = build_state.get("resume_fail_counts_by_slot") if isinstance(build_state.get("resume_fail_counts_by_slot"), dict) else {}
+    max_resume_failures = 0
+    for value in resume_fail_counts.values():
+        max_resume_failures = max(max_resume_failures, _coerce_nonneg_int(value, default=0))
+    if health_color == "green" and (no_progress_cycles >= degrade_threshold or max_resume_failures >= 2):
+        health_color = "yellow"
+        if no_progress_cycles >= degrade_threshold:
+            health_reason = f"no_progress_watchdog:{no_progress_cycles}/{NO_PROGRESS_THRESHOLD_CYCLES}"
+        else:
+            health_reason = f"resume_failures:max={max_resume_failures}"
 
     counts_raw = status_data.get("task_counts_by_status") if isinstance(status_data.get("task_counts_by_status"), dict) else {}
     counts: dict[str, int] = {}
@@ -11409,6 +11619,14 @@ def command_report(req: OpRequest) -> dict[str, Any]:
                 "stage": "report",
             }
         )
+    if health_reason:
+        warnings.append(
+            {
+                "code": "no_progress_watchdog_degraded",
+                "message": f"runtime health degraded: {health_reason}",
+                "stage": "report",
+            }
+        )
 
     summary = f"build: {run_state} | health: {health_color} | cycle: {cycle}"
     return _response(
@@ -11423,6 +11641,7 @@ def command_report(req: OpRequest) -> dict[str, Any]:
         data={
             "build": run_state,
             "health": health_color,
+            "health_reason": health_reason,
             "cycle": cycle,
             "phase": phase_id,
             "tasks_done": done_tasks,
