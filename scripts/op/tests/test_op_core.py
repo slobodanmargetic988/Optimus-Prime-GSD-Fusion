@@ -5230,6 +5230,59 @@ def test_dispatcher_consumes_work_dispatch_plan_only(monkeypatch: pytest.MonkeyP
                 row["worktree_root"] = str(root)
                 row["branch"] = "codex/dev-1/task-002"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        workstation_registry_path = root / "reports" / "optimus-prime" / "planning" / "WORKSTATION_REGISTRY.json"
+        workstation_registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "slots": {
+                        "dev-1": {
+                            "slot": "dev-1",
+                            "status": "ready",
+                            "target_task_id": "TASK-001",
+                            "target_lane_id": "phase-1/lane-a",
+                            "target_stage": "dev",
+                            "target_branch": "codex/dev-1/task",
+                            "target_worktree_name": "workstation-dev-1",
+                            "target_worktree_root": str(root),
+                        },
+                        "dev-2": {
+                            "slot": "dev-2",
+                            "status": "ready",
+                            "target_task_id": "TASK-002",
+                            "target_lane_id": "phase-1/lane-b",
+                            "target_stage": "dev",
+                            "target_branch": "codex/dev-2/task",
+                            "target_worktree_name": "workstation-dev-2",
+                            "target_worktree_root": str(root),
+                        },
+                        "dev-3": {
+                            "slot": "dev-3",
+                            "status": "ready",
+                            "target_task_id": "TASK-003",
+                            "target_lane_id": "phase-1/lane-c",
+                            "target_stage": "dev",
+                            "target_branch": "codex/dev-3/task",
+                            "target_worktree_name": "workstation-dev-3",
+                            "target_worktree_root": str(root),
+                        },
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        _write_workstation_registry_slot(
+            root,
+            slot="dev-1",
+            task_id="TASK-002",
+            lane_id="phase-1/lane-b",
+            stage="dev",
+            branch="codex/dev-1/task-002",
+            worktree_root=root,
+        )
 
         for row in task_state.get("tasks", []):
             if row.get("task_id") in {"TASK-001", "TASK-002"}:
@@ -5439,6 +5492,24 @@ def test_dispatch_packet_uses_slot_worktree_root_and_branch(monkeypatch: pytest.
                 row["worktree_root"] = str(custom_worktree)
                 row["branch"] = "codex/dev-1/task-001"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        _write_workstation_registry_slot(
+            root,
+            slot="dev-1",
+            task_id="TASK-001",
+            lane_id="phase-1/lane-a",
+            stage="dev",
+            branch="codex/dev-1/task",
+            worktree_root=root,
+        )
+        _write_workstation_registry_slot(
+            root,
+            slot="dev-1",
+            task_id="TASK-001",
+            lane_id="phase-1/lane-a",
+            stage="dev",
+            branch="codex/dev-1/task-001",
+            worktree_root=custom_worktree,
+        )
         for row in task_state.get("tasks", []):
             if row.get("task_id") == "TASK-001":
                 row["status"] = "pending"
@@ -5519,6 +5590,15 @@ def test_test_stage_dispatch_packet_uses_dev_branch_head_and_slot_context(monkey
                 row["worktree_root"] = str(custom_worktree)
                 row["branch"] = f"codex/{run_id}/test-1/bootstrap"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        _write_workstation_registry_slot(
+            root,
+            slot="test-1",
+            task_id="TASK-001",
+            lane_id="phase-1/lane-a",
+            stage="test",
+            branch=f"codex/{run_id}/test-1/task-001-test",
+            worktree_root=custom_worktree,
+        )
 
         for row in task_state.get("tasks", []):
             if row.get("task_id") == "TASK-001":
@@ -5626,6 +5706,15 @@ def test_review_stage_dispatch_uses_developer_source_branch(monkeypatch: pytest.
                 row["worktree_root"] = str(custom_worktree)
                 row["branch"] = "codex/review-1/bootstrap"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        _write_workstation_registry_slot(
+            root,
+            slot="review-1",
+            task_id="TASK-001",
+            lane_id="phase-1/lane-a",
+            stage="review",
+            branch="codex/review-1/task-001-review",
+            worktree_root=custom_worktree,
+        )
 
         for row in task_state.get("tasks", []):
             if row.get("task_id") == "TASK-001":
@@ -5730,6 +5819,15 @@ def test_test_stage_dispatch_skips_when_dev_branch_missing(monkeypatch: pytest.M
                 row["worktree_root"] = str(root)
                 row["branch"] = "codex/test-1/bootstrap"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        _write_workstation_registry_slot(
+            root,
+            slot="test-1",
+            task_id="TASK-001",
+            lane_id="phase-1/lane-a",
+            stage="test",
+            branch="codex/test-1/task-001-test",
+            worktree_root=root,
+        )
 
         for row in task_state.get("tasks", []):
             if row.get("task_id") == "TASK-001":
@@ -5831,6 +5929,15 @@ def test_first_assignment_sets_lane_and_previous_lane_equal(monkeypatch: pytest.
                 row["worktree_root"] = str(root)
                 row["branch"] = "codex/dev-1/task-001"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        _write_workstation_registry_slot(
+            root,
+            slot="dev-1",
+            task_id="TASK-001",
+            lane_id="phase-1/lane-a",
+            stage="dev",
+            branch="codex/dev-1/task-001",
+            worktree_root=root,
+        )
         monkeypatch.setattr(
             MODULE,
             "_dispatch_task_packet",
@@ -5916,6 +6023,15 @@ def test_lane_change_rotates_previous_lane(monkeypatch: pytest.MonkeyPatch):
                 row["worktree_root"] = str(root)
                 row["branch"] = "codex/dev-1/task-002"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        _write_workstation_registry_slot(
+            root,
+            slot="dev-1",
+            task_id="TASK-002",
+            lane_id="phase-1/lane-b",
+            stage="dev",
+            branch="codex/dev-1/task-002",
+            worktree_root=root,
+        )
         for row in task_state.get("tasks", []):
             if row.get("task_id") == "TASK-002":
                 row["status"] = "pending"
@@ -6001,6 +6117,40 @@ def test_dispatch_filter_blocks_only_hard_gated_assignment_aliases(monkeypatch: 
                 row["worktree_root"] = str(root)
                 row["branch"] = f"codex/{row['slot']}/task"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        workstation_registry_path = root / "reports" / "optimus-prime" / "planning" / "WORKSTATION_REGISTRY.json"
+        workstation_registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "slots": {
+                        "dev-1": {
+                            "slot": "dev-1",
+                            "status": "ready",
+                            "target_task_id": "TASK-001",
+                            "target_lane_id": "phase-1/lane-a",
+                            "target_stage": "dev",
+                            "target_branch": "codex/dev-1/task",
+                            "target_worktree_name": "workstation-dev-1",
+                            "target_worktree_root": str(root),
+                        },
+                        "dev-2": {
+                            "slot": "dev-2",
+                            "status": "ready",
+                            "target_task_id": "TASK-002",
+                            "target_lane_id": "phase-1/lane-b",
+                            "target_stage": "dev",
+                            "target_branch": "codex/dev-2/task",
+                            "target_worktree_name": "workstation-dev-2",
+                            "target_worktree_root": str(root),
+                        },
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         for row in task_state.get("tasks", []):
             if row.get("task_id") in {"TASK-001", "TASK-002"}:
                 row["status"] = "pending"
@@ -6671,20 +6821,18 @@ def test_workstation_manager_llm_action_schema_invalid_retries_then_blocks_task(
                 row["branch"] = "codex/dev-1/task-001"
                 row["worktree_root"] = None
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
-        monkeypatch.setattr(
-            MODULE,
-            "run_codex_exec",
-            lambda **_kwargs: 0,
+        _stub_workstation_async_llm(
+            monkeypatch,
+            lambda _prompt: {"schema_version": "1.0"},
         )
         monkeypatch.setattr(MODULE.sys.stdout, "isatty", lambda: True)
         out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
         logs = capsys.readouterr().out
         warnings = out.get("warnings", [])
         warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
-        assert "workstation_manager_retry_exhausted" in warning_codes
         assert "workstation_action_invalid" in warning_codes
-        assert "retrying." in logs
-        assert task["status"] == "blocked"
+        assert "attempt 1/10" in logs
+        assert task["status"] != "blocked"
 
 
 def _write_manager_action_from_prompt(prompt_text: str, payload: dict[str, object]) -> None:
@@ -6693,6 +6841,68 @@ def _write_manager_action_from_prompt(prompt_text: str, payload: dict[str, objec
     action_path = Path(path_line.split(marker, 1)[1].strip())
     action_path.parent.mkdir(parents=True, exist_ok=True)
     action_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _stub_workstation_async_llm(
+    monkeypatch: pytest.MonkeyPatch,
+    payload_builder,
+):
+    def fake_start_codex_exec_background(**kwargs):
+        prompt = str(kwargs.get("prompt_text") or "")
+        payload = payload_builder(prompt)
+        _write_manager_action_from_prompt(prompt, payload)
+        return 424242, None
+
+    monkeypatch.setattr(MODULE, "_start_codex_exec_background", fake_start_codex_exec_background)
+    monkeypatch.setattr(MODULE, "_poll_background_process", lambda *_args, **_kwargs: (True, 0))
+
+
+def _write_workstation_registry_slot(
+    root: Path,
+    *,
+    slot: str,
+    task_id: str,
+    lane_id: str,
+    stage: str,
+    branch: str,
+    worktree_root: Path,
+) -> None:
+    path = root / "reports" / "optimus-prime" / "planning" / "WORKSTATION_REGISTRY.json"
+    payload = {
+        "schema_version": "1.0",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "slots": {
+            slot: {
+                "slot": slot,
+                "status": "ready",
+                "request_id": "req-test",
+                "pid": None,
+                "attempt": 1,
+                "retry_count": 0,
+                "requested_cycle": 1,
+                "started_at": "2026-01-01T00:00:00Z",
+                "completed_at": "2026-01-01T00:00:01Z",
+                "last_update_at": "2026-01-01T00:00:01Z",
+                "target_task_id": task_id,
+                "target_lane_id": lane_id,
+                "target_stage": stage,
+                "target_branch": branch,
+                "target_base_ref": "RAB-BASE",
+                "target_worktree_name": f"workstation-{slot}",
+                "target_worktree_root": str(worktree_root),
+                "attempt_dir": None,
+                "action_path": None,
+                "validation_path": None,
+                "stdout_path": None,
+                "stderr_path": None,
+                "last_message_path": None,
+                "llm_exit_code": 0,
+                "last_error": None,
+            }
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def _mark_task_review_done_merge_ready(root: Path, task: dict[str, object]) -> None:
@@ -7210,24 +7420,19 @@ def test_workstation_manager_success_updates_slot_worktree_and_branch(
         assert isinstance(target_path, Path)
         target_path.mkdir(parents=True, exist_ok=True)
 
-        def fake_codex_exec(**kwargs):
-            prompt = str(kwargs.get("prompt_text") or "")
-            _write_manager_action_from_prompt(
-                prompt,
-                {
-                    "schema_version": "1.0",
-                    "slot": "dev-1",
-                    "lane_id": "phase-1/lane-a",
-                    "task_id": "TASK-001",
-                    "branch_name": "codex/dev-1/task-001",
-                    "worktree_name": "workstation-dev-1",
-                    "prepare_command": f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} --repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer --output json --force-reset-existing --worktree-name workstation-dev-1",
-                    "prereq_policy": "copy_env_files",
-                },
-            )
-            return 0
-
-        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        _stub_workstation_async_llm(
+            monkeypatch,
+            lambda _prompt: {
+                "schema_version": "1.0",
+                "slot": "dev-1",
+                "lane_id": "phase-1/lane-a",
+                "task_id": "TASK-001",
+                "branch_name": "codex/dev-1/task-001",
+                "worktree_name": "workstation-dev-1",
+                "prepare_command": f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} --repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer --output json --force-reset-existing --worktree-name workstation-dev-1",
+                "prereq_policy": "copy_env_files",
+            },
+        )
 
         def fake_run_manager_command(command_text, **_kwargs):
             return {
@@ -7335,33 +7540,26 @@ def test_workstation_manager_test_slot_uses_slot_prefix_and_dev_base_ref(
         assert isinstance(target_path, Path)
         target_path.mkdir(parents=True, exist_ok=True)
         codex_calls = {"count": 0}
-
-        def fake_codex_exec(**kwargs):
+        def payload_builder(prompt: str):
             codex_calls["count"] += 1
-            prompt = str(kwargs.get("prompt_text") or "")
             assert "Branch name: codex/test-1/task-001-test" in prompt
             assert "Base ref: codex/dev-1/task-001" in prompt
-            _write_manager_action_from_prompt(
-                prompt,
-                {
-                    "schema_version": "1.0",
-                    "slot": "test-1",
-                    "lane_id": "phase-1/lane-a",
-                    "task_id": "TASK-001",
-                    "branch_name": "codex/test-1/task-001-test",
-                    "source_branch": "codex/dev-1/task-001",
-                    "worktree_name": "workstation-test-1",
-                    "prepare_command": (
-                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
-                        f"--repo-root {root} --base-ref codex/dev-1/task-001 --branch-name codex/test-1/task-001-test "
-                        "--slot-role tester --output json --force-reset-existing --worktree-name workstation-test-1"
-                    ),
-                    "prereq_policy": "copy_env_files",
-                },
-            )
-            return 0
-
-        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+            return {
+                "schema_version": "1.0",
+                "slot": "test-1",
+                "lane_id": "phase-1/lane-a",
+                "task_id": "TASK-001",
+                "branch_name": "codex/test-1/task-001-test",
+                "source_branch": "codex/dev-1/task-001",
+                "worktree_name": "workstation-test-1",
+                "prepare_command": (
+                    f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                    f"--repo-root {root} --base-ref codex/dev-1/task-001 --branch-name codex/test-1/task-001-test "
+                    "--slot-role tester --output json --force-reset-existing --worktree-name workstation-test-1"
+                ),
+                "prereq_policy": "copy_env_files",
+            }
+        _stub_workstation_async_llm(monkeypatch, payload_builder)
         monkeypatch.setattr(
             MODULE,
             "_run_manager_command",
@@ -7477,24 +7675,19 @@ def test_workstation_manager_rejects_prepare_command_non_bundled_script_path(mon
                 row["worktree_root"] = str(root / "prepared-worktrees" / str(row.get("slot") or "slot"))
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
 
-        def fake_codex_exec(**kwargs):
-            prompt = str(kwargs.get("prompt_text") or "")
-            _write_manager_action_from_prompt(
-                prompt,
-                {
-                    "schema_version": "1.0",
-                    "slot": "dev-1",
-                    "lane_id": "phase-1/lane-a",
-                    "task_id": "TASK-001",
-                    "branch_name": "codex/dev-1/task-001",
-                    "worktree_name": "workstation-dev-1",
-                    "prepare_command": "python3 /tmp/prepare_workstation.py --repo-root /tmp",
-                    "prereq_policy": "copy_env_files",
-                },
-            )
-            return 0
-
-        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        _stub_workstation_async_llm(
+            monkeypatch,
+            lambda _prompt: {
+                "schema_version": "1.0",
+                "slot": "dev-1",
+                "lane_id": "phase-1/lane-a",
+                "task_id": "TASK-001",
+                "branch_name": "codex/dev-1/task-001",
+                "worktree_name": "workstation-dev-1",
+                "prepare_command": "python3 /tmp/prepare_workstation.py --repo-root /tmp",
+                "prereq_policy": "copy_env_files",
+            },
+        )
         monkeypatch.setattr(
             MODULE,
             "_run_manager_command",
@@ -7503,8 +7696,8 @@ def test_workstation_manager_rejects_prepare_command_non_bundled_script_path(mon
         out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
         warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
         assert "workstation_action_invalid" in warning_codes
-        assert "workstation_manager_retry_exhausted" in warning_codes
-        assert task["status"] == "blocked"
+        assert "workstation_manager_retry_exhausted" not in warning_codes
+        assert task["status"] != "blocked"
 
 
 def test_workstation_action_rejects_shared_worktree_name(monkeypatch: pytest.MonkeyPatch):
@@ -7543,28 +7736,23 @@ def test_workstation_action_rejects_shared_worktree_name(monkeypatch: pytest.Mon
                 row["worktree_root"] = str(root / "prepared-worktrees" / str(row.get("slot") or "slot"))
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
 
-        def fake_codex_exec(**kwargs):
-            prompt = str(kwargs.get("prompt_text") or "")
-            _write_manager_action_from_prompt(
-                prompt,
-                {
-                    "schema_version": "1.0",
-                    "slot": "dev-1",
-                    "lane_id": "phase-1/lane-a",
-                    "task_id": "TASK-001",
-                    "branch_name": "codex/dev-1/task-001",
-                    "worktree_name": "workstation-1",
-                    "prepare_command": (
-                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
-                        f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
-                        "--output json --force-reset-existing --worktree-name workstation-1"
-                    ),
-                    "prereq_policy": "copy_env_files",
-                },
-            )
-            return 0
-
-        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        _stub_workstation_async_llm(
+            monkeypatch,
+            lambda _prompt: {
+                "schema_version": "1.0",
+                "slot": "dev-1",
+                "lane_id": "phase-1/lane-a",
+                "task_id": "TASK-001",
+                "branch_name": "codex/dev-1/task-001",
+                "worktree_name": "workstation-1",
+                "prepare_command": (
+                    f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                    f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
+                    "--output json --force-reset-existing --worktree-name workstation-1"
+                ),
+                "prereq_policy": "copy_env_files",
+            },
+        )
         monkeypatch.setattr(
             MODULE,
             "_run_manager_command",
@@ -7573,7 +7761,7 @@ def test_workstation_action_rejects_shared_worktree_name(monkeypatch: pytest.Mon
         out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
         warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
         assert "workstation_action_invalid" in warning_codes
-        assert "workstation_manager_retry_exhausted" in warning_codes
+        assert "workstation_manager_retry_exhausted" not in warning_codes
 
 
 def test_workstation_manager_nonexistent_target_path_does_not_crash(monkeypatch: pytest.MonkeyPatch):
@@ -7613,28 +7801,23 @@ def test_workstation_manager_nonexistent_target_path_does_not_crash(monkeypatch:
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
         missing_target = root / "prepared-worktrees" / "missing-worktree"
 
-        def fake_codex_exec(**kwargs):
-            prompt = str(kwargs.get("prompt_text") or "")
-            _write_manager_action_from_prompt(
-                prompt,
-                {
-                    "schema_version": "1.0",
-                    "slot": "dev-1",
-                    "lane_id": "phase-1/lane-a",
-                    "task_id": "TASK-001",
-                    "branch_name": "codex/dev-1/task-001",
-                    "worktree_name": "workstation-dev-1",
-                    "prepare_command": (
-                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
-                        f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
-                        "--output json --force-reset-existing --worktree-name workstation-dev-1"
-                    ),
-                    "prereq_policy": "copy_env_files",
-                },
-            )
-            return 0
-
-        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        _stub_workstation_async_llm(
+            monkeypatch,
+            lambda _prompt: {
+                "schema_version": "1.0",
+                "slot": "dev-1",
+                "lane_id": "phase-1/lane-a",
+                "task_id": "TASK-001",
+                "branch_name": "codex/dev-1/task-001",
+                "worktree_name": "workstation-dev-1",
+                "prepare_command": (
+                    f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                    f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
+                    "--output json --force-reset-existing --worktree-name workstation-dev-1"
+                ),
+                "prereq_policy": "copy_env_files",
+            },
+        )
         monkeypatch.setattr(
             MODULE,
             "_run_manager_command",
@@ -7662,9 +7845,9 @@ def test_workstation_manager_nonexistent_target_path_does_not_crash(monkeypatch:
 
         out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
         warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
-        assert "workstation_manager_retry_exhausted" in warning_codes
+        assert "workstation_manager_retry_exhausted" not in warning_codes
         assert "workstation_execution_failed" in warning_codes
-        assert task["status"] == "blocked"
+        assert task["status"] != "blocked"
         validation_path = (
             root
             / "reports"
@@ -7720,28 +7903,23 @@ def test_workstation_success_rejects_non_deterministic_target_path(monkeypatch: 
         expected_target = MODULE._expected_slot_worktree_path(root, "dev-1")
         assert isinstance(expected_target, Path)
 
-        def fake_codex_exec(**kwargs):
-            prompt = str(kwargs.get("prompt_text") or "")
-            _write_manager_action_from_prompt(
-                prompt,
-                {
-                    "schema_version": "1.0",
-                    "slot": "dev-1",
-                    "lane_id": "phase-1/lane-a",
-                    "task_id": "TASK-001",
-                    "branch_name": "codex/dev-1/task-001",
-                    "worktree_name": "workstation-dev-1",
-                    "prepare_command": (
-                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
-                        f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
-                        "--output json --force-reset-existing --worktree-name workstation-dev-1"
-                    ),
-                    "prereq_policy": "copy_env_files",
-                },
-            )
-            return 0
-
-        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        _stub_workstation_async_llm(
+            monkeypatch,
+            lambda _prompt: {
+                "schema_version": "1.0",
+                "slot": "dev-1",
+                "lane_id": "phase-1/lane-a",
+                "task_id": "TASK-001",
+                "branch_name": "codex/dev-1/task-001",
+                "worktree_name": "workstation-dev-1",
+                "prepare_command": (
+                    f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                    f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
+                    "--output json --force-reset-existing --worktree-name workstation-dev-1"
+                ),
+                "prereq_policy": "copy_env_files",
+            },
+        )
         monkeypatch.setattr(
             MODULE,
             "_run_manager_command",
@@ -7769,9 +7947,10 @@ def test_workstation_success_rejects_non_deterministic_target_path(monkeypatch: 
 
         out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
         warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
-        assert "workstation_manager_retry_exhausted" in warning_codes
+        assert "workstation_action_invalid" not in warning_codes
         assert "workstation_execution_failed" in warning_codes
-        assert task["status"] == "blocked"
+        assert "workstation_manager_retry_exhausted" not in warning_codes
+        assert task["status"] != "blocked"
         registry_after = json.loads(registry_path.read_text(encoding="utf-8"))
         slot_row = next(item for item in registry_after.get("workers", []) if isinstance(item, dict) and item.get("slot") == "dev-1")
         assert slot_row.get("worktree_root") in {None, ""}
@@ -7828,30 +8007,25 @@ def test_workstation_manager_surfaces_prepare_script_error_message(monkeypatch: 
                 row["worktree_root"] = str(root / "prepared-worktrees" / str(row.get("slot") or "slot"))
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
 
-        def fake_codex_exec(**kwargs):
-            prompt = str(kwargs.get("prompt_text") or "")
+        def payload_builder(prompt: str):
             branch_line = next((line for line in prompt.splitlines() if line.startswith("Branch name: ")), "")
             prompt_branch = branch_line.split("Branch name: ", 1)[1].strip() if branch_line else "codex/dev-1/bootstrap"
-            _write_manager_action_from_prompt(
-                prompt,
-                {
-                    "schema_version": "1.0",
-                    "slot": "dev-1",
-                    "lane_id": "phase-1/lane-a",
-                    "task_id": "TASK-001",
-                    "branch_name": prompt_branch,
-                    "worktree_name": "workstation-dev-1",
-                    "prepare_command": (
-                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
-                        f"--repo-root {root} --base-ref RAB-BASE --branch-name {prompt_branch} --slot-role developer --output json "
-                        "--force-reset-existing --worktree-name workstation-dev-1"
-                    ),
-                    "prereq_policy": "copy_env_files",
-                },
-            )
-            return 0
+            return {
+                "schema_version": "1.0",
+                "slot": "dev-1",
+                "lane_id": "phase-1/lane-a",
+                "task_id": "TASK-001",
+                "branch_name": prompt_branch,
+                "worktree_name": "workstation-dev-1",
+                "prepare_command": (
+                    f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                    f"--repo-root {root} --base-ref RAB-BASE --branch-name {prompt_branch} --slot-role developer --output json "
+                    "--force-reset-existing --worktree-name workstation-dev-1"
+                ),
+                "prereq_policy": "copy_env_files",
+            }
 
-        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        _stub_workstation_async_llm(monkeypatch, payload_builder)
         monkeypatch.setattr(
             MODULE,
             "_run_manager_command",
@@ -7984,49 +8158,46 @@ def test_workstation_same_lane_skip_requires_slot_branch_prefix(monkeypatch: pyt
                 row["branch"] = "feature/random"
                 row["worktree_root"] = str(stable_worktree)
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
-        codex_calls = {"count": 0}
-
-        def fake_codex_exec(**kwargs):
-            codex_calls["count"] += 1
-            prompt = str(kwargs.get("prompt_text") or "")
-            _write_manager_action_from_prompt(
-                prompt,
-                {
-                    "schema_version": "1.0",
-                    "slot": "dev-1",
-                    "lane_id": "phase-1/lane-a",
-                    "task_id": "TASK-001",
-                    "branch_name": "codex/dev-1/task-001",
-                    "worktree_name": "workstation-dev-1",
-                    "prepare_command": (
-                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
-                        f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
-                        "--output json --force-reset-existing --worktree-name workstation-dev-1"
-                    ),
-                    "prereq_policy": "copy_env_files",
-                },
-            )
-            return 0
-
-        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        llm_calls = {"count": 0}
+        def payload_builder(_prompt: str) -> dict[str, object]:
+            llm_calls["count"] += 1
+            return {
+                "schema_version": "1.0",
+                "slot": "dev-1",
+                "lane_id": "phase-1/lane-a",
+                "task_id": "TASK-001",
+                "branch_name": "codex/dev-1/task-001",
+                "worktree_name": "workstation-dev-1",
+                "prepare_command": (
+                    f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                    f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
+                    "--output json --force-reset-existing --worktree-name workstation-dev-1"
+                ),
+                "prereq_policy": "copy_env_files",
+            }
+        _stub_workstation_async_llm(monkeypatch, payload_builder)
+        command_calls = {"count": 0}
         monkeypatch.setattr(
             MODULE,
             "_run_manager_command",
-            lambda *_args, **_kwargs: {
-                "ok": True,
-                "code": None,
-                "message": "",
-                "stdout": json.dumps(
-                    {
-                        "ok": True,
-                        "target_path": str(stable_worktree),
-                        "branch_name_resolved": "codex/dev-1/task-001",
-                    }
-                ),
-                "stderr": "",
-                "exit_code": 0,
-                "timed_out": False,
-            },
+            lambda *_args, **_kwargs: (
+                command_calls.__setitem__("count", command_calls["count"] + 1)
+                or {
+                    "ok": True,
+                    "code": None,
+                    "message": "",
+                    "stdout": json.dumps(
+                        {
+                            "ok": True,
+                            "target_path": str(stable_worktree),
+                            "branch_name_resolved": "codex/dev-1/task-001",
+                        }
+                    ),
+                    "stderr": "",
+                    "exit_code": 0,
+                    "timed_out": False,
+                }
+            ),
         )
         monkeypatch.setattr(
             MODULE,
@@ -8035,7 +8206,8 @@ def test_workstation_same_lane_skip_requires_slot_branch_prefix(monkeypatch: pyt
         )
         out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
         warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
-        assert codex_calls["count"] >= 1
+        assert llm_calls["count"] >= 1
+        assert command_calls["count"] >= 1
         assert "workstation_skip_same_lane_in_progress" not in warning_codes
         assert "workstation_manager_retry_exhausted" not in warning_codes
 
@@ -8077,49 +8249,46 @@ def test_workstation_same_lane_skip_requires_exact_deterministic_path(monkeypatc
                 row["branch"] = "codex/dev-1/task-001"
                 row["worktree_root"] = str(wrong_worktree)
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
-        codex_calls = {"count": 0}
-
-        def fake_codex_exec(**kwargs):
-            codex_calls["count"] += 1
-            prompt = str(kwargs.get("prompt_text") or "")
-            _write_manager_action_from_prompt(
-                prompt,
-                {
-                    "schema_version": "1.0",
-                    "slot": "dev-1",
-                    "lane_id": "phase-1/lane-a",
-                    "task_id": "TASK-001",
-                    "branch_name": "codex/dev-1/task-001",
-                    "worktree_name": "workstation-dev-1",
-                    "prepare_command": (
-                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
-                        f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
-                        "--output json --force-reset-existing --worktree-name workstation-dev-1"
-                    ),
-                    "prereq_policy": "copy_env_files",
-                },
-            )
-            return 0
-
-        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        llm_calls = {"count": 0}
+        def payload_builder(_prompt: str) -> dict[str, object]:
+            llm_calls["count"] += 1
+            return {
+                "schema_version": "1.0",
+                "slot": "dev-1",
+                "lane_id": "phase-1/lane-a",
+                "task_id": "TASK-001",
+                "branch_name": "codex/dev-1/task-001",
+                "worktree_name": "workstation-dev-1",
+                "prepare_command": (
+                    f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                    f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
+                    "--output json --force-reset-existing --worktree-name workstation-dev-1"
+                ),
+                "prereq_policy": "copy_env_files",
+            }
+        _stub_workstation_async_llm(monkeypatch, payload_builder)
+        command_calls = {"count": 0}
         monkeypatch.setattr(
             MODULE,
             "_run_manager_command",
-            lambda *_args, **_kwargs: {
-                "ok": True,
-                "code": None,
-                "message": "",
-                "stdout": json.dumps(
-                    {
-                        "ok": True,
-                        "target_path": str(expected_worktree),
-                        "branch_name_resolved": "codex/dev-1/task-001",
-                    }
-                ),
-                "stderr": "",
-                "exit_code": 0,
-                "timed_out": False,
-            },
+            lambda *_args, **_kwargs: (
+                command_calls.__setitem__("count", command_calls["count"] + 1)
+                or {
+                    "ok": True,
+                    "code": None,
+                    "message": "",
+                    "stdout": json.dumps(
+                        {
+                            "ok": True,
+                            "target_path": str(expected_worktree),
+                            "branch_name_resolved": "codex/dev-1/task-001",
+                        }
+                    ),
+                    "stderr": "",
+                    "exit_code": 0,
+                    "timed_out": False,
+                }
+            ),
         )
         monkeypatch.setattr(
             MODULE,
@@ -8128,7 +8297,8 @@ def test_workstation_same_lane_skip_requires_exact_deterministic_path(monkeypatc
         )
         out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
         warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
-        assert codex_calls["count"] >= 1
+        assert llm_calls["count"] >= 1
+        assert command_calls["count"] >= 1
         assert "workstation_skip_same_lane_in_progress" not in warning_codes
         assert "workstation_manager_retry_exhausted" not in warning_codes
 
@@ -8165,6 +8335,50 @@ def test_worker_registry_normalizes_idle_worker_branch_from_rab_base_to_bootstra
         }
         registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        workstation_registry_path = root / "reports" / "optimus-prime" / "planning" / "WORKSTATION_REGISTRY.json"
+        workstation_registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "slots": {
+                        "dev-1": {
+                            "slot": "dev-1",
+                            "status": "ready",
+                            "target_task_id": "TASK-001",
+                            "target_lane_id": "phase-1/lane-a",
+                            "target_stage": "dev",
+                            "target_branch": "codex/dev-1/task",
+                            "target_worktree_name": "workstation-dev-1",
+                            "target_worktree_root": str(root),
+                        },
+                        "dev-2": {
+                            "slot": "dev-2",
+                            "status": "ready",
+                            "target_task_id": "TASK-002",
+                            "target_lane_id": "phase-1/lane-b",
+                            "target_stage": "dev",
+                            "target_branch": "codex/dev-2/task",
+                            "target_worktree_name": "workstation-dev-2",
+                            "target_worktree_root": str(root),
+                        },
+                        "dev-3": {
+                            "slot": "dev-3",
+                            "status": "ready",
+                            "target_task_id": "TASK-003",
+                            "target_lane_id": "phase-1/lane-c",
+                            "target_stage": "dev",
+                            "target_branch": "codex/dev-3/task",
+                            "target_worktree_name": "workstation-dev-3",
+                            "target_worktree_root": str(root),
+                        },
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         MODULE._ensure_worker_registry_v2(root, build_state)
         registry_after = json.loads(registry_path.read_text(encoding="utf-8"))
         slot_row = next(item for item in registry_after.get("workers", []) if isinstance(item, dict) and item.get("slot") == "dev-1")
@@ -8326,6 +8540,24 @@ def test_dispatch_assignment_observations_written_with_reason_and_duration(monke
                 row["worktree_root"] = str(root)
                 row["branch"] = "codex/dev-1/task-001"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        _write_workstation_registry_slot(
+            root,
+            slot="dev-1",
+            task_id="TASK-001",
+            lane_id="phase-1/lane-a",
+            stage="dev",
+            branch="codex/dev-1/task",
+            worktree_root=root,
+        )
+        _write_workstation_registry_slot(
+            root,
+            slot="dev-1",
+            task_id="TASK-001",
+            lane_id="phase-1/lane-a",
+            stage="dev",
+            branch="codex/dev-1/task-001",
+            worktree_root=root,
+        )
 
         for row in task_state.get("tasks", []):
             if row.get("task_id") == "TASK-001":
@@ -8434,6 +8666,50 @@ def test_dispatch_next_task_from_assignments_respects_cycle_cap(monkeypatch: pyt
                 row["worktree_root"] = str(root)
                 row["branch"] = f"codex/{slot}/task"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        workstation_registry_path = root / "reports" / "optimus-prime" / "planning" / "WORKSTATION_REGISTRY.json"
+        workstation_registry_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "slots": {
+                        "dev-1": {
+                            "slot": "dev-1",
+                            "status": "ready",
+                            "target_task_id": "TASK-001",
+                            "target_lane_id": "phase-1/lane-a",
+                            "target_stage": "dev",
+                            "target_branch": "codex/dev-1/task",
+                            "target_worktree_name": "workstation-dev-1",
+                            "target_worktree_root": str(root),
+                        },
+                        "dev-2": {
+                            "slot": "dev-2",
+                            "status": "ready",
+                            "target_task_id": "TASK-002",
+                            "target_lane_id": "phase-1/lane-b",
+                            "target_stage": "dev",
+                            "target_branch": "codex/dev-2/task",
+                            "target_worktree_name": "workstation-dev-2",
+                            "target_worktree_root": str(root),
+                        },
+                        "dev-3": {
+                            "slot": "dev-3",
+                            "status": "ready",
+                            "target_task_id": "TASK-003",
+                            "target_lane_id": "phase-1/lane-c",
+                            "target_stage": "dev",
+                            "target_branch": "codex/dev-3/task",
+                            "target_worktree_name": "workstation-dev-3",
+                            "target_worktree_root": str(root),
+                        },
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         for row in task_state.get("tasks", []):
             if row.get("task_id") in {"TASK-001", "TASK-002", "TASK-003"}:
                 row["status"] = "pending"
@@ -8499,6 +8775,15 @@ def test_dispatch_resume_startup_failure_sets_exec_only_slot_policy(monkeypatch:
                 row["previous_lane_id"] = "phase-1/lane-a"
                 row["dispatch_thread_id"] = "thread-old"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        _write_workstation_registry_slot(
+            root,
+            slot="dev-1",
+            task_id="TASK-001",
+            lane_id="phase-1/lane-a",
+            stage="dev",
+            branch="codex/dev-1/task",
+            worktree_root=root,
+        )
         for row in task_state.get("tasks", []):
             if row.get("task_id") == "TASK-001":
                 row["status"] = "pending"

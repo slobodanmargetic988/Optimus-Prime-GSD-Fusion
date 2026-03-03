@@ -66,6 +66,7 @@ PRODUCTION_LINE_STATE_JSON = PLANNING_REL / "PRODUCTION_LINE_STATE.json"
 DONE_TASKS_REGISTRY_JSON = PLANNING_REL / "DONE_TASKS_REGISTRY.json"
 WORK_DISPATCH_PLAN_JSON = PLANNING_REL / "WORK_DISPATCH_PLAN.json"
 DISPATCH_ASSIGNMENT_OBSERVATIONS_JSONL = PLANNING_REL / "DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl"
+WORKSTATION_REGISTRY_JSON = PLANNING_REL / "WORKSTATION_REGISTRY.json"
 GAP_CONSUMPTION_PLAN_JSON = PLANNING_REL / "GAP_CONSUMPTION_PLAN.json"
 GAP_CONSUMPTION_LEDGER_JSONL = PLANNING_REL / "GAP_CONSUMPTION_LEDGER.jsonl"
 
@@ -145,6 +146,8 @@ TASK_FORWARD_PROGRESS_THRESHOLD_CYCLES = 25
 BRANCH_ACTION_COMMAND_TIMEOUT_SEC = 300
 BRANCH_VERIFY_COMMAND_TIMEOUT_SEC = 1800
 WORKSTATION_PREP_COMMAND_TIMEOUT_SEC = 600
+WORKSTATION_LAUNCH_HANDSHAKE_SEC = 10
+WORKSTATION_MAX_PREPARING_CYCLES = 3
 
 TASK_STATUS_PENDING = "pending"
 TASK_STATUS_DEV_WORKING = "dev_working"
@@ -255,6 +258,7 @@ OPTIMUS_GITIGNORE_LINES = [
     "/reports/optimus-prime/THREAD_TOKEN_USAGE_SUMMARY.json",
     "/reports/optimus-prime/THREAD_TOKEN_USAGE_SUMMARY.md",
     "/reports/optimus-prime/WORKER_REGISTRY.json",
+    "/reports/optimus-prime/planning/WORKSTATION_REGISTRY.json",
     "/reports/optimus-prime/TEST_TRAIN_STATE.json",
     "/reports/optimus-prime/TEST_TASK_ATTEMPTS.json",
     "/reports/optimus-prime/TEST_WAVE_LOG.jsonl",
@@ -1364,6 +1368,171 @@ def _write_worker_registry(path: Path, base_payload: Any, workers: list[dict[str
     out = base_payload if isinstance(base_payload, dict) else {}
     out["workers"] = normalized
     _atomic_write_json(path, out)
+
+
+def _fresh_workstation_registry_payload() -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "slots": {},
+    }
+
+
+def _normalize_workstation_registry_row(slot: str, row: dict[str, Any] | None) -> dict[str, Any]:
+    now = utc_now_iso()
+    data = dict(row) if isinstance(row, dict) else {}
+    data["slot"] = slot
+    data["status"] = (_as_str(data.get("status")) or "idle").lower()
+    data["request_id"] = _as_str(data.get("request_id")) or None
+    data["pid"] = int(data.get("pid")) if isinstance(data.get("pid"), int) else None
+    data["attempt"] = _coerce_nonneg_int(data.get("attempt"), default=0)
+    data["retry_count"] = _coerce_nonneg_int(data.get("retry_count"), default=0)
+    data["requested_cycle"] = (
+        _coerce_nonneg_int(data.get("requested_cycle"), default=0) if data.get("requested_cycle") is not None else None
+    )
+    data["started_at"] = _as_str(data.get("started_at")) or None
+    data["completed_at"] = _as_str(data.get("completed_at")) or None
+    data["last_update_at"] = _as_str(data.get("last_update_at")) or now
+    data["target_task_id"] = _as_str(data.get("target_task_id")) or None
+    data["target_lane_id"] = _as_str(data.get("target_lane_id")) or None
+    data["target_stage"] = _as_str(data.get("target_stage")) or None
+    data["target_branch"] = _as_str(data.get("target_branch")) or None
+    data["target_base_ref"] = _as_str(data.get("target_base_ref")) or None
+    data["target_worktree_name"] = _as_str(data.get("target_worktree_name")) or None
+    data["target_worktree_root"] = _as_str(data.get("target_worktree_root")) or None
+    data["attempt_dir"] = _as_str(data.get("attempt_dir")) or None
+    data["action_path"] = _as_str(data.get("action_path")) or None
+    data["validation_path"] = _as_str(data.get("validation_path")) or None
+    data["stdout_path"] = _as_str(data.get("stdout_path")) or None
+    data["stderr_path"] = _as_str(data.get("stderr_path")) or None
+    data["last_message_path"] = _as_str(data.get("last_message_path")) or None
+    data["llm_exit_code"] = int(data.get("llm_exit_code")) if isinstance(data.get("llm_exit_code"), int) else None
+    last_error = data.get("last_error")
+    data["last_error"] = dict(last_error) if isinstance(last_error, dict) else None
+    return data
+
+
+def _load_workstation_registry(path: Path) -> dict[str, Any]:
+    payload = _fresh_workstation_registry_payload()
+    if path.exists():
+        try:
+            parsed = _read_json(path)
+        except OpError:
+            parsed = None
+        if isinstance(parsed, dict):
+            payload.update(parsed)
+    slots_raw = payload.get("slots")
+    if not isinstance(slots_raw, dict):
+        slots_raw = {}
+    slots: dict[str, dict[str, Any]] = {}
+    for slot in FIXED_WORKER_SLOTS:
+        if not (slot.startswith("dev-") or slot.startswith("test-") or slot.startswith("review-")):
+            continue
+        slots[slot] = _normalize_workstation_registry_row(slot, slots_raw.get(slot) if isinstance(slots_raw.get(slot), dict) else None)
+    payload["slots"] = slots
+    payload["updated_at"] = utc_now_iso()
+    return payload
+
+
+def _write_workstation_registry(path: Path, payload: dict[str, Any]) -> None:
+    out = dict(payload) if isinstance(payload, dict) else _fresh_workstation_registry_payload()
+    slots_raw = out.get("slots")
+    normalized_slots: dict[str, dict[str, Any]] = {}
+    if isinstance(slots_raw, dict):
+        for slot, row in slots_raw.items():
+            slot_name = _as_str(slot)
+            if not slot_name:
+                continue
+            normalized_slots[slot_name] = _normalize_workstation_registry_row(
+                slot_name,
+                row if isinstance(row, dict) else None,
+            )
+    out["schema_version"] = SCHEMA_VERSION
+    out["updated_at"] = utc_now_iso()
+    out["slots"] = normalized_slots
+    _atomic_write_json(path, out)
+
+
+def _start_codex_exec_background(
+    *,
+    repo_root: Path,
+    prompt_text: str,
+    output_last_message: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+) -> tuple[int | None, str | None]:
+    output_last_message.parent.mkdir(parents=True, exist_ok=True)
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "codex",
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-c",
+        'model_reasoning_effort="xhigh"',
+        "--cd",
+        str(repo_root),
+        "--output-last-message",
+        str(output_last_message),
+        "-",
+    ]
+    stdout_handle = stdout_path.open("w", encoding="utf-8")
+    stderr_handle = stderr_path.open("w", encoding="utf-8")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(repo_root),
+            stdin=subprocess.PIPE,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            text=True,
+            bufsize=1,
+        )
+        if proc.stdin is not None:
+            proc.stdin.write(prompt_text)
+            proc.stdin.close()
+    except OSError as exc:
+        return None, str(exc)
+    finally:
+        stdout_handle.close()
+        stderr_handle.close()
+    return int(proc.pid), None
+
+
+def _poll_background_process(pid: int | None) -> tuple[bool, int | None]:
+    if not isinstance(pid, int) or pid <= 0:
+        return True, None
+    try:
+        done_pid, status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        if _pid_is_running(pid):
+            return False, None
+        return True, None
+    if done_pid == 0:
+        return False, None
+    if os.WIFEXITED(status):
+        return True, int(os.WEXITSTATUS(status))
+    if os.WIFSIGNALED(status):
+        return True, 128 + int(os.WTERMSIG(status))
+    return True, None
+
+
+def _terminate_pid(pid: int | None, *, term_grace_sec: int = 2, kill_grace_sec: int = 1) -> None:
+    if not isinstance(pid, int) or pid <= 0:
+        return
+    if not _pid_is_running(pid):
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    if _wait_pid_exit(pid, term_grace_sec):
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        return
+    _wait_pid_exit(pid, kill_grace_sec)
 
 
 def _default_worker_row(slot: str, *, run_id: str | None = None) -> dict[str, Any]:
@@ -8405,6 +8574,12 @@ def _dispatch_next_task_from_assignments(
         for worker in registry_workers
         if isinstance(worker, dict) and _as_str(worker.get("slot"))
     }
+    workstation_registry = _load_workstation_registry(_repo_path(req.repo_root, WORKSTATION_REGISTRY_JSON))
+    workstation_rows = (
+        workstation_registry.get("slots")
+        if isinstance(workstation_registry.get("slots"), dict)
+        else {}
+    )
     slot_count = len(FIXED_WORKER_SLOTS)
     plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
     stage_status_requirements = {
@@ -8599,8 +8774,41 @@ def _dispatch_next_task_from_assignments(
             continue
 
         slot_worker = workers_by_slot.get(slot_name) if isinstance(workers_by_slot.get(slot_name), dict) else {}
+        workstation_row = (
+            workstation_rows.get(slot_name)
+            if isinstance(workstation_rows.get(slot_name), dict)
+            else None
+        )
+        if isinstance(workstation_row, dict):
+            ws_status = (_as_str(workstation_row.get("status")) or "").lower()
+            ws_task_id = _as_str(workstation_row.get("target_task_id"))
+            ws_lane_id = _as_str(workstation_row.get("target_lane_id"))
+            if (ws_task_id and ws_task_id != task_id) or (ws_lane_id and ws_lane_id != lane_id) or ws_status != "ready":
+                _record_assignment_observation(
+                    row=row,
+                    status="skipped",
+                    reason_code="dispatch_assignment_workstation_not_ready",
+                    started_at=started,
+                    warning_codes=["dispatch_assignment_workstation_not_ready"],
+                )
+                all_warnings.append(
+                    {
+                        "code": "dispatch_assignment_workstation_not_ready",
+                        "message": (
+                            f"slot {slot_name} workstation not ready for assignment "
+                            f"(status={ws_status or 'unknown'}, target_task={ws_task_id or '-'}, target_lane={ws_lane_id or '-'})"
+                        ),
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                        "slot": slot_name,
+                    }
+                )
+                continue
         worktree_root = _as_str(slot_worker.get("worktree_root"))
         branch_name = _as_str(slot_worker.get("branch"))
+        if isinstance(workstation_row, dict):
+            worktree_root = _as_str(workstation_row.get("target_worktree_root")) or worktree_root
+            branch_name = _as_str(workstation_row.get("target_branch")) or branch_name
         if not worktree_root or not branch_name:
             if req.dry_run:
                 worktree_root = str(req.repo_root)
@@ -10554,6 +10762,248 @@ def _manager_workstation_cycle(
     task_state: dict[str, Any],
     build_state: dict[str, Any],
 ) -> dict[str, Any]:
+    def _execute_workstation_action_attempt(
+        *,
+        slot: str,
+        lane_id: str | None,
+        active_task_id: str | None,
+        attempt: int,
+        action_path: Path,
+        validation_path: Path,
+        llm_exit_code: int | None,
+        expected_worktree_name: str | None,
+        expected_worktree_path: Path | None,
+        task_branch: str,
+        task_base_ref: str,
+        source_branch: str | None,
+        script_path: str,
+    ) -> dict[str, Any]:
+        try:
+            action_payload = _read_json(action_path)
+        except OpError as exc:
+            validation_payload = {
+                "schema_version": SCHEMA_VERSION,
+                "slot": slot,
+                "task_id": active_task_id,
+                "lane_id": lane_id,
+                "attempt": attempt,
+                "ok": False,
+                "error": {
+                    "code": "workstation_action_invalid",
+                    "message": f"missing/invalid WORKSTATION_ACTION.json: {exc.message}",
+                    "stage": "build_loop",
+                },
+                "updated_at": utc_now_iso(),
+                "llm_exit_code": llm_exit_code,
+            }
+            _atomic_write_json(validation_path, validation_payload)
+            return {"ok": False, "code": "workstation_action_invalid", "message": validation_payload["error"]["message"]}
+
+        if not isinstance(action_payload, dict):
+            validation_payload = {
+                "schema_version": SCHEMA_VERSION,
+                "slot": slot,
+                "task_id": active_task_id,
+                "lane_id": lane_id,
+                "attempt": attempt,
+                "ok": False,
+                "error": {
+                    "code": "workstation_action_invalid",
+                    "message": "WORKSTATION_ACTION.json must be object",
+                    "stage": "build_loop",
+                },
+                "updated_at": utc_now_iso(),
+                "llm_exit_code": llm_exit_code,
+            }
+            _atomic_write_json(validation_path, validation_payload)
+            return {"ok": False, "code": "workstation_action_invalid", "message": "WORKSTATION_ACTION.json must be object"}
+
+        action_errors: list[str] = []
+        if _as_str(action_payload.get("slot")) != slot:
+            action_errors.append("slot mismatch")
+        action_task_id = _as_str(action_payload.get("task_id"))
+        if action_task_id != (active_task_id or ""):
+            action_errors.append("task_id mismatch")
+        action_lane_id = _as_str(action_payload.get("lane_id"))
+        if action_lane_id != (lane_id or ""):
+            action_errors.append("lane_id mismatch")
+        if _as_str(action_payload.get("branch_name")) != task_branch:
+            action_errors.append("branch_name mismatch")
+        if source_branch and _as_str(action_payload.get("source_branch")) != source_branch:
+            action_errors.append("source_branch mismatch")
+        action_worktree_name = _as_str(action_payload.get("worktree_name"))
+        if not action_worktree_name:
+            action_errors.append("worktree_name required")
+        elif expected_worktree_name and action_worktree_name != expected_worktree_name:
+            action_errors.append(f"worktree_name mismatch (expected {expected_worktree_name})")
+
+        prepare_command = _as_str(action_payload.get("prepare_command"))
+        if not prepare_command:
+            action_errors.append("prepare_command must invoke bundled prepare_workstation.py")
+        else:
+            prepare_script_path = _extract_script_path_from_command(
+                prepare_command,
+                script_name="prepare_workstation.py",
+                cwd=req.repo_root,
+            )
+            expected_script_path = Path(script_path).resolve()
+            if prepare_script_path is None:
+                action_errors.append("prepare_command must invoke bundled prepare_workstation.py")
+            elif prepare_script_path != expected_script_path:
+                action_errors.append(
+                    f"prepare_command must invoke bundled prepare_workstation.py at {expected_script_path}"
+                )
+            prepare_branch_name = _extract_command_option_value(
+                prepare_command,
+                "--branch-name",
+                cwd=req.repo_root,
+            )
+            if prepare_branch_name != task_branch:
+                action_errors.append("prepare_command --branch-name mismatch")
+            prepare_base_ref = _extract_command_option_value(
+                prepare_command,
+                "--base-ref",
+                cwd=req.repo_root,
+            )
+            if prepare_base_ref != task_base_ref:
+                action_errors.append(f"prepare_command --base-ref mismatch (expected {task_base_ref})")
+            prepare_worktree_name = _extract_command_option_value(
+                prepare_command,
+                "--worktree-name",
+                cwd=req.repo_root,
+            )
+            if expected_worktree_name and prepare_worktree_name != expected_worktree_name:
+                action_errors.append(
+                    f"prepare_command --worktree-name mismatch (expected {expected_worktree_name})"
+                )
+        prereq_policy = _as_str(action_payload.get("prereq_policy"))
+        if prereq_policy not in {"copy_env_files", "symlink_deps", "copy_env_files|symlink_deps"}:
+            action_errors.append("prereq_policy must be copy_env_files|symlink_deps")
+
+        if action_errors:
+            validation_payload = {
+                "schema_version": SCHEMA_VERSION,
+                "slot": slot,
+                "task_id": active_task_id,
+                "lane_id": lane_id,
+                "attempt": attempt,
+                "ok": False,
+                "error": {
+                    "code": "workstation_action_invalid",
+                    "message": "; ".join(action_errors),
+                    "stage": "build_loop",
+                },
+                "updated_at": utc_now_iso(),
+                "llm_exit_code": llm_exit_code,
+            }
+            _atomic_write_json(action_path, action_payload)
+            _atomic_write_json(validation_path, validation_payload)
+            return {
+                "ok": False,
+                "code": "workstation_action_invalid",
+                "message": "; ".join(action_errors),
+            }
+
+        prepare_result = _run_manager_command(
+            prepare_command,
+            cwd=req.repo_root,
+            timeout_sec=WORKSTATION_PREP_COMMAND_TIMEOUT_SEC,
+            manager="workstation",
+        )
+        stdout_text = _as_str(prepare_result.get("stdout")) or ""
+        err = _as_str(prepare_result.get("stderr")) or ""
+        manager_error_code = _as_str(prepare_result.get("code"))
+        parsed: dict[str, Any] | None = None
+        try:
+            parsed_raw = json.loads(stdout_text.strip() or "{}")
+            if isinstance(parsed_raw, dict):
+                parsed = parsed_raw
+        except json.JSONDecodeError:
+            parsed = None
+        prepare_payload_ok = isinstance(parsed, dict) and parsed.get("ok") is True
+        prepare_payload_error = _as_str(parsed.get("error")) if isinstance(parsed, dict) else None
+        target_path = _as_str(parsed.get("target_path")) if isinstance(parsed, dict) else None
+        branch_name_resolved = _as_str(parsed.get("branch_name_resolved")) if isinstance(parsed, dict) else None
+        branch_check_ok = False
+        target_path_exists = False
+        target_path_matches_expected = False
+        resolved_target_path: Path | None = None
+        branch_check_error: str | None = None
+        resolved_branch = branch_name_resolved or task_branch
+        if prepare_payload_ok and target_path:
+            target_root = Path(target_path).expanduser()
+            try:
+                resolved_target_path = target_root.resolve()
+            except OSError:
+                resolved_target_path = target_root
+            if expected_worktree_path and resolved_target_path != expected_worktree_path:
+                branch_check_error = (
+                    "prepared target_path mismatch: "
+                    f"expected {expected_worktree_path}, got {resolved_target_path}"
+                )
+            else:
+                target_path_matches_expected = True
+                target_path_exists = target_root.exists() and target_root.is_dir()
+                if target_path_exists:
+                    try:
+                        branch_check = _git_text(target_root, "rev-parse", "--abbrev-ref", "HEAD")
+                        branch_check_ok = bool(branch_check and branch_check == resolved_branch)
+                    except (OSError, ValueError) as exc:
+                        branch_check_error = f"unable to verify prepared worktree branch: {exc}"
+                        branch_check_ok = False
+                else:
+                    branch_check_error = f"prepared target_path does not exist: {target_path}"
+        elif prepare_payload_error:
+            branch_check_error = f"prepare_workstation failed: {prepare_payload_error}"
+        validation_payload = {
+            "schema_version": SCHEMA_VERSION,
+            "slot": slot,
+            "task_id": active_task_id,
+            "lane_id": lane_id,
+            "attempt": attempt,
+            "ok": bool(
+                _as_bool(prepare_result.get("ok"), default=False)
+                and prepare_payload_ok
+                and parsed
+                and target_path
+                and target_path_matches_expected
+                and branch_check_ok
+            ),
+            "checks": [
+                {"id": "prepare_command_exit_zero", "passed": _as_bool(prepare_result.get("ok"), default=False)},
+                {"id": "prepare_output_json", "passed": isinstance(parsed, dict)},
+                {"id": "prepare_payload_ok", "passed": prepare_payload_ok},
+                {"id": "prepare_target_path", "passed": bool(target_path)},
+                {"id": "prepare_target_path_expected", "passed": target_path_matches_expected},
+                {"id": "prepare_target_path_exists", "passed": target_path_exists},
+                {"id": "prepare_branch_match", "passed": branch_check_ok},
+            ],
+            "result": parsed,
+            "stderr": (err or "").strip(),
+            "error_code": manager_error_code,
+            "branch_check_error": branch_check_error,
+            "llm_exit_code": llm_exit_code,
+            "updated_at": utc_now_iso(),
+        }
+        _atomic_write_json(action_path, action_payload)
+        _atomic_write_json(validation_path, validation_payload)
+        if validation_payload["ok"]:
+            return {
+                "ok": True,
+                "target_path": str(resolved_target_path or Path(target_path)),
+                "resolved_branch": resolved_branch,
+            }
+        return {
+            "ok": False,
+            "code": manager_error_code or "workstation_execution_failed",
+            "message": (
+                prepare_payload_error
+                or branch_check_error
+                or _as_str(prepare_result.get("message"))
+                or (_as_str(parsed.get("error")) if isinstance(parsed, dict) else None)
+                or "workstation action execution/validation failed"
+            ),
+        }
     warnings: list[dict[str, Any]] = []
     out: dict[str, Any] = {
         "warnings": warnings,
@@ -10579,7 +11029,7 @@ def _manager_workstation_cycle(
                     "message": fatal_message,
                     "stage": "build_loop",
                 },
-            }
+            },
         )
         warnings.append(
             {
@@ -10596,9 +11046,7 @@ def _manager_workstation_cycle(
     script_path = str(script.resolve())
     prompt_template_path = WORKSTATION_MANAGER_PROMPT_TEMPLATE_PATH.resolve()
     prompt_template_text = (
-        prompt_template_path.read_text(encoding="utf-8")
-        if prompt_template_path.exists()
-        else ""
+        prompt_template_path.read_text(encoding="utf-8") if prompt_template_path.exists() else ""
     )
     if req.dry_run:
         attempt_dir = req.repo_root / "reports" / "optimus-prime" / "workstation-manager" / f"attempt-{cycle}"
@@ -10623,8 +11071,9 @@ def _manager_workstation_cycle(
             },
         )
         return out
-    registry_path = req.repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
-    registry_base, workers, registry_shape = _load_worker_registry(registry_path)
+
+    worker_registry_path = req.repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+    registry_base, workers, registry_shape = _load_worker_registry(worker_registry_path)
     task_map = _task_by_id(task_state)
     dispatch_assignments, _, dispatch_plan_ok = _load_work_dispatch_plan_assignments(
         req.repo_root,
@@ -10639,12 +11088,83 @@ def _manager_workstation_cycle(
             if slot_name and slot_name not in assignments_by_slot:
                 assignments_by_slot[slot_name] = row
 
-    def _payload_text(value: Any) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            return value.strip()
-        return str(value).strip()
+    workstation_registry_path = _repo_path(req.repo_root, WORKSTATION_REGISTRY_JSON)
+    workstation_registry = _load_workstation_registry(workstation_registry_path)
+    workstation_slots = (
+        workstation_registry.get("slots") if isinstance(workstation_registry.get("slots"), dict) else {}
+    )
+
+    def _set_slot_target(
+        row: dict[str, Any],
+        *,
+        task_id: str | None,
+        lane_id: str | None,
+        stage: str | None,
+        branch: str | None,
+        base_ref: str | None,
+        worktree_name: str | None,
+        worktree_root: Path | None,
+    ) -> None:
+        row["target_task_id"] = task_id or None
+        row["target_lane_id"] = lane_id or None
+        row["target_stage"] = stage or None
+        row["target_branch"] = branch or None
+        row["target_base_ref"] = base_ref or None
+        row["target_worktree_name"] = worktree_name or None
+        row["target_worktree_root"] = str(worktree_root) if isinstance(worktree_root, Path) else None
+        row["last_update_at"] = utc_now_iso()
+
+    def _handle_retry_exhausted(
+        *,
+        slot: str,
+        task_id: str | None,
+        ws_row: dict[str, Any],
+    ) -> None:
+        if _as_str(ws_row.get("status")) == "exhausted":
+            return
+        ws_row["status"] = "exhausted"
+        ws_row["pid"] = None
+        ws_row["last_update_at"] = utc_now_iso()
+        if task_id and isinstance(task_map.get(task_id), dict):
+            task = task_map[task_id]
+            task["status"] = TASK_STATUS_BLOCKED
+            task["owner_slot"] = None
+            _upsert_task_gap(
+                task,
+                {
+                    "gap_id": _gap_id(
+                        _as_str(build_state.get("plan_id")) or "plan-unknown",
+                        _as_str(task.get("phase_id")) or "phase-1",
+                        task_id,
+                        "workstation:blocked",
+                        "blocked",
+                    ),
+                    "category": "other",
+                    "severity": "P1",
+                    "stage": "workstation",
+                    "status": "open",
+                    "reason_codes": ["workstation_prepare_failed"],
+                    "retry_count": 10,
+                    "max_retries": 10,
+                    "created_at": utc_now_iso(),
+                    "updated_at": utc_now_iso(),
+                    "closure_ref": None,
+                    "slot": slot,
+                },
+            )
+        warnings.append(
+            {
+                "code": "workstation_manager_retry_exhausted",
+                "message": f"workstation preparation exhausted retries for slot {slot}",
+                "stage": "build_loop",
+                "slot": slot,
+                "task_id": task_id,
+            }
+        )
+        _emit_build_progress(
+            req,
+            f"workstation-manager: slot={slot} exhausted retries (10/10), task blocked",
+        )
 
     for worker in workers:
         if not isinstance(worker, dict):
@@ -10653,7 +11173,14 @@ def _manager_workstation_cycle(
         if role not in {"developer", "tester", "reviewer"}:
             continue
         slot = _as_str(worker.get("slot")) or "unknown-slot"
-        assignment = assignments_by_slot.get(slot) if isinstance(assignments_by_slot.get(slot), dict) else None
+        ws_row = _normalize_workstation_registry_row(
+            slot,
+            workstation_slots.get(slot) if isinstance(workstation_slots.get(slot), dict) else None,
+        )
+        workstation_slots[slot] = ws_row
+        assignment = (
+            assignments_by_slot.get(slot) if isinstance(assignments_by_slot.get(slot), dict) else None
+        )
         lane_id = _as_str(worker.get("lane_id")) or _as_str((assignment or {}).get("lane_id"))
         prev_lane_id = _as_str(worker.get("previous_lane_id"))
         active_task_id = (
@@ -10661,8 +11188,17 @@ def _manager_workstation_cycle(
             or _as_str(worker.get("active_task"))
             or _as_str((assignment or {}).get("task_id"))
         )
+
         if not active_task_id and assignment is None:
+            if _as_str(ws_row.get("status")) == "preparing":
+                _terminate_pid(ws_row.get("pid"))
+            ws_row["status"] = "idle"
+            ws_row["pid"] = None
+            ws_row["target_task_id"] = None
+            ws_row["target_lane_id"] = None
+            ws_row["last_update_at"] = utc_now_iso()
             continue
+
         current_worktree = _as_str(worker.get("worktree_root"))
         current_worktree_path = Path(current_worktree).expanduser() if current_worktree else None
         current_worktree_resolved: Path | None = None
@@ -10672,9 +11208,7 @@ def _manager_workstation_cycle(
             except OSError:
                 current_worktree_resolved = current_worktree_path
         current_worktree_ok = bool(
-            current_worktree_path
-            and current_worktree_path.exists()
-            and current_worktree_path.is_dir()
+            current_worktree_path and current_worktree_path.exists() and current_worktree_path.is_dir()
         )
         expected_worktree_name = _expected_slot_worktree_name(slot) or (
             current_worktree_path.name if current_worktree_path else None
@@ -10686,7 +11220,9 @@ def _manager_workstation_cycle(
             and current_worktree_resolved
             and current_worktree_resolved == expected_worktree_path
         )
-        task_row = task_map.get(active_task_id) if isinstance(task_map.get(active_task_id), dict) else {}
+        task_row = (
+            task_map.get(active_task_id) if isinstance(task_map.get(active_task_id), dict) else {}
+        )
         task_status = _normalize_task_status(task_row.get("status")) if active_task_id else None
         is_gapfix_assignment = _as_bool_field((assignment or {}).get("is_gapfix"))
         current_branch = _as_str(worker.get("branch"))
@@ -10716,20 +11252,42 @@ def _manager_workstation_cycle(
             if gapfix_branch:
                 task_branch = gapfix_branch
                 task_base_ref = gapfix_branch
+
+        _set_slot_target(
+            ws_row,
+            task_id=active_task_id,
+            lane_id=lane_id,
+            stage=slot_stage,
+            branch=task_branch,
+            base_ref=task_base_ref,
+            worktree_name=expected_worktree_name,
+            worktree_root=expected_worktree_path,
+        )
+
         if slot_stage in {"test", "review"} and active_task_id and not source_branch:
+            ws_row["status"] = "failed"
+            ws_row["retry_count"] = _coerce_nonneg_int(ws_row.get("retry_count"), default=0) + 1
+            ws_row["last_error"] = {
+                "code": "workstation_assignment_missing_dev_branch",
+                "message": (
+                    f"slot {slot} missing developer source branch for {slot_stage}-stage workstation prep "
+                    f"(task={active_task_id})"
+                ),
+            }
+            ws_row["last_update_at"] = utc_now_iso()
             warnings.append(
                 {
                     "code": "workstation_assignment_missing_dev_branch",
-                    "message": (
-                        f"slot {slot} missing developer source branch for {slot_stage}-stage workstation prep "
-                        f"(task={active_task_id})"
-                    ),
+                    "message": ws_row["last_error"]["message"],
                     "stage": "build_loop",
                     "slot": slot,
                     "task_id": active_task_id,
                 }
             )
+            if _coerce_nonneg_int(ws_row.get("retry_count"), default=0) >= 10:
+                _handle_retry_exhausted(slot=slot, task_id=active_task_id, ws_row=ws_row)
             continue
+
         if (
             active_task_id
             and task_status in {TASK_STATUS_DEV_WORKING, TASK_STATUS_TESTING, TASK_STATUS_REVIEWING}
@@ -10739,6 +11297,11 @@ def _manager_workstation_cycle(
             and current_worktree_matches_slot
             and current_branch_prefix_ok
         ):
+            ws_row["status"] = "ready"
+            ws_row["pid"] = None
+            ws_row["last_error"] = None
+            ws_row["completed_at"] = utc_now_iso()
+            ws_row["last_update_at"] = ws_row["completed_at"]
             warnings.append(
                 {
                     "code": "workstation_skip_same_lane_in_progress",
@@ -10750,6 +11313,7 @@ def _manager_workstation_cycle(
                 }
             )
             continue
+
         branch_mismatch = bool(current_branch and task_branch and current_branch != task_branch)
         branch_prefix_mismatch = bool(current_branch and not current_branch_prefix_ok)
         lane_transition = bool(lane_id and prev_lane_id and lane_id != prev_lane_id)
@@ -10768,32 +11332,157 @@ def _manager_workstation_cycle(
             or worktree_path_mismatch
         )
         if not needs_prep:
+            ws_row["status"] = "ready"
+            ws_row["pid"] = None
+            ws_row["last_error"] = None
+            ws_row["completed_at"] = utc_now_iso()
+            ws_row["last_update_at"] = ws_row["completed_at"]
             continue
+
+        preparing_target_matches = (
+            _as_str(ws_row.get("target_task_id")) == (active_task_id or None)
+            and _as_str(ws_row.get("target_lane_id")) == (lane_id or None)
+            and _as_str(ws_row.get("target_branch")) == task_branch
+            and _as_str(ws_row.get("target_worktree_name")) == (expected_worktree_name or None)
+        )
+        row_status = (_as_str(ws_row.get("status")) or "").lower()
+        if row_status == "preparing" and not preparing_target_matches:
+            _terminate_pid(ws_row.get("pid"))
+            ws_row["status"] = "idle"
+            ws_row["pid"] = None
+            ws_row["last_update_at"] = utc_now_iso()
+            row_status = "idle"
+
+        if row_status == "preparing" and preparing_target_matches:
+            finished, exit_code = _poll_background_process(ws_row.get("pid"))
+            if not finished:
+                requested_cycle = _coerce_nonneg_int(ws_row.get("requested_cycle"), default=cycle)
+                elapsed_cycles = max(0, cycle - requested_cycle)
+                if elapsed_cycles >= WORKSTATION_MAX_PREPARING_CYCLES:
+                    _terminate_pid(ws_row.get("pid"))
+                    ws_row["status"] = "timed_out"
+                    ws_row["pid"] = None
+                    ws_row["retry_count"] = _coerce_nonneg_int(ws_row.get("retry_count"), default=0) + 1
+                    ws_row["last_error"] = {
+                        "code": "manager_command_timeout",
+                        "message": (
+                            f"workstation prepare action exceeded {WORKSTATION_MAX_PREPARING_CYCLES} cycles "
+                            f"(slot={slot})"
+                        ),
+                    }
+                    ws_row["last_update_at"] = utc_now_iso()
+                    warnings.append(
+                        {
+                            "code": "manager_command_timeout",
+                            "message": _as_str((ws_row.get("last_error") or {}).get("message"))
+                            or f"workstation manager timed out for slot {slot}",
+                            "stage": "build_loop",
+                            "slot": slot,
+                            "task_id": active_task_id,
+                        }
+                    )
+                    if _coerce_nonneg_int(ws_row.get("retry_count"), default=0) >= 10:
+                        _handle_retry_exhausted(slot=slot, task_id=active_task_id, ws_row=ws_row)
+                else:
+                    _emit_build_progress(
+                        req,
+                        f"workstation-manager: slot={slot} still preparing (pid={ws_row.get('pid')}, elapsed_cycles={elapsed_cycles})",
+                    )
+                continue
+
+            ws_row["pid"] = None
+            ws_row["llm_exit_code"] = exit_code
+            attempt = _coerce_nonneg_int(ws_row.get("attempt"), default=1)
+            action_path = Path(_as_str(ws_row.get("action_path")) or "")
+            validation_path = Path(_as_str(ws_row.get("validation_path")) or "")
+            result = _execute_workstation_action_attempt(
+                slot=slot,
+                lane_id=lane_id,
+                active_task_id=active_task_id,
+                attempt=attempt,
+                action_path=action_path,
+                validation_path=validation_path,
+                llm_exit_code=exit_code,
+                expected_worktree_name=expected_worktree_name,
+                expected_worktree_path=expected_worktree_path,
+                task_branch=task_branch,
+                task_base_ref=task_base_ref,
+                source_branch=source_branch,
+                script_path=script_path,
+            )
+            if _as_bool(result.get("ok"), default=False):
+                target_path = _as_str(result.get("target_path")) or str(expected_worktree_path or "")
+                resolved_branch = _as_str(result.get("resolved_branch")) or task_branch
+                worker["worktree_root"] = target_path
+                worker["branch"] = resolved_branch
+                _apply_slot_lane_transition(worker, lane_id)
+                worker["updated_at"] = utc_now_iso()
+                ws_row["status"] = "ready"
+                ws_row["completed_at"] = utc_now_iso()
+                ws_row["last_error"] = None
+                ws_row["last_update_at"] = ws_row["completed_at"]
+                _emit_build_progress(
+                    req,
+                    f"workstation-manager: slot={slot} ready worktree={target_path} branch={resolved_branch}",
+                )
+                continue
+
+            ws_row["status"] = "failed"
+            ws_row["retry_count"] = _coerce_nonneg_int(ws_row.get("retry_count"), default=0) + 1
+            ws_row["last_error"] = {
+                "code": _as_str(result.get("code")) or "workstation_execution_failed",
+                "message": _as_str(result.get("message")) or "workstation action execution/validation failed",
+            }
+            ws_row["last_update_at"] = utc_now_iso()
+            warnings.append(
+                {
+                    "code": _as_str((ws_row.get("last_error") or {}).get("code")) or "workstation_execution_failed",
+                    "message": _as_str((ws_row.get("last_error") or {}).get("message"))
+                    or f"workstation manager failed for slot {slot}",
+                    "stage": "build_loop",
+                    "slot": slot,
+                    "task_id": active_task_id,
+                }
+            )
+            _emit_build_progress(
+                req,
+                (
+                    f"workstation-manager: slot={slot} attempt {attempt} execution/validation failed: "
+                    f"{_as_str((ws_row.get('last_error') or {}).get('message')) or 'unknown'}"
+                ),
+            )
+            if _coerce_nonneg_int(ws_row.get("retry_count"), default=0) >= 10:
+                _handle_retry_exhausted(slot=slot, task_id=active_task_id, ws_row=ws_row)
+            continue
+
+        if _coerce_nonneg_int(ws_row.get("retry_count"), default=0) >= 10:
+            _handle_retry_exhausted(slot=slot, task_id=active_task_id, ws_row=ws_row)
+            continue
+
         _emit_build_progress(
             req,
             f"workstation-manager: preparing slot={slot} role={role} lane={lane_id or '-'} task={active_task_id or '-'}",
         )
-        role_arg = "developer" if role == "developer" else "tester" if role == "tester" else "reviewer"
-        prepared = False
-        prior_errors: list[dict[str, Any]] = []
-        for attempt in range(1, 11):
-            _emit_build_progress(req, f"workstation-manager: slot={slot} attempt {attempt}/10")
-            attempt_dir = req.repo_root / "reports" / "optimus-prime" / "workstation-manager" / f"attempt-{slot}-{attempt}"
-            action_path = attempt_dir / "WORKSTATION_ACTION.json"
-            validation_path = attempt_dir / "WORKSTATION_VALIDATION.json"
-            stdout_path = attempt_dir / "llm_stdout.log"
-            stderr_path = attempt_dir / "llm_stderr.log"
-            last_message_path = attempt_dir / "last_message.txt"
-            prompt_path = attempt_dir / "prompt.txt"
-            if not prompt_template_text:
-                _emit_build_progress(
-                    req,
-                    (
-                        f"workstation-manager: slot={slot} attempt {attempt} failed: "
-                        f"prompt template missing at {prompt_template_path}; retrying."
-                    ),
-                )
-                validation_payload = {
+        attempt = max(1, _coerce_nonneg_int(ws_row.get("attempt"), default=0) + 1)
+        _emit_build_progress(req, f"workstation-manager: slot={slot} attempt {attempt}/10")
+        attempt_dir = req.repo_root / "reports" / "optimus-prime" / "workstation-manager" / f"attempt-{slot}-{attempt}"
+        action_path = attempt_dir / "WORKSTATION_ACTION.json"
+        validation_path = attempt_dir / "WORKSTATION_VALIDATION.json"
+        stdout_path = attempt_dir / "llm_stdout.log"
+        stderr_path = attempt_dir / "llm_stderr.log"
+        last_message_path = attempt_dir / "last_message.txt"
+        prompt_path = attempt_dir / "prompt.txt"
+        if not prompt_template_text:
+            ws_row["status"] = "failed"
+            ws_row["retry_count"] = _coerce_nonneg_int(ws_row.get("retry_count"), default=0) + 1
+            ws_row["last_error"] = {
+                "code": "workstation_action_invalid",
+                "message": f"workstation manager prompt template missing: {prompt_template_path}",
+            }
+            ws_row["last_update_at"] = utc_now_iso()
+            _atomic_write_json(
+                validation_path,
+                {
                     "schema_version": SCHEMA_VERSION,
                     "slot": slot,
                     "task_id": active_task_id,
@@ -10806,51 +11495,65 @@ def _manager_workstation_cycle(
                         "stage": "build_loop",
                     },
                     "updated_at": utc_now_iso(),
-                }
-                _atomic_write_json(validation_path, validation_payload)
-                prior_errors = [validation_payload["error"]]
-                continue
-            prompt = prompt_template_text
-            prompt = prompt.replace("{{REPO_ROOT}}", str(req.repo_root))
-            prompt = prompt.replace("{{SLOT}}", slot)
-            prompt = prompt.replace("{{ROLE}}", role_arg)
-            prompt = prompt.replace("{{LANE_ID}}", lane_id or "")
-            prompt = prompt.replace("{{TASK_ID}}", active_task_id or "")
-            prompt = prompt.replace("{{BRANCH_NAME}}", task_branch)
-            prompt = prompt.replace("{{BASE_REF}}", task_base_ref)
-            prompt = prompt.replace("{{SOURCE_BRANCH}}", source_branch or "")
-            prompt = prompt.replace("{{ACTION_PATH}}", str(action_path))
-            prompt = prompt.replace("{{WORKSTATION_SCRIPT_PATH}}", script_path)
-            prompt = prompt.replace("{{EXPECTED_WORKTREE_NAME}}", expected_worktree_name or "")
-            prompt = prompt.replace(
-                "{{CURRENT_WORKTREE_NAME}}",
-                Path(current_worktree).name if current_worktree else "",
+                },
             )
-            if prior_errors:
-                repair_lines = [
-                    f"{idx}. [{_as_str(item.get('code')) or 'error'}] {_as_str(item.get('message')) or 'validation failed'}"
-                    for idx, item in enumerate(prior_errors, start=1)
-                ]
-                prompt += "\n\nRepair context from previous failed attempt:\n" + "\n".join(repair_lines) + "\n"
-            prompt_path.parent.mkdir(parents=True, exist_ok=True)
-            prompt_path.write_text(prompt, encoding="utf-8")
-            try:
-                llm_exit_code = run_codex_exec(
-                    repo_root=req.repo_root,
-                    prompt_text=prompt,
-                    output_last_message=last_message_path,
-                    stdout_path=stdout_path,
-                    stderr_path=stderr_path,
-                )
-            except OSError as exc:
-                _emit_build_progress(
-                    req,
-                    (
-                        f"workstation-manager: slot={slot} attempt {attempt} failed: "
-                        f"unable to invoke codex exec ({exc}); retrying."
-                    ),
-                )
-                validation_payload = {
+            warnings.append(
+                {
+                    "code": "workstation_action_invalid",
+                    "message": f"workstation manager prompt template missing: {prompt_template_path}",
+                    "stage": "build_loop",
+                    "slot": slot,
+                    "task_id": active_task_id,
+                }
+            )
+            if _coerce_nonneg_int(ws_row.get("retry_count"), default=0) >= 10:
+                _handle_retry_exhausted(slot=slot, task_id=active_task_id, ws_row=ws_row)
+            continue
+
+        prompt = prompt_template_text
+        prompt = prompt.replace("{{REPO_ROOT}}", str(req.repo_root))
+        prompt = prompt.replace("{{SLOT}}", slot)
+        prompt = prompt.replace("{{ROLE}}", "developer" if role == "developer" else "tester" if role == "tester" else "reviewer")
+        prompt = prompt.replace("{{LANE_ID}}", lane_id or "")
+        prompt = prompt.replace("{{TASK_ID}}", active_task_id or "")
+        prompt = prompt.replace("{{BRANCH_NAME}}", task_branch)
+        prompt = prompt.replace("{{BASE_REF}}", task_base_ref)
+        prompt = prompt.replace("{{SOURCE_BRANCH}}", source_branch or "")
+        prompt = prompt.replace("{{ACTION_PATH}}", str(action_path))
+        prompt = prompt.replace("{{WORKSTATION_SCRIPT_PATH}}", script_path)
+        prompt = prompt.replace("{{EXPECTED_WORKTREE_NAME}}", expected_worktree_name or "")
+        prompt = prompt.replace(
+            "{{CURRENT_WORKTREE_NAME}}",
+            Path(current_worktree).name if current_worktree else "",
+        )
+        prior_error = ws_row.get("last_error") if isinstance(ws_row.get("last_error"), dict) else None
+        if isinstance(prior_error, dict):
+            prompt += (
+                "\n\nRepair context from previous failed attempt:\n"
+                f"1. [{_as_str(prior_error.get('code')) or 'error'}] "
+                f"{_as_str(prior_error.get('message')) or 'validation failed'}\n"
+            )
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text(prompt, encoding="utf-8")
+
+        pid, launch_error = _start_codex_exec_background(
+            repo_root=req.repo_root,
+            prompt_text=prompt,
+            output_last_message=last_message_path,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+        )
+        if launch_error or not isinstance(pid, int):
+            ws_row["status"] = "failed"
+            ws_row["retry_count"] = _coerce_nonneg_int(ws_row.get("retry_count"), default=0) + 1
+            ws_row["last_error"] = {
+                "code": "workstation_execution_failed",
+                "message": f"unable to invoke codex exec: {launch_error or 'unknown launch error'}",
+            }
+            ws_row["last_update_at"] = utc_now_iso()
+            _atomic_write_json(
+                validation_path,
+                {
                     "schema_version": SCHEMA_VERSION,
                     "slot": slot,
                     "task_id": active_task_id,
@@ -10859,313 +11562,103 @@ def _manager_workstation_cycle(
                     "ok": False,
                     "error": {
                         "code": "workstation_execution_failed",
-                        "message": f"unable to invoke codex exec: {exc}",
+                        "message": f"unable to invoke codex exec: {launch_error or 'unknown launch error'}",
                         "stage": "build_loop",
                     },
                     "updated_at": utc_now_iso(),
-                }
-                _atomic_write_json(validation_path, validation_payload)
-                prior_errors = [validation_payload["error"]]
-                continue
-            try:
-                action_payload = _read_json(action_path)
-            except OpError as exc:
-                _emit_build_progress(
-                    req,
-                    (
-                        f"workstation-manager: slot={slot} attempt {attempt} failed: "
-                        f"invalid WORKSTATION_ACTION artifact ({exc.message}); retrying."
-                    ),
-                )
-                validation_payload = {
-                    "schema_version": SCHEMA_VERSION,
-                    "slot": slot,
-                    "task_id": active_task_id,
-                    "lane_id": lane_id,
-                    "attempt": attempt,
-                    "ok": False,
-                    "error": {
-                        "code": "workstation_action_invalid",
-                        "message": f"missing/invalid WORKSTATION_ACTION.json: {exc.message}",
-                        "stage": "build_loop",
-                    },
-                    "updated_at": utc_now_iso(),
-                }
-                _atomic_write_json(validation_path, validation_payload)
-                prior_errors = [validation_payload["error"]]
-                continue
-            if not isinstance(action_payload, dict):
-                _emit_build_progress(
-                    req,
-                    (
-                        f"workstation-manager: slot={slot} attempt {attempt} failed: "
-                        "WORKSTATION_ACTION.json must be object; retrying."
-                    ),
-                )
-                validation_payload = {
-                    "schema_version": SCHEMA_VERSION,
-                    "slot": slot,
-                    "task_id": active_task_id,
-                    "lane_id": lane_id,
-                    "attempt": attempt,
-                    "ok": False,
-                    "error": {
-                        "code": "workstation_action_invalid",
-                        "message": "WORKSTATION_ACTION.json must be object",
-                        "stage": "build_loop",
-                    },
-                    "updated_at": utc_now_iso(),
-                }
-                _atomic_write_json(validation_path, validation_payload)
-                prior_errors = [validation_payload["error"]]
-                continue
-            action_errors: list[str] = []
-            if _as_str(action_payload.get("slot")) != slot:
-                action_errors.append("slot mismatch")
-            action_task_id = _payload_text(action_payload.get("task_id"))
-            if action_task_id != (active_task_id or ""):
-                action_errors.append("task_id mismatch")
-            action_lane_id = _payload_text(action_payload.get("lane_id"))
-            if action_lane_id != (lane_id or ""):
-                action_errors.append("lane_id mismatch")
-            if _as_str(action_payload.get("branch_name")) != task_branch:
-                action_errors.append("branch_name mismatch")
-            if source_branch and _as_str(action_payload.get("source_branch")) != source_branch:
-                action_errors.append("source_branch mismatch")
-            action_worktree_name = _as_str(action_payload.get("worktree_name"))
-            if not action_worktree_name:
-                action_errors.append("worktree_name required")
-            elif expected_worktree_name and action_worktree_name != expected_worktree_name:
-                action_errors.append(f"worktree_name mismatch (expected {expected_worktree_name})")
-            prepare_command = _as_str(action_payload.get("prepare_command"))
-            if not prepare_command:
-                action_errors.append("prepare_command must invoke bundled prepare_workstation.py")
-            else:
-                prepare_script_path = _extract_script_path_from_command(
-                    prepare_command,
-                    script_name="prepare_workstation.py",
-                    cwd=req.repo_root,
-                )
-                expected_script_path = Path(script_path).resolve()
-                if prepare_script_path is None:
-                    action_errors.append("prepare_command must invoke bundled prepare_workstation.py")
-                elif prepare_script_path != expected_script_path:
-                    action_errors.append(
-                        f"prepare_command must invoke bundled prepare_workstation.py at {expected_script_path}"
-                    )
-                prepare_branch_name = _extract_command_option_value(
-                    prepare_command,
-                    "--branch-name",
-                    cwd=req.repo_root,
-                )
-                if prepare_branch_name != task_branch:
-                    action_errors.append("prepare_command --branch-name mismatch")
-                prepare_base_ref = _extract_command_option_value(
-                    prepare_command,
-                    "--base-ref",
-                    cwd=req.repo_root,
-                )
-                if prepare_base_ref != task_base_ref:
-                    action_errors.append(f"prepare_command --base-ref mismatch (expected {task_base_ref})")
-                prepare_worktree_name = _extract_command_option_value(
-                    prepare_command,
-                    "--worktree-name",
-                    cwd=req.repo_root,
-                )
-                if expected_worktree_name and prepare_worktree_name != expected_worktree_name:
-                    action_errors.append(
-                        f"prepare_command --worktree-name mismatch (expected {expected_worktree_name})"
-                    )
-            prereq_policy = _as_str(action_payload.get("prereq_policy"))
-            if prereq_policy not in {"copy_env_files", "symlink_deps", "copy_env_files|symlink_deps"}:
-                action_errors.append("prereq_policy must be copy_env_files|symlink_deps")
-            if action_errors:
-                _emit_build_progress(
-                    req,
-                    (
-                        f"workstation-manager: slot={slot} attempt {attempt} validation failed: "
-                        f"{'; '.join(action_errors)}"
-                        + ("; applying necessary fixes and retrying." if attempt < 10 else "")
-                    ),
-                )
-                validation_payload = {
-                    "schema_version": SCHEMA_VERSION,
-                    "slot": slot,
-                    "task_id": active_task_id,
-                    "lane_id": lane_id,
-                    "attempt": attempt,
-                    "ok": False,
-                    "error": {
-                        "code": "workstation_action_invalid",
-                        "message": "; ".join(action_errors),
-                        "stage": "build_loop",
-                    },
-                    "updated_at": utc_now_iso(),
-                }
-                _atomic_write_json(action_path, action_payload)
-                _atomic_write_json(validation_path, validation_payload)
-                prior_errors = [validation_payload["error"]]
-                continue
-
-            prepare_result = _run_manager_command(
-                prepare_command,
-                cwd=req.repo_root,
-                timeout_sec=WORKSTATION_PREP_COMMAND_TIMEOUT_SEC,
-                manager="workstation",
-            )
-            code = prepare_result.get("exit_code")
-            stdout_text = _as_str(prepare_result.get("stdout")) or ""
-            err = _as_str(prepare_result.get("stderr")) or ""
-            manager_error_code = _as_str(prepare_result.get("code"))
-            parsed: dict[str, Any] | None = None
-            try:
-                parsed_raw = json.loads(stdout_text.strip() or "{}")
-                if isinstance(parsed_raw, dict):
-                    parsed = parsed_raw
-            except json.JSONDecodeError:
-                parsed = None
-            prepare_payload_ok = isinstance(parsed, dict) and parsed.get("ok") is True
-            prepare_payload_error = _as_str(parsed.get("error")) if isinstance(parsed, dict) else None
-            target_path = _as_str(parsed.get("target_path")) if isinstance(parsed, dict) else None
-            branch_name_resolved = _as_str(parsed.get("branch_name_resolved")) if isinstance(parsed, dict) else None
-            branch_check_ok = False
-            target_path_exists = False
-            target_path_matches_expected = False
-            resolved_target_path: Path | None = None
-            branch_check_error: str | None = None
-            resolved_branch = branch_name_resolved or task_branch
-            if prepare_payload_ok and target_path:
-                target_root = Path(target_path).expanduser()
-                try:
-                    resolved_target_path = target_root.resolve()
-                except OSError:
-                    resolved_target_path = target_root
-                if expected_worktree_path and resolved_target_path != expected_worktree_path:
-                    branch_check_error = (
-                        "prepared target_path mismatch: "
-                        f"expected {expected_worktree_path}, got {resolved_target_path}"
-                    )
-                else:
-                    target_path_matches_expected = True
-                    target_path_exists = target_root.exists() and target_root.is_dir()
-                    if target_path_exists:
-                        try:
-                            branch_check = _git_text(target_root, "rev-parse", "--abbrev-ref", "HEAD")
-                            branch_check_ok = bool(branch_check and branch_check == resolved_branch)
-                        except (OSError, ValueError) as exc:
-                            branch_check_error = f"unable to verify prepared worktree branch: {exc}"
-                            branch_check_ok = False
-                    else:
-                        branch_check_error = f"prepared target_path does not exist: {target_path}"
-            elif prepare_payload_error:
-                branch_check_error = f"prepare_workstation failed: {prepare_payload_error}"
-            validation_payload = {
-                "schema_version": SCHEMA_VERSION,
-                "slot": slot,
-                "task_id": active_task_id,
-                "lane_id": lane_id,
-                "attempt": attempt,
-                "ok": bool(
-                    _as_bool(prepare_result.get("ok"), default=False)
-                    and prepare_payload_ok
-                    and parsed
-                    and target_path
-                    and target_path_matches_expected
-                    and branch_check_ok
-                ),
-                "checks": [
-                    {"id": "prepare_command_exit_zero", "passed": _as_bool(prepare_result.get("ok"), default=False)},
-                    {"id": "prepare_output_json", "passed": isinstance(parsed, dict)},
-                    {"id": "prepare_payload_ok", "passed": prepare_payload_ok},
-                    {"id": "prepare_target_path", "passed": bool(target_path)},
-                    {"id": "prepare_target_path_expected", "passed": target_path_matches_expected},
-                    {"id": "prepare_target_path_exists", "passed": target_path_exists},
-                    {"id": "prepare_branch_match", "passed": branch_check_ok},
-                ],
-                "result": parsed,
-                "stderr": (err or "").strip(),
-                "error_code": manager_error_code,
-                "branch_check_error": branch_check_error,
-                "llm_exit_code": llm_exit_code,
-                "updated_at": utc_now_iso(),
-            }
-            _atomic_write_json(action_path, action_payload)
-            _atomic_write_json(validation_path, validation_payload)
-            if validation_payload["ok"]:
-                worker["worktree_root"] = str(resolved_target_path or Path(target_path))
-                worker["branch"] = resolved_branch
-                _apply_slot_lane_transition(worker, lane_id)
-                worker["updated_at"] = utc_now_iso()
-                _emit_build_progress(
-                    req,
-                    f"workstation-manager: slot={slot} ready worktree={target_path} branch={resolved_branch}",
-                )
-                prepared = True
-                break
-            prior_errors = [
-                {
-                    "code": manager_error_code or "workstation_execution_failed",
-                    "message": (
-                        prepare_payload_error
-                        or branch_check_error
-                        or _as_str(prepare_result.get("message"))
-                        or (_as_str(parsed.get("error")) if isinstance(parsed, dict) else None)
-                        or "workstation action execution/validation failed"
-                    ),
-                }
-            ]
-            _emit_build_progress(
-                req,
-                (
-                    f"workstation-manager: slot={slot} attempt {attempt} execution/validation failed: "
-                    f"{_as_str(prior_errors[0].get('message')) or 'unknown'}"
-                    + ("; applying necessary fixes and retrying." if attempt < 10 else "")
-                ),
-            )
-        if prepared:
-            continue
-        if active_task_id and isinstance(task_map.get(active_task_id), dict):
-            task = task_map[active_task_id]
-            task["status"] = TASK_STATUS_BLOCKED
-            task["owner_slot"] = None
-            _upsert_task_gap(
-                task,
-                {
-                    "gap_id": _gap_id(_as_str(build_state.get("plan_id")) or "plan-unknown", _as_str(task.get("phase_id")) or "phase-1", active_task_id, "workstation:blocked", "blocked"),
-                    "category": "other",
-                    "severity": "P1",
-                    "stage": "workstation",
-                    "status": "open",
-                    "reason_codes": ["workstation_prepare_failed"],
-                    "retry_count": 10,
-                    "max_retries": 10,
-                    "created_at": utc_now_iso(),
-                    "updated_at": utc_now_iso(),
-                    "closure_ref": None,
-                    "slot": slot,
                 },
             )
-        last_error = prior_errors[0] if prior_errors else {}
-        last_error_code = _as_str(last_error.get("code"))
-        if last_error_code in {
-            "workstation_action_invalid",
-            "workstation_execution_failed",
-            "manager_command_disallowed",
-            "manager_command_timeout",
-        }:
             warnings.append(
                 {
-                    "code": last_error_code,
-                    "message": _as_str(last_error.get("message")) or f"workstation manager failed for slot {slot}",
+                    "code": "workstation_execution_failed",
+                    "message": _as_str((ws_row.get("last_error") or {}).get("message"))
+                    or f"workstation manager failed for slot {slot}",
                     "stage": "build_loop",
                     "slot": slot,
                     "task_id": active_task_id,
                 }
             )
+            if _coerce_nonneg_int(ws_row.get("retry_count"), default=0) >= 10:
+                _handle_retry_exhausted(slot=slot, task_id=active_task_id, ws_row=ws_row)
+            continue
+
+        now_iso = utc_now_iso()
+        ws_row["status"] = "preparing"
+        ws_row["pid"] = pid
+        ws_row["attempt"] = attempt
+        ws_row["request_id"] = f"{slot}-{cycle}-{attempt}-{uuid.uuid4().hex[:8]}"
+        ws_row["requested_cycle"] = cycle
+        ws_row["started_at"] = now_iso
+        ws_row["last_update_at"] = now_iso
+        ws_row["attempt_dir"] = str(attempt_dir)
+        ws_row["action_path"] = str(action_path)
+        ws_row["validation_path"] = str(validation_path)
+        ws_row["stdout_path"] = str(stdout_path)
+        ws_row["stderr_path"] = str(stderr_path)
+        ws_row["last_message_path"] = str(last_message_path)
+        ws_row["llm_exit_code"] = None
+
+        handshake_deadline = time.monotonic() + WORKSTATION_LAUNCH_HANDSHAKE_SEC
+        finished_now = False
+        exit_code_now: int | None = None
+        while time.monotonic() < handshake_deadline:
+            finished_now, exit_code_now = _poll_background_process(pid)
+            if finished_now:
+                break
+            time.sleep(0.25)
+        if not finished_now:
+            _emit_build_progress(
+                req,
+                f"workstation-manager: slot={slot} attempt {attempt} running asynchronously (pid={pid})",
+            )
+            continue
+
+        ws_row["pid"] = None
+        ws_row["llm_exit_code"] = exit_code_now
+        result = _execute_workstation_action_attempt(
+            slot=slot,
+            lane_id=lane_id,
+            active_task_id=active_task_id,
+            attempt=attempt,
+            action_path=action_path,
+            validation_path=validation_path,
+            llm_exit_code=exit_code_now,
+            expected_worktree_name=expected_worktree_name,
+            expected_worktree_path=expected_worktree_path,
+            task_branch=task_branch,
+            task_base_ref=task_base_ref,
+            source_branch=source_branch,
+            script_path=script_path,
+        )
+        if _as_bool(result.get("ok"), default=False):
+            target_path = _as_str(result.get("target_path")) or str(expected_worktree_path or "")
+            resolved_branch = _as_str(result.get("resolved_branch")) or task_branch
+            worker["worktree_root"] = target_path
+            worker["branch"] = resolved_branch
+            _apply_slot_lane_transition(worker, lane_id)
+            worker["updated_at"] = utc_now_iso()
+            ws_row["status"] = "ready"
+            ws_row["completed_at"] = utc_now_iso()
+            ws_row["last_error"] = None
+            ws_row["last_update_at"] = ws_row["completed_at"]
+            _emit_build_progress(
+                req,
+                f"workstation-manager: slot={slot} ready worktree={target_path} branch={resolved_branch}",
+            )
+            continue
+
+        ws_row["status"] = "failed"
+        ws_row["retry_count"] = _coerce_nonneg_int(ws_row.get("retry_count"), default=0) + 1
+        ws_row["last_error"] = {
+            "code": _as_str(result.get("code")) or "workstation_execution_failed",
+            "message": _as_str(result.get("message")) or "workstation action execution/validation failed",
+        }
+        ws_row["last_update_at"] = utc_now_iso()
         warnings.append(
             {
-                "code": "workstation_manager_retry_exhausted",
-                "message": f"workstation preparation exhausted retries for slot {slot}",
+                "code": _as_str((ws_row.get("last_error") or {}).get("code")) or "workstation_execution_failed",
+                "message": _as_str((ws_row.get("last_error") or {}).get("message"))
+                or f"workstation manager failed for slot {slot}",
                 "stage": "build_loop",
                 "slot": slot,
                 "task_id": active_task_id,
@@ -11173,9 +11666,22 @@ def _manager_workstation_cycle(
         )
         _emit_build_progress(
             req,
-            f"workstation-manager: slot={slot} exhausted retries (10/10), task blocked",
+            (
+                f"workstation-manager: slot={slot} attempt {attempt} execution/validation failed: "
+                f"{_as_str((ws_row.get('last_error') or {}).get('message')) or 'unknown'}"
+            ),
         )
-    _write_worker_registry(registry_path, registry_base, workers, registry_shape if registry_shape in {"dict_list", "dict_dict", "list"} else "dict_list")
+        if _coerce_nonneg_int(ws_row.get("retry_count"), default=0) >= 10:
+            _handle_retry_exhausted(slot=slot, task_id=active_task_id, ws_row=ws_row)
+
+    _write_worker_registry(
+        worker_registry_path,
+        registry_base,
+        workers,
+        registry_shape if registry_shape in {"dict_list", "dict_dict", "list"} else "dict_list",
+    )
+    workstation_registry["slots"] = workstation_slots
+    _write_workstation_registry(workstation_registry_path, workstation_registry)
     return out
 
 

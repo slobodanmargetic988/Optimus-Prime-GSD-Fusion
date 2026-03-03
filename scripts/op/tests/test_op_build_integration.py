@@ -216,6 +216,68 @@ def write_profile_selection(root: Path, aliases: list[str]) -> None:
     )
 
 
+def _stub_workstation_async_llm(
+    monkeypatch: pytest.MonkeyPatch,
+    payload_builder,
+):
+    def fake_start_codex_exec_background(**kwargs):
+        prompt = str(kwargs.get("prompt_text") or "")
+        payload = payload_builder(prompt)
+        _write_manager_action_from_prompt(prompt, payload)
+        return 424242, None
+
+    monkeypatch.setattr(MODULE, "_start_codex_exec_background", fake_start_codex_exec_background)
+    monkeypatch.setattr(MODULE, "_poll_background_process", lambda *_args, **_kwargs: (True, 0))
+
+
+def _write_workstation_registry_slot_ready(
+    root: Path,
+    *,
+    slot: str,
+    branch: str,
+    worktree_root: Path,
+    task_id: str | None = None,
+    lane_id: str | None = None,
+    stage: str | None = None,
+) -> None:
+    path = root / "reports" / "optimus-prime" / "planning" / "WORKSTATION_REGISTRY.json"
+    payload = {
+        "schema_version": "1.0",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "slots": {
+            slot: {
+                "slot": slot,
+                "status": "ready",
+                "request_id": "req-test",
+                "pid": None,
+                "attempt": 1,
+                "retry_count": 0,
+                "requested_cycle": 1,
+                "started_at": "2026-01-01T00:00:00Z",
+                "completed_at": "2026-01-01T00:00:01Z",
+                "last_update_at": "2026-01-01T00:00:01Z",
+                "target_task_id": task_id,
+                "target_lane_id": lane_id,
+                "target_stage": stage,
+                "target_branch": branch,
+                "target_base_ref": "RAB-BASE",
+                "target_worktree_name": f"workstation-{slot}",
+                "target_worktree_root": str(worktree_root),
+                "attempt_dir": None,
+                "action_path": None,
+                "validation_path": None,
+                "stdout_path": None,
+                "stderr_path": None,
+                "last_message_path": None,
+                "llm_exit_code": 0,
+                "last_error": None,
+            }
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def pin_build_lock(monkeypatch: pytest.MonkeyPatch, lock_id: str = TEST_CONTROL_RUN_ID) -> None:
     monkeypatch.setattr(MODULE, "_acquire_build_loop_lock", lambda _lock_path: (True, lock_id, None))
 
@@ -414,6 +476,12 @@ def test_op_build_passes_selected_profile_aliases_to_controller(monkeypatch: pyt
         events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
         events_path.parent.mkdir(parents=True, exist_ok=True)
         events_path.write_text("", encoding="utf-8")
+        _write_workstation_registry_slot_ready(
+            root,
+            slot="dev-1",
+            branch="codex/dev-1/bootstrap",
+            worktree_root=root,
+        )
 
         captured: dict[str, object] = {}
 
@@ -478,6 +546,12 @@ def test_op_build_dispatch_reassigns_profile_when_current_is_hard_gated(monkeypa
         events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
         events_path.parent.mkdir(parents=True, exist_ok=True)
         events_path.write_text("", encoding="utf-8")
+        _write_workstation_registry_slot_ready(
+            root,
+            slot="dev-1",
+            branch="codex/dev-1/bootstrap",
+            worktree_root=root,
+        )
 
         monkeypatch.setattr(
             MODULE,
@@ -888,6 +962,15 @@ def test_dead_pid_without_evidence_triggers_same_cycle_redispatch(monkeypatch: p
                 row["branch"] = "codex/dev-1/task-001"
                 row["worktree_root"] = str(root)
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        _write_workstation_registry_slot_ready(
+            root,
+            slot="dev-1",
+            branch="codex/dev-1/task-001",
+            worktree_root=root,
+            task_id="TASK-001",
+            lane_id="phase-1/lane-a",
+            stage="dev",
+        )
 
         events_path = root / "reports" / "optimus-prime" / "controller" / "EVENTS.jsonl"
         events_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2439,28 +2522,23 @@ def test_build_handles_missing_workstation_target_path_gracefully(monkeypatch: p
 
         missing_target = root / "prepared-worktrees" / "workstation-dev-1"
 
-        def fake_codex_exec(**kwargs):
-            prompt = str(kwargs.get("prompt_text") or "")
-            _write_manager_action_from_prompt(
-                prompt,
-                {
-                    "schema_version": "1.0",
-                    "slot": "dev-1",
-                    "lane_id": "phase-1/lane-a",
-                    "task_id": "TASK-001",
-                    "branch_name": "codex/dev-1/task-001",
-                    "worktree_name": "workstation-dev-1",
-                    "prepare_command": (
-                        f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
-                        f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
-                        "--output json --force-reset-existing --worktree-name workstation-dev-1"
-                    ),
-                    "prereq_policy": "copy_env_files",
-                },
-            )
-            return 0
-
-        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        _stub_workstation_async_llm(
+            monkeypatch,
+            lambda _prompt: {
+                "schema_version": "1.0",
+                "slot": "dev-1",
+                "lane_id": "phase-1/lane-a",
+                "task_id": "TASK-001",
+                "branch_name": "codex/dev-1/task-001",
+                "worktree_name": "workstation-dev-1",
+                "prepare_command": (
+                    f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                    f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 --slot-role developer "
+                    "--output json --force-reset-existing --worktree-name workstation-dev-1"
+                ),
+                "prereq_policy": "copy_env_files",
+            },
+        )
         monkeypatch.setattr(
             MODULE,
             "_run_manager_command",
@@ -2492,10 +2570,10 @@ def test_build_handles_missing_workstation_target_path_gracefully(monkeypatch: p
         assert out["status"] == "running_needs_resume"
         warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
         assert warning_codes.intersection({"workstation_execution_failed", "workstation_action_invalid"})
-        assert "workstation_manager_retry_exhausted" in warning_codes
+        assert "workstation_manager_retry_exhausted" not in warning_codes
         post_task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
         post_task = next(item for item in post_task_state.get("tasks", []) if isinstance(item, dict) and item.get("task_id") == "TASK-001")
-        assert post_task.get("status") == "blocked"
+        assert post_task.get("status") != "blocked"
         validation_path = root / "reports" / "optimus-prime" / "workstation-manager" / "attempt-dev-1-1" / "WORKSTATION_VALIDATION.json"
         payload = json.loads(validation_path.read_text(encoding="utf-8"))
         checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
