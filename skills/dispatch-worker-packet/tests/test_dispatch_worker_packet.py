@@ -217,6 +217,31 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "validation_error")
             self.assertIn("gap_batch_ref", ctx.exception.message)
 
+    def test_gapfix_packet_requires_existing_gap_batch_ref_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing_ref = root / "reports" / "optimus-prime" / "planning" / "gapfix" / "TASK-001" / "batch-missing.json"
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(
+                    make_cfg(
+                        root,
+                        op_build_mode=True,
+                        role="developer",
+                        slot="dev-1",
+                        plan_id="plan-1",
+                        requirement_ids=["REQ-001"],
+                        task_acceptance_refs=["AC-1"],
+                        dev_ready_evidence_ref="reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+                        is_gapfix=True,
+                        gap_batch_id="task-001-dev-c1-abc123",
+                        gap_batch_ref=str(missing_ref),
+                        gap_stage="dev",
+                        source_gap_ids=["GAP-1"],
+                    )
+                )
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("existing gap_batch_ref", ctx.exception.message)
+
     def test_tester_test_source_branch_must_align_start_from_branch(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(MODULE.ToolError) as ctx:

@@ -424,6 +424,15 @@ def validate_policy(cfg: DispatchInput) -> None:
                     "gapfix packets require gap_batch_ref",
                     stage="validate",
                 )
+            gap_batch_path = Path(cfg.gap_batch_ref).expanduser()
+            if not gap_batch_path.is_absolute():
+                gap_batch_path = cfg.repo_root / gap_batch_path
+            if not gap_batch_path.exists():
+                raise ToolError(
+                    "validation_error",
+                    f"gapfix packets require existing gap_batch_ref (missing: {gap_batch_path})",
+                    stage="validate",
+                )
             if cfg.gap_stage not in {"dev", "test", "review"}:
                 raise ToolError(
                     "validation_error",

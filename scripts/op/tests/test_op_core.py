@@ -5362,6 +5362,54 @@ def test_manager_dispatcher_empty_assignments_returns_dispatch_plan_no_assignmen
         assert out.get("assignment_observations") == []
 
 
+def test_load_dispatch_assignments_gapfix_requires_existing_gap_batch_ref():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        planning = root / "reports" / "optimus-prime" / "planning"
+        planning.mkdir(parents=True, exist_ok=True)
+        (planning / "WORK_DISPATCH_PLAN.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "active_phase_id": "phase-1",
+                    "assignments": [
+                        {
+                            "task_id": "TASK-001",
+                            "lane_id": "phase-1/lane-a",
+                            "phase_id": "phase-1",
+                            "next_stage": "dev",
+                            "next_role": "developer",
+                            "slot": "dev-1",
+                            "dispatch_policy": "resume_if_same_lane",
+                            "is_gapfix": True,
+                            "gap_batch_id": "task-001-dev-c1-abc123",
+                            "gap_batch_ref": str(
+                                root
+                                / "reports"
+                                / "optimus-prime"
+                                / "planning"
+                                / "gapfix"
+                                / "TASK-001"
+                                / "batch-task-001-dev-c1-abc123.json"
+                            ),
+                            "gap_stage": "dev",
+                            "source_gap_ids": ["GAP-TASK-001-001"],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assignments, warnings, readable = MODULE._load_work_dispatch_plan_assignments(root, active_phase_id="phase-1")
+        assert readable is True
+        assert assignments == []
+        warning_codes = [row.get("code") for row in warnings if isinstance(row, dict)]
+        assert "dispatch_assignment_invalid" in warning_codes
+
+
 def test_dispatch_packet_uses_slot_worktree_root_and_branch(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

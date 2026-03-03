@@ -8333,6 +8333,21 @@ def _load_work_dispatch_plan_assignments(
                     }
                 )
                 continue
+            gap_batch_path = Path(gap_batch_ref).expanduser()
+            if not gap_batch_path.is_absolute():
+                gap_batch_path = repo_root / gap_batch_path
+            if not gap_batch_path.exists():
+                warnings.append(
+                    {
+                        "code": "dispatch_assignment_invalid",
+                        "message": f"assignment #{idx + 1} gapfix row references missing gap_batch_ref={gap_batch_ref}",
+                        "stage": "build_loop",
+                        "artifact": str(path),
+                        "index": idx,
+                    }
+                )
+                continue
+            gap_batch_ref = str(gap_batch_path.resolve())
             if not source_gap_ids:
                 warnings.append(
                     {
