@@ -113,6 +113,7 @@ class DispatchInput:
     lane_id: str | None
     is_gapfix: bool
     gap_batch_id: str | None
+    gap_batch_ref: str | None
     gap_stage: str | None
     source_gap_ids: list[str]
     test_source_branch: str | None
@@ -417,6 +418,12 @@ def validate_policy(cfg: DispatchInput) -> None:
                     "gapfix packets require gap_batch_id",
                     stage="validate",
                 )
+            if not isinstance(cfg.gap_batch_ref, str) or not cfg.gap_batch_ref.strip():
+                raise ToolError(
+                    "validation_error",
+                    "gapfix packets require gap_batch_ref",
+                    stage="validate",
+                )
             if cfg.gap_stage not in {"dev", "test", "review"}:
                 raise ToolError(
                     "validation_error",
@@ -539,6 +546,7 @@ def config_from_args(args: argparse.Namespace) -> DispatchInput:
         lane_id=((args.lane_id or data.get("lane_id") or "").strip() or None),
         is_gapfix=_bool(data.get("is_gapfix"), default=False),
         gap_batch_id=((data.get("gap_batch_id") or "").strip() or None),
+        gap_batch_ref=((data.get("gap_batch_ref") or "").strip() or None),
         gap_stage=((data.get("gap_stage") or "").strip() or None),
         source_gap_ids=_list_of_str(data, "source_gap_ids", required=False),
         test_source_branch=((args.test_source_branch or data.get("test_source_branch") or "").strip() or None),
@@ -604,6 +612,7 @@ def render_packet(cfg: DispatchInput) -> str:
     test_source_commit = cfg.test_source_commit or "none"
     is_gapfix = "true" if cfg.is_gapfix else "false"
     gap_batch_id = cfg.gap_batch_id or "none"
+    gap_batch_ref = cfg.gap_batch_ref or "none"
     gap_stage = cfg.gap_stage or "none"
     source_gap_ids = ", ".join(cfg.source_gap_ids) if cfg.source_gap_ids else "none"
     verification_mode = str(cfg.verification_contract.get("mode") or "implementation_green").strip() if isinstance(cfg.verification_contract, dict) else "implementation_green"
@@ -669,6 +678,7 @@ def render_packet(cfg: DispatchInput) -> str:
         f"dev_ready_evidence_ref: {dev_ready_ref}\n\n"
         f"is_gapfix: {is_gapfix}\n"
         f"gap_batch_id: {gap_batch_id}\n"
+        f"gap_batch_ref: {gap_batch_ref}\n"
         f"gap_stage: {gap_stage}\n"
         f"source_gap_ids: {source_gap_ids}\n\n"
         f"## Acceptance Criteria\n"
@@ -692,6 +702,7 @@ def render_packet(cfg: DispatchInput) -> str:
         f"- is_gapfix: {is_gapfix}\n"
         f"- if is_gapfix=true, consume all source_gap_ids in this batch before completion\n"
         f"- gap_batch_id: {gap_batch_id}\n"
+        f"- gap_batch_ref: {gap_batch_ref}\n"
         f"- gap_stage: {gap_stage}\n"
         f"- source_gap_ids: {source_gap_ids}\n\n"
         f"## Expected Worker Response Fields\n"
@@ -1116,6 +1127,7 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "lane_id": cfg.lane_id,
         "is_gapfix": cfg.is_gapfix,
         "gap_batch_id": cfg.gap_batch_id,
+        "gap_batch_ref": cfg.gap_batch_ref,
         "gap_stage": cfg.gap_stage,
         "source_gap_ids": cfg.source_gap_ids,
         "worktree_root": str(cfg.worktree_root),
@@ -1172,6 +1184,7 @@ def update_branch_lineage(path: Path, cfg: DispatchInput, dispatch: dict[str, An
         "infra_failure_reason_codes": cfg.infra_failure_reason_codes,
         "is_gapfix": cfg.is_gapfix,
         "gap_batch_id": cfg.gap_batch_id,
+        "gap_batch_ref": cfg.gap_batch_ref,
         "gap_stage": cfg.gap_stage,
         "source_gap_ids": cfg.source_gap_ids,
         "dispatch_pid": dispatch["pid"],
@@ -1460,6 +1473,7 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "infra_failure_reason_codes": cfg.infra_failure_reason_codes,
         "is_gapfix": cfg.is_gapfix,
         "gap_batch_id": cfg.gap_batch_id,
+        "gap_batch_ref": cfg.gap_batch_ref,
         "gap_stage": cfg.gap_stage,
         "source_gap_ids": cfg.source_gap_ids,
         "status": "started" if dispatch["dispatch_started"] else "failed",

@@ -64,6 +64,7 @@ def make_cfg(root: Path, **overrides):
         lane_id=overrides.get("lane_id"),
         is_gapfix=overrides.get("is_gapfix", False),
         gap_batch_id=overrides.get("gap_batch_id"),
+        gap_batch_ref=overrides.get("gap_batch_ref"),
         gap_stage=overrides.get("gap_stage"),
         source_gap_ids=overrides.get("source_gap_ids", []),
         test_source_branch=overrides.get("test_source_branch"),
@@ -192,6 +193,29 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             content = MODULE.render_packet(cfg)
             self.assertIn("## Test Stage Source Sync", content)
             self.assertIn("merge source branch before running tests", content)
+
+    def test_gapfix_packet_requires_gap_batch_ref(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(
+                    make_cfg(
+                        Path(tmp),
+                        op_build_mode=True,
+                        role="developer",
+                        slot="dev-1",
+                        plan_id="plan-1",
+                        requirement_ids=["REQ-001"],
+                        task_acceptance_refs=["AC-1"],
+                        dev_ready_evidence_ref="reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+                        is_gapfix=True,
+                        gap_batch_id="task-001-dev-c1-abc123",
+                        gap_batch_ref=None,
+                        gap_stage="dev",
+                        source_gap_ids=["GAP-1"],
+                    )
+                )
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("gap_batch_ref", ctx.exception.message)
 
     def test_tester_test_source_branch_must_align_start_from_branch(self):
         with tempfile.TemporaryDirectory() as tmp:

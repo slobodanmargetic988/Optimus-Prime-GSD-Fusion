@@ -8033,6 +8033,7 @@ def _dispatch_task_packet(
     run_id: str | None = None,
     is_gapfix: bool = False,
     gap_batch_id: str | None = None,
+    gap_batch_ref: str | None = None,
     source_gap_ids: list[str] | None = None,
     gap_stage: str | None = None,
 ) -> dict[str, Any]:
@@ -8120,6 +8121,7 @@ def _dispatch_task_packet(
         "test_source_commit": _as_str(test_source_commit_override) or None,
         "is_gapfix": bool(is_gapfix),
         "gap_batch_id": _as_str(gap_batch_id) or None,
+        "gap_batch_ref": _as_str(gap_batch_ref) or None,
         "gap_stage": (_as_str(gap_stage) or "").lower() or None,
         "source_gap_ids": [
             gap_id for gap_id in (_as_str(item) for item in (source_gap_ids or [])) if gap_id
@@ -8256,6 +8258,7 @@ def _load_work_dispatch_plan_assignments(
         dispatch_policy = _as_str(row.get("dispatch_policy")) or "resume_if_same_lane"
         is_gapfix = _as_bool_field(row.get("is_gapfix"))
         gap_batch_id = _as_str(row.get("gap_batch_id"))
+        gap_batch_ref = _as_str(row.get("gap_batch_ref"))
         gap_stage = (_as_str(row.get("gap_stage")) or "").lower() or None
         source_gap_ids_raw = row.get("source_gap_ids")
         source_gap_ids = (
@@ -8319,6 +8322,17 @@ def _load_work_dispatch_plan_assignments(
                     }
                 )
                 continue
+            if not gap_batch_ref:
+                warnings.append(
+                    {
+                        "code": "dispatch_assignment_invalid",
+                        "message": f"assignment #{idx + 1} gapfix row missing gap_batch_ref",
+                        "stage": "build_loop",
+                        "artifact": str(path),
+                        "index": idx,
+                    }
+                )
+                continue
             if not source_gap_ids:
                 warnings.append(
                     {
@@ -8343,6 +8357,7 @@ def _load_work_dispatch_plan_assignments(
                 "dispatch_policy": dispatch_policy,
                 "is_gapfix": is_gapfix,
                 "gap_batch_id": gap_batch_id,
+                "gap_batch_ref": gap_batch_ref,
                 "gap_stage": gap_stage,
                 "source_gap_ids": source_gap_ids,
             }
@@ -8459,6 +8474,7 @@ def _dispatch_next_task_from_assignments(
                 "dispatch_policy": _as_str(row.get("dispatch_policy")),
                 "is_gapfix": _as_bool_field(row.get("is_gapfix")),
                 "gap_batch_id": _as_str(row.get("gap_batch_id")),
+                "gap_batch_ref": _as_str(row.get("gap_batch_ref")),
                 "gap_stage": _as_str(row.get("gap_stage")),
                 "status": status,
                 "reason_code": reason_code,
@@ -8497,6 +8513,7 @@ def _dispatch_next_task_from_assignments(
         dispatch_policy = _as_str(row.get("dispatch_policy")) or "resume_if_same_lane"
         is_gapfix = _as_bool_field(row.get("is_gapfix"))
         gap_batch_id = _as_str(row.get("gap_batch_id"))
+        gap_batch_ref = _as_str(row.get("gap_batch_ref"))
         gap_stage = (_as_str(row.get("gap_stage")) or "").lower() or None
         source_gap_ids = [
             gap_id
@@ -8796,6 +8813,7 @@ def _dispatch_next_task_from_assignments(
             run_id=run_id,
             is_gapfix=is_gapfix,
             gap_batch_id=gap_batch_id,
+            gap_batch_ref=gap_batch_ref,
             source_gap_ids=source_gap_ids,
             gap_stage=gap_stage,
         )
@@ -9650,6 +9668,7 @@ def _manager_gap_consumption_cycle(
             continue
         batch_fingerprint = _sha256("|".join(source_gap_ids))[:10]
         batch_id = f"{task_id.lower()}-{selected_stage}-c{cycle}-{batch_fingerprint}"
+        batch_ref = str(_gap_batch_artifact_path(req.repo_root, task_id, batch_id))
         consumed_gap_ids: list[str] = []
         for row in selected_rows:
             gap_id = _as_str(row.get("gap_id"))
@@ -9681,12 +9700,13 @@ def _manager_gap_consumption_cycle(
                 "dispatch_policy": "resume_if_same_lane",
                 "is_gapfix": True,
                 "gap_batch_id": batch_id,
+                "gap_batch_ref": batch_ref,
                 "gap_stage": selected_stage,
                 "source_gap_ids": consumed_gap_ids,
             }
         )
         _atomic_write_json(
-            _gap_batch_artifact_path(req.repo_root, task_id, batch_id),
+            Path(batch_ref),
             {
                 "schema_version": SCHEMA_VERSION,
                 "updated_at": now,
@@ -9709,6 +9729,7 @@ def _manager_gap_consumption_cycle(
                 "status": "scheduled",
                 "target_gap_stage": selected_stage,
                 "source_gap_ids": consumed_gap_ids,
+                "gap_batch_ref": batch_ref,
                 "slot": slot,
             }
         )
@@ -9732,6 +9753,7 @@ def _manager_gap_consumption_cycle(
         enriched = dict(row)
         enriched.setdefault("is_gapfix", False)
         enriched.setdefault("gap_batch_id", None)
+        enriched.setdefault("gap_batch_ref", None)
         enriched.setdefault("gap_stage", None)
         enriched.setdefault("source_gap_ids", [])
         final_assignments.append(enriched)
