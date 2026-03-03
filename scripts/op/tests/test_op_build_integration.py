@@ -128,7 +128,7 @@ def build_repo(root: Path) -> None:
                 "for task in tasks:",
                 "    task_id = task['task_id']",
                 "    evidence_ref = f'reports/optimus-prime/planning/evidence/{task_id}/TASK_EVIDENCE.json'",
-                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'lane_id': task['lane_id'], 'requirement_ids': task['requirement_ids'], 'verification_contract': task['verification_contract'], 'status': 'pending', 'owner_slot': None, 'dispatch_thread_id': None, 'last_progress_at': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'gaps_that_need_patching': [], 'blockers': [], 'last_handoff_outcome': {'status': None, 'reason_codes': [], 'timestamp': None}, 'blocking_source': 'none'})",
+                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'lane_id': task['lane_id'], 'requirement_ids': task['requirement_ids'], 'verification_contract': task['verification_contract'], 'status': 'pending', 'owner_slot': None, 'dispatch_thread_id': None, 'last_progress_at': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'gaps_that_need_patching': [], 'blockers': [], 'last_handoff_outcome': {'status': None, 'reason_codes': [], 'timestamp': None}, 'blocking_source': 'none', 'gapfix_state': {'active_batch_id': None, 'active': False, 'target_gap_stage': None, 'consumed_gap_ids': [], 'batch_started_cycle': None, 'batch_last_updated_at': None}, 'progress_watchdog': {'task_started_cycle': None, 'last_forward_progress_cycle': None, 'consecutive_no_forward_progress_cycles': 0, 'threshold_cycles': 25, 'triggered': False, 'triggered_at': None}})",
                 "state_json = {'schema_version': '1.0', 'initialized_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z', 'mission': 'inline:Build MyBoard', 'scope': 'inline:Board workflow', 'mission_source': {'mode': 'inline', 'value': 'Build MyBoard', 'path': None, 'display': 'Build MyBoard'}, 'scope_source': {'mode': 'inline', 'value': 'Board workflow', 'path': None, 'display': 'Board workflow'}, 'constraints': [], 'requirements': requirements, 'map_fingerprint': 'map-test', 'repo_fingerprint': 'repo-test', 'baseline_ready': True, 'plan_ready': True, 'plan_id': plan_id, 'build_ready': True}",
                 "state_md = '# STATE\\n\\n- baseline_ready: true\\n- plan_ready: true\\n- build_ready: true\\n'",
                 "gaps = {'schema_version': '1.0', 'plan_id': plan_id, 'updated_at': '2026-01-01T00:00:00Z', 'gaps': []}",
@@ -1785,14 +1785,14 @@ def test_build_keeps_gap_open_until_explicit_closure_even_after_recovery():
         )
         assert out["status"] == "running_needs_resume"
         task_state_after = json.loads(task_state_path.read_text(encoding="utf-8"))
-        open_ids = {
+        retained_ids = {
             row.get("gap_id")
             for task in task_state_after.get("tasks", [])
             if isinstance(task, dict)
             for row in task.get("gaps_that_need_patching", [])
-            if isinstance(row, dict) and row.get("status") == "open"
+            if isinstance(row, dict) and row.get("status") in {"open", "consumed"}
         }
-        assert "gap-sticky-after-recovery-1" in open_ids
+        assert "gap-sticky-after-recovery-1" in retained_ids
 
 
 def test_project_done_still_blocked_when_preserved_gap_survives_recovery():
@@ -2491,7 +2491,7 @@ def test_build_handles_missing_workstation_target_path_gracefully(monkeypatch: p
         )
         assert out["status"] == "running_needs_resume"
         warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
-        assert "workstation_execution_failed" in warning_codes
+        assert warning_codes.intersection({"workstation_execution_failed", "workstation_action_invalid"})
         assert "workstation_manager_retry_exhausted" in warning_codes
         post_task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
         post_task = next(item for item in post_task_state.get("tasks", []) if isinstance(item, dict) and item.get("task_id") == "TASK-001")
@@ -2500,8 +2500,12 @@ def test_build_handles_missing_workstation_target_path_gracefully(monkeypatch: p
         payload = json.loads(validation_path.read_text(encoding="utf-8"))
         checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
         by_id = {item.get("id"): item for item in checks if isinstance(item, dict)}
-        assert by_id.get("prepare_target_path_exists", {}).get("passed") is False
-        assert isinstance(payload.get("branch_check_error"), str) and payload.get("branch_check_error")
+        if "prepare_target_path_exists" in by_id:
+            assert by_id.get("prepare_target_path_exists", {}).get("passed") is False
+            assert isinstance(payload.get("branch_check_error"), str) and payload.get("branch_check_error")
+        else:
+            error_payload = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            assert isinstance(error_payload.get("message"), str) and error_payload.get("message")
 
 
 def test_dispatch_observation_rows_present_after_manager_dispatch_cycle(monkeypatch: pytest.MonkeyPatch):

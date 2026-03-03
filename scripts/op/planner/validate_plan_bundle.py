@@ -665,6 +665,8 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
                 "blockers",
                 "last_handoff_outcome",
                 "blocking_source",
+                "gapfix_state",
+                "progress_watchdog",
             },
             optional=set(),
             errors=errors,
@@ -756,6 +758,129 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
         blocking_source = _as_str(row.get("blocking_source"))
         if blocking_source not in {"handoff", "evidence", "merge", "none"}:
             _err(errors, "planner_bundle_schema_error", f"TASK_EXECUTION_STATE.tasks[{idx}].blocking_source must be handoff|evidence|merge|none")
+
+        gapfix_state = _require_object(
+            row.get("gapfix_state"),
+            label=f"TASK_EXECUTION_STATE.tasks[{idx}].gapfix_state",
+            errors=errors,
+        )
+        if gapfix_state is not None:
+            _strict_keys(
+                gapfix_state,
+                label=f"TASK_EXECUTION_STATE.tasks[{idx}].gapfix_state",
+                required={
+                    "active_batch_id",
+                    "active",
+                    "target_gap_stage",
+                    "consumed_gap_ids",
+                    "batch_started_cycle",
+                    "batch_last_updated_at",
+                },
+                optional=set(),
+                errors=errors,
+            )
+            _require_str_or_none(
+                gapfix_state.get("active_batch_id"),
+                label=f"TASK_EXECUTION_STATE.tasks[{idx}].gapfix_state.active_batch_id",
+                errors=errors,
+            )
+            _require_bool(
+                gapfix_state.get("active"),
+                label=f"TASK_EXECUTION_STATE.tasks[{idx}].gapfix_state.active",
+                errors=errors,
+            )
+            target_stage = gapfix_state.get("target_gap_stage")
+            _require_str_or_none(
+                target_stage,
+                label=f"TASK_EXECUTION_STATE.tasks[{idx}].gapfix_state.target_gap_stage",
+                errors=errors,
+            )
+            if isinstance(target_stage, str) and target_stage not in {"dev", "test", "review"}:
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    f"TASK_EXECUTION_STATE.tasks[{idx}].gapfix_state.target_gap_stage must be dev|test|review|null",
+                )
+            _require_str_list(
+                gapfix_state.get("consumed_gap_ids"),
+                label=f"TASK_EXECUTION_STATE.tasks[{idx}].gapfix_state.consumed_gap_ids",
+                errors=errors,
+            )
+            batch_started = gapfix_state.get("batch_started_cycle")
+            if batch_started is not None and (not isinstance(batch_started, int) or batch_started < 1):
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    f"TASK_EXECUTION_STATE.tasks[{idx}].gapfix_state.batch_started_cycle must be positive int|null",
+                )
+            batch_updated = gapfix_state.get("batch_last_updated_at")
+            if batch_updated is not None and not _is_iso8601(batch_updated):
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    f"TASK_EXECUTION_STATE.tasks[{idx}].gapfix_state.batch_last_updated_at must be ISO-8601|null",
+                )
+
+        progress_watchdog = _require_object(
+            row.get("progress_watchdog"),
+            label=f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog",
+            errors=errors,
+        )
+        if progress_watchdog is not None:
+            _strict_keys(
+                progress_watchdog,
+                label=f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog",
+                required={
+                    "task_started_cycle",
+                    "last_forward_progress_cycle",
+                    "consecutive_no_forward_progress_cycles",
+                    "threshold_cycles",
+                    "triggered",
+                    "triggered_at",
+                },
+                optional=set(),
+                errors=errors,
+            )
+            task_started = progress_watchdog.get("task_started_cycle")
+            if task_started is not None and (not isinstance(task_started, int) or task_started < 1):
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog.task_started_cycle must be positive int|null",
+                )
+            last_forward = progress_watchdog.get("last_forward_progress_cycle")
+            if last_forward is not None and (not isinstance(last_forward, int) or last_forward < 1):
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog.last_forward_progress_cycle must be positive int|null",
+                )
+            no_progress = progress_watchdog.get("consecutive_no_forward_progress_cycles")
+            if not isinstance(no_progress, int) or no_progress < 0:
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog.consecutive_no_forward_progress_cycles must be non-negative int",
+                )
+            threshold_cycles = progress_watchdog.get("threshold_cycles")
+            if not isinstance(threshold_cycles, int) or threshold_cycles < 1:
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog.threshold_cycles must be positive int",
+                )
+            _require_bool(
+                progress_watchdog.get("triggered"),
+                label=f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog.triggered",
+                errors=errors,
+            )
+            triggered_at = progress_watchdog.get("triggered_at")
+            if triggered_at is not None and not _is_iso8601(triggered_at):
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog.triggered_at must be ISO-8601|null",
+                )
 
     missing = sorted(task_ids - state_ids)
     if missing:

@@ -111,6 +111,10 @@ class DispatchInput:
     dispatch_mode: str
     resume_thread_id: str | None
     lane_id: str | None
+    is_gapfix: bool
+    gap_batch_id: str | None
+    gap_stage: str | None
+    source_gap_ids: list[str]
     test_source_branch: str | None
     test_source_commit: str | None
     dry_run: bool
@@ -317,11 +321,11 @@ def validate_policy(cfg: DispatchInput) -> None:
                     stage="validate",
                 )
 
-    expected_prefix = f"codex/{cfg.slot}/"
-    if not cfg.branch_name.startswith(expected_prefix):
+    expected_pattern = rf"^codex/(?:[^/]+/)?{re.escape(cfg.slot)}/"
+    if not re.match(expected_pattern, cfg.branch_name):
         raise ToolError(
             "validation_error",
-            f"branch_name must start with '{expected_prefix}'",
+            f"branch_name must match 'codex/<run_id>/{cfg.slot}/...'",
             stage="validate",
         )
 
@@ -400,6 +404,31 @@ def validate_policy(cfg: DispatchInput) -> None:
                 "op-build mode packets require infra_failure_reason_codes list",
                 stage="validate",
             )
+        if cfg.is_gapfix:
+            if cfg.role != "developer" or not cfg.slot.startswith("dev-"):
+                raise ToolError(
+                    "validation_error",
+                    "gapfix packets must target a developer slot",
+                    stage="validate",
+                )
+            if not isinstance(cfg.gap_batch_id, str) or not cfg.gap_batch_id.strip():
+                raise ToolError(
+                    "validation_error",
+                    "gapfix packets require gap_batch_id",
+                    stage="validate",
+                )
+            if cfg.gap_stage not in {"dev", "test", "review"}:
+                raise ToolError(
+                    "validation_error",
+                    "gapfix packets require gap_stage=dev|test|review",
+                    stage="validate",
+                )
+            if not isinstance(cfg.source_gap_ids, list) or not cfg.source_gap_ids:
+                raise ToolError(
+                    "validation_error",
+                    "gapfix packets require source_gap_ids",
+                    stage="validate",
+                )
     if cfg.dispatch_mode not in DISPATCH_MODES:
         raise ToolError("validation_error", "dispatch_mode must be exec|resume", stage="validate")
     if cfg.dispatch_mode == "resume":
@@ -508,6 +537,10 @@ def config_from_args(args: argparse.Namespace) -> DispatchInput:
         dispatch_mode=((args.dispatch_mode or data.get("dispatch_mode") or "exec").strip() or "exec"),
         resume_thread_id=((args.resume_thread_id or data.get("resume_thread_id") or "").strip() or None),
         lane_id=((args.lane_id or data.get("lane_id") or "").strip() or None),
+        is_gapfix=_bool(data.get("is_gapfix"), default=False),
+        gap_batch_id=((data.get("gap_batch_id") or "").strip() or None),
+        gap_stage=((data.get("gap_stage") or "").strip() or None),
+        source_gap_ids=_list_of_str(data, "source_gap_ids", required=False),
         test_source_branch=((args.test_source_branch or data.get("test_source_branch") or "").strip() or None),
         test_source_commit=((args.test_source_commit or data.get("test_source_commit") or "").strip() or None),
         dry_run=bool(data.get("dry_run", False) or args.dry_run),
@@ -569,6 +602,10 @@ def render_packet(cfg: DispatchInput) -> str:
     phase_id = cfg.phase_id or "none"
     test_source_branch = cfg.test_source_branch or "none"
     test_source_commit = cfg.test_source_commit or "none"
+    is_gapfix = "true" if cfg.is_gapfix else "false"
+    gap_batch_id = cfg.gap_batch_id or "none"
+    gap_stage = cfg.gap_stage or "none"
+    source_gap_ids = ", ".join(cfg.source_gap_ids) if cfg.source_gap_ids else "none"
     verification_mode = str(cfg.verification_contract.get("mode") or "implementation_green").strip() if isinstance(cfg.verification_contract, dict) else "implementation_green"
     stage_expectation = (cfg.stage_expectation or "expect_pass").strip()
     expected_fail_codes = (
@@ -630,6 +667,10 @@ def render_packet(cfg: DispatchInput) -> str:
         f"requirement_ids: {requirement_ids}\n"
         f"task_acceptance_refs: {acceptance_refs}\n"
         f"dev_ready_evidence_ref: {dev_ready_ref}\n\n"
+        f"is_gapfix: {is_gapfix}\n"
+        f"gap_batch_id: {gap_batch_id}\n"
+        f"gap_stage: {gap_stage}\n"
+        f"source_gap_ids: {source_gap_ids}\n\n"
         f"## Acceptance Criteria\n"
         f"{criteria_lines}\n\n"
         f"{test_sync_section}"
@@ -647,6 +688,12 @@ def render_packet(cfg: DispatchInput) -> str:
         f"- if expectation is expect_fail, do not block merely because tests fail for missing functionality; "
         f"that is successful red-phase output when failure_class=expected_red.\n"
         f"- infra failures are always blocking and must use reason_codes from infra_failure_reason_codes.\n\n"
+        f"## Gapfix Mode\n"
+        f"- is_gapfix: {is_gapfix}\n"
+        f"- if is_gapfix=true, consume all source_gap_ids in this batch before completion\n"
+        f"- gap_batch_id: {gap_batch_id}\n"
+        f"- gap_stage: {gap_stage}\n"
+        f"- source_gap_ids: {source_gap_ids}\n\n"
         f"## Expected Worker Response Fields\n"
         f"- intended_branch\n"
         f"- fallback_branch\n"
@@ -1067,6 +1114,10 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "expected_failure_reason_codes": cfg.expected_failure_reason_codes,
         "infra_failure_reason_codes": cfg.infra_failure_reason_codes,
         "lane_id": cfg.lane_id,
+        "is_gapfix": cfg.is_gapfix,
+        "gap_batch_id": cfg.gap_batch_id,
+        "gap_stage": cfg.gap_stage,
+        "source_gap_ids": cfg.source_gap_ids,
         "worktree_root": str(cfg.worktree_root),
         "updated_at": utc_now_iso(),
         "dispatch_started_at": utc_now_iso(),
@@ -1119,6 +1170,10 @@ def update_branch_lineage(path: Path, cfg: DispatchInput, dispatch: dict[str, An
         "verification_contract": cfg.verification_contract,
         "expected_failure_reason_codes": cfg.expected_failure_reason_codes,
         "infra_failure_reason_codes": cfg.infra_failure_reason_codes,
+        "is_gapfix": cfg.is_gapfix,
+        "gap_batch_id": cfg.gap_batch_id,
+        "gap_stage": cfg.gap_stage,
+        "source_gap_ids": cfg.source_gap_ids,
         "dispatch_pid": dispatch["pid"],
         "last_dispatch_at": utc_now_iso(),
     }
@@ -1403,6 +1458,10 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "verification_contract": cfg.verification_contract,
         "expected_failure_reason_codes": cfg.expected_failure_reason_codes,
         "infra_failure_reason_codes": cfg.infra_failure_reason_codes,
+        "is_gapfix": cfg.is_gapfix,
+        "gap_batch_id": cfg.gap_batch_id,
+        "gap_stage": cfg.gap_stage,
+        "source_gap_ids": cfg.source_gap_ids,
         "status": "started" if dispatch["dispatch_started"] else "failed",
     }
 

@@ -127,10 +127,13 @@ This runs autonomous execution with strict gates until:
 Build cycle manager order:
 1. `profile-manager`
 2. `production-line-manager`
-3. `branch-merge-manager`
-4. `workstation-manager`
-5. controller tick
-6. `work-dispatcher`
+3. `gap-consumption-manager`
+4. `branch-merge-manager`
+5. `workstation-manager`
+6. controller tick
+7. `production-line-manager` (post-directive reconcile)
+8. `gap-consumption-manager` (post-directive reconcile)
+9. `work-dispatcher`
 
 Canonical runtime task statuses:
 - `pending`, `dev_working`, `dev_done`, `testing`, `tests_done`, `reviewing`, `review_done`, `blocked`
@@ -158,6 +161,7 @@ Runtime reliability notes:
 - Dispatch packets use workstation-prepared slot context (`worktree_root`, `branch`) from `WORKER_REGISTRY.json`.
 - `/op-build` response data now includes current-cycle `assignment_observations` (same signal persisted to `DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl`).
 - Dispatcher supports same-lane thread continuation (`codex resume`) with deterministic fallback to fresh dispatch on resume failure.
+- Worker branch templates are run-aware in active build loops: `codex/<run_id>/<slot>/<task_slug>` (test/review suffixes still apply).
 - Branch/workstation managers run LLM-first action loops with strict validators and bounded retries (max 10); retry exhaustion blocks only the affected task/lane.
 - Workstation manager accepts only `prepare_command` values that resolve to the bundled `skills/workstation-preparation/scripts/prepare_workstation.py` path.
 - Workstation manager enforces slot-specific worktree names (`workstation-dev-*`, `workstation-test-*`, `workstation-review-*`), requires prepared `target_path` to match exact deterministic slot path, and skips destructive prep only for same-lane in-progress slots with valid slot-prefixed branches (`codex/<slot>/...`).
@@ -165,6 +169,7 @@ Runtime reliability notes:
 - Embedded gaps close only when explicit closure conditions pass with evidence refs and can reopen on regression.
 - Dead running worker PIDs are normalized before dispatch gating, so stale registry entries do not block dispatch capacity.
 - Dead PID recovery is evidence-first: if no new progress is ingested, OP queues immediate same-cycle same-slot redispatch and tracks retry metadata.
+- `/op-resume --reset-exhausted-retries` clears continuation-limiting counters (gap/dead-pid/resume-fail/task-attempt/task-watchdog/global-watchdog) before resume.
 - If `WORKER_REGISTRY.json` is unreadable, OP attempts auto-recovery; if recovery fails, it emits `worker_registry_recovery_failed_dispatch_allowed` and continues dispatch by policy.
 
 Operator stop behavior:

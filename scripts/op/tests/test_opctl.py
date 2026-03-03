@@ -154,3 +154,21 @@ def test_merge_payload_preserves_explicit_sleep_override(monkeypatch: pytest.Mon
     parsed = MODULE.parse_args()
     payload = MODULE.merge_payload(parsed)
     assert payload.get("sleep_minutes") == 2.0
+
+
+def test_merge_payload_includes_reset_exhausted_retries_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-resume",
+            "--repo-root",
+            "/tmp/repo",
+            "--reset-exhausted-retries",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("reset_exhausted_retries") is True

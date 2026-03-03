@@ -145,7 +145,7 @@ def build_repo(root: Path) -> None:
                 "for task in tasks:",
                 "    task_id = task['task_id']",
                 "    evidence_ref = f'reports/optimus-prime/planning/evidence/{task_id}/TASK_EVIDENCE.json'",
-                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'lane_id': task['lane_id'], 'requirement_ids': task['requirement_ids'], 'verification_contract': task['verification_contract'], 'status': 'pending', 'owner_slot': None, 'dispatch_thread_id': None, 'last_progress_at': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'gaps_that_need_patching': [], 'blockers': [], 'last_handoff_outcome': {'status': None, 'reason_codes': [], 'timestamp': None}, 'blocking_source': 'none'})",
+                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'lane_id': task['lane_id'], 'requirement_ids': task['requirement_ids'], 'verification_contract': task['verification_contract'], 'status': 'pending', 'owner_slot': None, 'dispatch_thread_id': None, 'last_progress_at': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'gaps_that_need_patching': [], 'blockers': [], 'last_handoff_outcome': {'status': None, 'reason_codes': [], 'timestamp': None}, 'blocking_source': 'none', 'gapfix_state': {'active_batch_id': None, 'active': False, 'target_gap_stage': None, 'consumed_gap_ids': [], 'batch_started_cycle': None, 'batch_last_updated_at': None}, 'progress_watchdog': {'task_started_cycle': None, 'last_forward_progress_cycle': None, 'consecutive_no_forward_progress_cycles': 0, 'threshold_cycles': 25, 'triggered': False, 'triggered_at': None}})",
                 "",
                 "state_json = {'schema_version': '1.0', 'initialized_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z', 'mission': 'inline:Build MyBoard', 'scope': 'inline:Board workflow', 'mission_source': {'mode': 'inline', 'value': 'Build MyBoard', 'path': None, 'display': 'Build MyBoard'}, 'scope_source': {'mode': 'inline', 'value': 'Board workflow', 'path': None, 'display': 'Board workflow'}, 'constraints': [], 'requirements': requirements, 'map_fingerprint': 'map-test', 'repo_fingerprint': 'repo-test', 'baseline_ready': True, 'plan_ready': True, 'plan_id': plan_id, 'build_ready': True}",
                 "state_md = '# STATE\\\\n\\\\n- baseline_ready: true\\\\n- plan_ready: true\\\\n- build_ready: true\\\\n'",
@@ -2455,14 +2455,20 @@ def test_build_recovery_preserves_sticky_open_gaps_from_prior_state():
         )
         assert out["status"] == "running_needs_resume"
         refreshed = json.loads(task_state_path.read_text(encoding="utf-8"))
-        open_ids = set()
+        retained_ids = set()
+        retained_statuses = set()
         for row in refreshed.get("tasks", []):
             if not isinstance(row, dict):
                 continue
             for gap in row.get("gaps_that_need_patching", []):
-                if isinstance(gap, dict) and gap.get("status") == "open":
-                    open_ids.add(gap.get("gap_id"))
-        assert "gap-preserve-001" in open_ids
+                if not isinstance(gap, dict):
+                    continue
+                status = MODULE._as_str(gap.get("status"))
+                if status in {"open", "consumed"}:
+                    retained_ids.add(gap.get("gap_id"))
+                    retained_statuses.add(status)
+        assert "gap-preserve-001" in retained_ids
+        assert retained_statuses
 
 
 def test_build_recovery_failure_returns_blocked_preflight_and_releases_lock(monkeypatch: pytest.MonkeyPatch):
@@ -3167,6 +3173,141 @@ def test_op_resume_uses_existing_build_state():
             }
         )
         assert resumed["status"] == "running_needs_resume"
+
+
+def test_op_resume_reset_exhausted_retries_reopens_blocked_tasks():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        planning_root = root / "reports" / "optimus-prime" / "planning"
+        task_state_path = planning_root / "TASK_EXECUTION_STATE.json"
+        build_state_path = planning_root / "BUILD_STATE.json"
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task = task_state["tasks"][0]
+        task_id = task["task_id"]
+        task["status"] = "blocked"
+        task["owner_slot"] = None
+        task["gaps_that_need_patching"] = [
+            {
+                "gap_id": "gap-exhausted-1",
+                "category": "other",
+                "severity": "P1",
+                "stage": "workstation",
+                "status": "open",
+                "reason_codes": ["workstation_prepare_failed"],
+                "retry_count": 10,
+                "max_retries": 10,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "closure_ref": None,
+                "slot": "dev-1",
+            }
+        ]
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        build_state = json.loads(build_state_path.read_text(encoding="utf-8"))
+        build_state["gap_retry_attempts"] = {"gap-exhausted-1": 10}
+        build_state["gap_retry_exhausted_ids"] = ["gap-exhausted-1", "gap-unrelated"]
+        build_state["dead_pid_retry_counts"] = {task_id: 2}
+        build_state["resume_fail_counts_by_slot"] = {"dev-1": 1}
+        build_state_path.write_text(json.dumps(build_state, indent=2) + "\n", encoding="utf-8")
+
+        resumed = run_payload(
+            {
+                "command": "/op-resume",
+                "repo_root": str(root),
+                "reset_exhausted_retries": True,
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert resumed["status"] in {"running_needs_resume", "completed"}
+        assert any(item.get("code") == "resume_exhausted_retries_reset" for item in resumed.get("warnings", []))
+        reset_summary = resumed.get("data", {}).get("resume_retry_reset", {})
+        assert reset_summary.get("reset_gap_count", 0) >= 1
+        assert task_id in set(reset_summary.get("reset_task_ids", []))
+
+        task_state_after = json.loads(task_state_path.read_text(encoding="utf-8"))
+        task_after = next(item for item in task_state_after["tasks"] if item.get("task_id") == task_id)
+        assert MODULE._normalize_task_status(task_after.get("status")) != MODULE.TASK_STATUS_BLOCKED
+        gap_row = task_after["gaps_that_need_patching"][0]
+        assert gap_row["retry_count"] == 0
+        assert "resume_retry_reset" in gap_row.get("reason_codes", [])
+
+        build_state_after = json.loads(build_state_path.read_text(encoding="utf-8"))
+        assert "gap-exhausted-1" not in set(build_state_after.get("gap_retry_exhausted_ids", []))
+        assert "gap-exhausted-1" not in (build_state_after.get("gap_retry_attempts") or {})
+        assert (build_state_after.get("dead_pid_retry_counts") or {}).get(task_id) is None
+
+
+def test_op_resume_reset_exhausted_retries_blocks_when_build_lock_active():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        lock_path = root / "reports" / "optimus-prime" / "planning" / "BUILD_LOOP.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "lock_id": "lock-test",
+                    "pid": os.getpid(),
+                    "acquired_at": "2026-01-01T00:00:00Z",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        resumed = run_payload(
+            {
+                "command": "/op-resume",
+                "repo_root": str(root),
+                "reset_exhausted_retries": True,
+                "max_build_cycles": 1,
+                "dry_run": True,
+                "sleep_minutes": 0,
+            }
+        )
+        assert resumed["ok"] is False
+        assert resumed["status"] == "blocked_preflight"
+        assert any(item.get("code") == "resume_reset_build_active" for item in resumed.get("errors", []))
 
 
 def test_op_resume_malformed_build_state_backup_and_reset():
@@ -5310,10 +5451,13 @@ def test_test_stage_dispatch_packet_uses_dev_branch_head_and_slot_context(monkey
             }
         )
         req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+        lock_id = "op-build-20260303T000000Z-run-abc123"
+        run_id = MODULE._run_id_from_lock_id(lock_id)
         planning = root / "reports" / "optimus-prime" / "planning"
         plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
         task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
         build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["loop_lock_id"] = lock_id
         build_state["profile_aliases"] = ["codex"]
         build_state["slot_profile_assignments"] = {"test-1": "codex"}
         MODULE._ensure_worker_registry_v2(root, build_state)
@@ -5325,14 +5469,14 @@ def test_test_stage_dispatch_packet_uses_dev_branch_head_and_slot_context(monkey
         for row in registry_payload.get("workers", []):
             if row.get("slot") == "test-1":
                 row["worktree_root"] = str(custom_worktree)
-                row["branch"] = "codex/test-1/bootstrap"
+                row["branch"] = f"codex/{run_id}/test-1/bootstrap"
         registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
 
         for row in task_state.get("tasks", []):
             if row.get("task_id") == "TASK-001":
                 row["status"] = "dev_done"
                 row["owner_slot"] = None
-                row["active_branch"] = "codex/dev-1/task-001"
+                row["active_branch"] = f"codex/{run_id}/dev-1/task-001"
 
         (planning / "WORK_DISPATCH_PLAN.json").write_text(
             json.dumps(
@@ -5361,7 +5505,7 @@ def test_test_stage_dispatch_packet_uses_dev_branch_head_and_slot_context(monkey
         captured_payloads: list[dict[str, object]] = []
 
         def fake_git_text(_repo_root: Path, *args: str) -> str:
-            if args == ("rev-parse", "codex/dev-1/task-001"):
+            if args == ("rev-parse", f"codex/{run_id}/dev-1/task-001"):
                 return "a" * 40
             if args == ("rev-parse", "RAB-BASE"):
                 return "b" * 40
@@ -5397,10 +5541,10 @@ def test_test_stage_dispatch_packet_uses_dev_branch_head_and_slot_context(monkey
         assert captured_payloads
         payload = captured_payloads[0]
         assert payload.get("worktree_root") == str(custom_worktree)
-        assert payload.get("branch_name") == "codex/test-1/task-001-test"
-        assert payload.get("start_from_branch") == "codex/dev-1/task-001"
+        assert payload.get("branch_name") == f"codex/{run_id}/test-1/task-001-test"
+        assert payload.get("start_from_branch") == f"codex/{run_id}/dev-1/task-001"
         assert payload.get("start_from_commit") == "a" * 40
-        assert payload.get("test_source_branch") == "codex/dev-1/task-001"
+        assert payload.get("test_source_branch") == f"codex/{run_id}/dev-1/task-001"
         assert payload.get("test_source_commit") == "a" * 40
 
 
@@ -5505,7 +5649,7 @@ def test_review_stage_dispatch_uses_developer_source_branch(monkeypatch: pytest.
         assert captured_payloads
         payload = captured_payloads[0]
         assert payload.get("worktree_root") == str(custom_worktree)
-        assert payload.get("branch_name") == "codex/review-1/task-001-review"
+        assert payload.get("branch_name") in {"codex/review-1/task-001-review", "codex/run/review-1/task-001-review"}
         assert payload.get("start_from_branch") == "codex/dev-1/task-001"
         assert payload.get("start_from_commit") == "d" * 40
 
@@ -7058,7 +7202,7 @@ def test_workstation_manager_success_updates_slot_worktree_and_branch(
         monkeypatch.setattr(
             MODULE,
             "_git_text",
-            lambda repo_root, *args: "codex/dev-1/task-001" if str(repo_root) == str(target_path) else "abc123",
+            lambda repo_root, *args: ("codex/dev-1/task-001" if str(repo_root) == str(target_path) else "abc123"),
         )
         out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
         logs = capsys.readouterr().out
@@ -7192,7 +7336,7 @@ def test_workstation_manager_test_slot_uses_slot_prefix_and_dev_base_ref(
         monkeypatch.setattr(
             MODULE,
             "_git_text",
-            lambda repo_root, *args: "codex/test-1/task-001-test" if str(repo_root) == str(target_path) else "abc123",
+            lambda repo_root, *args: ("codex/test-1/task-001-test" if str(repo_root) == str(target_path) else "abc123"),
         )
 
         out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)

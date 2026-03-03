@@ -53,6 +53,17 @@ Use this skill to replace manual multi-step dispatch flow:
   "phase_id": "phase-1",
   "requirement_ids": ["REQ-001"],
   "task_acceptance_refs": ["AC-001"],
+  "verification_contract": {
+    "mode": "tdd_red|implementation_green|hardening",
+    "dev_expectation": "expect_fail|expect_pass",
+    "test_expectation": "expect_fail|expect_pass",
+    "review_expectation": "expect_fail|expect_pass",
+    "expected_failure_reason_codes": ["tdd_expected_failure_observed"],
+    "infra_failure_reason_codes": ["verification_environment_error", "verification_command_target_missing"]
+  },
+  "stage_expectation": "expect_fail|expect_pass",
+  "expected_failure_reason_codes": ["tdd_expected_failure_observed"],
+  "infra_failure_reason_codes": ["verification_environment_error", "verification_command_target_missing"],
   "dev_ready_evidence_ref": "reports/optimus-prime/planning/DEV_READY_EVIDENCE.json",
   "dry_run": false
 }
@@ -77,6 +88,10 @@ Optional:
   - non-empty `phase_id`
   - non-empty `requirement_ids[]`
   - non-empty `task_acceptance_refs[]`
+  - `verification_contract.mode=tdd_red|implementation_green|hardening`
+  - `stage_expectation=expect_fail|expect_pass`
+  - `expected_failure_reason_codes[]` list
+  - `infra_failure_reason_codes[]` list
   - non-empty `dev_ready_evidence_ref`
 - Legacy compatibility paths are intentionally out of scope for this repo; use the OP-build packet contract as the only supported model.
 
@@ -89,6 +104,16 @@ Generated packet includes:
   - `intended_branch`
   - `fallback_branch`
   - `fallback_reason`
+- verification contract section with explicit TDD expectation semantics:
+  - `expect_fail` means expected red failure is success when `failure_class=expected_red`
+  - infra failures are always blocking
+- completion artifact contract with canonical schema references:
+  - template: `skills/dispatch-worker-packet/assets/TASK_EVIDENCE_CANONICAL_TEMPLATE.json`
+  - validator reference: `scripts/op/op_core.py::_validate_task_evidence_payload`
+  - required summary fields:
+    - `summary.expectation`
+    - `summary.expectation_met`
+    - `summary.failure_class`
 
 ## Usage
 

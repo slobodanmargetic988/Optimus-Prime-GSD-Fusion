@@ -45,7 +45,23 @@
         "reason_codes": [],
         "timestamp": null
       },
-      "blocking_source": "none"
+      "blocking_source": "none",
+      "gapfix_state": {
+        "active_batch_id": null,
+        "active": false,
+        "target_gap_stage": null,
+        "consumed_gap_ids": [],
+        "batch_started_cycle": null,
+        "batch_last_updated_at": null
+      },
+      "progress_watchdog": {
+        "task_started_cycle": null,
+        "last_forward_progress_cycle": null,
+        "consecutive_no_forward_progress_cycles": 0,
+        "threshold_cycles": 25,
+        "triggered": false,
+        "triggered_at": null
+      }
     },
     {
       "task_id": "TASK-002",
@@ -89,7 +105,23 @@
         "reason_codes": [],
         "timestamp": null
       },
-      "blocking_source": "none"
+      "blocking_source": "none",
+      "gapfix_state": {
+        "active_batch_id": null,
+        "active": false,
+        "target_gap_stage": null,
+        "consumed_gap_ids": [],
+        "batch_started_cycle": null,
+        "batch_last_updated_at": null
+      },
+      "progress_watchdog": {
+        "task_started_cycle": null,
+        "last_forward_progress_cycle": null,
+        "consecutive_no_forward_progress_cycles": 0,
+        "threshold_cycles": 25,
+        "triggered": false,
+        "triggered_at": null
+      }
     },
     {
       "task_id": "TASK-003",
@@ -133,7 +165,23 @@
         "reason_codes": [],
         "timestamp": null
       },
-      "blocking_source": "none"
+      "blocking_source": "none",
+      "gapfix_state": {
+        "active_batch_id": null,
+        "active": false,
+        "target_gap_stage": null,
+        "consumed_gap_ids": [],
+        "batch_started_cycle": null,
+        "batch_last_updated_at": null
+      },
+      "progress_watchdog": {
+        "task_started_cycle": null,
+        "last_forward_progress_cycle": null,
+        "consecutive_no_forward_progress_cycles": 0,
+        "threshold_cycles": 25,
+        "triggered": false,
+        "triggered_at": null
+      }
     }
   ]
 }

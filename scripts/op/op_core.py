@@ -66,6 +66,8 @@ PRODUCTION_LINE_STATE_JSON = PLANNING_REL / "PRODUCTION_LINE_STATE.json"
 DONE_TASKS_REGISTRY_JSON = PLANNING_REL / "DONE_TASKS_REGISTRY.json"
 WORK_DISPATCH_PLAN_JSON = PLANNING_REL / "WORK_DISPATCH_PLAN.json"
 DISPATCH_ASSIGNMENT_OBSERVATIONS_JSONL = PLANNING_REL / "DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl"
+GAP_CONSUMPTION_PLAN_JSON = PLANNING_REL / "GAP_CONSUMPTION_PLAN.json"
+GAP_CONSUMPTION_LEDGER_JSONL = PLANNING_REL / "GAP_CONSUMPTION_LEDGER.jsonl"
 
 BUILD_STATE_JSON = PLANNING_REL / "BUILD_STATE.json"
 TASK_EXECUTION_STATE_JSON = PLANNING_REL / "TASK_EXECUTION_STATE.json"
@@ -138,6 +140,7 @@ TERMINAL_HARD_STOPS = {
 
 STALE_IN_PROGRESS_TIMEOUT_SEC = 900
 NO_PROGRESS_THRESHOLD_CYCLES = 25
+TASK_FORWARD_PROGRESS_THRESHOLD_CYCLES = 25
 
 BRANCH_ACTION_COMMAND_TIMEOUT_SEC = 300
 BRANCH_VERIFY_COMMAND_TIMEOUT_SEC = 1800
@@ -204,6 +207,15 @@ DEFAULT_INFRA_FAILURE_REASON_CODES = [
     "verification_environment_error",
     "verification_command_target_missing",
 ]
+HUMAN_BLOCKED_GAP_REASON_TOKENS = (
+    "secret",
+    "token",
+    "oauth",
+    "manual",
+    "human",
+    "credential",
+    "api_key",
+)
 
 FIXED_WORKER_TOPOLOGY: list[dict[str, str]] = [
     {"slot": "dev-1", "role": "developer"},
@@ -274,6 +286,7 @@ class OpRequest:
     max_build_cycles: int | None
     sleep_minutes: float
     dry_run: bool
+    reset_exhausted_retries: bool
 
 
 def utc_now_iso() -> str:
@@ -1080,6 +1093,117 @@ def _task_progress_fingerprint(payload: dict[str, Any]) -> str:
     return _sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 
+def _task_forward_progress_rank(status: str) -> int:
+    normalized = _normalize_task_status(status)
+    return {
+        TASK_STATUS_PENDING: 0,
+        TASK_STATUS_DEV_WORKING: 1,
+        TASK_STATUS_DEV_DONE: 2,
+        TASK_STATUS_TESTING: 3,
+        TASK_STATUS_TESTS_DONE: 4,
+        TASK_STATUS_REVIEWING: 5,
+        TASK_STATUS_REVIEW_DONE: 6,
+        TASK_STATUS_BLOCKED: 0,
+    }.get(normalized, 0)
+
+
+def _apply_task_progress_watchdog(
+    task_state: dict[str, Any],
+    build_state: dict[str, Any],
+    *,
+    plan_id: str,
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    cycle = _coerce_nonneg_int(build_state.get("last_cycle"), default=0)
+    now = utc_now_iso()
+    for task in task_state.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        if not task_id:
+            continue
+        watchdog = _normalize_progress_watchdog(task.get("progress_watchdog"))
+        if watchdog["task_started_cycle"] <= 0:
+            watchdog["task_started_cycle"] = cycle
+        status = _normalize_task_status(task.get("status"))
+        rank = _task_forward_progress_rank(status)
+        rows = _normalize_task_gap_rows(task)
+        closed_gap_count = sum(
+            1
+            for row in rows
+            if isinstance(row, dict) and (_as_str(row.get("status")) or "").lower() in {"closed", "verified", "patched"}
+        )
+        forward_progress = rank > _coerce_nonneg_int(watchdog.get("_last_rank"), default=0) or closed_gap_count > _coerce_nonneg_int(
+            watchdog.get("_last_closed_gap_count"),
+            default=0,
+        )
+        if forward_progress:
+            watchdog["consecutive_no_forward_progress_cycles"] = 0
+            watchdog["last_forward_progress_cycle"] = cycle
+            watchdog["triggered"] = False
+            watchdog["triggered_at"] = None
+        elif status != TASK_STATUS_REVIEW_DONE:
+            watchdog["consecutive_no_forward_progress_cycles"] = _coerce_nonneg_int(
+                watchdog.get("consecutive_no_forward_progress_cycles"),
+                default=0,
+            ) + 1
+        threshold = max(
+            1,
+            _coerce_nonneg_int(
+                watchdog.get("threshold_cycles"),
+                default=TASK_FORWARD_PROGRESS_THRESHOLD_CYCLES,
+            ),
+        )
+        if (
+            not _as_bool_field(watchdog.get("triggered"))
+            and status != TASK_STATUS_REVIEW_DONE
+            and _coerce_nonneg_int(watchdog.get("consecutive_no_forward_progress_cycles"), default=0) >= threshold
+        ):
+            watchdog["triggered"] = True
+            watchdog["triggered_at"] = now
+            task["status"] = TASK_STATUS_BLOCKED
+            task["owner_slot"] = None
+            task["blocking_source"] = "evidence"
+            _upsert_task_gap(
+                task,
+                {
+                    "gap_id": _gap_id(
+                        plan_id,
+                        _as_str(task.get("phase_id")) or "phase-1",
+                        task_id,
+                        "task:progress_stalled",
+                        "blocked",
+                    ),
+                    "category": "task_blocked",
+                    "severity": "P1",
+                    "stage": "dev",
+                    "status": "open",
+                    "reason_codes": ["task_progress_stalled"],
+                    "retry_count": 0,
+                    "max_retries": 5,
+                    "created_at": now,
+                    "updated_at": now,
+                    "closure_ref": _as_str((task.get("evidence") or {}).get("task_evidence_ref")),
+                },
+            )
+            warnings.append(
+                {
+                    "code": "task_progress_stalled",
+                    "message": (
+                        f"task {task_id} hit per-task no-forward-progress threshold "
+                        f"({_coerce_nonneg_int(watchdog.get('consecutive_no_forward_progress_cycles'), default=0)}/{threshold})"
+                    ),
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                }
+            )
+        watchdog["threshold_cycles"] = threshold
+        watchdog["_last_rank"] = rank
+        watchdog["_last_closed_gap_count"] = closed_gap_count
+        task["progress_watchdog"] = watchdog
+    return warnings
+
+
 def _load_no_progress_watchdog_state(path: Path) -> dict[str, Any]:
     default = {
         "schema_version": SCHEMA_VERSION,
@@ -1242,7 +1366,7 @@ def _write_worker_registry(path: Path, base_payload: Any, workers: list[dict[str
     _atomic_write_json(path, out)
 
 
-def _default_worker_row(slot: str) -> dict[str, Any]:
+def _default_worker_row(slot: str, *, run_id: str | None = None) -> dict[str, Any]:
     now = utc_now_iso()
     if slot.startswith("dev-"):
         role = "developer"
@@ -1259,7 +1383,7 @@ def _default_worker_row(slot: str) -> dict[str, Any]:
         manager_type = "production_line"
     elif slot == "branch-manager-1":
         manager_type = "branch_merge"
-    default_branch = _default_slot_branch(slot, role=role)
+    default_branch = _default_slot_branch(slot, role=role, run_id=run_id)
     row: dict[str, Any] = {
         "slot": slot,
         "role": role,
@@ -1281,15 +1405,50 @@ def _default_worker_row(slot: str) -> dict[str, Any]:
     return row
 
 
-def _default_slot_branch(slot: str, *, role: str | None = None) -> str:
+def _run_id_from_lock_id(lock_id: str | None) -> str:
+    text = (_as_str(lock_id) or "").strip()
+    if not text:
+        return ""
+    text = text.lower()
+    if text.startswith("op-build-"):
+        text = text[len("op-build-") :]
+    return re.sub(r"[^a-z0-9._-]+", "-", text).strip("-")
+
+
+def _slot_suffix_for_lane(lane_id: str | None) -> str:
+    lane_tail = (_as_str(lane_id) or "").rsplit("/", 1)[-1].lower()
+    if lane_tail == "lane-b":
+        return "2"
+    if lane_tail == "lane-c":
+        return "3"
+    return "1"
+
+
+def _slot_for_stage_and_lane(stage: str, lane_id: str | None) -> str:
+    suffix = _slot_suffix_for_lane(lane_id)
+    if stage == "dev":
+        return f"dev-{suffix}"
+    if stage == "test":
+        return f"test-{suffix}"
+    return f"review-{suffix}"
+
+
+def _default_slot_branch(slot: str, *, role: str | None = None, run_id: str | None = None) -> str:
     resolved_role = role or ("developer" if slot.startswith("dev-") else "tester" if slot.startswith("test-") else "reviewer" if slot.startswith("review-") else "manager")
     if resolved_role in {"developer", "tester", "reviewer"}:
+        rid = _run_id_from_lock_id(run_id)
+        if rid:
+            return f"codex/{rid}/{slot}/bootstrap"
         return f"codex/{slot}/bootstrap"
     return "RAB-BASE"
 
 
-def _branch_name_for_stage(slot: str, task_id: str, stage: str) -> str:
-    base = f"codex/{slot}/{task_id.lower()}"
+def _branch_name_for_stage(slot: str, task_id: str, stage: str, *, run_id: str | None = None) -> str:
+    rid = _run_id_from_lock_id(run_id)
+    if rid:
+        base = f"codex/{rid}/{slot}/{task_id.lower()}"
+    else:
+        base = f"codex/{slot}/{task_id.lower()}"
     if stage == "test":
         return f"{base}-test"
     if stage == "review":
@@ -1302,7 +1461,7 @@ def _developer_source_branch(task: dict[str, Any]) -> str | None:
     if branch:
         return branch
     active_branch = _as_str(task.get("active_branch"))
-    if active_branch and active_branch.startswith("codex/dev-"):
+    if active_branch and re.match(r"^codex/(?:[^/]+/)?dev-[^/]+/", active_branch):
         return active_branch
     return None
 
@@ -1348,6 +1507,7 @@ def _ensure_worker_registry_v2(repo_root: Path, build_state: dict[str, Any]) -> 
     registry_path = repo_root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
     base_payload, workers, shape = _load_worker_registry(registry_path)
     by_slot: dict[str, dict[str, Any]] = {}
+    run_id = _run_id_from_lock_id(_as_str(build_state.get("loop_lock_id")))
     for worker in workers:
         if not isinstance(worker, dict):
             continue
@@ -1365,7 +1525,7 @@ def _ensure_worker_registry_v2(repo_root: Path, build_state: dict[str, Any]) -> 
         if row.get("active_task") is not None and row.get("active_task_id") is None:
             row["active_task_id"] = _as_str(row.get("active_task"))
         row_role = _as_str(row.get("role")) or ("developer" if slot.startswith("dev-") else "tester" if slot.startswith("test-") else "reviewer" if slot.startswith("review-") else "manager")
-        default_branch = _default_slot_branch(slot, role=row_role)
+        default_branch = _default_slot_branch(slot, role=row_role, run_id=run_id)
         current_branch = _as_str(row.get("branch"))
         active_task_id = _as_str(row.get("active_task_id")) or _as_str(row.get("active_task"))
         if not current_branch:
@@ -1379,7 +1539,7 @@ def _ensure_worker_registry_v2(repo_root: Path, build_state: dict[str, Any]) -> 
     for slot in FIXED_WORKER_SLOTS:
         row = by_slot.get(slot)
         if not isinstance(row, dict):
-            row = _default_worker_row(slot)
+            row = _default_worker_row(slot, run_id=run_id)
             inserted += 1
         out_workers.append(row)
 
@@ -1983,6 +2143,47 @@ def _write_task_evidence_files(repo_root: Path, plan_packets: dict[str, Any]) ->
     return refs
 
 
+def _normalize_gapfix_state(value: Any) -> dict[str, Any]:
+    row = value if isinstance(value, dict) else {}
+    consumed_ids_raw = row.get("consumed_gap_ids")
+    consumed_gap_ids = (
+        [gap_id for gap_id in (_as_str(item) for item in consumed_ids_raw) if gap_id]
+        if isinstance(consumed_ids_raw, list)
+        else []
+    )
+    return {
+        "active_batch_id": _as_str(row.get("active_batch_id")),
+        "active": _as_bool_field(row.get("active")),
+        "target_gap_stage": (_as_str(row.get("target_gap_stage")) or "dev").lower(),
+        "consumed_gap_ids": consumed_gap_ids,
+        "batch_started_cycle": _coerce_nonneg_int(row.get("batch_started_cycle"), default=0),
+        "batch_last_updated_at": _as_str(row.get("batch_last_updated_at")),
+    }
+
+
+def _normalize_progress_watchdog(value: Any) -> dict[str, Any]:
+    row = value if isinstance(value, dict) else {}
+    return {
+        "task_started_cycle": _coerce_nonneg_int(row.get("task_started_cycle"), default=0),
+        "last_forward_progress_cycle": _coerce_nonneg_int(row.get("last_forward_progress_cycle"), default=0),
+        "consecutive_no_forward_progress_cycles": _coerce_nonneg_int(
+            row.get("consecutive_no_forward_progress_cycles"),
+            default=0,
+        ),
+        "threshold_cycles": max(
+            1,
+            _coerce_nonneg_int(
+                row.get("threshold_cycles"),
+                default=TASK_FORWARD_PROGRESS_THRESHOLD_CYCLES,
+            ),
+        ),
+        "triggered": _as_bool_field(row.get("triggered")),
+        "triggered_at": _as_str(row.get("triggered_at")),
+        "_last_rank": _coerce_nonneg_int(row.get("_last_rank"), default=0),
+        "_last_closed_gap_count": _coerce_nonneg_int(row.get("_last_closed_gap_count"), default=0),
+    }
+
+
 def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str, str] | None = None) -> dict[str, Any]:
     tasks = plan_packets.get("tasks") if isinstance(plan_packets.get("tasks"), list) else []
     out_tasks: list[dict[str, Any]] = []
@@ -2026,6 +2227,8 @@ def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str,
                 "blockers": [],
                 "last_handoff_outcome": {"status": None, "reason_codes": [], "timestamp": None},
                 "blocking_source": "none",
+                "gapfix_state": _normalize_gapfix_state({}),
+                "progress_watchdog": _normalize_progress_watchdog({}),
             }
         )
     return {
@@ -2104,6 +2307,8 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
         gaps = item.get("gaps_that_need_patching")
         if not isinstance(gaps, list):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} gaps_that_need_patching must be list"})
+        else:
+            item["gaps_that_need_patching"] = _normalize_task_gap_rows(item)
         blockers = item.get("blockers")
         if not isinstance(blockers, list):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} blockers must be list"})
@@ -2143,6 +2348,18 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
                     "message": f"task {task_id} blocking_source must be handoff|evidence|merge|none",
                 }
             )
+        gapfix_state = item.get("gapfix_state")
+        if not isinstance(gapfix_state, dict):
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} gapfix_state must be object"})
+            item["gapfix_state"] = _normalize_gapfix_state({})
+        else:
+            item["gapfix_state"] = _normalize_gapfix_state(gapfix_state)
+        progress_watchdog = item.get("progress_watchdog")
+        if not isinstance(progress_watchdog, dict):
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} progress_watchdog must be object"})
+            item["progress_watchdog"] = _normalize_progress_watchdog({})
+        else:
+            item["progress_watchdog"] = _normalize_progress_watchdog(progress_watchdog)
     expected_task_ids = []
     for task in plan_packets.get("tasks", []):
         if isinstance(task, dict):
@@ -2382,6 +2599,8 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
             continue
         plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
         contract = _task_verification_contract(task, plan_task)
+        gapfix_state = _normalize_gapfix_state(task.get("gapfix_state"))
+        task["gapfix_state"] = gapfix_state
         evidence_path = _task_evidence_path(repo_root, task)
         if not evidence_path.exists():
             task["status"] = "blocked"
@@ -2528,7 +2747,17 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
 
         expectation_eval = _evaluate_evidence_expectation(payload=payload, expected=expected)
         if expectation_eval.get("progress"):
-            if stage == "dev":
+            if _as_bool_field(gapfix_state.get("active")) and stage == "dev":
+                target_gap_stage = (_as_str(gapfix_state.get("target_gap_stage")) or "dev").lower()
+                if target_gap_stage == "review":
+                    task["status"] = TASK_STATUS_TESTS_DONE
+                else:
+                    task["status"] = TASK_STATUS_DEV_DONE
+                gapfix_state["active"] = False
+                gapfix_state["active_batch_id"] = None
+                gapfix_state["batch_last_updated_at"] = payload_updated_at
+                task["gapfix_state"] = gapfix_state
+            elif stage == "dev":
                 task["status"] = TASK_STATUS_DEV_DONE
             elif stage == "test":
                 task["status"] = TASK_STATUS_TESTS_DONE
@@ -2551,6 +2780,11 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
                 }
             )
         elif expectation_eval.get("blocked"):
+            if _as_bool_field(gapfix_state.get("active")):
+                gapfix_state["active"] = False
+                gapfix_state["active_batch_id"] = None
+                gapfix_state["batch_last_updated_at"] = payload_updated_at
+                task["gapfix_state"] = gapfix_state
             normalized_status = _normalize_task_status(task.get("status"))
             if normalized_status == TASK_STATUS_REVIEW_DONE and task_id in merged_task_ids:
                 warnings.append(
@@ -3555,6 +3789,8 @@ def _normalize_task_gap_rows(task: dict[str, Any]) -> list[dict[str, Any]]:
         if not gap_id:
             continue
         status = (_as_str(row.get("status")) or "open").lower()
+        if status not in {"open", "consumed", "closed", "exhausted", "human_blocked", "verified", "patched"}:
+            status = "open"
         category = _as_str(row.get("category")) or "other"
         severity = _as_str(row.get("severity")) or "P2"
         stage = _as_str(row.get("stage")) or "dev"
@@ -3578,6 +3814,10 @@ def _normalize_task_gap_rows(task: dict[str, Any]) -> list[dict[str, Any]]:
         normalized["created_at"] = _as_str(normalized.get("created_at")) or utc_now_iso()
         normalized["updated_at"] = _as_str(normalized.get("updated_at")) or utc_now_iso()
         normalized["closure_ref"] = _as_str(normalized.get("closure_ref"))
+        normalized["consumed_by_batch_id"] = _as_str(normalized.get("consumed_by_batch_id"))
+        normalized["consumed_at"] = _as_str(normalized.get("consumed_at"))
+        normalized["superseded_by_gap_id"] = _as_str(normalized.get("superseded_by_gap_id"))
+        normalized["previous_gap_id"] = _as_str(normalized.get("previous_gap_id"))
         out.append(normalized)
     task["gaps_that_need_patching"] = out
     return out
@@ -3613,9 +3853,74 @@ def _upsert_task_gap(task: dict[str, Any], row: dict[str, Any]) -> None:
         prior_status = (_as_str(item.get("status")) or "open").lower()
         prior_retry_count = _coerce_nonneg_int(item.get("retry_count"), default=0)
         requested_status = (_as_str(row.get("status")) or "open").lower()
+        if requested_status not in {"open", "consumed", "closed", "exhausted", "human_blocked", "verified", "patched"}:
+            requested_status = "open"
+        # Consumed gaps stay immutable snapshots; unresolved conditions are tracked as child gaps.
+        if prior_status == "consumed" and requested_status == "open":
+            child_gap_id = _as_str(item.get("superseded_by_gap_id"))
+            child_row: dict[str, Any] | None = None
+            if child_gap_id:
+                for candidate in rows:
+                    if _as_str(candidate.get("gap_id")) == child_gap_id:
+                        child_row = candidate
+                        break
+            if child_row is None:
+                next_retry = max(prior_retry_count + 1, 1)
+                child_gap_id = f"{target_gap_id}.r{next_retry}"
+                while any(_as_str(candidate.get("gap_id")) == child_gap_id for candidate in rows):
+                    next_retry += 1
+                    child_gap_id = f"{target_gap_id}.r{next_retry}"
+                child_row = {
+                    "gap_id": child_gap_id,
+                    "status": "open",
+                    "category": _as_str(row.get("category")) or _as_str(item.get("category")) or "other",
+                    "severity": _as_str(row.get("severity")) or _as_str(item.get("severity")) or "P2",
+                    "stage": _as_str(row.get("stage")) or _as_str(item.get("stage")) or "dev",
+                    "reason_codes": [
+                        code
+                        for code in (_as_str(v) for v in row.get("reason_codes", []))
+                        if code
+                    ]
+                    or [
+                        code
+                        for code in (_as_str(v) for v in item.get("reason_codes", []))
+                        if code
+                    ]
+                    or ["gap_detected"],
+                    "retry_count": next_retry,
+                    "max_retries": max(
+                        1,
+                        _coerce_nonneg_int(
+                            row.get("max_retries"),
+                            default=_coerce_nonneg_int(item.get("max_retries"), default=5),
+                        ),
+                    ),
+                    "created_at": now,
+                    "updated_at": now,
+                    "closure_ref": _as_str(row.get("closure_ref")) or _as_str(item.get("closure_ref")),
+                    "previous_gap_id": target_gap_id,
+                }
+                rows.append(child_row)
+            else:
+                child_row.update(row)
+                child_row["updated_at"] = now
+                child_row["status"] = "open"
+                child_row["previous_gap_id"] = _as_str(child_row.get("previous_gap_id")) or target_gap_id
+                child_row["retry_count"] = max(
+                    _coerce_nonneg_int(child_row.get("retry_count"), default=0),
+                    prior_retry_count + 1,
+                )
+                child_row["max_retries"] = max(1, _coerce_nonneg_int(child_row.get("max_retries"), default=5))
+                child_row["reason_codes"] = [
+                    code for code in (_as_str(v) for v in child_row.get("reason_codes", [])) if code
+                ] or ["gap_detected"]
+            item["superseded_by_gap_id"] = child_gap_id
+            item["updated_at"] = now
+            task["gaps_that_need_patching"] = rows
+            return
         item.update(row)
         item["updated_at"] = now
-        item["status"] = _as_str(item.get("status")) or "open"
+        item["status"] = requested_status
         requested_retry_count = _coerce_nonneg_int(row.get("retry_count"), default=prior_retry_count)
         if prior_status == "closed" and requested_status == "open":
             item["retry_count"] = max(prior_retry_count + 1, requested_retry_count)
@@ -3623,15 +3928,26 @@ def _upsert_task_gap(task: dict[str, Any], row: dict[str, Any]) -> None:
             item["retry_count"] = requested_retry_count
         item["max_retries"] = max(1, _coerce_nonneg_int(item.get("max_retries"), default=5))
         item["reason_codes"] = [code for code in (_as_str(v) for v in item.get("reason_codes", [])) if code] or ["gap_detected"]
+        item["consumed_by_batch_id"] = _as_str(item.get("consumed_by_batch_id"))
+        item["consumed_at"] = _as_str(item.get("consumed_at"))
+        item["superseded_by_gap_id"] = _as_str(item.get("superseded_by_gap_id"))
+        item["previous_gap_id"] = _as_str(item.get("previous_gap_id"))
         task["gaps_that_need_patching"] = rows
         return
     inserted = dict(row)
-    inserted.setdefault("status", "open")
+    inserted_status = (_as_str(inserted.get("status")) or "open").lower()
+    if inserted_status not in {"open", "consumed", "closed", "exhausted", "human_blocked", "verified", "patched"}:
+        inserted_status = "open"
+    inserted["status"] = inserted_status
     inserted.setdefault("retry_count", 0)
     inserted.setdefault("max_retries", 5)
     inserted.setdefault("created_at", now)
     inserted["updated_at"] = now
     inserted["reason_codes"] = [code for code in (_as_str(v) for v in inserted.get("reason_codes", [])) if code] or ["gap_detected"]
+    inserted["consumed_by_batch_id"] = _as_str(inserted.get("consumed_by_batch_id"))
+    inserted["consumed_at"] = _as_str(inserted.get("consumed_at"))
+    inserted["superseded_by_gap_id"] = _as_str(inserted.get("superseded_by_gap_id"))
+    inserted["previous_gap_id"] = _as_str(inserted.get("previous_gap_id"))
     rows.append(inserted)
     task["gaps_that_need_patching"] = rows
 
@@ -3639,6 +3955,7 @@ def _upsert_task_gap(task: dict[str, Any], row: dict[str, Any]) -> None:
 def _close_task_gap(task: dict[str, Any], *, gap_id: str, closure_ref: str | None = None) -> None:
     rows = _normalize_task_gap_rows(task)
     now = utc_now_iso()
+    closed_ids: set[str] = set()
     for row in rows:
         if _as_str(row.get("gap_id")) != gap_id:
             continue
@@ -3654,6 +3971,32 @@ def _close_task_gap(task: dict[str, Any], *, gap_id: str, closure_ref: str | Non
         row["reason_codes"] = reason_codes or ["gap_closed_by_evidence"]
         if closure_ref:
             row["closure_ref"] = closure_ref
+        closed_ids.add(gap_id)
+    # If a child gap closes, close consumed parent snapshots in the same lineage.
+    changed = True
+    while changed:
+        changed = False
+        for row in rows:
+            parent_gap_id = _as_str(row.get("gap_id"))
+            child_gap_id = _as_str(row.get("superseded_by_gap_id"))
+            if not parent_gap_id or not child_gap_id:
+                continue
+            if child_gap_id not in closed_ids:
+                continue
+            if (_as_str(row.get("status")) or "").lower() != "consumed":
+                continue
+            row["status"] = "closed"
+            row["updated_at"] = now
+            reason_codes = [
+                code for code in (_as_str(item) for item in row.get("reason_codes", [])) if code
+            ]
+            if "gap_closed_by_evidence" not in reason_codes:
+                reason_codes.append("gap_closed_by_evidence")
+            row["reason_codes"] = reason_codes or ["gap_closed_by_evidence"]
+            if closure_ref and not _as_str(row.get("closure_ref")):
+                row["closure_ref"] = closure_ref
+            closed_ids.add(parent_gap_id)
+            changed = True
     task["gaps_that_need_patching"] = rows
 
 
@@ -3768,7 +4111,8 @@ def _refresh_task_embedded_gaps(repo_root: Path, plan_packets: dict[str, Any], t
         for row in list(_normalize_task_gap_rows(task)):
             if not isinstance(row, dict):
                 continue
-            if (_as_str(row.get("status")) or "").lower() != "open":
+            row_status = (_as_str(row.get("status")) or "").lower()
+            if row_status not in {"open", "consumed"}:
                 continue
             gap_id = _as_str(row.get("gap_id"))
             if not gap_id:
@@ -3885,7 +4229,7 @@ def _reconcile_task_embedded_gap_closures(repo_root: Path, task_state: dict[str,
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            if (_as_str(row.get("status")) or "").lower() != "open":
+            if (_as_str(row.get("status")) or "").lower() not in {"open", "consumed"}:
                 continue
             gap_id = _as_str(row.get("gap_id"))
             if not gap_id:
@@ -3927,7 +4271,8 @@ def _open_task_gap_ids(task_state: dict[str, Any], *, phase_id: str | None = Non
         if phase_id and (_as_str(task.get("phase_id")) or "phase-1") != phase_id:
             continue
         for row in _normalize_task_gap_rows(task):
-            if (_as_str(row.get("status")) or "").lower() != "open":
+            status = (_as_str(row.get("status")) or "").lower()
+            if status in {"closed", "verified", "patched"}:
                 continue
             gap_id = _as_str(row.get("gap_id"))
             if gap_id and gap_id not in seen:
@@ -4414,10 +4759,11 @@ def _manager_profile_cycle(
         if isinstance(worker, dict) and _as_str(worker.get("slot"))
     }
     out_workers: list[dict[str, Any]] = []
+    run_id = _run_id_from_lock_id(_as_str(build_state.get("loop_lock_id")))
     for slot in FIXED_WORKER_SLOTS:
         row = by_slot.get(slot)
         if not isinstance(row, dict):
-            row = _default_worker_row(slot)
+            row = _default_worker_row(slot, run_id=run_id)
         row["codex_profile_alias"] = _as_str(assignments.get(slot))
         row["updated_at"] = utc_now_iso()
         out_workers.append(row)
@@ -7087,6 +7433,14 @@ def _fresh_build_state_payload() -> dict[str, Any]:
         "slot_resume_policy": {},
         "resume_fail_counts_by_slot": {},
         "last_dispatch_cycle_summary": {},
+        "dead_pid_retry_counts": {},
+        "artifact_fan_in": {
+            "last_sync_at": None,
+            "worktrees_scanned": 0,
+            "evidence_files_synced": 0,
+            "handoff_rows_synced": 0,
+        },
+        "last_dead_pid_recovery": {},
         "state_recovery": {
             "last_recovery_at": None,
             "reason": None,
@@ -7169,12 +7523,34 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     payload.setdefault("slot_resume_policy", {})
     payload.setdefault("resume_fail_counts_by_slot", {})
     payload.setdefault("last_dispatch_cycle_summary", {})
+    payload.setdefault("dead_pid_retry_counts", {})
+    payload.setdefault(
+        "artifact_fan_in",
+        {
+            "last_sync_at": None,
+            "worktrees_scanned": 0,
+            "evidence_files_synced": 0,
+            "handoff_rows_synced": 0,
+        },
+    )
+    payload.setdefault("last_dead_pid_recovery", {})
     if not isinstance(payload.get("slot_resume_policy"), dict):
         payload["slot_resume_policy"] = {}
     if not isinstance(payload.get("resume_fail_counts_by_slot"), dict):
         payload["resume_fail_counts_by_slot"] = {}
     if not isinstance(payload.get("last_dispatch_cycle_summary"), dict):
         payload["last_dispatch_cycle_summary"] = {}
+    if not isinstance(payload.get("dead_pid_retry_counts"), dict):
+        payload["dead_pid_retry_counts"] = {}
+    if not isinstance(payload.get("artifact_fan_in"), dict):
+        payload["artifact_fan_in"] = {
+            "last_sync_at": None,
+            "worktrees_scanned": 0,
+            "evidence_files_synced": 0,
+            "handoff_rows_synced": 0,
+        }
+    if not isinstance(payload.get("last_dead_pid_recovery"), dict):
+        payload["last_dead_pid_recovery"] = {}
     payload.setdefault(
         "state_recovery",
         {
@@ -7654,6 +8030,11 @@ def _dispatch_task_packet(
     start_from_commit_override: str | None = None,
     test_source_branch_override: str | None = None,
     test_source_commit_override: str | None = None,
+    run_id: str | None = None,
+    is_gapfix: bool = False,
+    gap_batch_id: str | None = None,
+    source_gap_ids: list[str] | None = None,
+    gap_stage: str | None = None,
 ) -> dict[str, Any]:
     script = _resolve_skill_script("dispatch-worker-packet", "dispatch_worker_packet.py")
     task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
@@ -7704,7 +8085,7 @@ def _dispatch_task_packet(
     if not start_from_commit:
         start_from_commit = _git_text(req.repo_root, "rev-parse", "HEAD") or "HEAD"
     worktree_root = worktree_root_override or str(req.repo_root)
-    branch_name = branch_name_override or _branch_name_for_stage(slot_name, task_id, stage)
+    branch_name = branch_name_override or _branch_name_for_stage(slot_name, task_id, stage, run_id=run_id)
     payload = {
         "slot": slot_name,
         "role": cfg["role"],
@@ -7737,6 +8118,12 @@ def _dispatch_task_packet(
         "lane_id": lane_id,
         "test_source_branch": _as_str(test_source_branch_override) or None,
         "test_source_commit": _as_str(test_source_commit_override) or None,
+        "is_gapfix": bool(is_gapfix),
+        "gap_batch_id": _as_str(gap_batch_id) or None,
+        "gap_stage": (_as_str(gap_stage) or "").lower() or None,
+        "source_gap_ids": [
+            gap_id for gap_id in (_as_str(item) for item in (source_gap_ids or [])) if gap_id
+        ],
         "dry_run": req.dry_run,
         "cycle_note": f"/op-build:{stage}:{task_id}",
     }
@@ -7754,7 +8141,7 @@ def _dispatch_task_packet(
             task["developer_branch"] = _as_str(payload.get("branch_name"))
         else:
             source_branch_for_stage = _as_str(start_from_branch_override)
-            if source_branch_for_stage.startswith("codex/dev-") and not _as_str(task.get("developer_branch")):
+            if re.match(r"^codex/[^/]+/dev-[^/]+/", source_branch_for_stage) and not _as_str(task.get("developer_branch")):
                 task["developer_branch"] = source_branch_for_stage
         task["last_progress_at"] = utc_now_iso()
         attempts = task.get("attempts")
@@ -7867,6 +8254,15 @@ def _load_work_dispatch_plan_assignments(
         next_role = _as_str(row.get("next_role"))
         slot = _as_str(row.get("slot"))
         dispatch_policy = _as_str(row.get("dispatch_policy")) or "resume_if_same_lane"
+        is_gapfix = _as_bool_field(row.get("is_gapfix"))
+        gap_batch_id = _as_str(row.get("gap_batch_id"))
+        gap_stage = (_as_str(row.get("gap_stage")) or "").lower() or None
+        source_gap_ids_raw = row.get("source_gap_ids")
+        source_gap_ids = (
+            [item for item in (_as_str(v) for v in source_gap_ids_raw) if item]
+            if isinstance(source_gap_ids_raw, list)
+            else []
+        )
         if not task_id or not lane_id or not phase_id or not next_stage or not next_role or not slot:
             warnings.append(
                 {
@@ -7900,6 +8296,40 @@ def _load_work_dispatch_plan_assignments(
                 }
             )
             continue
+        if is_gapfix:
+            if not gap_batch_id:
+                warnings.append(
+                    {
+                        "code": "dispatch_assignment_invalid",
+                        "message": f"assignment #{idx + 1} gapfix row missing gap_batch_id",
+                        "stage": "build_loop",
+                        "artifact": str(path),
+                        "index": idx,
+                    }
+                )
+                continue
+            if gap_stage not in {"dev", "test", "review"}:
+                warnings.append(
+                    {
+                        "code": "dispatch_assignment_invalid",
+                        "message": f"assignment #{idx + 1} gapfix row has invalid gap_stage={gap_stage}",
+                        "stage": "build_loop",
+                        "artifact": str(path),
+                        "index": idx,
+                    }
+                )
+                continue
+            if not source_gap_ids:
+                warnings.append(
+                    {
+                        "code": "dispatch_assignment_invalid",
+                        "message": f"assignment #{idx + 1} gapfix row missing source_gap_ids",
+                        "stage": "build_loop",
+                        "artifact": str(path),
+                        "index": idx,
+                    }
+                )
+                continue
         if expected_active_phase and phase_id != expected_active_phase:
             continue
         out.append(
@@ -7911,6 +8341,10 @@ def _load_work_dispatch_plan_assignments(
                 "next_role": next_role,
                 "slot": slot,
                 "dispatch_policy": dispatch_policy,
+                "is_gapfix": is_gapfix,
+                "gap_batch_id": gap_batch_id,
+                "gap_stage": gap_stage,
+                "source_gap_ids": source_gap_ids,
             }
         )
     if not out:
@@ -7948,6 +8382,7 @@ def _dispatch_next_task_from_assignments(
         "test": {TASK_STATUS_DEV_DONE},
         "review": {TASK_STATUS_TESTS_DONE},
     }
+    run_id = _run_id_from_lock_id(_as_str(build_state.get("loop_lock_id")))
     dispatch_window = build_state.get("dispatch_window") if isinstance(build_state.get("dispatch_window"), dict) else {}
     max_dispatch_per_cycle = max(1, _coerce_nonneg_int(dispatch_window.get("max_assignments_per_cycle"), default=3))
     slot_resume_policy = build_state.get("slot_resume_policy")
@@ -7971,7 +8406,7 @@ def _dispatch_next_task_from_assignments(
     ) -> None:
         row = workers_by_slot.get(slot_name)
         if not isinstance(row, dict):
-            row = _default_worker_row(slot_name)
+            row = _default_worker_row(slot_name, run_id=run_id)
             registry_workers.append(row)
             workers_by_slot[slot_name] = row
         _apply_slot_lane_transition(row, lane_value)
@@ -8022,6 +8457,9 @@ def _dispatch_next_task_from_assignments(
                 "lane_id": _as_str(row.get("lane_id")),
                 "next_stage": _as_str(row.get("next_stage")),
                 "dispatch_policy": _as_str(row.get("dispatch_policy")),
+                "is_gapfix": _as_bool_field(row.get("is_gapfix")),
+                "gap_batch_id": _as_str(row.get("gap_batch_id")),
+                "gap_stage": _as_str(row.get("gap_stage")),
                 "status": status,
                 "reason_code": reason_code,
                 "duration_ms": int(max(0.0, (time.perf_counter() - started_at) * 1000.0)),
@@ -8057,6 +8495,14 @@ def _dispatch_next_task_from_assignments(
         next_stage = _as_str(row.get("next_stage"))
         slot_name = _as_str(row.get("slot"))
         dispatch_policy = _as_str(row.get("dispatch_policy")) or "resume_if_same_lane"
+        is_gapfix = _as_bool_field(row.get("is_gapfix"))
+        gap_batch_id = _as_str(row.get("gap_batch_id"))
+        gap_stage = (_as_str(row.get("gap_stage")) or "").lower() or None
+        source_gap_ids = [
+            gap_id
+            for gap_id in (_as_str(item) for item in (row.get("source_gap_ids") if isinstance(row.get("source_gap_ids"), list) else []))
+            if gap_id
+        ]
         if dispatched_count >= max_dispatch_per_cycle:
             _record_assignment_observation(
                 row=row,
@@ -8102,7 +8548,16 @@ def _dispatch_next_task_from_assignments(
             )
             continue
         status = _normalize_task_status(task.get("status"))
-        if status not in stage_status_requirements[next_stage]:
+        allowed_statuses = stage_status_requirements[next_stage]
+        if is_gapfix and next_stage == "dev":
+            allowed_statuses = {
+                TASK_STATUS_PENDING,
+                TASK_STATUS_DEV_DONE,
+                TASK_STATUS_TESTS_DONE,
+                TASK_STATUS_REVIEW_DONE,
+                TASK_STATUS_BLOCKED,
+            }
+        if status not in allowed_statuses:
             _record_assignment_observation(
                 row=row,
                 status="skipped",
@@ -8117,7 +8572,7 @@ def _dispatch_next_task_from_assignments(
         if not worktree_root or not branch_name:
             if req.dry_run:
                 worktree_root = str(req.repo_root)
-                branch_name = f"codex/{slot_name}/{task_id.lower()}"
+                branch_name = _branch_name_for_stage(slot_name, task_id, next_stage, run_id=run_id)
                 all_warnings.append(
                     {
                         "code": "dispatch_assignment_invalid",
@@ -8168,6 +8623,33 @@ def _dispatch_next_task_from_assignments(
         start_from_commit_override: str | None = None
         test_source_branch_override: str | None = None
         test_source_commit_override: str | None = None
+        if is_gapfix and next_stage == "dev":
+            dev_branch = _developer_source_branch(task)
+            if dev_branch:
+                branch_name = dev_branch
+                start_from_branch_override = dev_branch
+                start_from_commit_override = _git_text(req.repo_root, "rev-parse", dev_branch)
+            elif gap_stage in {"test", "review"}:
+                all_warnings.append(
+                    {
+                        "code": "dispatch_assignment_missing_dev_branch",
+                        "message": (
+                            f"gapfix assignment for {task_id} requires existing developer branch "
+                            f"(gap_stage={gap_stage})"
+                        ),
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                        "slot": slot_name,
+                    }
+                )
+                _record_assignment_observation(
+                    row=row,
+                    status="skipped",
+                    reason_code="dispatch_assignment_missing_dev_branch",
+                    started_at=started,
+                    warning_codes=["dispatch_assignment_missing_dev_branch"],
+                )
+                continue
         if next_stage in {"test", "review"}:
             source_branch = _developer_source_branch(task)
             if not source_branch:
@@ -8214,7 +8696,7 @@ def _dispatch_next_task_from_assignments(
                 continue
             start_from_branch_override = source_branch
             start_from_commit_override = source_commit
-            branch_name = _branch_name_for_stage(slot_name, task_id, next_stage)
+            branch_name = _branch_name_for_stage(slot_name, task_id, next_stage, run_id=run_id)
             if next_stage == "test":
                 test_source_branch_override = source_branch
                 test_source_commit_override = source_commit
@@ -8311,6 +8793,11 @@ def _dispatch_next_task_from_assignments(
             start_from_commit_override=start_from_commit_override,
             test_source_branch_override=test_source_branch_override,
             test_source_commit_override=test_source_commit_override,
+            run_id=run_id,
+            is_gapfix=is_gapfix,
+            gap_batch_id=gap_batch_id,
+            source_gap_ids=source_gap_ids,
+            gap_stage=gap_stage,
         )
         dispatch_payload_for_warnings = result.get("dispatch") if isinstance(result.get("dispatch"), dict) else {}
         warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
@@ -8542,6 +9029,7 @@ def _dispatch_next_task(
         for worker in registry_workers
         if isinstance(worker, dict) and _as_str(worker.get("slot"))
     }
+    run_id = _run_id_from_lock_id(_as_str(build_state.get("loop_lock_id")))
 
     def _persist_worker_slot_transition(
         *,
@@ -8553,7 +9041,7 @@ def _dispatch_next_task(
     ) -> None:
         row = workers_by_slot.get(slot_name)
         if not isinstance(row, dict):
-            row = _default_worker_row(slot_name)
+            row = _default_worker_row(slot_name, run_id=run_id)
             registry_workers.append(row)
             workers_by_slot[slot_name] = row
         _apply_slot_lane_transition(row, lane_value)
@@ -8672,6 +9160,7 @@ def _dispatch_next_task(
                 slot_name,
                 _as_str(task_payload.get("task_id")) or "TASK-UNKNOWN",
                 stage_name,
+                run_id=run_id,
             )
             if stage_name == "test":
                 test_source_branch_override = source_branch
@@ -8691,6 +9180,7 @@ def _dispatch_next_task(
             start_from_commit_override=start_from_commit_override,
             test_source_branch_override=test_source_branch_override,
             test_source_commit_override=test_source_commit_override,
+            run_id=run_id,
         )
         if _as_bool(result.get("ok"), default=False):
             dispatch_payload = result.get("dispatch") if isinstance(result.get("dispatch"), dict) else {}
@@ -8974,18 +9464,7 @@ def _manager_production_line_cycle(
                     next_stage = "review"
                 else:
                     continue
-                lane_tail = lane_id.rsplit("/", 1)[-1].lower()
-                slot_suffix = "1"
-                if lane_tail == "lane-b":
-                    slot_suffix = "2"
-                elif lane_tail == "lane-c":
-                    slot_suffix = "3"
-                if next_stage == "dev":
-                    slot = f"dev-{slot_suffix}"
-                elif next_stage == "test":
-                    slot = f"test-{slot_suffix}"
-                else:
-                    slot = f"review-{slot_suffix}"
+                slot = _slot_for_stage_and_lane(next_stage, lane_id)
                 assignments.append(
                     {
                         "task_id": task_id,
@@ -8995,6 +9474,10 @@ def _manager_production_line_cycle(
                         "next_role": next_role,
                         "slot": slot,
                         "dispatch_policy": "resume_if_same_lane",
+                        "is_gapfix": False,
+                        "gap_batch_id": None,
+                        "gap_stage": None,
+                        "source_gap_ids": [],
                     }
                 )
                 break
@@ -9023,6 +9506,261 @@ def _manager_production_line_cycle(
         "gaps_payload": {"schema_version": SCHEMA_VERSION, "gaps": []},
         "active_phase_id": active_phase_id,
         "phase_checks": phase_checks,
+    }
+
+
+def _is_human_required_gap(row: dict[str, Any]) -> bool:
+    reason_codes = row.get("reason_codes") if isinstance(row.get("reason_codes"), list) else []
+    for reason in reason_codes:
+        reason_text = (_as_str(reason) or "").lower()
+        if any(token in reason_text for token in HUMAN_BLOCKED_GAP_REASON_TOKENS):
+            return True
+    return False
+
+
+def _task_gap_stage_order(stage: str) -> int:
+    stage_key = (_as_str(stage) or "dev").lower()
+    if stage_key == "dev":
+        return 0
+    if stage_key == "test":
+        return 1
+    if stage_key == "review":
+        return 2
+    return 3
+
+
+def _gap_batch_artifact_path(repo_root: Path, task_id: str, batch_id: str) -> Path:
+    return (
+        repo_root
+        / "reports"
+        / "optimus-prime"
+        / "planning"
+        / "gapfix"
+        / task_id
+        / f"batch-{batch_id}.json"
+    )
+
+
+def _manager_gap_consumption_cycle(
+    req: OpRequest,
+    *,
+    plan_packets: dict[str, Any],
+    task_state: dict[str, Any],
+    build_state: dict[str, Any],
+    active_phase_id: str | None,
+) -> dict[str, Any]:
+    warnings: list[dict[str, Any]] = []
+    cycle = int(build_state.get("last_cycle", 0))
+    now = utc_now_iso()
+    plan_map = _plan_task_map(plan_packets)
+    task_map = _task_by_id(task_state)
+
+    dispatch_plan_path = _repo_path(req.repo_root, WORK_DISPATCH_PLAN_JSON)
+    existing_payload: dict[str, Any]
+    if dispatch_plan_path.exists():
+        try:
+            parsed = _read_json(dispatch_plan_path)
+        except OpError:
+            parsed = {}
+        existing_payload = parsed if isinstance(parsed, dict) else {}
+    else:
+        existing_payload = {}
+    existing_assignments_raw = existing_payload.get("assignments")
+    existing_assignments = existing_assignments_raw if isinstance(existing_assignments_raw, list) else []
+
+    lane_busy: set[str] = set()
+    for task in task_state.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        status = _normalize_task_status(task.get("status"))
+        if status not in {TASK_STATUS_DEV_WORKING, TASK_STATUS_TESTING, TASK_STATUS_REVIEWING}:
+            continue
+        lane_id = _as_str(task.get("lane_id")) or _as_str((plan_map.get(_as_str(task.get("task_id")) or "") or {}).get("lane_id"))
+        if lane_id:
+            lane_busy.add(lane_id)
+
+    gapfix_assignments: list[dict[str, Any]] = []
+    ledger_rows: list[dict[str, Any]] = []
+    active_gapfix_tasks: set[str] = set()
+    for task in sorted(
+        [row for row in task_state.get("tasks", []) if isinstance(row, dict)],
+        key=lambda row: _as_str(row.get("task_id")) or "TASK-UNKNOWN",
+    ):
+        task_id = _as_str(task.get("task_id"))
+        if not task_id:
+            continue
+        phase_id = _as_str(task.get("phase_id")) or _as_str((plan_map.get(task_id) or {}).get("phase_id")) or "phase-1"
+        if active_phase_id and phase_id != active_phase_id:
+            continue
+        lane_id = _as_str(task.get("lane_id")) or _as_str((plan_map.get(task_id) or {}).get("lane_id"))
+        if not lane_id:
+            continue
+        gapfix_state = _normalize_gapfix_state(task.get("gapfix_state"))
+        task["gapfix_state"] = gapfix_state
+        if gapfix_state.get("active"):
+            active_gapfix_tasks.add(task_id)
+        if lane_id in lane_busy:
+            continue
+        task_status = _normalize_task_status(task.get("status"))
+        if task_status in {TASK_STATUS_DEV_WORKING, TASK_STATUS_TESTING, TASK_STATUS_REVIEWING}:
+            continue
+        rows = _normalize_task_gap_rows(task)
+        open_by_stage: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            status = (_as_str(row.get("status")) or "open").lower()
+            if status in {"closed", "consumed"}:
+                continue
+            if _is_human_required_gap(row):
+                if status != "human_blocked":
+                    row["status"] = "human_blocked"
+                    row["updated_at"] = now
+                warnings.append(
+                    {
+                        "code": "gap_requires_human_action",
+                        "message": f"task {task_id} has gap requiring manual intervention",
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                        "gap_id": _as_str(row.get("gap_id")),
+                    }
+                )
+                continue
+            if status != "open":
+                continue
+            stage = (_as_str(row.get("stage")) or "dev").lower()
+            if stage not in {"dev", "test", "review"}:
+                stage = "dev"
+            open_by_stage.setdefault(stage, []).append(row)
+        if not open_by_stage:
+            if gapfix_state.get("active"):
+                gapfix_state["active"] = False
+                gapfix_state["active_batch_id"] = None
+                gapfix_state["batch_last_updated_at"] = now
+            continue
+        if gapfix_state.get("active"):
+            continue
+        selected_stage = sorted(open_by_stage.keys(), key=_task_gap_stage_order)[0]
+        selected_rows = sorted(
+            open_by_stage[selected_stage],
+            key=lambda row: _as_str(row.get("gap_id")) or "",
+        )
+        source_gap_ids = [_as_str(row.get("gap_id")) for row in selected_rows if _as_str(row.get("gap_id"))]
+        if not source_gap_ids:
+            continue
+        batch_fingerprint = _sha256("|".join(source_gap_ids))[:10]
+        batch_id = f"{task_id.lower()}-{selected_stage}-c{cycle}-{batch_fingerprint}"
+        consumed_gap_ids: list[str] = []
+        for row in selected_rows:
+            gap_id = _as_str(row.get("gap_id"))
+            if not gap_id:
+                continue
+            row["status"] = "consumed"
+            row["consumed_by_batch_id"] = batch_id
+            row["consumed_at"] = now
+            row["updated_at"] = now
+            consumed_gap_ids.append(gap_id)
+        gapfix_state["active"] = True
+        gapfix_state["active_batch_id"] = batch_id
+        gapfix_state["target_gap_stage"] = selected_stage
+        gapfix_state["consumed_gap_ids"] = consumed_gap_ids
+        gapfix_state["batch_started_cycle"] = cycle
+        gapfix_state["batch_last_updated_at"] = now
+        task["gapfix_state"] = gapfix_state
+        active_gapfix_tasks.add(task_id)
+        lane_busy.add(lane_id)
+        slot = _slot_for_stage_and_lane("dev", lane_id)
+        gapfix_assignments.append(
+            {
+                "task_id": task_id,
+                "lane_id": lane_id,
+                "phase_id": phase_id,
+                "next_stage": "dev",
+                "next_role": "developer",
+                "slot": slot,
+                "dispatch_policy": "resume_if_same_lane",
+                "is_gapfix": True,
+                "gap_batch_id": batch_id,
+                "gap_stage": selected_stage,
+                "source_gap_ids": consumed_gap_ids,
+            }
+        )
+        _atomic_write_json(
+            _gap_batch_artifact_path(req.repo_root, task_id, batch_id),
+            {
+                "schema_version": SCHEMA_VERSION,
+                "updated_at": now,
+                "task_id": task_id,
+                "phase_id": phase_id,
+                "lane_id": lane_id,
+                "batch_id": batch_id,
+                "target_gap_stage": selected_stage,
+                "source_gap_ids": consumed_gap_ids,
+                "gaps": selected_rows,
+            },
+        )
+        ledger_rows.append(
+            {
+                "timestamp": now,
+                "cycle": cycle,
+                "task_id": task_id,
+                "lane_id": lane_id,
+                "batch_id": batch_id,
+                "status": "scheduled",
+                "target_gap_stage": selected_stage,
+                "source_gap_ids": consumed_gap_ids,
+                "slot": slot,
+            }
+        )
+
+    final_assignments: list[dict[str, Any]] = []
+    taken_lanes: set[str] = set()
+    taken_tasks: set[str] = set()
+    for row in gapfix_assignments:
+        final_assignments.append(row)
+        taken_lanes.add(_as_str(row.get("lane_id")))
+        taken_tasks.add(_as_str(row.get("task_id")))
+    for row in existing_assignments:
+        if not isinstance(row, dict):
+            continue
+        task_id = _as_str(row.get("task_id"))
+        lane_id = _as_str(row.get("lane_id"))
+        if not task_id or not lane_id:
+            continue
+        if task_id in taken_tasks or lane_id in taken_lanes:
+            continue
+        enriched = dict(row)
+        enriched.setdefault("is_gapfix", False)
+        enriched.setdefault("gap_batch_id", None)
+        enriched.setdefault("gap_stage", None)
+        enriched.setdefault("source_gap_ids", [])
+        final_assignments.append(enriched)
+
+    _atomic_write_json(
+        dispatch_plan_path,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "active_phase_id": active_phase_id,
+            "assignments": final_assignments,
+        },
+    )
+    _atomic_write_json(
+        _repo_path(req.repo_root, GAP_CONSUMPTION_PLAN_JSON),
+        {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "active_phase_id": active_phase_id,
+            "assignments": gapfix_assignments,
+            "active_gapfix_task_ids": sorted(active_gapfix_tasks),
+        },
+    )
+    for row in ledger_rows:
+        _append_jsonl(_repo_path(req.repo_root, GAP_CONSUMPTION_LEDGER_JSONL), row)
+    return {
+        "warnings": warnings,
+        "assignments": final_assignments,
+        "gapfix_assignments": gapfix_assignments,
     }
 
 
@@ -9091,6 +9829,23 @@ def _task_is_merge_eligible(
     validation_errors = _validate_task_evidence_payload(payload, task_id, phase_id)
     if validation_errors:
         return False, "task_evidence_invalid"
+    latest_consumed_at: datetime | None = None
+    for row in _normalize_task_gap_rows(task):
+        if not isinstance(row, dict):
+            continue
+        if (_as_str(row.get("status")) or "").lower() != "consumed":
+            continue
+        consumed_at = _as_str(row.get("consumed_at")) or _as_str(row.get("updated_at"))
+        consumed_dt = _parse_iso_utc(consumed_at) if consumed_at else None
+        if consumed_dt is None:
+            continue
+        if latest_consumed_at is None or consumed_dt > latest_consumed_at:
+            latest_consumed_at = consumed_dt
+    evidence_updated_at = _parse_iso_utc(_as_str(payload.get("updated_at")))
+    if latest_consumed_at is not None and (
+        evidence_updated_at is None or evidence_updated_at <= latest_consumed_at
+    ):
+        return False, "gap_consumption_pending_recheck"
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     summary_result = (_as_str(summary.get("result")) or "").lower()
     reason_codes = summary.get("reason_codes") if isinstance(summary.get("reason_codes"), list) else []
@@ -9112,6 +9867,7 @@ def _manager_branch_merge_cycle(
     build_state: dict[str, Any],
 ) -> list[dict[str, Any]]:
     warnings: list[dict[str, Any]] = []
+    run_id = _run_id_from_lock_id(_as_str(build_state.get("loop_lock_id")))
     registry_path = _repo_path(req.repo_root, DONE_TASKS_REGISTRY_JSON)
     if registry_path.exists():
         payload = _read_json(registry_path)
@@ -9140,7 +9896,7 @@ def _manager_branch_merge_cycle(
         if eligible:
             merge_eligible_ids.append(task_id)
             continue
-        if reason_code in {"tdd_expectation_not_met", "task_evidence_invalid", "task_evidence_missing"}:
+        if reason_code in {"tdd_expectation_not_met", "task_evidence_invalid", "task_evidence_missing", "gap_consumption_pending_recheck"}:
             warnings.append(
                 {
                     "code": reason_code,
@@ -9196,7 +9952,7 @@ def _manager_branch_merge_cycle(
         branch_name = (
             _as_str(task.get("active_branch"))
             or _as_str(task.get("branch"))
-            or f"codex/dev-1/{task_id.lower()}"
+            or _branch_name_for_stage("dev-1", task_id, "dev", run_id=run_id)
         )
         merged_ok = False
         verification_ok = False
@@ -9799,6 +10555,7 @@ def _manager_workstation_cycle(
         out["fatal_code"] = "workstation_manager_missing_skill_fatal"
         out["fatal_message"] = fatal_message
         return out
+    run_id = _run_id_from_lock_id(_as_str(build_state.get("loop_lock_id")))
     script_path = str(script.resolve())
     prompt_template_path = WORKSTATION_MANAGER_PROMPT_TEMPLATE_PATH.resolve()
     prompt_template_text = (
@@ -9894,9 +10651,14 @@ def _manager_workstation_cycle(
         )
         task_row = task_map.get(active_task_id) if isinstance(task_map.get(active_task_id), dict) else {}
         task_status = _normalize_task_status(task_row.get("status")) if active_task_id else None
+        is_gapfix_assignment = _as_bool_field((assignment or {}).get("is_gapfix"))
         current_branch = _as_str(worker.get("branch"))
-        branch_prefix = f"codex/{slot}/"
-        current_branch_prefix_ok = bool(current_branch and current_branch.startswith(branch_prefix))
+        branch_prefixes = [f"codex/{slot}/"]
+        if run_id:
+            branch_prefixes.insert(0, f"codex/{run_id}/{slot}/")
+        current_branch_prefix_ok = bool(
+            current_branch and any(current_branch.startswith(prefix) for prefix in branch_prefixes)
+        )
         slot_stage = _as_str((assignment or {}).get("next_stage"))
         if slot_stage not in {"dev", "test", "review"}:
             if role == "tester":
@@ -9906,12 +10668,17 @@ def _manager_workstation_cycle(
             else:
                 slot_stage = "dev"
         task_branch = (
-            _branch_name_for_stage(slot, active_task_id, slot_stage)
+            _branch_name_for_stage(slot, active_task_id, slot_stage, run_id=run_id)
             if active_task_id
-            else _default_slot_branch(slot, role=role)
+            else _default_slot_branch(slot, role=role, run_id=run_id)
         )
         source_branch = _developer_source_branch(task_row) if slot_stage in {"test", "review"} else None
         task_base_ref = source_branch or "RAB-BASE"
+        if is_gapfix_assignment and role == "developer":
+            gapfix_branch = _developer_source_branch(task_row)
+            if gapfix_branch:
+                task_branch = gapfix_branch
+                task_base_ref = gapfix_branch
         if slot_stage in {"test", "review"} and active_task_id and not source_branch:
             warnings.append(
                 {
@@ -9926,7 +10693,6 @@ def _manager_workstation_cycle(
                 }
             )
             continue
-        current_branch_exact_match = bool(current_branch and task_branch and current_branch == task_branch)
         if (
             active_task_id
             and task_status in {TASK_STATUS_DEV_WORKING, TASK_STATUS_TESTING, TASK_STATUS_REVIEWING}
@@ -9935,7 +10701,6 @@ def _manager_workstation_cycle(
             and lane_id == prev_lane_id
             and current_worktree_matches_slot
             and current_branch_prefix_ok
-            and current_branch_exact_match
         ):
             warnings.append(
                 {
@@ -11159,6 +11924,18 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             active_phase_id = _as_str(production_out.get("active_phase_id"))
             phase_checks = production_out.get("phase_checks") if isinstance(production_out.get("phase_checks"), dict) else {}
 
+            _emit_build_progress(req, f"cycle {build_state['last_cycle']}: gap-consumption-manager")
+            gap_out = _manager_gap_consumption_cycle(
+                req,
+                plan_packets=merged_plan_packets,
+                task_state=task_state,
+                build_state=build_state,
+                active_phase_id=active_phase_id,
+            )
+            gap_warnings = gap_out.get("warnings", []) if isinstance(gap_out.get("warnings"), list) else []
+            warnings.extend(gap_warnings)
+            cycle_local_warnings.extend(gap_warnings)
+
             _emit_build_progress(req, f"cycle {build_state['last_cycle']}: branch-merge-manager")
             branch_warnings = _manager_branch_merge_cycle(
                 req,
@@ -11310,6 +12087,25 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             gaps_payload = production_out.get("gaps_payload") if isinstance(production_out.get("gaps_payload"), dict) else gaps_payload
             active_phase_id = _as_str(production_out.get("active_phase_id"))
             phase_checks = production_out.get("phase_checks") if isinstance(production_out.get("phase_checks"), dict) else phase_checks
+
+            _emit_build_progress(req, f"cycle {build_state['last_cycle']}: gap-consumption-manager")
+            gap_out = _manager_gap_consumption_cycle(
+                req,
+                plan_packets=merged_plan_packets,
+                task_state=task_state,
+                build_state=build_state,
+                active_phase_id=active_phase_id,
+            )
+            gap_warnings = gap_out.get("warnings", []) if isinstance(gap_out.get("warnings"), list) else []
+            warnings.extend(gap_warnings)
+            cycle_local_warnings.extend(gap_warnings)
+            task_watchdog_warnings = _apply_task_progress_watchdog(
+                task_state,
+                build_state,
+                plan_id=plan_id,
+            )
+            warnings.extend(task_watchdog_warnings)
+            cycle_local_warnings.extend(task_watchdog_warnings)
 
             history.append(
                 {
@@ -11553,6 +12349,16 @@ def command_build(req: OpRequest) -> dict[str, Any]:
                         if isinstance(recovery_production.get("phase_checks"), dict)
                         else phase_checks
                     )
+                    gap_out = _manager_gap_consumption_cycle(
+                        req,
+                        plan_packets=merged_plan_packets,
+                        task_state=task_state,
+                        build_state=build_state,
+                        active_phase_id=active_phase_id,
+                    )
+                    gap_warnings = gap_out.get("warnings", []) if isinstance(gap_out.get("warnings"), list) else []
+                    warnings.extend(gap_warnings)
+                    cycle_local_warnings.extend(gap_warnings)
                 dead_pid_assignments, dead_pid_warnings = _prepare_dead_pid_redispatch_assignments(
                     req.repo_root,
                     task_state,
@@ -12568,6 +13374,182 @@ def command_report(req: OpRequest) -> dict[str, Any]:
     )
 
 
+def _resume_status_from_gap_stage(stage: str, *, slot: str | None) -> str:
+    stage_key = stage.strip().lower()
+    if stage_key == "merge":
+        return TASK_STATUS_REVIEW_DONE
+    if stage_key == "review":
+        return TASK_STATUS_TESTS_DONE
+    if stage_key == "test":
+        return TASK_STATUS_DEV_DONE
+    if stage_key == "workstation":
+        slot_key = (slot or "").strip().lower()
+        if slot_key.startswith("review-"):
+            return TASK_STATUS_TESTS_DONE
+        if slot_key.startswith("test-"):
+            return TASK_STATUS_DEV_DONE
+        return TASK_STATUS_PENDING
+    return TASK_STATUS_PENDING
+
+
+def _resume_reset_exhausted_retries(repo_root: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    lock_snapshot = _load_build_lock_snapshot(repo_root)
+    if bool(lock_snapshot.get("exists")) and bool(lock_snapshot.get("pid_alive")):
+        active_pid = lock_snapshot.get("pid")
+        raise OpError(
+            "resume_reset_build_active",
+            f"cannot reset exhausted retries while build lock is active (pid={active_pid})",
+            stage="resume",
+        )
+    active_workers = _active_workers_count(repo_root)
+    if isinstance(active_workers, int) and active_workers > 0:
+        raise OpError(
+            "resume_reset_workers_active",
+            f"cannot reset exhausted retries while {active_workers} worker(s) are active",
+            stage="resume",
+        )
+
+    task_state_path = _repo_path(repo_root, TASK_EXECUTION_STATE_JSON)
+    if not task_state_path.exists():
+        raise OpError("resume_reset_task_state_missing", "TASK_EXECUTION_STATE.json is missing", stage="resume")
+    task_state_raw = _read_json(task_state_path)
+    if not isinstance(task_state_raw, dict):
+        raise OpError("resume_reset_task_state_invalid", "TASK_EXECUTION_STATE.json must be a JSON object", stage="resume")
+    task_state = task_state_raw
+
+    build_state_path = _repo_path(repo_root, BUILD_STATE_JSON)
+    if not build_state_path.exists():
+        raise OpError("resume_reset_build_state_missing", "BUILD_STATE.json is missing", stage="resume")
+    build_state = _load_build_state(build_state_path)
+
+    now = utc_now_iso()
+    reset_gap_ids: set[str] = set()
+    reset_task_ids: set[str] = set()
+    reset_gap_count = 0
+    reopened_task_count = 0
+
+    for task in task_state.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        task_id = _as_str(task.get("task_id"))
+        task["attempts"] = {"dev": 0, "test": 0, "review": 0}
+        task_watchdog = _normalize_progress_watchdog(task.get("progress_watchdog"))
+        task_watchdog["consecutive_no_forward_progress_cycles"] = 0
+        task_watchdog["last_forward_progress_cycle"] = 0
+        task_watchdog["triggered"] = False
+        task_watchdog["triggered_at"] = None
+        task_watchdog["_last_rank"] = _task_forward_progress_rank(_normalize_task_status(task.get("status")))
+        task_watchdog["_last_closed_gap_count"] = 0
+        task["progress_watchdog"] = task_watchdog
+        gapfix_state = _normalize_gapfix_state(task.get("gapfix_state"))
+        gapfix_state["active"] = False
+        gapfix_state["active_batch_id"] = None
+        gapfix_state["batch_last_updated_at"] = now
+        task["gapfix_state"] = gapfix_state
+        rows = _normalize_task_gap_rows(task)
+        reopened_candidates: list[tuple[int, str]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if (_as_str(row.get("status")) or "open").lower() != "open":
+                continue
+            retry_count = _coerce_nonneg_int(row.get("retry_count"), default=0)
+            max_retries = max(1, _coerce_nonneg_int(row.get("max_retries"), default=5))
+            if retry_count < max_retries:
+                continue
+            row["retry_count"] = 0
+            row["updated_at"] = now
+            reason_codes = [code for code in (_as_str(item) for item in row.get("reason_codes", [])) if code]
+            if "resume_retry_reset" not in reason_codes:
+                reason_codes.append("resume_retry_reset")
+            row["reason_codes"] = reason_codes or ["resume_retry_reset"]
+            gap_id = _as_str(row.get("gap_id"))
+            if gap_id:
+                reset_gap_ids.add(gap_id)
+            reset_gap_count += 1
+            if task_id:
+                reset_task_ids.add(task_id)
+            reopened_status = _resume_status_from_gap_stage(
+                _as_str(row.get("stage")) or "",
+                slot=_as_str(row.get("slot")),
+            )
+            rank = {
+                TASK_STATUS_PENDING: 0,
+                TASK_STATUS_DEV_DONE: 1,
+                TASK_STATUS_TESTS_DONE: 2,
+                TASK_STATUS_REVIEW_DONE: 3,
+            }.get(reopened_status, 0)
+            reopened_candidates.append((rank, reopened_status))
+        if reopened_candidates and _normalize_task_status(task.get("status")) == TASK_STATUS_BLOCKED:
+            reopened_candidates.sort(key=lambda item: item[0])
+            task["status"] = reopened_candidates[0][1]
+            task["owner_slot"] = None
+            task["last_progress_at"] = now
+            task["blocking_source"] = "none"
+            reopened_task_count += 1
+
+    build_state["gap_retry_attempts"] = {}
+
+    build_state["gap_retry_exhausted_ids"] = []
+
+    build_state["dead_pid_retry_counts"] = {}
+    build_state["resume_fail_counts_by_slot"] = {}
+    build_state["slot_resume_policy"] = {}
+    build_state["last_dispatch_cycle_summary"] = {}
+    build_state["last_assignment_observations"] = []
+    build_state["last_task_state_fingerprint"] = None
+    build_state["no_progress_watchdog"] = {
+        "consecutive_no_progress_cycles": 0,
+        "threshold_cycles": NO_PROGRESS_THRESHOLD_CYCLES,
+        "last_progress_at": now,
+        "triggered": False,
+        "triggered_at": None,
+    }
+    build_state["open_gap_ids"] = _open_task_gap_ids(task_state)
+    build_state["updated_at"] = now
+    build_state["retry_reset"] = {
+        "last_reset_at": now,
+        "reset_gap_ids": sorted(reset_gap_ids),
+        "reset_task_ids": sorted(reset_task_ids),
+    }
+
+    task_state["updated_at"] = now
+    _atomic_write_json(
+        _repo_path(repo_root, NO_PROGRESS_WATCHDOG_STATE_JSON),
+        {
+            "schema_version": SCHEMA_VERSION,
+            "last_cycle": _coerce_nonneg_int(build_state.get("last_cycle"), default=0),
+            "consecutive_no_progress_cycles": 0,
+            "threshold_cycles": NO_PROGRESS_THRESHOLD_CYCLES,
+            "last_progress_at": now,
+            "triggered": False,
+            "triggered_at": None,
+            "trigger_reason": None,
+        },
+    )
+    _atomic_write_json(task_state_path, task_state)
+    _atomic_write_json(build_state_path, build_state)
+
+    warning = {
+        "code": "resume_exhausted_retries_reset",
+        "message": (
+            "reset exhausted retry counters "
+            f"(gaps={reset_gap_count}, tasks_reopened={reopened_task_count})"
+        ),
+        "stage": "resume",
+        "reset_gap_count": reset_gap_count,
+        "reopened_task_count": reopened_task_count,
+    }
+    summary = {
+        "reset_requested": True,
+        "reset_gap_count": reset_gap_count,
+        "reopened_task_count": reopened_task_count,
+        "reset_gap_ids": sorted(reset_gap_ids),
+        "reset_task_ids": sorted(reset_task_ids),
+    }
+    return [warning], summary
+
+
 def command_resume(req: OpRequest) -> dict[str, Any]:
     build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
     if not build_state_path.exists():
@@ -12673,7 +13655,40 @@ def command_resume(req: OpRequest) -> dict[str, Any]:
             state_ref=str(build_state_path),
         )
 
+    reset_warnings: list[dict[str, Any]] = []
+    reset_summary: dict[str, Any] | None = None
+    if req.reset_exhausted_retries:
+        try:
+            reset_warnings, reset_summary = _resume_reset_exhausted_retries(req.repo_root)
+        except OpError as exc:
+            return _response(
+                req,
+                ok=False,
+                status="blocked_preflight",
+                summary="Resume blocked: failed to reset exhausted retries.",
+                errors=[
+                    {
+                        "code": exc.code,
+                        "message": exc.message,
+                        "stage": "resume",
+                    }
+                ],
+                next_action="Stop active /op-build workers and rerun /op-resume --reset-exhausted-retries.",
+                state_ref=str(build_state_path),
+            )
+
     out = command_build(req)
+    if reset_warnings:
+        existing = out.get("warnings")
+        if not isinstance(existing, list):
+            existing = []
+        out["warnings"] = [*reset_warnings, *existing]
+    if reset_summary is not None:
+        data = out.get("data")
+        if not isinstance(data, dict):
+            data = {}
+        data["resume_retry_reset"] = reset_summary
+        out["data"] = data
     if reconcile_warnings:
         existing = out.get("warnings")
         if not isinstance(existing, list):
@@ -12751,6 +13766,7 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         max_build_cycles=max_cycles_out,
         sleep_minutes=max(0.0, sleep_val),
         dry_run=_as_bool(payload.get("dry_run"), default=False),
+        reset_exhausted_retries=_as_bool(payload.get("reset_exhausted_retries"), default=False),
     )
 
 

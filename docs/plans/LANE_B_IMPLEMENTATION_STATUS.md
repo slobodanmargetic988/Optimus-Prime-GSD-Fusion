@@ -191,10 +191,13 @@ Diagram reference:
   - cycle wiring is managerized in deterministic order:
     1. `profile-manager`
     2. `production-line-manager`
-    3. `branch-merge-manager`
-    4. `workstation-manager`
-    5. controller tick
-    6. `work-dispatcher`
+    3. `gap-consumption-manager`
+    4. `branch-merge-manager`
+    5. `workstation-manager`
+    6. controller tick
+    7. `production-line-manager` (post-directive reconcile)
+    8. `gap-consumption-manager` (post-directive reconcile)
+    9. `work-dispatcher`
   - fixed 11-slot worker registry topology is enforced each build:
     - `dev-1..3`, `test-1..3`, `review-1..3`, `production-line-manager-1`, `branch-manager-1`
   - canonical runtime task statuses are active:
@@ -209,12 +212,20 @@ Diagram reference:
     - handoff writes `last_handoff_outcome` only and emits `handoff_non_authoritative_state_only` on fail/blocked outcomes
     - evidence sync applies expectation-aware transitions (including TDD red expected-fail progression) and sets `blocking_source` (`evidence|handoff|merge|none`)
   - task-embedded gaps are authoritative for strict-done, phase gating, status, and health; external gap artifacts are no longer runtime decision inputs
+  - `gap-consumption-manager` consumes open embedded gaps per task/lane stage (batched per task), writes:
+    - `reports/optimus-prime/planning/GAP_CONSUMPTION_PLAN.json`
+    - `reports/optimus-prime/planning/GAP_CONSUMPTION_LEDGER.jsonl`
+    - `reports/optimus-prime/planning/gapfix/<task_id>/batch-<id>.json`
+  - embedded gap lifecycle now supports `open|consumed|closed|exhausted|human_blocked` with parent/child linkage fields for rework chains
   - `WORK_DISPATCH_PLAN.json` is authoritative for dispatch decisions; dispatcher no longer performs direct fallback task scans
   - empty-assignment dispatch cycles are deterministic (`dispatch_plan_no_assignments`)
   - dispatch packets now consume workstation-prepared slot context (`worktree_root`, `branch`) from worker registry rows
   - `/op-build` response data includes current-cycle `assignment_observations` (artifact parity with `DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl`)
   - embedded gaps now support deterministic closure/reopen lifecycle with evidence-backed closure refs (`task_gap_closed`)
   - dispatcher supports same-lane thread continuation (`codex resume`) with deterministic fallback to fresh dispatch
+  - branch naming in active build loops is run-aware:
+    - `codex/<run_id>/<slot>/<task_slug>` (`-test` / `-review` suffixes for non-dev stages)
+    - when no loop lock context exists (isolated unit flows), helper fallback remains `codex/<slot>/...`
   - branch manager executes LLM-first merge actions with strict schema validation, explicit merge proof (`source_branch` ancestor of `RAB-BASE` HEAD), deterministic rollback to captured pre-merge HEAD on verification failure, and bounded retries; exhaustion emits `merge_manager_retry_exhausted` and blocks only the affected lane/task
   - branch manager retries are eligibility-aware:
     - merge candidate eligibility is re-checked each attempt and retries stop with `merge_candidate_lost_eligibility` if the task is no longer merge-ready
@@ -223,6 +234,13 @@ Diagram reference:
   - workstation manager enforces slot-specific worktree names (`workstation-dev-*`, `workstation-test-*`, `workstation-review-*`) and skips destructive prep only for same-lane in-progress slots with deterministic slot path + branch prefix `codex/<slot>/...`
   - production-line manager performs artifact fan-in from worker worktrees (`TASK_EVIDENCE.json` + handoff rows) before state reconciliation
   - dead PID recovery is evidence-first: reconcile from evidence when present, otherwise queue same-cycle same-slot redispatch with retry-watchdog metadata
+  - `/op-resume --reset-exhausted-retries` clears continuation-limit counters:
+    - gap retry maps
+    - dead-pid retry maps
+    - resume-fail-by-slot counters
+    - per-task stage attempts
+    - per-task progress watchdog counters
+    - global no-progress watchdog counters/state
 
 ## Runtime + Blocker Artifacts (Canonical)
 

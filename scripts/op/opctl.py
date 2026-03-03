@@ -131,6 +131,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-build-cycles", type=int)
     parser.add_argument("--sleep-minutes", type=float)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--reset-exhausted-retries", action="store_true")
     parser.add_argument("--json-pretty", action="store_true")
     return parser.parse_args()
 
@@ -166,6 +167,8 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["sleep_minutes"] = args.sleep_minutes
     if args.dry_run:
         payload["dry_run"] = True
+    if args.reset_exhausted_retries:
+        payload["reset_exhausted_retries"] = True
 
     payload.setdefault("repo_root", str(Path.cwd().resolve()))
     payload.setdefault("non_interactive", True)

@@ -47,13 +47,28 @@ Planning requirements:
      - review_expectation (expect_fail|expect_pass)
      - expected_failure_reason_codes[] (non-empty)
      - infra_failure_reason_codes[] (non-empty)
-4. Phase graph must be acyclic and task phase_id must map to a valid phase.
-5. Per phase, use at most 3 distinct lanes.
-6. TDD-first: each requirement and task must include verification intent.
+4. Every TASK_EXECUTION_STATE task row must include:
+   - gapfix_state object:
+     - active_batch_id (null on initialize)
+     - active (false on initialize)
+     - target_gap_stage (null on initialize)
+     - consumed_gap_ids ([] on initialize)
+     - batch_started_cycle (null on initialize)
+     - batch_last_updated_at (null on initialize)
+   - progress_watchdog object:
+     - task_started_cycle (null on initialize)
+     - last_forward_progress_cycle (null on initialize)
+     - consecutive_no_forward_progress_cycles (0 on initialize)
+     - threshold_cycles (25)
+     - triggered (false)
+     - triggered_at (null)
+5. Phase graph must be acyclic and task phase_id must map to a valid phase.
+6. Per phase, use at most 3 distinct lanes.
+7. TDD-first: each requirement and task must include verification intent.
    - phase-1 seed TDD tasks MUST use verification_contract.mode=tdd_red and expect_fail for dev/test/review.
-7. For each functionality tree with more than 2 tasks, include at least 2 terminal hardening/review tasks.
-8. PLAN_CHECK.passed must be true.
-9. Keep plan quality high enough for autonomous op-build execution.
+8. For each functionality tree with more than 2 tasks, include at least 2 terminal hardening/review tasks.
+9. PLAN_CHECK.passed must be true.
+10. Keep plan quality high enough for autonomous op-build execution.
 
 Strict output discipline:
 - Write only the required JSONL bundle file + required artifact content.
