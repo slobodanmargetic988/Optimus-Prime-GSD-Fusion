@@ -20,7 +20,7 @@ Use this skill to replace manual multi-step dispatch flow:
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dispatch-worker-packet/scripts/dispatch_worker_packet.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dispatch-worker-packet/scripts/dispatch_worker_packet.py`
 
 ## Input Contract
 
@@ -120,13 +120,13 @@ Generated packet includes:
 ### Dry run
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dispatch-worker-packet/scripts/dispatch_worker_packet.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dispatch-worker-packet/scripts/dispatch_worker_packet.py --input-json - --json-pretty
 {
   "slot": "dev-1",
   "role": "developer",
   "task_identifier": "MYO-156",
-  "repo_root": "/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion",
-  "worktree_root": "/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion",
+  "repo_root": "/Users/slobodan/projects/Optimus-Prime-GSD-Fusion",
+  "worktree_root": "/Users/slobodan/projects/Optimus-Prime-GSD-Fusion",
   "branch_name": "codex/dev-1/MYO-156",
   "start_from_branch": "main",
   "start_from_commit": "abc1234",

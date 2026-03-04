@@ -9,7 +9,7 @@ Goal: Produce lane plan for cycle controller hard-stop prevention.
 Inputs: product_goal: Deterministic cycle control and terminal-state enforcement.
 Inputs: target_users: Optimus Prime orchestrator.
 Inputs: scope_constraints: terminal reasons limited to 3 allowed reasons.
-Inputs: repo_root: /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion
+Inputs: repo_root: /Users/slobodan/projects/Optimus-Prime-GSD-Fusion
 Inputs: tdd_policy: strict-test-first
 ```
 
@@ -29,7 +29,7 @@ Goal: Extend from Lane A to full GSD fusion + packaging lanes.
 Inputs: product_goal: End-to-end autonomous coding workflow with deterministic gates.
 Inputs: target_users: Operator running multi-agent delivery loops.
 Inputs: scope_constraints: Keep Agents repo untouched; standalone implementation.
-Inputs: repo_root: /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion
+Inputs: repo_root: /Users/slobodan/projects/Optimus-Prime-GSD-Fusion
 Inputs: quality_gates: dev-self-check -> tester -> reviewer
 ```
 

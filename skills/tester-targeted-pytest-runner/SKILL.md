@@ -20,7 +20,7 @@ Behavior:
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py`
 
 ## Input Contract
 
@@ -61,12 +61,12 @@ Behavior:
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py --input-json - --json-pretty
 {
-  "worktree_root": "/Users/slobodan/Projects/Ouroboros/workstations/workstation-2",
+  "worktree_root": "/Users/slobodan/projects/Ouroboros/workstations/workstation-2",
   "task_identifier": "MYO-167",
-  "env_source": "/Users/slobodan/Projects/Ouroboros/.env",
-  "python_bin": "/Users/slobodan/Projects/Ouroboros/.venv/bin/python",
+  "env_source": "/Users/slobodan/projects/Ouroboros/.env",
+  "python_bin": "/Users/slobodan/projects/Ouroboros/.venv/bin/python",
   "runs": [
     {"name": "users_auth", "cmd": "pytest tests/users/test_auth.py -q", "required": true}
   ],

@@ -17,8 +17,8 @@
 ## Lane A (implemented)
 Deterministic cycle controller core and stop-prevention rules.
 
-- Spec: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_PHASE1_PLAN.md`
-- Status: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_IMPLEMENTATION_STATUS.md`
+- Spec: `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_PHASE1_PLAN.md`
+- Status: `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_IMPLEMENTATION_STATUS.md`
 
 ## Lane B (implemented)
 Full GSD fusion capabilities: planning lifecycle, plan gates, test-first contracts, UAT/gap closure, reliability layer.
@@ -29,8 +29,8 @@ Full GSD fusion capabilities: planning lifecycle, plan gates, test-first contrac
 - Current posture: baseline implemented, with active redesign/hardening continuing until repeated canary runs satisfy user vision and expectations.
 - Next lane focus: Lane C packaging/installer UX and private prerelease validation.
 
-- Spec: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_B_FULL_GSD_FUSION_PLAN.md`
-- Status: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_B_IMPLEMENTATION_STATUS.md`
+- Spec: `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_B_FULL_GSD_FUSION_PLAN.md`
+- Status: `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_B_IMPLEMENTATION_STATUS.md`
 
 ## Lane C (in progress)
 Installable product packaging, command UX, diagnostics, docs, and release framework.
@@ -38,19 +38,19 @@ Installable product packaging, command UX, diagnostics, docs, and release framew
 - Implemented now: deterministic GitHub-first release bundle builder + checksum artifacts, install/update/uninstall/doctor commands, product `opctl` wrapper, private release fetch/auth installer path, release publish workflow, and private smoke matrix workflow.
 - Pending next: first real private prerelease execution (`vX.Y.Z-rc.N`) and green smoke evidence across macOS/Linux + global/local.
 
-- Spec: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_C_INSTALLABLE_PRODUCT_PLAN.md`
-- Status: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_C_IMPLEMENTATION_STATUS.md`
+- Spec: `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_C_INSTALLABLE_PRODUCT_PLAN.md`
+- Status: `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_C_IMPLEMENTATION_STATUS.md`
 
 ## Sequencing Rule
 Lane A -> Lane B -> Lane C, with Lane D and Lane E as post-core extension lanes.
 
 ## Diagrams
-1. [Diagram index](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/README.md)
-2. [Lane A diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_A_FLOW_DIAGRAMS.md)
-3. [Lane B diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_B_FLOW_DIAGRAMS.md)
-4. [Lane C diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_C_FLOW_DIAGRAMS.md)
-5. [Lane D diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_D_FLOW_DIAGRAMS.md)
-6. [Lane E diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_E_FLOW_DIAGRAMS.md)
+1. [Diagram index](/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/README.md)
+2. [Lane A diagrams](/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_A_FLOW_DIAGRAMS.md)
+3. [Lane B diagrams](/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_B_FLOW_DIAGRAMS.md)
+4. [Lane C diagrams](/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_C_FLOW_DIAGRAMS.md)
+5. [Lane D diagrams](/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_D_FLOW_DIAGRAMS.md)
+6. [Lane E diagrams](/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_E_FLOW_DIAGRAMS.md)
 
 Policy:
 1. Behavior-changing lane PRs must update the corresponding diagram file in the same PR.

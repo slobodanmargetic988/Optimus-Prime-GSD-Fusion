@@ -33,7 +33,7 @@ opctl update \
   --repo-name Optimus-Prime-GSD-Fusion \
   --channel prerelease \
   --mode local \
-  --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion \
+  --repo-root /Users/slobodan/projects/Optimus-Prime-GSD-Fusion \
   --json-pretty
 ```
 

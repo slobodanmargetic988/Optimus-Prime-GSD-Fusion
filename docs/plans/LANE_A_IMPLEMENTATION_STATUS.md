@@ -50,4 +50,4 @@ Optimus must not finish run or print final done summary unless:
 - [x] Added deterministic workstation asset hydration tracker/manifest support in `workstation-preparation`.
 - [x] Added per-slot readiness state file for dispatch gating (`WORKSTATION_ASSET_STATE.json`).
 - [x] Added manifest example and hydration tests.
-- See: `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_WORKSTATION_HYDRATION_ADDENDUM.md`
+- See: `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_WORKSTATION_HYDRATION_ADDENDUM.md`

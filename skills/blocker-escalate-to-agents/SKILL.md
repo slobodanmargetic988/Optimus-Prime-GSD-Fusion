@@ -21,7 +21,7 @@ Behavior:
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/blocker-escalate-to-agents/scripts/blocker_escalate_to_agents.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/blocker-escalate-to-agents/scripts/blocker_escalate_to_agents.py`
 
 ## Input Contract
 
@@ -71,7 +71,7 @@ Fields include:
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/blocker-escalate-to-agents/scripts/blocker_escalate_to_agents.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/blocker-escalate-to-agents/scripts/blocker_escalate_to_agents.py --input-json - --json-pretty
 {
   "blocker_kind": "worktree",
   "title": "Branch checkout blocked by active worktree",
@@ -84,7 +84,7 @@ cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/
   "project_name": "Agents",
   "assignee": "me",
   "dry_run": true,
-  "repo_root": "/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion"
+  "repo_root": "/Users/slobodan/projects/Optimus-Prime-GSD-Fusion"
 }
 JSON
 ```

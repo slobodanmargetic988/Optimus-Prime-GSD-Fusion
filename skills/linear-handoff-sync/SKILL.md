@@ -24,7 +24,7 @@ Default local sync log path:
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/linear-handoff-sync/scripts/linear_handoff_sync.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/linear-handoff-sync/scripts/linear_handoff_sync.py`
 
 ## Input Contract
 
@@ -69,7 +69,7 @@ Tool behavior:
 ### Dry run
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/linear-handoff-sync/scripts/linear_handoff_sync.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/linear-handoff-sync/scripts/linear_handoff_sync.py --input-json - --json-pretty
 {
   "issue_identifier": "MYO-155",
   "target_phase": "agent_testing",
@@ -90,11 +90,11 @@ JSON
 
 ```bash
 LINEAR_API_KEY="<your-key>" \
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/linear-handoff-sync/scripts/linear_handoff_sync.py \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/linear-handoff-sync/scripts/linear_handoff_sync.py \
   --issue-identifier MYO-155 \
   --target-phase agent_testing \
   --summary-payload-json '{"task_identifier":"MYO-155","branch":"codex/dev-1/MYO-155","head_commit":"abc123","decision":"ready_for_review","checks":[{"name":"unit","result":"pass"}],"blockers":[]}' \
-  --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion \
+  --repo-root /Users/slobodan/projects/Optimus-Prime-GSD-Fusion \
   --json-pretty
 ```
 

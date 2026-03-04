@@ -9,7 +9,7 @@ Runs planning bootstrap end-to-end and stops with a summary. It does not start b
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py`
 
 ## Required Inputs
 
@@ -19,9 +19,9 @@ Runs planning bootstrap end-to-end and stops with a summary. It does not start b
 ## Usage
 
 ```bash
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py \
   --command /op-initialize \
-  --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion \
+  --repo-root /Users/slobodan/projects/Optimus-Prime-GSD-Fusion \
   --mission "Ship MyBoard milestone" \
   --scope "Board workflows and collaboration" \
   --constraint "No legacy compatibility" \

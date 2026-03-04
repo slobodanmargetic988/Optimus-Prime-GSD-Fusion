@@ -25,13 +25,13 @@ Outputs:
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/thread-token-audit/scripts/thread_token_audit.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/thread-token-audit/scripts/thread_token_audit.py`
 
 ## Input Contract
 
 ```json
 {
-  "repo_root": "/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion",
+  "repo_root": "/Users/slobodan/projects/Optimus-Prime-GSD-Fusion",
   "thread_history_path": "reports/optimus-prime/THREAD_HISTORY.log",
   "worker_registry_path": "reports/optimus-prime/WORKER_REGISTRY.json",
   "output_json_path": "reports/optimus-prime/THREAD_TOKEN_USAGE_SUMMARY.json",
@@ -50,9 +50,9 @@ Notes:
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/thread-token-audit/scripts/thread_token_audit.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/thread-token-audit/scripts/thread_token_audit.py --input-json - --json-pretty
 {
-  "repo_root": "/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion"
+  "repo_root": "/Users/slobodan/projects/Optimus-Prime-GSD-Fusion"
 }
 JSON
 ```

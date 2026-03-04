@@ -19,7 +19,7 @@ Use this skill to run the shared-environment testing train model:
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/test-train-manager/scripts/test_train_manager.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/test-train-manager/scripts/test_train_manager.py`
 
 ## Core Actions
 
@@ -37,7 +37,7 @@ Use this skill to run the shared-environment testing train model:
 
 ```json
 {
-  "repo_root": "/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion",
+  "repo_root": "/Users/slobodan/projects/Optimus-Prime-GSD-Fusion",
   "action": "evaluate_promotion_gate",
   "test_branch": "test",
   "test_next_branch": "test-next",

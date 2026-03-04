@@ -9,7 +9,7 @@ Creates baseline planning artifacts under `reports/optimus-prime/planning/`.
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py`
 
 ## Required Inputs
 
@@ -19,9 +19,9 @@ Creates baseline planning artifacts under `reports/optimus-prime/planning/`.
 ## Usage
 
 ```bash
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py \
   --command /op-new-project \
-  --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion \
+  --repo-root /Users/slobodan/projects/Optimus-Prime-GSD-Fusion \
   --mission "Ship MyBoard milestone" \
   --scope "Board workflows and collaboration" \
   --constraint "No legacy compatibility" \

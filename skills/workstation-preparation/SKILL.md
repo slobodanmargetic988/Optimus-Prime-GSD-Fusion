@@ -122,4 +122,4 @@ python3 /Users/slobodan/.codex/skills/workstation-preparation/scripts/prepare_wo
 - If requested branch is currently checked out in another worktree, command fails unless `--branch-in-use-fallback-suffix` is provided.
 - New slots are created under `<repo-parent>/<repo-name>-workstations` by default. Override with `--worktrees-parent` when needed.
 - Manifest format example:
-  - `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/workstation-preparation/references/workstation_assets_manifest.example.json`
+  - `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/workstation-preparation/references/workstation_assets_manifest.example.json`

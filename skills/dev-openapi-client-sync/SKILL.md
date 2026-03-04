@@ -19,7 +19,7 @@ It performs:
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py`
 
 ## Input Contract
 
@@ -56,9 +56,9 @@ Optional:
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py --input-json - --json-pretty
 {
-  "repo_root": "/Users/slobodan/Projects/Ouroboros",
+  "repo_root": "/Users/slobodan/projects/Ouroboros",
   "openapi_output": "/tmp/myboard-openapi/openapi.json",
   "client_root": "web/nuxt-app",
   "export_command": "python manage.py spectacular --file {openapi_output}",

@@ -89,7 +89,7 @@ Goal: Finish first 20 ready tasks in MYO backlog with deterministic handoff loop
 Inputs: primary_mission: Complete first 20 ready MYO tasks from current sprint with full dev/test/review chain.
 Inputs: task_source: Linear team Myownmint, project Ouroboros, status Ready, ordered by priority then age.
 Inputs: repo_root: ../Ouroboros
-Inputs: worktrees_parent: /Users/slobodan/Projects/.Ouroboros-workstations
+Inputs: worktrees_parent: /Users/slobodan/projects/.Ouroboros-workstations
 Inputs: tracking_mode: automated-handoff
 Inputs: agent_root_path: agents
 Inputs: standards_source: agents/agent-making-agent/README.md

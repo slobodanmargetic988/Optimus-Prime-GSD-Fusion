@@ -23,7 +23,7 @@ It also supports a stop-authorization verification mode so Optimus cannot end ea
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py`
 
 ## Terminal Conditions
 
@@ -61,14 +61,14 @@ Optional:
 - `emit_stdout` (default `true`)
 
 See detailed schemas in:
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/references/contracts.md`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/references/contracts.md`
 
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py --input-json - --json-pretty
 {
-  "repo_root": "/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion",
+  "repo_root": "/Users/slobodan/projects/Optimus-Prime-GSD-Fusion",
   "sleep_minutes": 5,
   "profile_aliases": ["codex", "codex-second"],
   "dry_run": true,
@@ -80,8 +80,8 @@ JSON
 ### Verify terminal stop authorization
 
 ```bash
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py \
-  --verify-final-state /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/controller/FINAL_STATE.json \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py \
+  --verify-final-state /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/controller/FINAL_STATE.json \
   --json-pretty
 ```
 

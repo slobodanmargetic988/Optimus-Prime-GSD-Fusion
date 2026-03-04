@@ -3,7 +3,7 @@
 Updated: 2026-03-02
 
 Diagram reference:
-1. [Lane B diagrams](/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_B_FLOW_DIAGRAMS.md)
+1. [Lane B diagrams](/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_B_FLOW_DIAGRAMS.md)
 2. If behavior diverges from diagrams, add explicit `diagram drift` note until reconciled.
 
 ## Vision Lock (for future reviews)
@@ -273,11 +273,11 @@ Run:
 
 ```bash
 python3 -m pytest \
-  /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/op/tests \
-  /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/runtime-coordinator/tests/test_runtime_coordinator.py \
-  /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/test-train-manager/tests/test_test_train_manager.py \
-  /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py \
-  /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py
+  /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/op/tests \
+  /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/runtime-coordinator/tests/test_runtime_coordinator.py \
+  /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/test-train-manager/tests/test_test_train_manager.py \
+  /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dispatch-worker-packet/tests/test_dispatch_worker_packet.py \
+  /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py
 ```
 
 ## Lane B Status (Active Redesign + Hardening)

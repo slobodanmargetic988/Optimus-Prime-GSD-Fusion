@@ -65,8 +65,8 @@ Observed in:
 1. Canary #4 (2026-03-02)
 
 Evidence:
-1. `opctl /op-status --repo-root /Users/slobodan/Projects/MyBoard --json-pretty`
-2. `opctl /op-report --repo-root /Users/slobodan/Projects/MyBoard --json-pretty`
+1. `opctl /op-status --repo-root /Users/slobodan/projects/MyBoard --json-pretty`
+2. `opctl /op-report --repo-root /Users/slobodan/projects/MyBoard --json-pretty`
 
 ### F-20260303-WS-LAUNCH-STALL-001
 Status: open

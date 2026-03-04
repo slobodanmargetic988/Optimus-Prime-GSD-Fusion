@@ -80,7 +80,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 ### Tester Preflight Resolver Quick Use
 - Run `tester-preflight-resolver` before any test execution. Treat it as mandatory packet preflight.
 - Minimal invocation:
-  - `python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/tester-preflight-resolver/scripts/tester_preflight_resolver.py --input-json -`
+  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/tester-preflight-resolver/scripts/tester_preflight_resolver.py --input-json -`
   - payload fields: `worktree_root`, `task_identifier`, `branch_name`, `start_from_branch`, `start_from_commit`, optional `target_head_commit`, `fallback_suffix`, `allow_fallback`, `dry_run`
 - Orchestration-relevant output fields:
   - `intended_branch`, `resolved_branch`, `fallback_used`, `branch_exists`, `fallback_created`, `resolved_head_commit`, `lineage_ok`, `head_matches_target`, `next_step`
@@ -89,7 +89,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 ### Tester Targeted Pytest Runner Quick Use
 - Use `tester-targeted-pytest-runner` as the standard path for targeted runtime checks and decision hint generation.
 - Minimal invocation:
-  - `python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py --input-json -`
+  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py --input-json -`
   - payload fields: `worktree_root`, `task_identifier`, `env_source`, `python_bin`, `runs[]`, optional `timeout_sec`, optional per-run `timeout_sec`, optional `db_precheck`, `stop_on_blocked`, `dry_run`
 - Orchestration-relevant output fields:
   - `decision_hint`, `runs[]` (`result`, `summary`, `snippet`, `signature`, `timeout_sec`), `blocker_class`, `host_rerun_commands`
@@ -98,7 +98,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 ### Tester Handoff Summary Builder Quick Use
 - Use `tester-handoff-summary-builder` to emit the final strict tester summary payload for Optimus.
 - Minimal invocation:
-  - `python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/tester-handoff-summary-builder/scripts/tester_handoff_summary_builder.py --input-json -`
+  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/tester-handoff-summary-builder/scripts/tester_handoff_summary_builder.py --input-json -`
   - payload fields: `task_identifier`, `resolved_branch`, `start_from_branch`, `start_from_commit`, `head_commit`, optional `preflight_json_path`, `test_results_json_path`, `decision_override`, optional `include_metadata`, `findings`, `blockers`, `dry_run`
 - Orchestration-relevant output fields:
   - `checks[]`, `decision`, `findings`, `blockers`

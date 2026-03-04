@@ -1,6 +1,6 @@
 # Lane A Imported Assets Manifest
 
-Copied from /Users/slobodan/Projects/Agents:
+Copied from /Users/slobodan/projects/Agents:
 
 - `agents/optimus-prime`
 - `agents/optimus-fullstack-developer`

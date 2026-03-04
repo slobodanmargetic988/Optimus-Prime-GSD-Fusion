@@ -21,7 +21,7 @@ Default profile storage root:
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-ephemeral-db-runner/scripts/dev_ephemeral_db_runner.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-ephemeral-db-runner/scripts/dev_ephemeral_db_runner.py`
 
 ## Input Contract
 
@@ -66,7 +66,7 @@ Extended fields:
 Start:
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-ephemeral-db-runner/scripts/dev_ephemeral_db_runner.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-ephemeral-db-runner/scripts/dev_ephemeral_db_runner.py --input-json - --json-pretty
 {
   "action": "start",
   "profile_name": "myo-160",
@@ -83,7 +83,7 @@ JSON
 Stop:
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-ephemeral-db-runner/scripts/dev_ephemeral_db_runner.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-ephemeral-db-runner/scripts/dev_ephemeral_db_runner.py --input-json - --json-pretty
 {
   "action": "stop",
   "profile_name": "myo-160",

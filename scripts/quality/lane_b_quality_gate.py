@@ -176,7 +176,7 @@ def write_artifact(path: Path, payload: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run deterministic Lane B quality gate.")
     parser.add_argument("--repo-root", required=True, help="Absolute repo root path")
-    parser.add_argument("--canary-project-root", default=None, help="Absolute path to real-project canary root (default: $OP_CANARY_PROJECT_ROOT or /Users/slobodan/Projects/MyBoard)")
+    parser.add_argument("--canary-project-root", default=None, help="Absolute path to real-project canary root (default: $OP_CANARY_PROJECT_ROOT or /Users/slobodan/projects/MyBoard)")
     args = parser.parse_args()
     repo_root = Path(args.repo_root).expanduser().resolve()
 

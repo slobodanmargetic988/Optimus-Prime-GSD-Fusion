@@ -19,7 +19,7 @@ Behavior:
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-check-bundle/scripts/dev_check_bundle.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-check-bundle/scripts/dev_check_bundle.py`
 
 ## Input Contract
 
@@ -62,10 +62,10 @@ Optional:
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-check-bundle/scripts/dev_check_bundle.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-check-bundle/scripts/dev_check_bundle.py --input-json - --json-pretty
 {
   "task_identifier": "MYO-163",
-  "repo_root": "/Users/slobodan/Projects/Ouroboros",
+  "repo_root": "/Users/slobodan/projects/Ouroboros",
   "checks": [
     {"name": "compileall", "cmd": ".venv/bin/python -m compileall app"},
     {"name": "pytest", "cmd": ".venv/bin/pytest tests/unit -q"}

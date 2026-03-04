@@ -9,19 +9,19 @@ Use this command to map an existing repository into planning artifacts.
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py`
 
 ## Usage
 
 ```bash
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py \
   --command /op-map-codebase \
-  --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion \
+  --repo-root /Users/slobodan/projects/Optimus-Prime-GSD-Fusion \
   --json-pretty
 ```
 
 CLI wrapper:
 
 ```bash
-/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.sh /op-map-codebase --json-pretty
+/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.sh /op-map-codebase --json-pretty
 ```

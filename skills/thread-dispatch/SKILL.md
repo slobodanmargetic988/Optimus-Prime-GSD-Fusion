@@ -56,7 +56,7 @@ DESKTOP_SCRIPT="$CODEX_HOME/skills/thread-dispatch/scripts/dispatch_codex_deskto
 
 ```bash
 python3 "$DISPATCH_SCRIPT" \
-  --cwd /Users/slobodan/Projects/Oroboros \
+  --cwd /Users/slobodan/projects/Oroboros \
   --prompt "Review open Linear blockers and write a concise summary." \
   --background
 ```
@@ -65,8 +65,8 @@ python3 "$DISPATCH_SCRIPT" \
 
 ```bash
 python3 "$DISPATCH_SCRIPT" \
-  --cwd /Users/slobodan/Projects/Oroboros \
-  --prompt-file /Users/slobodan/Projects/Oroboros/tmp/worker_prompt.txt \
+  --cwd /Users/slobodan/projects/Oroboros \
+  --prompt-file /Users/slobodan/projects/Oroboros/tmp/worker_prompt.txt \
   --background
 ```
 
@@ -74,7 +74,7 @@ python3 "$DISPATCH_SCRIPT" \
 
 ```bash
 python3 "$DISPATCH_SCRIPT" \
-  --cwd /Users/slobodan/Projects/Oroboros \
+  --cwd /Users/slobodan/projects/Oroboros \
   --prompt "Summarize test failures in backend logs." \
   --foreground
 ```
@@ -87,7 +87,7 @@ Treat the profile path as a parameter (`codex_home`), not a fixed value.
 ```bash
 CODEX_HOME="$HOME/.codex-<profile-name>" \
 python3 "$CODEX_HOME/skills/thread-dispatch/scripts/dispatch_codex_run.py" \
-  --cwd /Users/slobodan/Projects/Oroboros \
+  --cwd /Users/slobodan/projects/Oroboros \
   --prompt "Your prompt here" \
   --background
 ```
@@ -98,7 +98,7 @@ Equivalent to the shell-prefix approach above, but explicit in the script args.
 
 ```bash
 python3 "$DISPATCH_SCRIPT" \
-  --cwd /Users/slobodan/Projects/Oroboros \
+  --cwd /Users/slobodan/projects/Oroboros \
   --prompt "Your prompt here" \
   --background \
   --codex-home "$HOME/.codex-<profile-name>"
@@ -108,7 +108,7 @@ python3 "$DISPATCH_SCRIPT" \
 
 ```bash
 python3 "$DISPATCH_SCRIPT" \
-  --cwd /Users/slobodan/Projects/Oroboros \
+  --cwd /Users/slobodan/projects/Oroboros \
   --prompt "Your prompt here" \
   --background \
   --codex-home "$HOME/.codex-second" \
@@ -121,7 +121,7 @@ Equivalent spawned Codex command will include generated `-c 'mcp_servers.<name>.
 
 ```bash
 python3 "$DISPATCH_SCRIPT" \
-  --cwd /Users/slobodan/Projects/Oroboros \
+  --cwd /Users/slobodan/projects/Oroboros \
   --prompt "Use Linear only for this task." \
   --background \
   --codex-home "$HOME/.codex-second" \
@@ -158,7 +158,7 @@ From file:
 
 ```bash
 python3 "$DESKTOP_SCRIPT" \
-  --prompt-file /Users/slobodan/Projects/Oroboros/tmp/prompt.txt
+  --prompt-file /Users/slobodan/projects/Oroboros/tmp/prompt.txt
 ```
 
 Notes:

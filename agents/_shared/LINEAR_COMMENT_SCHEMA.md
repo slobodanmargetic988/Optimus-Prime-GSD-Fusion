@@ -47,7 +47,7 @@ issue_id: PAY-22
 role: backend-developer
 event: handoff
 worker_slot: dev-1
-worktree_path: /Users/slobodan/Projects/Oroboros/.worktrees/dev-1
+worktree_path: /Users/slobodan/projects/Oroboros/.worktrees/dev-1
 session_id: 019c7f00-demo
 handoff_to: backend-tester
 branch: codex/dev-1/PAY-22

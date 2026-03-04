@@ -25,7 +25,7 @@ Core actions:
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/runtime-coordinator/scripts/runtime_coordinator.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/runtime-coordinator/scripts/runtime_coordinator.py`
 
 ## Input Contract
 
@@ -95,4 +95,4 @@ Defaults map to `reports/optimus-prime/*` inside `repo_root`.
 - Blocking runtime outcomes are appended to `BLOCKERS.jsonl`.
 - Recurring blockers are converted into adaptation candidates.
 
-See `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/runtime-coordinator/references/contracts.md`.
+See `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/runtime-coordinator/references/contracts.md`.

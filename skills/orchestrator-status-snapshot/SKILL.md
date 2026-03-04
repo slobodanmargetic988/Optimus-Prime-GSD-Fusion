@@ -25,7 +25,7 @@ The script is read-only and emits deterministic JSON.
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/orchestrator-status-snapshot/scripts/orchestrator_status_snapshot.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/orchestrator-status-snapshot/scripts/orchestrator_status_snapshot.py`
 
 ## Input Contract
 
@@ -49,8 +49,8 @@ Notes:
 ### CLI flags
 
 ```bash
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/orchestrator-status-snapshot/scripts/orchestrator_status_snapshot.py \
-  --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/orchestrator-status-snapshot/scripts/orchestrator_status_snapshot.py \
+  --repo-root /Users/slobodan/projects/Optimus-Prime-GSD-Fusion \
   --output-mode json+text \
   --include-history \
   --max-history-items 5 \
@@ -60,10 +60,10 @@ python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/orchestrator-st
 ### JSON contract via file/stdin
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/orchestrator-status-snapshot/scripts/orchestrator_status_snapshot.py \
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/orchestrator-status-snapshot/scripts/orchestrator_status_snapshot.py \
   --input-json - --json-pretty
 {
-  "repo_root": "/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion",
+  "repo_root": "/Users/slobodan/projects/Optimus-Prime-GSD-Fusion",
   "include_history": false,
   "max_history_items": 5,
   "include_process_check": true,

@@ -135,7 +135,7 @@ Optimus may only stop when:
 CLI verification mode:
 
 ```bash
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py \
   --verify-final-state /abs/path/to/FINAL_STATE.json
 ```
 

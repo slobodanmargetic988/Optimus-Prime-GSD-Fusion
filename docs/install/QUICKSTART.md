@@ -24,7 +24,7 @@ Token resolution order in installer/update:
 ## 2) Install from private prerelease (recommended)
 
 ```bash
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/install/op_install.py \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/install/op_install.py \
   --repo-owner slobodanmargetic988 \
   --repo-name Optimus-Prime-GSD-Fusion \
   --channel prerelease \
@@ -35,7 +35,7 @@ python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/install/op_ins
 Version-pinned install:
 
 ```bash
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/install/op_install.py \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/install/op_install.py \
   --repo-owner slobodanmargetic988 \
   --repo-name Optimus-Prime-GSD-Fusion \
   --channel prerelease \
@@ -54,12 +54,12 @@ python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/install/op_ins
 ## 4) Local project install mode
 
 ```bash
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/install/op_install.py \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/install/op_install.py \
   --repo-owner slobodanmargetic988 \
   --repo-name Optimus-Prime-GSD-Fusion \
   --channel prerelease \
   --mode local \
-  --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion \
+  --repo-root /Users/slobodan/projects/Optimus-Prime-GSD-Fusion \
   --json-pretty
 ```
 
@@ -67,12 +67,12 @@ python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/install/op_ins
 
 ```bash
 python3 -m scripts.release.build_lane_c_bundle \
-  --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion \
-  --out-dir /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/dist \
+  --repo-root /Users/slobodan/projects/Optimus-Prime-GSD-Fusion \
+  --out-dir /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/dist \
   --json-pretty
 
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/install/op_install.py \
-  --bundle-dir /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/dist/optimus-prime-0.2.0 \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/install/op_install.py \
+  --bundle-dir /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/dist/optimus-prime-0.2.0 \
   --mode global \
   --json-pretty
 ```

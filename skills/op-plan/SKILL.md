@@ -9,13 +9,13 @@ Generates `PLAN_PACKETS.json`, `PLAN_CHECK.json`, `TEST_CONTRACT.md`, and `PLAYW
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py`
 
 ## Usage
 
 ```bash
-python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py \
+python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/op/opctl.py \
   --command /op-plan \
-  --repo-root /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion \
+  --repo-root /Users/slobodan/projects/Optimus-Prime-GSD-Fusion \
   --json-pretty
 ```

@@ -23,7 +23,7 @@ Goal: Plan V2 of Optimus cycle controller and full GSD fusion workflow.
 Inputs: product_goal: Deterministic autonomous orchestration with controller-owned cycle logic.
 Inputs: target_users: solo founder operating multiple Codex workers.
 Inputs: scope_constraints: standalone repo, no backward compatibility required.
-Inputs: repo_root: /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion
+Inputs: repo_root: /Users/slobodan/projects/Optimus-Prime-GSD-Fusion
 Inputs: tracking_mode: local
 Inputs: plan_output_dir: docs/plans/
 Inputs: tdd_policy: strict-test-first

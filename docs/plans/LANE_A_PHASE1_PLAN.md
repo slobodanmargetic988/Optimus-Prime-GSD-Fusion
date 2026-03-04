@@ -10,9 +10,9 @@ This plan intentionally excludes backward-compatibility, staged rollout, and dep
 
 ## Target Project + Document Location
 - New project root:  
-  `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion`
+  `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion`
 - Plan document path for this phase:  
-  `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_PHASE1_PLAN.md`
+  `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_PHASE1_PLAN.md`
 
 ---
 
@@ -75,21 +75,21 @@ Controller exits only when one is proven:
 ## Files to Build
 
 ### Skill
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/SKILL.md`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/references/contracts.md`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/SKILL.md`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/scripts/optimus_cycle_controller.py`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/references/contracts.md`
 
 ### Runtime artifacts
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/controller/HEARTBEAT.json`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/controller/EVENTS.jsonl`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/controller/FINAL_STATE.json`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/controller/lock.pid`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/controller/HEARTBEAT.json`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/controller/EVENTS.jsonl`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/controller/FINAL_STATE.json`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/controller/lock.pid`
 
 ### Terminal evidence flags
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/control/PROJECT_DONE.json`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/control/INSURMOUNTABLE_BLOCKER.json`
-- `/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/control/ALL_RATE_GATES_BLOCKING.json`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/control/PROJECT_DONE.json`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/control/INSURMOUNTABLE_BLOCKER.json`
+- `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/reports/optimus-prime/control/ALL_RATE_GATES_BLOCKING.json`
 
 ---
 

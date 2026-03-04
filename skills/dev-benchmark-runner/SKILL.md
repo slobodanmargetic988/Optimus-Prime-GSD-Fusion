@@ -20,7 +20,7 @@ Behavior:
 
 ## Script
 
-`/Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-benchmark-runner/scripts/dev_benchmark_runner.py`
+`/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-benchmark-runner/scripts/dev_benchmark_runner.py`
 
 ## Input Contract
 
@@ -58,7 +58,7 @@ Optional:
 ## Usage
 
 ```bash
-cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/dev-benchmark-runner/scripts/dev_benchmark_runner.py --input-json - --json-pretty
+cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-benchmark-runner/scripts/dev_benchmark_runner.py --input-json - --json-pretty
 {
   "script": "scripts/benchmark_tasks_minimal.py",
   "dataset_size": 150,
@@ -67,7 +67,7 @@ cat <<'JSON' | python3 /Users/slobodan/Projects/Optimus-Prime-GSD-Fusion/skills/
   "max_retries": 2,
   "artifact_path": "reports/product-plan/evidence/benchmark.json",
   "dry_run": false,
-  "repo_root": "/Users/slobodan/Projects/Ouroboros"
+  "repo_root": "/Users/slobodan/projects/Ouroboros"
 }
 JSON
 ```
