@@ -76,3 +76,15 @@ python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/scripts/install/op_ins
   --mode global \
   --json-pretty
 ```
+
+## 6) Optional: create additional Codex profiles for multi-account OP usage
+
+Create `~/.codex-second` from your default `.codex`:
+
+```bash
+python3 "$CODEX_HOME/skills/create-codex-profile/scripts/create_codex_profile.py" \
+  --profile second \
+  --json-pretty
+```
+
+The profile creator copies `auth.json` + `sessions/` and symlinks all other top-level `.codex` items so installed OP skills remain shared across profiles.

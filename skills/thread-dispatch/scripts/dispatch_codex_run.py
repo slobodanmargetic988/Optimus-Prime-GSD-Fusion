@@ -162,7 +162,23 @@ def resolve_mcp_disable_overrides(args: argparse.Namespace) -> tuple[list[str], 
     mode = "disable_all" if args.disable_all_mcp else "enable_only"
     codex_home = effective_codex_home(args)
     config_path = codex_home / "config.toml"
-    config_data = read_codex_config(config_path)
+    try:
+        config_data = read_codex_config(config_path)
+    except ValueError as exc:
+        message = str(exc)
+        if message.startswith("config_toml_not_found:"):
+            # Graceful fallback: if profile has no config.toml, do not block dispatch.
+            return (
+                [],
+                {
+                    "mcp_mode": "inherit",
+                    "mcp_mode_requested": mode,
+                    "mcp_config_path": str(config_path),
+                    "mcp_config_missing": True,
+                    "mcp_warning": message,
+                },
+            )
+        raise
     defined_servers = configured_mcp_server_names(config_data)
     if not defined_servers:
         raise ValueError(f"mcp_servers_not_defined_in_config:{config_path}")

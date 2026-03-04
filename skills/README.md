@@ -4,6 +4,7 @@ This folder stores portable skill definitions used by agents in this repository.
 
 ## Included Skills
 - `codex-rate-snapshot`
+- `create-codex-profile`
 - `blocker-escalate-to-agents`
 - `cycle-tick`
 - `dev-benchmark-runner`

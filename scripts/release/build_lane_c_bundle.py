@@ -34,6 +34,7 @@ PAYLOAD_PATHS = [
     "scripts/db-impact-detector.sh",
     "scripts/db-reset-migrate-seed.sh",
     "skills/codex-rate-snapshot",
+    "skills/create-codex-profile",
     "skills/dispatch-worker-packet",
     "skills/optimus-cycle-controller",
     "skills/runtime-coordinator",

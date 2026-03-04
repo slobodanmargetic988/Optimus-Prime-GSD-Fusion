@@ -56,6 +56,7 @@ def test_global_install_and_uninstall_flow():
             "runtime-coordinator",
             "test-train-manager",
             "codex-rate-snapshot",
+            "create-codex-profile",
             "thread-dispatch",
             "workstation-preparation",
         }

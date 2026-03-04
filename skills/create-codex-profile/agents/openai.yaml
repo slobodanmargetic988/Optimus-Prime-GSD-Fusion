@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Codex Profile"
+  short_description: "Clone .codex profile using copy+symlink policy"
+  default_prompt: "Create a new Codex profile by copying auth/sessions and symlinking all other .codex assets."

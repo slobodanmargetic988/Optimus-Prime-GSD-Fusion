@@ -146,6 +146,22 @@ opctl /op-health --json-pretty
 opctl /op-resume --json-pretty
 ```
 
+### Multi-Profile Codex Setup
+
+If you run OP with multiple Codex accounts/profiles, use the bundled `create-codex-profile` skill to create profile homes like `~/.codex-second` while preserving separate usage/account files.
+
+Example:
+
+```bash
+python3 "$CODEX_HOME/skills/create-codex-profile/scripts/create_codex_profile.py" \
+  --profile second \
+  --json-pretty
+```
+
+Behavior:
+- copies per-profile items: `auth.json`, `sessions/`
+- symlinks all other top-level `.codex` items (shared skills/agents/state backend)
+
 Runtime reliability notes:
 - Runtime decisions are now based on task-embedded gaps (`tasks[].gaps_that_need_patching`); external `GAPS.json` / `GAP_CLOSURE_PLAN_PACKETS.json` are not decision inputs.
 - Planner/runtime use an explicit per-task `verification_contract` (`tdd_red|implementation_green|hardening`) and evidence summary expectation fields (`expectation`, `expectation_met`, `failure_class`).

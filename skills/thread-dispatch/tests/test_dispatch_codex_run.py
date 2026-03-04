@@ -75,6 +75,24 @@ command = "beta"
     assert meta["mcp_servers_disabled"] == ["beta"]
 
 
+def test_resolve_mcp_disable_overrides_missing_config_falls_back(mod, tmp_path):
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir(parents=True)
+
+    args = SimpleNamespace(
+        enable_only_mcp=[],
+        disable_all_mcp=True,
+        codex_home=str(codex_home),
+    )
+    overrides, meta = mod.resolve_mcp_disable_overrides(args)
+
+    assert overrides == []
+    assert meta["mcp_mode"] == "inherit"
+    assert meta["mcp_mode_requested"] == "disable_all"
+    assert meta["mcp_config_missing"] is True
+    assert "config_toml_not_found" in meta["mcp_warning"]
+
+
 def test_build_command_resume_path(mod):
     args = SimpleNamespace(
         resume_session_id="123e4567-e89b-12d3-a456-426614174000",
