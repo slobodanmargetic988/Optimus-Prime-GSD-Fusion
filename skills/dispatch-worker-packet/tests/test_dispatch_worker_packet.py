@@ -161,6 +161,10 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn(str(MODULE.TASK_EVIDENCE_TEMPLATE_REF), content)
             self.assertIn("## Verification Contract (authoritative)", content)
             self.assertIn("stage_expectation:", content)
+            self.assertIn("## Git Hygiene Guard (mandatory)", content)
+            self.assertIn("do not stage or commit any path under reports/optimus-prime/", content)
+            self.assertIn("before each commit run: git diff --cached --name-only", content)
+            self.assertIn("forbidden_op_artifact_commit", content)
 
     def test_packet_render_requires_canonical_task_evidence_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -175,6 +179,8 @@ class DispatchWorkerPacketTests(unittest.TestCase):
                 self.assertIn("dev.checks[], dev.verify_results[], dev.blockers[], dev.artifacts[]", content)
                 self.assertIn("test.checks[], test.verify_results[], test.uat_results[], test.blockers[], test.artifacts[]", content)
                 self.assertIn("review.blockers[], review.artifacts[]", content)
+                self.assertIn("test.uat_results[] row shape: requirement_id(str), requirement_ids(str[]), passed(bool), notes(str)", content)
+                self.assertIn("for every requirement_id in packet requirement_ids, write at least one test.uat_results row", content)
                 self.assertIn("summary.reason_codes[]", content)
                 self.assertIn(str(MODULE.TASK_EVIDENCE_SCHEMA_TEST_REF), content)
                 self.assertNotIn("  - verify_results: array", content)

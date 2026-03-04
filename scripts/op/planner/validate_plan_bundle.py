@@ -831,6 +831,8 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
                 progress_watchdog,
                 label=f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog",
                 required={
+                    "started",
+                    "first_dispatched_cycle",
                     "task_started_cycle",
                     "last_forward_progress_cycle",
                     "consecutive_no_forward_progress_cycles",
@@ -868,6 +870,18 @@ def _validate_task_execution_state(payload: dict[str, Any], task_ids: set[str], 
                     errors,
                     "planner_bundle_schema_error",
                     f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog.threshold_cycles must be positive int",
+                )
+            _require_bool(
+                progress_watchdog.get("started"),
+                label=f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog.started",
+                errors=errors,
+            )
+            first_dispatched = progress_watchdog.get("first_dispatched_cycle")
+            if first_dispatched is not None and (not isinstance(first_dispatched, int) or first_dispatched < 1):
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    f"TASK_EXECUTION_STATE.tasks[{idx}].progress_watchdog.first_dispatched_cycle must be positive int|null",
                 )
             _require_bool(
                 progress_watchdog.get("triggered"),

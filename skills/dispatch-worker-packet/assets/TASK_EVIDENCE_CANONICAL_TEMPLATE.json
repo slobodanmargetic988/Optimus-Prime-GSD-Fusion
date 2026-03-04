@@ -21,7 +21,16 @@
     "status": "queued|working|done|blocked",
     "checks": [],
     "verify_results": [],
-    "uat_results": [],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-001",
+        "requirement_ids": [
+          "REQ-001"
+        ],
+        "passed": false,
+        "notes": "Set passed=true only when UAT requirement is validated."
+      }
+    ],
     "blockers": [],
     "artifacts": []
   },

@@ -68,6 +68,30 @@ Evidence:
 1. `opctl /op-status --repo-root /Users/slobodan/Projects/MyBoard --json-pretty`
 2. `opctl /op-report --repo-root /Users/slobodan/Projects/MyBoard --json-pretty`
 
+### F-20260303-WS-LAUNCH-STALL-001
+Status: open
+
+Finding:
+1. Workstation-manager can stall a full cycle for long periods before printing async handoff (`running asynchronously`).
+2. The stall occurs in workstation action launch/generation path before async-preparing state is fully registered.
+3. During this window, no other cycle steps progress, which looks like hard freeze in terminal.
+
+Observed in:
+1. Canary run on 2026-03-03 (`cycle 6`, `test-2 attempt 1/10`).
+
+Evidence:
+1. Terminal timeline gap between:
+2. `workstation-manager: slot=test-2 attempt 1/10`
+3. `workstation-manager: slot=test-2 attempt 1 running asynchronously (pid=...)`
+4. `reports/optimus-prime/workstation-manager/attempt-test-2-1/{prompt.txt,last_message.txt,llm_stdout.log,llm_stderr.log}`
+
+Impact:
+1. Entire build cycle remains blocked while workstation-manager launch path is waiting.
+2. Operator cannot distinguish slow launch from deadlock without digging into artifacts.
+
+Next fix intent:
+1. Add explicit launch-path timeout/heartbeat instrumentation before async handoff so this class cannot stall cycle invisibly.
+
 ## UX Follow-ups (Still Open)
 1. Keep improving console visibility for long-running loops:
 2. Ensure watchdog state/proximity is always obvious from interactive output without extra artifact digging.

@@ -56,6 +56,8 @@ Planning requirements:
      - batch_started_cycle (null on initialize)
      - batch_last_updated_at (null on initialize)
    - progress_watchdog object:
+     - started (false on initialize)
+     - first_dispatched_cycle (null on initialize)
      - task_started_cycle (null on initialize)
      - last_forward_progress_cycle (null on initialize)
      - consecutive_no_forward_progress_cycles (0 on initialize)

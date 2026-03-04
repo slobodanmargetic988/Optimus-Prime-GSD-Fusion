@@ -60,7 +60,9 @@
         "consecutive_no_forward_progress_cycles": 0,
         "threshold_cycles": 25,
         "triggered": false,
-        "triggered_at": null
+        "triggered_at": null,
+        "started": false,
+        "first_dispatched_cycle": null
       }
     },
     {
@@ -120,7 +122,9 @@
         "consecutive_no_forward_progress_cycles": 0,
         "threshold_cycles": 25,
         "triggered": false,
-        "triggered_at": null
+        "triggered_at": null,
+        "started": false,
+        "first_dispatched_cycle": null
       }
     },
     {
@@ -180,7 +184,9 @@
         "consecutive_no_forward_progress_cycles": 0,
         "threshold_cycles": 25,
         "triggered": false,
-        "triggered_at": null
+        "triggered_at": null,
+        "started": false,
+        "first_dispatched_cycle": null
       }
     }
   ]
