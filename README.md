@@ -165,7 +165,8 @@ Runtime reliability notes:
 - Branch/workstation managers run LLM-first action loops with strict validators and bounded retries (max 10); retry exhaustion blocks only the affected task/lane.
 - Workstation manager accepts only `prepare_command` values that resolve to the bundled `skills/workstation-preparation/scripts/prepare_workstation.py` path.
 - Workstation manager enforces slot-specific worktree names (`workstation-dev-*`, `workstation-test-*`, `workstation-review-*`), requires prepared `target_path` to match exact deterministic slot path, and skips destructive prep only for same-lane in-progress slots with valid slot-prefixed branches (`codex/<slot>/...`).
-- Production-line manager syncs worker worktree artifacts into canonical reports before applying evidence/handoff state transitions.
+- Artifact fan-in is config-gated (`workflow.enable_artifact_fan_in`) and defaults to `false`; when disabled OP emits `artifact_fan_in_disabled` and skips worktree fan-in.
+- Workstation manager deterministically enforces `<worktree>/reports/optimus-prime -> <repo>/reports/optimus-prime` symlink after validation (delete-and-replace if a non-symlink path exists), so worker artifacts land in canonical reports without fan-in.
 - Embedded gaps close only when explicit closure conditions pass with evidence refs and can reopen on regression.
 - Dead running worker PIDs are normalized before dispatch gating, so stale registry entries do not block dispatch capacity.
 - Dead PID recovery is evidence-first: if no new progress is ingested, OP queues immediate same-cycle same-slot redispatch and tracks retry metadata.

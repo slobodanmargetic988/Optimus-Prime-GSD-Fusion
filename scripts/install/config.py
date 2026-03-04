@@ -13,15 +13,30 @@ from scripts.install.common import InstallContext, InstallError, as_bool, as_str
 
 PROFILES = {
     "quality": {
-        "workflow": {"max_build_cycles": 50, "strict_validation": True, "sleep_minutes": 1.0},
+        "workflow": {
+            "max_build_cycles": 50,
+            "strict_validation": True,
+            "sleep_minutes": 1.0,
+            "enable_artifact_fan_in": False,
+        },
         "rate_gate": {"max_wait_hours": 2.0},
     },
     "balanced": {
-        "workflow": {"max_build_cycles": 20, "strict_validation": True, "sleep_minutes": 1.0},
+        "workflow": {
+            "max_build_cycles": 20,
+            "strict_validation": True,
+            "sleep_minutes": 1.0,
+            "enable_artifact_fan_in": False,
+        },
         "rate_gate": {"max_wait_hours": 2.0},
     },
     "budget": {
-        "workflow": {"max_build_cycles": 10, "strict_validation": False, "sleep_minutes": 1.0},
+        "workflow": {
+            "max_build_cycles": 10,
+            "strict_validation": False,
+            "sleep_minutes": 1.0,
+            "enable_artifact_fan_in": False,
+        },
         "rate_gate": {"max_wait_hours": 1.0},
     },
 }
@@ -32,6 +47,7 @@ DEFAULT_CONFIG = {
         "max_build_cycles": 20,
         "strict_validation": True,
         "sleep_minutes": 1.0,
+        "enable_artifact_fan_in": False,
     },
     "rate_gate": {"max_wait_hours": 2.0},
     "paths": {},
@@ -130,6 +146,16 @@ def _validate_config(config: dict[str, Any]) -> list[dict[str, Any]]:
                     "fix": "Set workflow.sleep_minutes to a number greater than 0.",
                 }
             )
+        enable_artifact_fan_in = workflow.get("enable_artifact_fan_in")
+        if not isinstance(enable_artifact_fan_in, bool):
+            errors.append(
+                {
+                    "code": "config_validation_error",
+                    "field": "workflow.enable_artifact_fan_in",
+                    "message": "workflow.enable_artifact_fan_in must be boolean",
+                    "fix": "Set workflow.enable_artifact_fan_in to true or false.",
+                }
+            )
     rate_gate = config.get("rate_gate")
     if not isinstance(rate_gate, dict):
         errors.append(
@@ -216,6 +242,13 @@ def resolve_effective_config(payload: dict[str, Any], ctx: InstallContext) -> di
         workflow["sleep_minutes"] = float(cli_sleep)
         effective["workflow"] = workflow
         sources.append({"source": "cli_sleep_minutes", "path": None})
+
+    cli_fan_in = payload.get("enable_artifact_fan_in")
+    if cli_fan_in is not None:
+        workflow = effective.get("workflow") if isinstance(effective.get("workflow"), dict) else {}
+        workflow["enable_artifact_fan_in"] = as_bool(cli_fan_in, default=False)
+        effective["workflow"] = workflow
+        sources.append({"source": "cli_enable_artifact_fan_in", "path": None})
 
     errors = _validate_config(effective)
     return {

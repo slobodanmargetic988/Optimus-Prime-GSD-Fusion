@@ -239,6 +239,7 @@ OPTIMUS_GITIGNORE_BEGIN = "# BEGIN OPTIMUS-PRIME MANAGED REPORT IGNORES"
 OPTIMUS_GITIGNORE_END = "# END OPTIMUS-PRIME MANAGED REPORT IGNORES"
 OPTIMUS_GITIGNORE_LINES = [
     OPTIMUS_GITIGNORE_BEGIN,
+    "/reports/optimus-prime/**",
     "/reports/optimus-prime/runtime/**",
     "/reports/optimus-prime/controller/**",
     "/reports/optimus-prime/control/**",
@@ -289,6 +290,7 @@ class OpRequest:
     output_mode: str
     max_build_cycles: int | None
     sleep_minutes: float
+    enable_artifact_fan_in: bool
     dry_run: bool
     reset_exhausted_retries: bool
 
@@ -427,12 +429,18 @@ def _expected_for_stage(contract: dict[str, Any], stage: str) -> str:
     return _normalize_stage_expectation(contract.get("dev_expectation"))
 
 
-def _task_has_open_embedded_gap(task: dict[str, Any]) -> bool:
+def _task_has_open_embedded_gap(
+    task: dict[str, Any],
+    *,
+    include_consumed: bool = True,
+) -> bool:
     rows = task.get("gaps_that_need_patching") if isinstance(task.get("gaps_that_need_patching"), list) else []
     for row in rows:
         if not isinstance(row, dict):
             continue
         status = (_as_str(row.get("status")) or "open").lower()
+        if status == "consumed" and not include_consumed:
+            continue
         if status not in {"closed", "verified", "patched"}:
             return True
     return False
@@ -619,6 +627,34 @@ def _summarize_watchdog_findings(
         f"reasons={findings}, "
         f"warnings={warning_summary}"
     )
+
+
+def _summarize_branch_merge_decision(warnings: list[dict[str, Any]]) -> str:
+    pending_ids: list[str] = []
+    reason_counts: dict[str, int] = {}
+    for row in warnings:
+        if not isinstance(row, dict):
+            continue
+        code = _as_str(row.get("code")) or "unknown"
+        if code == "branch_merge_pending_tasks":
+            task_ids = row.get("task_ids") if isinstance(row.get("task_ids"), list) else []
+            for item in task_ids:
+                task_id = _as_str(item)
+                if task_id and task_id not in pending_ids:
+                    pending_ids.append(task_id)
+            continue
+        task_id = _as_str(row.get("task_id"))
+        if not task_id:
+            continue
+        reason_counts[code] = reason_counts.get(code, 0) + 1
+    if pending_ids:
+        preview = ",".join(pending_ids[:3])
+        suffix = "..." if len(pending_ids) > 3 else ""
+        return f"branch-merge decision: candidates={len(pending_ids)} pending={preview}{suffix}"
+    if reason_counts:
+        reason_text = ",".join(f"{key}:{value}" for key, value in sorted(reason_counts.items()))
+        return f"branch-merge decision: candidates=0 reasons={reason_text}"
+    return "branch-merge decision: candidates=0"
 
 
 def _resolve_profile_detection_root() -> Path:
@@ -1127,8 +1163,19 @@ def _apply_task_progress_watchdog(
         if not task_id:
             continue
         watchdog = _normalize_progress_watchdog(task.get("progress_watchdog"))
+        threshold = max(
+            1,
+            _coerce_nonneg_int(
+                watchdog.get("threshold_cycles"),
+                default=TASK_FORWARD_PROGRESS_THRESHOLD_CYCLES,
+            ),
+        )
+        if not _as_bool_field(watchdog.get("started")):
+            watchdog["threshold_cycles"] = threshold
+            task["progress_watchdog"] = watchdog
+            continue
         if watchdog["task_started_cycle"] <= 0:
-            watchdog["task_started_cycle"] = cycle
+            watchdog["task_started_cycle"] = watchdog["first_dispatched_cycle"] or cycle
         status = _normalize_task_status(task.get("status"))
         rank = _task_forward_progress_rank(status)
         rows = _normalize_task_gap_rows(task)
@@ -1151,13 +1198,6 @@ def _apply_task_progress_watchdog(
                 watchdog.get("consecutive_no_forward_progress_cycles"),
                 default=0,
             ) + 1
-        threshold = max(
-            1,
-            _coerce_nonneg_int(
-                watchdog.get("threshold_cycles"),
-                default=TASK_FORWARD_PROGRESS_THRESHOLD_CYCLES,
-            ),
-        )
         if (
             not _as_bool_field(watchdog.get("triggered"))
             and status != TASK_STATUS_REVIEW_DONE
@@ -1646,6 +1686,84 @@ def _expected_slot_worktree_path(repo_root: Path, slot: str) -> Path | None:
     if not worktree_name:
         return None
     return (repo_root.parent / f".{repo_root.name}-workstations" / worktree_name).resolve()
+
+
+def _ensure_worktree_artifact_root_symlink(repo_root: Path, worktree_root: Path) -> dict[str, Any]:
+    """Ensure <worktree>/reports/optimus-prime is a symlink to repo reports/optimus-prime."""
+    canonical_target = (repo_root / "reports" / "optimus-prime").resolve()
+    link_path = worktree_root / "reports" / "optimus-prime"
+    link_parent = link_path.parent
+    try:
+        canonical_target.mkdir(parents=True, exist_ok=True)
+        if link_parent.exists():
+            if not link_parent.is_dir():
+                if link_parent.is_symlink() or link_parent.is_file():
+                    link_parent.unlink()
+                else:
+                    shutil.rmtree(link_parent)
+                link_parent.mkdir(parents=True, exist_ok=True)
+        else:
+            link_parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return {
+            "ok": False,
+            "code": "workstation_artifact_symlink_failed",
+            "message": f"unable to prepare reports path in worktree {worktree_root}: {exc}",
+            "replaced": False,
+            "created": False,
+        }
+
+    replaced = False
+    created = False
+    try:
+        if link_path.exists() or link_path.is_symlink():
+            if link_path.is_symlink():
+                try:
+                    current_target = link_path.resolve()
+                except OSError:
+                    current_target = None
+                if current_target == canonical_target:
+                    return {
+                        "ok": True,
+                        "code": "workstation_artifact_symlink_enforced",
+                        "message": "artifact-root symlink already enforced",
+                        "replaced": False,
+                        "created": False,
+                        "target": str(canonical_target),
+                        "link_path": str(link_path),
+                    }
+                link_path.unlink()
+                replaced = True
+            elif link_path.is_dir():
+                shutil.rmtree(link_path)
+                replaced = True
+            else:
+                link_path.unlink()
+                replaced = True
+        link_path.symlink_to(canonical_target)
+        created = True
+    except OSError as exc:
+        return {
+            "ok": False,
+            "code": "workstation_artifact_symlink_failed",
+            "message": f"unable to enforce artifact-root symlink for {worktree_root}: {exc}",
+            "replaced": replaced,
+            "created": created,
+        }
+
+    return {
+        "ok": True,
+        "code": "workstation_artifact_symlink_replaced" if replaced else "workstation_artifact_symlink_enforced",
+        "message": (
+            "replaced existing worktree artifact root with canonical symlink"
+            if replaced
+            else "artifact-root symlink enforced"
+        ),
+        "replaced": replaced,
+        "created": created,
+        "target": str(canonical_target),
+        "link_path": str(link_path),
+    }
 
 
 def _apply_slot_lane_transition(row: dict[str, Any], lane_value: str | None) -> None:
@@ -2330,9 +2448,23 @@ def _normalize_gapfix_state(value: Any) -> dict[str, Any]:
     }
 
 
+def _clear_active_gapfix_state(task: dict[str, Any], *, timestamp: str | None = None) -> bool:
+    gapfix_state = _normalize_gapfix_state(task.get("gapfix_state"))
+    if not _as_bool_field(gapfix_state.get("active")):
+        task["gapfix_state"] = gapfix_state
+        return False
+    gapfix_state["active"] = False
+    gapfix_state["active_batch_id"] = None
+    gapfix_state["batch_last_updated_at"] = _as_str(timestamp) or utc_now_iso()
+    task["gapfix_state"] = gapfix_state
+    return True
+
+
 def _normalize_progress_watchdog(value: Any) -> dict[str, Any]:
     row = value if isinstance(value, dict) else {}
     return {
+        "started": _as_bool_field(row.get("started")),
+        "first_dispatched_cycle": _coerce_nonneg_int(row.get("first_dispatched_cycle"), default=0),
         "task_started_cycle": _coerce_nonneg_int(row.get("task_started_cycle"), default=0),
         "last_forward_progress_cycle": _coerce_nonneg_int(row.get("last_forward_progress_cycle"), default=0),
         "consecutive_no_forward_progress_cycles": _coerce_nonneg_int(
@@ -2351,6 +2483,30 @@ def _normalize_progress_watchdog(value: Any) -> dict[str, Any]:
         "_last_rank": _coerce_nonneg_int(row.get("_last_rank"), default=0),
         "_last_closed_gap_count": _coerce_nonneg_int(row.get("_last_closed_gap_count"), default=0),
     }
+
+
+def _mark_task_watchdog_started(task: dict[str, Any], build_state: dict[str, Any]) -> None:
+    if not isinstance(task, dict):
+        return
+    watchdog = _normalize_progress_watchdog(task.get("progress_watchdog"))
+    cycle = _coerce_nonneg_int(build_state.get("last_cycle"), default=0)
+    if not _as_bool_field(watchdog.get("started")):
+        watchdog["started"] = True
+        if cycle > 0:
+            if watchdog["first_dispatched_cycle"] <= 0:
+                watchdog["first_dispatched_cycle"] = cycle
+            if watchdog["task_started_cycle"] <= 0:
+                watchdog["task_started_cycle"] = cycle
+        watchdog["consecutive_no_forward_progress_cycles"] = 0
+        watchdog["triggered"] = False
+        watchdog["triggered_at"] = None
+    else:
+        if cycle > 0:
+            if watchdog["first_dispatched_cycle"] <= 0:
+                watchdog["first_dispatched_cycle"] = cycle
+            if watchdog["task_started_cycle"] <= 0:
+                watchdog["task_started_cycle"] = cycle
+    task["progress_watchdog"] = watchdog
 
 
 def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str, str] | None = None) -> dict[str, Any]:
@@ -7603,6 +7759,7 @@ def _fresh_build_state_payload() -> dict[str, Any]:
         "resume_fail_counts_by_slot": {},
         "last_dispatch_cycle_summary": {},
         "dead_pid_retry_counts": {},
+        "artifact_fan_in_enabled": False,
         "artifact_fan_in": {
             "last_sync_at": None,
             "worktrees_scanned": 0,
@@ -7693,6 +7850,7 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     payload.setdefault("resume_fail_counts_by_slot", {})
     payload.setdefault("last_dispatch_cycle_summary", {})
     payload.setdefault("dead_pid_retry_counts", {})
+    payload.setdefault("artifact_fan_in_enabled", False)
     payload.setdefault(
         "artifact_fan_in",
         {
@@ -7711,6 +7869,8 @@ def _load_build_state(path: Path) -> dict[str, Any]:
         payload["last_dispatch_cycle_summary"] = {}
     if not isinstance(payload.get("dead_pid_retry_counts"), dict):
         payload["dead_pid_retry_counts"] = {}
+    if not isinstance(payload.get("artifact_fan_in_enabled"), bool):
+        payload["artifact_fan_in_enabled"] = False
     if not isinstance(payload.get("artifact_fan_in"), dict):
         payload["artifact_fan_in"] = {
             "last_sync_at": None,
@@ -8300,6 +8460,8 @@ def _dispatch_task_packet(
     }
     result = _run_tool_json(script, payload, req.repo_root)
     if _as_bool_field(result.get("ok")):
+        if stage in {"test", "review"}:
+            _clear_active_gapfix_state(task)
         task["status"] = cfg["status"]
         task["owner_slot"] = slot_name
         if lane_id:
@@ -9140,6 +9302,7 @@ def _dispatch_next_task_from_assignments(
                 branch_name=branch_name,
                 worktree_root=worktree_root,
             )
+            _mark_task_watchdog_started(task, build_state)
             dispatch_successes.append(result)
             dispatched_count += 1
             continue
@@ -9469,6 +9632,7 @@ def _dispatch_next_task(
                 dispatch_thread_id=_as_str(task_payload.get("dispatch_thread_id")),
                 dispatch_mode_used=dispatch_mode_used,
             )
+            _mark_task_watchdog_started(task_payload, build_state)
         selection_warning = selection.get("warning")
         if isinstance(selection_warning, dict):
             warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
@@ -9633,7 +9797,21 @@ def _manager_production_line_cycle(
     build_state: dict[str, Any],
 ) -> dict[str, Any]:
     warnings: list[dict[str, Any]] = []
-    warnings.extend(_fan_in_worker_artifacts(req.repo_root, build_state))
+    fan_in_enabled = _as_bool(build_state.get("artifact_fan_in_enabled"), default=False)
+    cycle_id = _coerce_nonneg_int(build_state.get("last_cycle"), default=0)
+    if fan_in_enabled:
+        warnings.extend(_fan_in_worker_artifacts(req.repo_root, build_state))
+    else:
+        if _coerce_nonneg_int(build_state.get("artifact_fan_in_disabled_cycle"), default=-1) != cycle_id:
+            warnings.append(
+                {
+                    "code": "artifact_fan_in_disabled",
+                    "message": "artifact fan-in skipped by workflow configuration (enable_artifact_fan_in=false)",
+                    "stage": "build_loop",
+                    "cycle": cycle_id,
+                }
+            )
+            build_state["artifact_fan_in_disabled_cycle"] = cycle_id
     warnings.extend(_apply_handoff_updates(req.repo_root, task_state, build_state))
     warnings.extend(_sync_task_state_from_evidence(req.repo_root, plan_packets, task_state))
     warnings.extend(_refresh_task_embedded_gaps(req.repo_root, plan_packets, task_state))
@@ -9808,6 +9986,19 @@ def _manager_gap_consumption_cycle(
         existing_payload = {}
     existing_assignments_raw = existing_payload.get("assignments")
     existing_assignments = existing_assignments_raw if isinstance(existing_assignments_raw, list) else []
+    active_gapfix_assignments: set[tuple[str, str]] = set()
+    active_gapfix_tasks: set[str] = set()
+    for row in existing_assignments:
+        if not isinstance(row, dict):
+            continue
+        if not _as_bool_field(row.get("is_gapfix")):
+            continue
+        task_id = _as_str(row.get("task_id"))
+        if not task_id:
+            continue
+        batch_id = _as_str(row.get("gap_batch_id")) or ""
+        active_gapfix_assignments.add((task_id, batch_id))
+        active_gapfix_tasks.add(task_id)
 
     lane_busy: set[str] = set()
     for task in task_state.get("tasks", []):
@@ -9822,7 +10013,6 @@ def _manager_gap_consumption_cycle(
 
     gapfix_assignments: list[dict[str, Any]] = []
     ledger_rows: list[dict[str, Any]] = []
-    active_gapfix_tasks: set[str] = set()
     for task in sorted(
         [row for row in task_state.get("tasks", []) if isinstance(row, dict)],
         key=lambda row: _as_str(row.get("task_id")) or "TASK-UNKNOWN",
@@ -9838,8 +10028,6 @@ def _manager_gap_consumption_cycle(
             continue
         gapfix_state = _normalize_gapfix_state(task.get("gapfix_state"))
         task["gapfix_state"] = gapfix_state
-        if gapfix_state.get("active"):
-            active_gapfix_tasks.add(task_id)
         if lane_id in lane_busy:
             continue
         task_status = _normalize_task_status(task.get("status"))
@@ -9873,11 +10061,42 @@ def _manager_gap_consumption_cycle(
             if stage not in {"dev", "test", "review"}:
                 stage = "dev"
             open_by_stage.setdefault(stage, []).append(row)
+        if gapfix_state.get("active"):
+            active_batch_id = _as_str(gapfix_state.get("active_batch_id")) or ""
+            target_stage = (_as_str(gapfix_state.get("target_gap_stage")) or "dev").lower()
+            if target_stage not in {"dev", "test", "review"}:
+                target_stage = "dev"
+            in_progress = task_status in {
+                TASK_STATUS_DEV_WORKING,
+                TASK_STATUS_TESTING,
+                TASK_STATUS_REVIEWING,
+            }
+            has_matching_gapfix_assignment = (
+                (task_id, active_batch_id) in active_gapfix_assignments
+                or (task_id, "") in active_gapfix_assignments
+            )
+            stale_reason: str | None = None
+            if not in_progress and not has_matching_gapfix_assignment:
+                stale_reason = "no_inflight_gapfix_assignment"
+            elif open_by_stage and target_stage not in open_by_stage and not has_matching_gapfix_assignment:
+                stale_reason = "target_stage_no_longer_open"
+            if stale_reason:
+                _clear_active_gapfix_state(task, timestamp=now)
+                gapfix_state = _normalize_gapfix_state(task.get("gapfix_state"))
+                warnings.append(
+                    {
+                        "code": "gapfix_state_stale_cleared",
+                        "message": f"cleared stale gapfix state for task {task_id} ({stale_reason})",
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                        "reason": stale_reason,
+                    }
+                )
+            else:
+                active_gapfix_tasks.add(task_id)
         if not open_by_stage:
-            if gapfix_state.get("active"):
-                gapfix_state["active"] = False
-                gapfix_state["active_batch_id"] = None
-                gapfix_state["batch_last_updated_at"] = now
+            if _clear_active_gapfix_state(task, timestamp=now):
+                gapfix_state = _normalize_gapfix_state(task.get("gapfix_state"))
             continue
         if gapfix_state.get("active"):
             continue
@@ -10058,7 +10277,7 @@ def _task_is_merge_eligible(
 ) -> tuple[bool, str]:
     if _normalize_task_status(task.get("status")) != TASK_STATUS_REVIEW_DONE:
         return False, "status_not_review_done"
-    if _task_has_open_embedded_gap(task):
+    if _task_has_open_embedded_gap(task, include_consumed=False):
         return False, "open_task_gap"
     task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
     phase_id = _as_str(task.get("phase_id")) or _as_str(plan_task.get("phase_id")) or "phase-1"
@@ -10074,23 +10293,6 @@ def _task_is_merge_eligible(
     validation_errors = _validate_task_evidence_payload(payload, task_id, phase_id)
     if validation_errors:
         return False, "task_evidence_invalid"
-    latest_consumed_at: datetime | None = None
-    for row in _normalize_task_gap_rows(task):
-        if not isinstance(row, dict):
-            continue
-        if (_as_str(row.get("status")) or "").lower() != "consumed":
-            continue
-        consumed_at = _as_str(row.get("consumed_at")) or _as_str(row.get("updated_at"))
-        consumed_dt = _parse_iso_utc(consumed_at) if consumed_at else None
-        if consumed_dt is None:
-            continue
-        if latest_consumed_at is None or consumed_dt > latest_consumed_at:
-            latest_consumed_at = consumed_dt
-    evidence_updated_at = _parse_iso_utc(_as_str(payload.get("updated_at")))
-    if latest_consumed_at is not None and (
-        evidence_updated_at is None or evidence_updated_at <= latest_consumed_at
-    ):
-        return False, "gap_consumption_pending_recheck"
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     summary_result = (_as_str(summary.get("result")) or "").lower()
     reason_codes = summary.get("reason_codes") if isinstance(summary.get("reason_codes"), list) else []
@@ -10111,6 +10313,37 @@ def _manager_branch_merge_cycle(
     task_state: dict[str, Any],
     build_state: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    def _source_branch_forbidden_report_paths(repo_root: Path, source_branch: str) -> tuple[list[str], str | None]:
+        code, out, err = _run(["git", "ls-tree", "-r", "--name-only", source_branch], cwd=repo_root)
+        if code != 0:
+            message = (_as_str(err) or _as_str(out) or "").strip()
+            lowered = message.lower()
+            # During tests or stale branch scenarios, merge command itself remains the source of truth.
+            if "not a valid object name" in lowered or "unknown revision" in lowered:
+                return [], None
+            return [], message or "unable to inspect source branch tree"
+        forbidden = [
+            line.strip()
+            for line in (_as_str(out) or "").splitlines()
+            if line.strip().startswith("reports/optimus-prime/")
+        ]
+        return forbidden, None
+
+    def _is_merge_conflict_failure(command_text: str, stdout_text: str, stderr_text: str) -> bool:
+        cmd = _as_str(command_text).strip().lower()
+        if "git merge" not in cmd:
+            return False
+        combined = f"{_as_str(stdout_text)}\n{_as_str(stderr_text)}".lower()
+        conflict_markers = (
+            "automatic merge failed",
+            "merge conflict",
+            "conflict (",
+            "fix conflicts and then commit",
+            "unmerged paths",
+            "would be overwritten by merge",
+        )
+        return any(marker in combined for marker in conflict_markers)
+
     warnings: list[dict[str, Any]] = []
     run_id = _run_id_from_lock_id(_as_str(build_state.get("loop_lock_id")))
     registry_path = _repo_path(req.repo_root, DONE_TASKS_REGISTRY_JSON)
@@ -10141,15 +10374,14 @@ def _manager_branch_merge_cycle(
         if eligible:
             merge_eligible_ids.append(task_id)
             continue
-        if reason_code in {"tdd_expectation_not_met", "task_evidence_invalid", "task_evidence_missing", "gap_consumption_pending_recheck"}:
-            warnings.append(
-                {
-                    "code": reason_code,
-                    "message": f"task {task_id} is review_done but not merge-eligible ({reason_code})",
-                    "stage": "build_loop",
-                    "task_id": task_id,
-                }
-            )
+        warnings.append(
+            {
+                "code": reason_code or "merge_not_eligible",
+                "message": f"task {task_id} is review_done but not merge-eligible ({reason_code or 'unknown'})",
+                "stage": "build_loop",
+                "task_id": task_id,
+            }
+        )
     pending_merge = [task_id for task_id in merge_eligible_ids if task_id not in merged_ids]
     if req.dry_run:
         out = {
@@ -10250,52 +10482,6 @@ def _manager_branch_merge_cycle(
                     f"branch-merge-manager: task={task_id} eligibility lost ({reason_code}); stopping retries",
                 )
                 lost_eligibility = True
-                retries_exhausted = False
-                break
-            missing_targets: list[str] = []
-            for verify_cmd in verify_commands:
-                missing_targets.extend(_verification_command_missing_targets(req.repo_root, verify_cmd))
-            if missing_targets:
-                dedup_targets = sorted(set(missing_targets))
-                validation_payload = {
-                    "schema_version": SCHEMA_VERSION,
-                    "task_id": task_id,
-                    "attempt": attempt,
-                    "ok": False,
-                    "error": {
-                        "code": "merge_verification_contract_invalid",
-                        "message": f"verification command target missing: {', '.join(dedup_targets)}",
-                        "stage": "build_loop",
-                    },
-                    "details": {
-                        "code": "verification_command_target_missing",
-                        "missing_targets": dedup_targets,
-                    },
-                    "finished_at": utc_now_iso(),
-                }
-                _atomic_write_json(validation_path, validation_payload)
-                prior_errors = [validation_payload["error"]]
-                warnings.append(
-                    {
-                        "code": "verification_command_target_missing",
-                        "message": f"task {task_id} verification target missing: {', '.join(dedup_targets)}",
-                        "stage": "build_loop",
-                        "task_id": task_id,
-                        "missing_targets": dedup_targets,
-                    }
-                )
-                _emit_build_progress(
-                    req,
-                    (
-                        f"branch-merge-manager: task={task_id} verification contract invalid: "
-                        f"missing targets {', '.join(dedup_targets)}; stopping retries"
-                    ),
-                )
-                non_retriable_error = {
-                    "code": "merge_verification_contract_invalid",
-                    "message": validation_payload["error"]["message"],
-                    "details": validation_payload.get("details"),
-                }
                 retries_exhausted = False
                 break
             if not prompt_template_text:
@@ -10432,8 +10618,11 @@ def _manager_branch_merge_cycle(
             if not isinstance(commands, list) or not commands or not all(isinstance(item, str) and item.strip() for item in commands):
                 action_errors.append("commands must be non-empty list[str]")
             action_verify = action_payload.get("verification_commands")
-            if not isinstance(action_verify, list) or not action_verify or not all(isinstance(item, str) and item.strip() for item in action_verify):
-                action_errors.append("verification_commands must be non-empty list[str]")
+            if action_verify is not None and (
+                not isinstance(action_verify, list)
+                or not all(isinstance(item, str) and item.strip() for item in action_verify)
+            ):
+                action_errors.append("verification_commands must be list[str] when provided")
             if action_errors:
                 _emit_build_progress(
                     req,
@@ -10481,6 +10670,26 @@ def _manager_branch_merge_cycle(
                         "unable to resolve pre-merge HEAD on RAB-BASE",
                         stage="build_loop",
                     )
+                forbidden_paths, inspect_error = _source_branch_forbidden_report_paths(req.repo_root, branch_name)
+                if inspect_error:
+                    raise OpError(
+                        "branch_manager_execution_failed",
+                        f"unable to inspect source branch tree for {branch_name}: {inspect_error}",
+                        stage="build_loop",
+                    )
+                if forbidden_paths:
+                    preview = ", ".join(forbidden_paths[:3])
+                    if len(forbidden_paths) > 3:
+                        preview += ", ..."
+                    raise OpError(
+                        "merge_source_contains_op_artifacts",
+                        (
+                            f"source branch {branch_name} includes forbidden OP artifacts ({preview}); "
+                            f"clean reports/optimus-prime files from {branch_name}, then merge RAB-BASE into "
+                            f"{branch_name}, resolve conflicts, commit, and rerun review."
+                        ),
+                        stage="build_loop",
+                    )
                 command_rows: list[dict[str, Any]] = []
                 for cmd in commands:
                     cmd_result = _run_manager_command(
@@ -10504,6 +10713,15 @@ def _manager_branch_merge_cycle(
                         }
                     )
                     if not cmd_ok:
+                        if _is_merge_conflict_failure(cmd, stdout, stderr):
+                            raise OpError(
+                                "merge_conflict_detected",
+                                (
+                                    f"merge conflict detected while merging {branch_name} into RAB-BASE; "
+                                    f"merge RAB-BASE into {branch_name}, resolve conflicts, commit, and rerun review."
+                                ),
+                                stage="build_loop",
+                            )
                         raise OpError(
                             _as_str(cmd_result.get("code")) or "branch_manager_execution_failed",
                             _as_str(cmd_result.get("message"))
@@ -10528,42 +10746,6 @@ def _manager_branch_merge_cycle(
                     )
                 verification_rows: list[dict[str, Any]] = []
                 verification_ok = True
-                for cmd in verify_commands:
-                    verify_result = _run_manager_command(
-                        cmd,
-                        cwd=req.repo_root,
-                        timeout_sec=BRANCH_VERIFY_COMMAND_TIMEOUT_SEC,
-                        manager="branch",
-                    )
-                    verify_ok = _as_bool(verify_result.get("ok"), default=False)
-                    row = {
-                        "command": cmd,
-                        "passed": verify_ok,
-                        "exit_code": verify_result.get("exit_code"),
-                        "stdout": (_as_str(verify_result.get("stdout")) or "").strip(),
-                        "stderr": (_as_str(verify_result.get("stderr")) or "").strip(),
-                        "error_code": _as_str(verify_result.get("code")),
-                    }
-                    verification_rows.append(row)
-                    if not verify_ok:
-                        verification_ok = False
-                if not verification_ok and merged_commit:
-                    rollback_target = _as_str(pre_merge_head)
-                    if rollback_target:
-                        rollback_result = _run_manager_command(
-                            f"git reset --hard {rollback_target}",
-                            cwd=req.repo_root,
-                            timeout_sec=BRANCH_ACTION_COMMAND_TIMEOUT_SEC,
-                            manager="branch",
-                        )
-                        rollback_applied = _as_bool(rollback_result.get("ok"), default=False)
-                        if not rollback_applied:
-                            raise OpError(
-                                _as_str(rollback_result.get("code")) or "branch_manager_execution_failed",
-                                _as_str(rollback_result.get("message"))
-                                or f"failed rollback to pre-merge HEAD {rollback_target}",
-                                stage="build_loop",
-                            )
                 validation_payload = {
                     "schema_version": SCHEMA_VERSION,
                     "task_id": task_id,
@@ -10578,6 +10760,8 @@ def _manager_branch_merge_cycle(
                     "rollback_target": rollback_target,
                     "action_commands": command_rows,
                     "verification": verification_rows,
+                    "verification_skipped": True,
+                    "verification_skip_reason": "review_stage_already_verified",
                     "llm_exit_code": exit_code,
                     "finished_at": utc_now_iso(),
                 }
@@ -10587,23 +10771,10 @@ def _manager_branch_merge_cycle(
                 if verification_ok:
                     _emit_build_progress(
                         req,
-                        f"branch-merge-manager: task={task_id} merged and verified on attempt {attempt}",
+                        f"branch-merge-manager: task={task_id} merged on attempt {attempt}",
                     )
                     retries_exhausted = False
                     break
-                prior_errors = [
-                    {
-                        "code": "branch_manager_execution_failed",
-                        "message": "post-merge verification suite failed",
-                    }
-                ]
-                _emit_build_progress(
-                    req,
-                    (
-                        f"branch-merge-manager: task={task_id} attempt {attempt} verification failed; "
-                        "applying necessary fixes and retrying."
-                    ),
-                )
             except OpError as exc:
                 rollback_error: dict[str, Any] | None = None
                 if pre_merge_head and not rollback_applied:
@@ -10644,6 +10815,28 @@ def _manager_branch_merge_cycle(
                 merged_ok = False
                 verification_ok = False
                 prior_errors = [validation_payload["error"]]
+                if exc.code == "merge_conflict_detected":
+                    non_retriable_error = validation_payload["error"]
+                    retries_exhausted = False
+                    _emit_build_progress(
+                        req,
+                        (
+                            f"branch-merge-manager: task={task_id} merge conflict detected; "
+                            "task blocked with merge gap and retries stopped"
+                        ),
+                    )
+                    break
+                if exc.code == "merge_source_contains_op_artifacts":
+                    non_retriable_error = validation_payload["error"]
+                    retries_exhausted = False
+                    _emit_build_progress(
+                        req,
+                        (
+                            f"branch-merge-manager: task={task_id} source branch contains OP artifacts; "
+                            "task blocked with merge gap and retries stopped"
+                        ),
+                    )
+                    break
                 _emit_build_progress(
                     req,
                     (
@@ -10703,6 +10896,8 @@ def _manager_branch_merge_cycle(
             "branch_manager_action_invalid",
             "branch_manager_execution_failed",
             "merge_proof_failed",
+            "merge_conflict_detected",
+            "merge_source_contains_op_artifacts",
             "manager_command_disallowed",
             "manager_command_timeout",
             "merge_verification_contract_invalid",
@@ -10734,12 +10929,14 @@ def _manager_branch_merge_cycle(
                 f"branch-merge-manager: task={task_id} blocked due to non-retriable merge contract failure",
             )
 
+    merged_task_ids = sorted({_as_str(row.get("task_id")) for row in merged_rows if _as_str(row.get("task_id"))})
+    pending_merge_ids = sorted([task_id for task_id in merge_eligible_ids if task_id and task_id not in set(merged_task_ids)])
     out = {
         "schema_version": SCHEMA_VERSION,
         "updated_at": utc_now_iso(),
         "review_done_task_ids": sorted(review_done),
-        "merged_task_ids": sorted({_as_str(row.get('task_id')) for row in merged_rows if _as_str(row.get('task_id'))}),
-        "pending_merge_task_ids": sorted([task_id for task_id in review_done if task_id not in {_as_str(row.get('task_id')) for row in merged_rows if _as_str(row.get('task_id'))}]),
+        "merged_task_ids": merged_task_ids,
+        "pending_merge_task_ids": pending_merge_ids,
         "branch": "RAB-BASE",
         "merged_tasks": merged_rows,
     }
@@ -11166,6 +11363,89 @@ def _manager_workstation_cycle(
             f"workstation-manager: slot={slot} exhausted retries (10/10), task blocked",
         )
 
+    def _enforce_artifact_symlink_or_fail(
+        *,
+        slot: str,
+        task_id: str | None,
+        ws_row: dict[str, Any],
+        worktree_root: Path | None,
+    ) -> bool:
+        if not isinstance(worktree_root, Path):
+            ws_row["status"] = "failed"
+            ws_row["retry_count"] = _coerce_nonneg_int(ws_row.get("retry_count"), default=0) + 1
+            ws_row["last_error"] = {
+                "code": "workstation_artifact_symlink_failed",
+                "message": f"workstation slot {slot} missing worktree path for artifact symlink enforcement",
+            }
+            ws_row["last_update_at"] = utc_now_iso()
+            warnings.append(
+                {
+                    "code": "workstation_artifact_symlink_failed",
+                    "message": _as_str((ws_row.get("last_error") or {}).get("message"))
+                    or f"workstation artifact symlink enforcement failed for slot {slot}",
+                    "stage": "build_loop",
+                    "slot": slot,
+                    "task_id": task_id,
+                }
+            )
+            _emit_build_progress(
+                req,
+                f"workstation-manager: slot={slot} artifact symlink enforcement failed: missing worktree path",
+            )
+            if _coerce_nonneg_int(ws_row.get("retry_count"), default=0) >= 10:
+                _handle_retry_exhausted(slot=slot, task_id=task_id, ws_row=ws_row)
+            return False
+
+        symlink_result = _ensure_worktree_artifact_root_symlink(req.repo_root, worktree_root)
+        if _as_bool(symlink_result.get("ok"), default=False):
+            if _as_bool(symlink_result.get("created"), default=False) or _as_bool(
+                symlink_result.get("replaced"), default=False
+            ):
+                warnings.append(
+                    {
+                        "code": _as_str(symlink_result.get("code")) or "workstation_artifact_symlink_enforced",
+                        "message": _as_str(symlink_result.get("message"))
+                        or f"artifact-root symlink enforced for slot {slot}",
+                        "stage": "build_loop",
+                        "slot": slot,
+                        "task_id": task_id,
+                        "worktree_root": str(worktree_root),
+                        "link_path": _as_str(symlink_result.get("link_path")),
+                        "target": _as_str(symlink_result.get("target")),
+                    }
+                )
+            return True
+
+        ws_row["status"] = "failed"
+        ws_row["pid"] = None
+        ws_row["retry_count"] = _coerce_nonneg_int(ws_row.get("retry_count"), default=0) + 1
+        ws_row["last_error"] = {
+            "code": "workstation_artifact_symlink_failed",
+            "message": _as_str(symlink_result.get("message")) or "artifact-root symlink enforcement failed",
+        }
+        ws_row["last_update_at"] = utc_now_iso()
+        warnings.append(
+            {
+                "code": "workstation_artifact_symlink_failed",
+                "message": _as_str((ws_row.get("last_error") or {}).get("message"))
+                or f"workstation artifact symlink enforcement failed for slot {slot}",
+                "stage": "build_loop",
+                "slot": slot,
+                "task_id": task_id,
+                "worktree_root": str(worktree_root),
+            }
+        )
+        _emit_build_progress(
+            req,
+            (
+                f"workstation-manager: slot={slot} artifact symlink enforcement failed: "
+                f"{_as_str((ws_row.get('last_error') or {}).get('message')) or 'unknown'}"
+            ),
+        )
+        if _coerce_nonneg_int(ws_row.get("retry_count"), default=0) >= 10:
+            _handle_retry_exhausted(slot=slot, task_id=task_id, ws_row=ws_row)
+        return False
+
     for worker in workers:
         if not isinstance(worker, dict):
             continue
@@ -11297,6 +11577,13 @@ def _manager_workstation_cycle(
             and current_worktree_matches_slot
             and current_branch_prefix_ok
         ):
+            if not _enforce_artifact_symlink_or_fail(
+                slot=slot,
+                task_id=active_task_id,
+                ws_row=ws_row,
+                worktree_root=expected_worktree_path or current_worktree_path,
+            ):
+                continue
             ws_row["status"] = "ready"
             ws_row["pid"] = None
             ws_row["last_error"] = None
@@ -11332,6 +11619,13 @@ def _manager_workstation_cycle(
             or worktree_path_mismatch
         )
         if not needs_prep:
+            if not _enforce_artifact_symlink_or_fail(
+                slot=slot,
+                task_id=active_task_id,
+                ws_row=ws_row,
+                worktree_root=expected_worktree_path or current_worktree_path,
+            ):
+                continue
             ws_row["status"] = "ready"
             ws_row["pid"] = None
             ws_row["last_error"] = None
@@ -11413,6 +11707,14 @@ def _manager_workstation_cycle(
             if _as_bool(result.get("ok"), default=False):
                 target_path = _as_str(result.get("target_path")) or str(expected_worktree_path or "")
                 resolved_branch = _as_str(result.get("resolved_branch")) or task_branch
+                target_path_obj = Path(target_path).expanduser()
+                if not _enforce_artifact_symlink_or_fail(
+                    slot=slot,
+                    task_id=active_task_id,
+                    ws_row=ws_row,
+                    worktree_root=target_path_obj,
+                ):
+                    continue
                 worker["worktree_root"] = target_path
                 worker["branch"] = resolved_branch
                 _apply_slot_lane_transition(worker, lane_id)
@@ -11633,6 +11935,14 @@ def _manager_workstation_cycle(
         if _as_bool(result.get("ok"), default=False):
             target_path = _as_str(result.get("target_path")) or str(expected_worktree_path or "")
             resolved_branch = _as_str(result.get("resolved_branch")) or task_branch
+            target_path_obj = Path(target_path).expanduser()
+            if not _enforce_artifact_symlink_or_fail(
+                slot=slot,
+                task_id=active_task_id,
+                ws_row=ws_row,
+                worktree_root=target_path_obj,
+            ):
+                continue
             worker["worktree_root"] = target_path
             worker["branch"] = resolved_branch
             _apply_slot_lane_transition(worker, lane_id)
@@ -12198,6 +12508,7 @@ def _preflight_build(
 
 
 def command_build(req: OpRequest) -> dict[str, Any]:
+    _ensure_managed_gitignore_block(req.repo_root)
     _emit_build_progress(req, f"starting build runtime for {req.repo_root}")
     auto_init_warnings: list[dict[str, Any]] = []
     mission_scope_supplied = bool(req.mission or req.mission_file or req.scope or req.scope_file)
@@ -12342,6 +12653,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
     ]
     build_state["profile_aliases"] = selected_aliases
     build_state["profile_assignment_policy"] = "dynamic_reassign_on_gate"
+    build_state["artifact_fan_in_enabled"] = bool(req.enable_artifact_fan_in)
     if not isinstance(build_state.get("slot_profile_assignments"), dict):
         build_state["slot_profile_assignments"] = {}
 
@@ -12488,6 +12800,10 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             )
             warnings.extend(branch_warnings)
             cycle_local_warnings.extend(branch_warnings)
+            _emit_build_progress(
+                req,
+                f"cycle {build_state['last_cycle']}: {_summarize_branch_merge_decision(branch_warnings)}",
+            )
 
             _emit_build_progress(req, f"cycle {build_state['last_cycle']}: workstation-manager")
             workstation_out = _manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
@@ -14294,6 +14610,7 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         sleep_val = float(sleep_minutes)
     except (TypeError, ValueError) as exc:
         raise OpError("input_error", "sleep_minutes must be numeric", stage="input") from exc
+    enable_artifact_fan_in = _as_bool(payload.get("enable_artifact_fan_in"), default=False)
 
     return OpRequest(
         command=command,
@@ -14308,6 +14625,7 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         output_mode=_as_str(payload.get("output_mode")) or "json",
         max_build_cycles=max_cycles_out,
         sleep_minutes=max(0.0, sleep_val),
+        enable_artifact_fan_in=enable_artifact_fan_in,
         dry_run=_as_bool(payload.get("dry_run"), default=False),
         reset_exhausted_retries=_as_bool(payload.get("reset_exhausted_retries"), default=False),
     )

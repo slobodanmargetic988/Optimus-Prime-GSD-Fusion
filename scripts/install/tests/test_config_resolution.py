@@ -75,6 +75,7 @@ def test_config_precedence_cli_over_project_over_global_over_defaults():
             # strict_validation from profile defaults after merges.
             assert effective["workflow"]["strict_validation"] is True
             assert effective["workflow"]["sleep_minutes"] == 1.0
+            assert effective["workflow"]["enable_artifact_fan_in"] is False
         finally:
             if old_xdg is None:
                 os.environ.pop("XDG_CONFIG_HOME", None)
@@ -89,12 +90,17 @@ def test_config_validation_reports_fix_guidance():
         payload = {
             "mode": "global",
             "home_override": str(home),
-            "config": {
-                "profile": "invalid-profile",
-                "workflow": {"max_build_cycles": -1, "strict_validation": "bad", "sleep_minutes": 0},
-                "rate_gate": {"max_wait_hours": 0},
-            },
-        }
+                "config": {
+                    "profile": "invalid-profile",
+                    "workflow": {
+                        "max_build_cycles": -1,
+                        "strict_validation": "bad",
+                        "sleep_minutes": 0,
+                        "enable_artifact_fan_in": "bad",
+                    },
+                    "rate_gate": {"max_wait_hours": 0},
+                },
+            }
         ctx = COMMON.resolve_context(payload)
         resolved = CONFIG.resolve_effective_config(payload, ctx)
         assert resolved["errors"]
@@ -103,6 +109,7 @@ def test_config_validation_reports_fix_guidance():
         assert "workflow.max_build_cycles" in fields
         assert "workflow.strict_validation" in fields
         assert "workflow.sleep_minutes" in fields
+        assert "workflow.enable_artifact_fan_in" in fields
         assert "rate_gate.max_wait_hours" in fields
         assert all("fix" in item for item in resolved["errors"])
 
@@ -120,3 +127,18 @@ def test_cli_sleep_minutes_override_wins():
         resolved = CONFIG.resolve_effective_config(payload, ctx)
         assert resolved["errors"] == []
         assert resolved["effective_config"]["workflow"]["sleep_minutes"] == 0.25
+
+
+def test_cli_enable_artifact_fan_in_override_wins():
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp) / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "mode": "global",
+            "home_override": str(home),
+            "enable_artifact_fan_in": True,
+        }
+        ctx = COMMON.resolve_context(payload)
+        resolved = CONFIG.resolve_effective_config(payload, ctx)
+        assert resolved["errors"] == []
+        assert resolved["effective_config"]["workflow"]["enable_artifact_fan_in"] is True

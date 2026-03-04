@@ -145,7 +145,7 @@ def build_repo(root: Path) -> None:
                 "for task in tasks:",
                 "    task_id = task['task_id']",
                 "    evidence_ref = f'reports/optimus-prime/planning/evidence/{task_id}/TASK_EVIDENCE.json'",
-                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'lane_id': task['lane_id'], 'requirement_ids': task['requirement_ids'], 'verification_contract': task['verification_contract'], 'status': 'pending', 'owner_slot': None, 'dispatch_thread_id': None, 'last_progress_at': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'gaps_that_need_patching': [], 'blockers': [], 'last_handoff_outcome': {'status': None, 'reason_codes': [], 'timestamp': None}, 'blocking_source': 'none', 'gapfix_state': {'active_batch_id': None, 'active': False, 'target_gap_stage': None, 'consumed_gap_ids': [], 'batch_started_cycle': None, 'batch_last_updated_at': None}, 'progress_watchdog': {'task_started_cycle': None, 'last_forward_progress_cycle': None, 'consecutive_no_forward_progress_cycles': 0, 'threshold_cycles': 25, 'triggered': False, 'triggered_at': None}})",
+                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'lane_id': task['lane_id'], 'requirement_ids': task['requirement_ids'], 'verification_contract': task['verification_contract'], 'status': 'pending', 'owner_slot': None, 'dispatch_thread_id': None, 'last_progress_at': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'gaps_that_need_patching': [], 'blockers': [], 'last_handoff_outcome': {'status': None, 'reason_codes': [], 'timestamp': None}, 'blocking_source': 'none', 'gapfix_state': {'active_batch_id': None, 'active': False, 'target_gap_stage': None, 'consumed_gap_ids': [], 'batch_started_cycle': None, 'batch_last_updated_at': None}, 'progress_watchdog': {'started': False, 'first_dispatched_cycle': None, 'task_started_cycle': None, 'last_forward_progress_cycle': None, 'consecutive_no_forward_progress_cycles': 0, 'threshold_cycles': 25, 'triggered': False, 'triggered_at': None}})",
                 "",
                 "state_json = {'schema_version': '1.0', 'initialized_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z', 'mission': 'inline:Build MyBoard', 'scope': 'inline:Board workflow', 'mission_source': {'mode': 'inline', 'value': 'Build MyBoard', 'path': None, 'display': 'Build MyBoard'}, 'scope_source': {'mode': 'inline', 'value': 'Board workflow', 'path': None, 'display': 'Board workflow'}, 'constraints': [], 'requirements': requirements, 'map_fingerprint': 'map-test', 'repo_fingerprint': 'repo-test', 'baseline_ready': True, 'plan_ready': True, 'plan_id': plan_id, 'build_ready': True}",
                 "state_md = '# STATE\\\\n\\\\n- baseline_ready: true\\\\n- plan_ready: true\\\\n- build_ready: true\\\\n'",
@@ -237,6 +237,65 @@ def test_summarize_watchdog_findings_includes_reasons_and_warning_codes():
     assert "no_progress=3/25" in summary
     assert "reasons=no_task_state_delta" in summary
     assert "warnings=no_progress_watchdog_warning" in summary
+
+
+def test_task_progress_watchdog_skips_dormant_tasks_until_first_dispatch():
+    task_state = {
+        "tasks": [
+            {
+                "task_id": "TASK-001",
+                "phase_id": "phase-1",
+                "status": "pending",
+                "owner_slot": None,
+                "blocking_source": "none",
+                "evidence": {"task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json"},
+                "gaps_that_need_patching": [],
+                "progress_watchdog": {
+                    "started": False,
+                    "first_dispatched_cycle": 0,
+                    "task_started_cycle": 0,
+                    "last_forward_progress_cycle": 0,
+                    "consecutive_no_forward_progress_cycles": 17,
+                    "threshold_cycles": 25,
+                    "triggered": False,
+                    "triggered_at": None,
+                },
+            }
+        ]
+    }
+    build_state = {"last_cycle": 18}
+    warnings = MODULE._apply_task_progress_watchdog(task_state, build_state, plan_id="plan-test")
+    assert warnings == []
+    watchdog = task_state["tasks"][0]["progress_watchdog"]
+    assert watchdog["started"] is False
+    assert watchdog["consecutive_no_forward_progress_cycles"] == 17
+    assert task_state["tasks"][0]["status"] == "pending"
+
+
+def test_mark_task_watchdog_started_on_first_dispatch():
+    task = {
+        "task_id": "TASK-001",
+        "status": "pending",
+        "progress_watchdog": {
+            "started": False,
+            "first_dispatched_cycle": 0,
+            "task_started_cycle": 0,
+            "last_forward_progress_cycle": 0,
+            "consecutive_no_forward_progress_cycles": 5,
+            "threshold_cycles": 25,
+            "triggered": True,
+            "triggered_at": "2026-03-03T00:00:00Z",
+        },
+    }
+    build_state = {"last_cycle": 9}
+    MODULE._mark_task_watchdog_started(task, build_state)
+    watchdog = task["progress_watchdog"]
+    assert watchdog["started"] is True
+    assert watchdog["first_dispatched_cycle"] == 9
+    assert watchdog["task_started_cycle"] == 9
+    assert watchdog["consecutive_no_forward_progress_cycles"] == 0
+    assert watchdog["triggered"] is False
+    assert watchdog["triggered_at"] is None
 
 
 def planner_checksum(content_type: str, content: object) -> str:
@@ -924,6 +983,21 @@ def test_op_build_default_sleep_minutes_is_one():
         build_repo(root)
         req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
         assert req.sleep_minutes == 1.0
+        assert req.enable_artifact_fan_in is False
+
+
+def test_op_build_request_accepts_enable_artifact_fan_in_override():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "enable_artifact_fan_in": True,
+            }
+        )
+        assert req.enable_artifact_fan_in is True
 
 
 def test_op_plan_emits_task_execution_state():
@@ -4426,6 +4500,75 @@ def test_dispatch_task_packet_includes_phase_id_in_worker_payload(monkeypatch: p
         assert captured.get("phase_id") == "phase-2"
 
 
+@pytest.mark.parametrize(
+    ("stage", "expected_status", "expected_slot"),
+    [
+        ("test", "testing", "test-1"),
+        ("review", "reviewing", "review-1"),
+    ],
+)
+def test_dispatch_task_packet_clears_active_gapfix_when_tester_or_reviewer_takes_over(
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    expected_status: str,
+    expected_slot: str,
+):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "max_build_cycles": 1,
+                "dry_run": True,
+            }
+        )
+
+        task = {
+            "task_id": "TASK-001",
+            "phase_id": "phase-1",
+            "requirement_ids": ["REQ-001"],
+            "evidence": {
+                "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+            },
+            "attempts": {"dev": 1, "test": 0, "review": 0},
+            "blockers": [],
+            "gapfix_state": {
+                "active_batch_id": "batch-123",
+                "active": True,
+                "target_gap_stage": "test",
+                "consumed_gap_ids": ["gap-1"],
+                "batch_started_cycle": 3,
+                "batch_last_updated_at": "2026-03-03T00:00:00Z",
+            },
+        }
+        plan_task = {
+            "phase_id": "phase-1",
+            "must_haves": ["Implement feature"],
+            "requirement_ids": ["REQ-001"],
+        }
+
+        monkeypatch.setattr(MODULE, "_resolve_skill_script", lambda *_args, **_kwargs: Path("/tmp/fake_script.py"))
+        monkeypatch.setattr(MODULE, "_run_tool_json", lambda *_args, **_kwargs: {"ok": True, "status": "dispatch_started"})
+        monkeypatch.setattr(MODULE, "_git_text", lambda *_args, **_kwargs: "abc1234")
+
+        out = MODULE._dispatch_task_packet(
+            req,
+            task,
+            plan_task,
+            stage,
+            "plan-1",
+            "codex",
+            start_from_branch_override="codex/run-1/dev-1/task-001",
+        )
+        assert out["ok"] is True
+        assert task["status"] == expected_status
+        assert task["owner_slot"] == expected_slot
+        assert task["gapfix_state"]["active"] is False
+        assert task["gapfix_state"]["active_batch_id"] is None
+
+
 def test_append_task_blocker_compacts_duplicates_and_bounds():
     task = {"blockers": []}
     for _ in range(5):
@@ -5463,6 +5606,182 @@ def test_load_dispatch_assignments_gapfix_requires_existing_gap_batch_ref():
         assert "dispatch_assignment_invalid" in warning_codes
 
 
+def test_gap_consumption_clears_stale_active_gapfix_and_reschedules():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["last_cycle"] = 42
+        active_phase_id = "phase-1"
+
+        task = next(row for row in task_state["tasks"] if row.get("task_id") == "TASK-001")
+        task["status"] = "review_done"
+        task["owner_slot"] = None
+        task["gapfix_state"] = {
+            "active_batch_id": "old-batch",
+            "active": True,
+            "target_gap_stage": "test",
+            "consumed_gap_ids": ["gap-old"],
+            "batch_started_cycle": 1,
+            "batch_last_updated_at": "2026-03-03T00:00:00Z",
+        }
+        task["gaps_that_need_patching"] = [
+            {
+                "gap_id": "gap-review-open",
+                "category": "uat_missing",
+                "severity": "P1",
+                "stage": "review",
+                "status": "open",
+                "reason_codes": ["uat_requirement_not_passed"],
+                "retry_count": 0,
+                "max_retries": 5,
+                "created_at": "2026-03-03T00:00:00Z",
+                "updated_at": "2026-03-03T00:00:00Z",
+                "closure_ref": None,
+            }
+        ]
+        (planning / "WORK_DISPATCH_PLAN.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "active_phase_id": "phase-1",
+                    "assignments": [],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        out = MODULE._manager_gap_consumption_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+            active_phase_id=active_phase_id,
+        )
+        warning_codes = {row.get("code") for row in out.get("warnings", []) if isinstance(row, dict)}
+        assert "gapfix_state_stale_cleared" in warning_codes
+        gapfix_rows = [row for row in out.get("gapfix_assignments", []) if row.get("task_id") == "TASK-001"]
+        assert len(gapfix_rows) == 1
+        assert gapfix_rows[0].get("gap_stage") == "review"
+        assert task["gapfix_state"]["active"] is True
+        assert task["gapfix_state"]["active_batch_id"] != "old-batch"
+
+
+def test_gap_consumption_keeps_active_gapfix_when_matching_assignment_exists():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["last_cycle"] = 7
+        active_phase_id = "phase-1"
+
+        task = next(row for row in task_state["tasks"] if row.get("task_id") == "TASK-001")
+        task["status"] = "review_done"
+        task["owner_slot"] = None
+        task["gapfix_state"] = {
+            "active_batch_id": "batch-live",
+            "active": True,
+            "target_gap_stage": "test",
+            "consumed_gap_ids": ["gap-old"],
+            "batch_started_cycle": 1,
+            "batch_last_updated_at": "2026-03-03T00:00:00Z",
+        }
+        task["gaps_that_need_patching"] = [
+            {
+                "gap_id": "gap-review-open",
+                "category": "uat_missing",
+                "severity": "P1",
+                "stage": "review",
+                "status": "open",
+                "reason_codes": ["uat_requirement_not_passed"],
+                "retry_count": 0,
+                "max_retries": 5,
+                "created_at": "2026-03-03T00:00:00Z",
+                "updated_at": "2026-03-03T00:00:00Z",
+                "closure_ref": None,
+            }
+        ]
+        (planning / "WORK_DISPATCH_PLAN.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "active_phase_id": "phase-1",
+                    "assignments": [
+                        {
+                            "task_id": "TASK-001",
+                            "lane_id": "phase-1/lane-a",
+                            "phase_id": "phase-1",
+                            "next_stage": "dev",
+                            "next_role": "developer",
+                            "slot": "dev-1",
+                            "dispatch_policy": "resume_if_same_lane",
+                            "is_gapfix": True,
+                            "gap_batch_id": "batch-live",
+                            "gap_batch_ref": str(
+                                root
+                                / "reports"
+                                / "optimus-prime"
+                                / "planning"
+                                / "gapfix"
+                                / "TASK-001"
+                                / "batch-batch-live.json"
+                            ),
+                            "gap_stage": "test",
+                            "source_gap_ids": ["gap-old"],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        gap_ref = root / "reports" / "optimus-prime" / "planning" / "gapfix" / "TASK-001" / "batch-batch-live.json"
+        gap_ref.parent.mkdir(parents=True, exist_ok=True)
+        gap_ref.write_text("{}", encoding="utf-8")
+
+        out = MODULE._manager_gap_consumption_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+            active_phase_id=active_phase_id,
+        )
+        warning_codes = {row.get("code") for row in out.get("warnings", []) if isinstance(row, dict)}
+        assert "gapfix_state_stale_cleared" not in warning_codes
+        assert out.get("gapfix_assignments") == []
+        assert task["gapfix_state"]["active"] is True
+        assert task["gapfix_state"]["active_batch_id"] == "batch-live"
+
+
 def test_dispatch_packet_uses_slot_worktree_root_and_branch(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -6234,6 +6553,7 @@ def test_fan_in_syncs_task_evidence_from_worktree_before_state_resolution():
         plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
         task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
         build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["artifact_fan_in_enabled"] = True
         task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
         task["status"] = "dev_working"
         task["owner_slot"] = "dev-1"
@@ -6283,6 +6603,94 @@ def test_fan_in_syncs_task_evidence_from_worktree_before_state_resolution():
         assert "worktree_artifacts_synced" in warning_codes
         task_after = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
         assert task_after.get("status") == "dev_done"
+
+
+def test_fan_in_disabled_skips_worktree_sync_and_warns_once_per_cycle():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["artifact_fan_in_enabled"] = False
+        build_state["last_cycle"] = 3
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["lane_id"] = "phase-1/lane-a"
+        worktree_root = root / ".MyBoard-workstations" / "workstation-dev-1"
+        evidence_path = worktree_root / "reports" / "optimus-prime" / "planning" / "evidence" / "TASK-001" / "TASK_EVIDENCE.json"
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        evidence_payload = {
+            "schema_version": "1.0",
+            "plan_id": plan_packets.get("plan_id"),
+            "phase_id": "phase-1",
+            "task_id": "TASK-001",
+            "requirement_ids": ["REQ-001"],
+            "updated_at": "2026-01-01T00:00:00Z",
+            "dev": {"status": "done", "checks": [], "verify_results": [], "dev_ready": True, "blockers": [], "artifacts": []},
+            "test": {"status": "pending", "checks": [], "verify_results": [], "uat_results": [], "blockers": [], "artifacts": []},
+            "review": {"status": "pending", "decision": None, "blockers": [], "artifacts": []},
+            "gate": {"ready_for_test": True, "ready_for_review": False, "ready_for_phase_exit": False},
+            "summary": {
+                "result": "fail",
+                "expectation": "expect_fail",
+                "expectation_met": True,
+                "failure_class": "expected_red",
+                "reason_codes": ["tdd_expected_failure_observed", "fan_in_disabled"],
+            },
+        }
+        evidence_path.write_text(json.dumps(evidence_payload, indent=2) + "\n", encoding="utf-8")
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["worktree_root"] = str(worktree_root)
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+                row["lane_id"] = "phase-1/lane-a"
+                row["previous_lane_id"] = "phase-1/lane-a"
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+
+        out_first = MODULE._manager_production_line_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+        )
+        out_second = MODULE._manager_production_line_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+        )
+        warning_codes_first = {item.get("code") for item in out_first.get("warnings", []) if isinstance(item, dict)}
+        warning_codes_second = {item.get("code") for item in out_second.get("warnings", []) if isinstance(item, dict)}
+        assert "artifact_fan_in_disabled" in warning_codes_first
+        assert "artifact_fan_in_disabled" not in warning_codes_second
+        canonical_evidence = (
+            root
+            / "reports"
+            / "optimus-prime"
+            / "planning"
+            / "evidence"
+            / "TASK-001"
+            / "TASK_EVIDENCE.json"
+        )
+        canonical_payload = json.loads(canonical_evidence.read_text(encoding="utf-8"))
+        reason_codes = (canonical_payload.get("summary") or {}).get("reason_codes") or []
+        assert "fan_in_disabled" not in reason_codes
 
 
 def test_dead_pid_without_progress_returns_forced_redispatch_assignment():
@@ -6924,6 +7332,128 @@ def _mark_task_review_done_merge_ready(root: Path, task: dict[str, object]) -> N
     evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def test_task_is_merge_eligible_ignores_consumed_gaps():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        plan_task = next(item for item in plan_packets["tasks"] if item.get("task_id") == "TASK-001")
+        _mark_task_review_done_merge_ready(root, task)
+        task["gaps_that_need_patching"] = [
+            {
+                "gap_id": "gap-consumed-1",
+                "category": "verify_missing",
+                "severity": "P1",
+                "stage": "test",
+                "status": "consumed",
+                "reason_codes": ["verify_command_not_passed"],
+                "retry_count": 1,
+                "max_retries": 5,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "consumed_at": "2026-01-01T00:00:00Z",
+                "closure_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+            }
+        ]
+        eligible, reason = MODULE._task_is_merge_eligible(root, task, plan_task)
+        assert eligible is True
+        assert reason == "eligible"
+
+
+def test_task_is_merge_eligible_blocks_open_gaps():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        plan_task = next(item for item in plan_packets["tasks"] if item.get("task_id") == "TASK-001")
+        _mark_task_review_done_merge_ready(root, task)
+        task["gaps_that_need_patching"] = [
+            {
+                "gap_id": "gap-open-1",
+                "category": "verify_missing",
+                "severity": "P1",
+                "stage": "test",
+                "status": "open",
+                "reason_codes": ["verify_command_not_passed"],
+                "retry_count": 0,
+                "max_retries": 5,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "closure_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+            }
+        ]
+        eligible, reason = MODULE._task_is_merge_eligible(root, task, plan_task)
+        assert eligible is False
+        assert reason == "open_task_gap"
+
+
+def test_branch_manager_reports_merge_ineligibility_reasons():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        _mark_task_review_done_merge_ready(root, task)
+        task["gaps_that_need_patching"] = [
+            {
+                "gap_id": "gap-open-1",
+                "category": "verify_missing",
+                "severity": "P1",
+                "stage": "test",
+                "status": "open",
+                "reason_codes": ["verify_command_not_passed"],
+                "retry_count": 0,
+                "max_retries": 5,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "closure_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+            }
+        ]
+        warnings = MODULE._manager_branch_merge_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+        )
+        warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
+        assert "open_task_gap" in warning_codes
+        assert "branch_merge_pending_tasks" not in warning_codes
+
+
 def test_branch_manager_success_updates_done_registry_with_verification_ref(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -7039,7 +7569,7 @@ def test_branch_manager_stops_when_candidate_loses_eligibility(monkeypatch: pyte
         assert task["status"] == "review_done"
 
 
-def test_branch_manager_missing_verify_target_stops_retries_and_blocks_task():
+def test_branch_manager_missing_verify_target_does_not_preblock_before_merge(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
@@ -7062,6 +7592,44 @@ def test_branch_manager_missing_verify_target_stops_retries_and_blocks_task():
             if isinstance(plan_task, dict):
                 plan_task["verify_commands"] = ["python3 -m pytest tests/does-not-exist/test_missing.py"]
 
+        def fake_codex_exec(**kwargs):
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "task_id": "TASK-001",
+                    "attempt": 1,
+                    "target_branch": "RAB-BASE",
+                    "source_branch": "codex/dev-1/task-001",
+                    "merge_strategy": "no_ff",
+                    "commands": [
+                        "git checkout RAB-BASE",
+                        "git merge --no-ff --no-edit codex/dev-1/task-001",
+                    ],
+                    "verification_commands": ["python3 -m pytest tests/does-not-exist/test_missing.py"],
+                },
+            )
+            return 0
+
+        command_log: list[str] = []
+
+        def fake_run_manager_command(command_text: str, **_kwargs):
+            command_log.append(str(command_text).strip())
+            return {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": "",
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            }
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(MODULE, "_run_manager_command", fake_run_manager_command)
+        monkeypatch.setattr(MODULE, "_git_text", lambda *_args, **_kwargs: "abc123")
+
         warnings = MODULE._manager_branch_merge_cycle(
             req,
             plan_packets=plan_packets,
@@ -7069,11 +7637,20 @@ def test_branch_manager_missing_verify_target_stops_retries_and_blocks_task():
             build_state=build_state,
         )
         warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
-        assert "verification_command_target_missing" in warning_codes
-        assert "merge_verification_contract_invalid" in warning_codes
+        assert "verification_command_target_missing" not in warning_codes
+        assert "merge_verification_contract_invalid" not in warning_codes
         assert "merge_manager_retry_exhausted" not in warning_codes
-        assert task["status"] == "blocked"
-        assert task["blocking_source"] == "merge"
+        assert "branch_manager_execution_failed" not in warning_codes
+        assert not any("tests/does-not-exist/test_missing.py" in item for item in command_log)
+        assert (root / "reports" / "optimus-prime" / "branch-manager" / "attempt-task-001-1" / "MERGE_ACTION.json").exists()
+        assert task["status"] == "review_done"
+        done_registry = json.loads((planning / "DONE_TASKS_REGISTRY.json").read_text(encoding="utf-8"))
+        merged_task_ids = {
+            item.get("task_id")
+            for item in done_registry.get("merged_tasks", [])
+            if isinstance(item, dict)
+        }
+        assert "TASK-001" in merged_task_ids
 
 
 def test_branch_manager_merge_proof_required_before_done_registry_update(
@@ -7188,7 +7765,7 @@ def test_branch_manager_merge_proof_required_before_done_registry_update(
         assert isinstance(rollback_target, str) and rollback_target.strip()
 
 
-def test_branch_manager_rollback_uses_pre_merge_head_not_head_parent(monkeypatch: pytest.MonkeyPatch):
+def test_branch_manager_skips_post_merge_verification_commands(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
@@ -7229,23 +7806,9 @@ def test_branch_manager_rollback_uses_pre_merge_head_not_head_parent(monkeypatch
             return 0
 
         command_log: list[str] = []
-        verify_attempts = {"count": 0}
-
         def fake_run_manager_command(command_text, **_kwargs):
             text = str(command_text).strip()
             command_log.append(text)
-            if text.startswith("python3 -m pytest"):
-                verify_attempts["count"] += 1
-                if verify_attempts["count"] == 1:
-                    return {
-                        "ok": False,
-                        "code": "branch_manager_execution_failed",
-                        "message": "simulated verify failure",
-                        "stdout": "",
-                        "stderr": "",
-                        "exit_code": 1,
-                        "timed_out": False,
-                    }
             return {
                 "ok": True,
                 "code": None,
@@ -7275,11 +7838,12 @@ def test_branch_manager_rollback_uses_pre_merge_head_not_head_parent(monkeypatch
         )
         warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
         assert "merge_manager_retry_exhausted" not in warning_codes
-        assert "git reset --hard pre-merge-1" in command_log
+        assert not any(item.startswith("python3 -m pytest") for item in command_log)
+        assert not any(item.startswith("git reset --hard ") for item in command_log)
         assert not any("HEAD~1" in item for item in command_log)
 
 
-def test_branch_manager_validation_records_rollback_metadata_on_verify_fail(monkeypatch: pytest.MonkeyPatch):
+def test_branch_manager_validation_marks_verification_skipped_on_merge_success(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
@@ -7319,22 +7883,7 @@ def test_branch_manager_validation_records_rollback_metadata_on_verify_fail(monk
             )
             return 0
 
-        verify_attempts = {"count": 0}
-
         def fake_run_manager_command(command_text, **_kwargs):
-            text = str(command_text).strip()
-            if text.startswith("python3 -m pytest"):
-                verify_attempts["count"] += 1
-                if verify_attempts["count"] == 1:
-                    return {
-                        "ok": False,
-                        "code": "branch_manager_execution_failed",
-                        "message": "simulated verify failure",
-                        "stdout": "",
-                        "stderr": "",
-                        "exit_code": 1,
-                        "timed_out": False,
-                    }
             return {
                 "ok": True,
                 "code": None,
@@ -7372,8 +7921,228 @@ def test_branch_manager_validation_records_rollback_metadata_on_verify_fail(monk
         )
         payload = json.loads(validation_path.read_text(encoding="utf-8"))
         assert payload.get("pre_merge_head") == "pre-merge-1"
+        assert payload.get("rollback_applied") is False
+        assert payload.get("rollback_target") is None
+        assert payload.get("verification_skipped") is True
+        assert payload.get("verification_skip_reason") == "review_stage_already_verified"
+        assert payload.get("verification") == []
+
+
+def test_branch_manager_merge_conflict_blocks_task_without_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        _mark_task_review_done_merge_ready(root, task)
+
+        def fake_codex_exec(**kwargs):
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "task_id": "TASK-001",
+                    "attempt": 1,
+                    "target_branch": "RAB-BASE",
+                    "source_branch": "codex/dev-1/task-001",
+                    "merge_strategy": "no_ff",
+                    "commands": [
+                        "git checkout RAB-BASE",
+                        "git merge --no-ff --no-edit codex/dev-1/task-001",
+                    ],
+                    "verification_commands": ["python3 -m pytest"],
+                },
+            )
+            return 0
+
+        command_log: list[str] = []
+
+        def fake_run_manager_command(command_text, **_kwargs):
+            text = str(command_text).strip()
+            command_log.append(text)
+            if text.startswith("git merge "):
+                return {
+                    "ok": False,
+                    "code": "branch_manager_execution_failed",
+                    "message": "merge failed due to conflicts",
+                    "stdout": "",
+                    "stderr": "Automatic merge failed; fix conflicts and then commit the result.",
+                    "exit_code": 1,
+                    "timed_out": False,
+                }
+            return {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": "",
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            }
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(MODULE, "_run_manager_command", fake_run_manager_command)
+        monkeypatch.setattr(MODULE, "_git_text", lambda *_args, **_kwargs: "pre-merge-sha")
+
+        warnings = MODULE._manager_branch_merge_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+        )
+        warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
+        assert "merge_conflict_detected" in warning_codes
+        assert "merge_manager_retry_exhausted" not in warning_codes
+        assert any(item == "git reset --hard pre-merge-sha" for item in command_log)
+        assert task["status"] == "blocked"
+        assert task["blocking_source"] == "merge"
+        merge_gap = next(
+            item
+            for item in task.get("gaps_that_need_patching", [])
+            if isinstance(item, dict) and item.get("category") == "merge_blocked"
+        )
+        assert "merge_conflict_detected" in (merge_gap.get("reason_codes") or [])
+        validation_path = (
+            root
+            / "reports"
+            / "optimus-prime"
+            / "branch-manager"
+            / "attempt-task-001-1"
+            / "MERGE_VALIDATION.json"
+        )
+        payload = json.loads(validation_path.read_text(encoding="utf-8"))
+        assert payload.get("error", {}).get("code") == "merge_conflict_detected"
         assert payload.get("rollback_applied") is True
-        assert payload.get("rollback_target") == "pre-merge-1"
+        assert payload.get("rollback_target") == "pre-merge-sha"
+        assert not (
+            root
+            / "reports"
+            / "optimus-prime"
+            / "branch-manager"
+            / "attempt-task-001-2"
+            / "MERGE_VALIDATION.json"
+        ).exists()
+
+
+def test_branch_manager_blocks_source_branch_with_op_artifacts_without_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        _mark_task_review_done_merge_ready(root, task)
+
+        def fake_codex_exec(**kwargs):
+            prompt = str(kwargs.get("prompt_text") or "")
+            _write_manager_action_from_prompt(
+                prompt,
+                {
+                    "schema_version": "1.0",
+                    "task_id": "TASK-001",
+                    "attempt": 1,
+                    "target_branch": "RAB-BASE",
+                    "source_branch": "codex/dev-1/task-001",
+                    "merge_strategy": "no_ff",
+                    "commands": [
+                        "git checkout RAB-BASE",
+                        "git merge --no-ff --no-edit codex/dev-1/task-001",
+                    ],
+                    "verification_commands": ["python3 -m pytest"],
+                },
+            )
+            return 0
+
+        command_log: list[str] = []
+        original_run = MODULE._run
+
+        def fake_run(args, cwd=None):
+            if args[:4] == ["git", "ls-tree", "-r", "--name-only"]:
+                return 0, "reports/optimus-prime/planning/UAT.md\nsrc/app.py\n", ""
+            return original_run(args, cwd=cwd)
+
+        def fake_run_manager_command(command_text, **_kwargs):
+            text = str(command_text).strip()
+            command_log.append(text)
+            return {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": "",
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            }
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
+        monkeypatch.setattr(MODULE, "_run", fake_run)
+        monkeypatch.setattr(MODULE, "_run_manager_command", fake_run_manager_command)
+        monkeypatch.setattr(MODULE, "_git_text", lambda *_args, **_kwargs: "pre-merge-sha")
+
+        warnings = MODULE._manager_branch_merge_cycle(
+            req,
+            plan_packets=plan_packets,
+            task_state=task_state,
+            build_state=build_state,
+        )
+        warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
+        assert "merge_source_contains_op_artifacts" in warning_codes
+        assert "merge_manager_retry_exhausted" not in warning_codes
+        assert "git merge --no-ff --no-edit codex/dev-1/task-001" not in command_log
+        assert any(item == "git reset --hard pre-merge-sha" for item in command_log)
+        merge_gap = next(
+            item
+            for item in task.get("gaps_that_need_patching", [])
+            if isinstance(item, dict) and item.get("category") == "merge_blocked"
+        )
+        assert "merge_source_contains_op_artifacts" in (merge_gap.get("reason_codes") or [])
+        validation_path = (
+            root
+            / "reports"
+            / "optimus-prime"
+            / "branch-manager"
+            / "attempt-task-001-1"
+            / "MERGE_VALIDATION.json"
+        )
+        payload = json.loads(validation_path.read_text(encoding="utf-8"))
+        assert payload.get("error", {}).get("code") == "merge_source_contains_op_artifacts"
+        assert payload.get("rollback_applied") is True
+        assert not (
+            root
+            / "reports"
+            / "optimus-prime"
+            / "branch-manager"
+            / "attempt-task-001-2"
+            / "MERGE_VALIDATION.json"
+        ).exists()
 
 
 def test_workstation_manager_success_updates_slot_worktree_and_branch(
@@ -8121,6 +8890,119 @@ def test_workstation_manager_skips_prepare_for_same_lane_in_progress_slot(
         slot_row = next(item for item in registry_after.get("workers", []) if isinstance(item, dict) and item.get("slot") == "dev-1")
         assert slot_row.get("worktree_root") == str(stable_worktree)
         assert slot_row.get("branch") == "codex/dev-1/task-001"
+
+
+def test_workstation_skip_path_enforces_artifact_symlink_replace(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["lane_id"] = "phase-1/lane-a"
+        stable_worktree = MODULE._expected_slot_worktree_path(root, "dev-1")
+        assert isinstance(stable_worktree, Path)
+        stable_worktree.mkdir(parents=True, exist_ok=True)
+        artifact_root = stable_worktree / "reports" / "optimus-prime"
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        (artifact_root / "junk.json").write_text("{}", encoding="utf-8")
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+                row["lane_id"] = "phase-1/lane-a"
+                row["previous_lane_id"] = "phase-1/lane-a"
+                row["branch"] = "codex/dev-1/task-001"
+                row["worktree_root"] = str(stable_worktree)
+            elif row.get("role") in {"developer", "tester", "reviewer"}:
+                row["lane_id"] = "phase-1/lane-z"
+                row["previous_lane_id"] = "phase-1/lane-z"
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        monkeypatch.setattr(
+            MODULE,
+            "run_codex_exec",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("LLM workstation prep should not run")),
+        )
+
+        out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+        warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
+        assert "workstation_skip_same_lane_in_progress" in warning_codes
+        assert "workstation_artifact_symlink_replaced" in warning_codes
+        assert artifact_root.is_symlink()
+        assert artifact_root.resolve() == (root / "reports" / "optimus-prime").resolve()
+
+
+def test_workstation_symlink_failure_marks_slot_not_ready(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["lane_id"] = "phase-1/lane-a"
+        stable_worktree = MODULE._expected_slot_worktree_path(root, "dev-1")
+        assert isinstance(stable_worktree, Path)
+        stable_worktree.mkdir(parents=True, exist_ok=True)
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+                row["lane_id"] = "phase-1/lane-a"
+                row["previous_lane_id"] = "phase-1/lane-a"
+                row["branch"] = "codex/dev-1/task-001"
+                row["worktree_root"] = str(stable_worktree)
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        monkeypatch.setattr(
+            MODULE,
+            "_ensure_worktree_artifact_root_symlink",
+            lambda *_args, **_kwargs: {
+                "ok": False,
+                "code": "workstation_artifact_symlink_failed",
+                "message": "simulated symlink failure",
+            },
+        )
+        monkeypatch.setattr(
+            MODULE,
+            "run_codex_exec",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("LLM workstation prep should not run")),
+        )
+
+        out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+        warning_codes = {item.get("code") for item in out.get("warnings", []) if isinstance(item, dict)}
+        assert "workstation_artifact_symlink_failed" in warning_codes
+        workstation_registry = json.loads((planning / "WORKSTATION_REGISTRY.json").read_text(encoding="utf-8"))
+        slot_row = (workstation_registry.get("slots") or {}).get("dev-1") or {}
+        assert slot_row.get("status") == "failed"
 
 
 def test_workstation_same_lane_skip_requires_slot_branch_prefix(monkeypatch: pytest.MonkeyPatch):
@@ -9040,7 +9922,32 @@ def test_build_prints_watchdog_findings_each_cycle(
         )
         assert out.get("status") == "running_needs_resume"
         logs = capsys.readouterr().out
+        assert "cycle 1: branch-merge decision: candidates=0" in logs
+        assert "cycle 2: branch-merge decision: candidates=0" in logs
         assert "cycle 1: watchdog findings:" in logs
         assert "cycle 2: watchdog findings:" in logs
         assert "reasons=initial_baseline" in logs
         assert "reasons=no_task_state_delta" in logs
+
+
+def test_summarize_branch_merge_decision_with_candidates():
+    summary = MODULE._summarize_branch_merge_decision(
+        [
+            {
+                "code": "branch_merge_pending_tasks",
+                "task_ids": ["TASK-003", "TASK-001", "TASK-002"],
+            }
+        ]
+    )
+    assert summary == "branch-merge decision: candidates=3 pending=TASK-003,TASK-001,TASK-002"
+
+
+def test_summarize_branch_merge_decision_with_reasons_only():
+    summary = MODULE._summarize_branch_merge_decision(
+        [
+            {"code": "open_task_gap", "task_id": "TASK-001"},
+            {"code": "task_evidence_invalid", "task_id": "TASK-002"},
+            {"code": "open_task_gap", "task_id": "TASK-003"},
+        ]
+    )
+    assert summary == "branch-merge decision: candidates=0 reasons=open_task_gap:2,task_evidence_invalid:1"

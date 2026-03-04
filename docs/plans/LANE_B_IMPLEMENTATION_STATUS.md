@@ -232,7 +232,10 @@ Diagram reference:
     - non-retriable verify contract mismatches (for example missing command targets) emit `merge_verification_contract_invalid` and stop retry burn for that task
   - workstation manager executes LLM-first lane-change preparation with strict schema validation, exact bundled skill-script path enforcement, exact deterministic slot target path enforcement, and bounded retries; exhaustion emits `workstation_manager_retry_exhausted` and blocks only the affected lane/task
   - workstation manager enforces slot-specific worktree names (`workstation-dev-*`, `workstation-test-*`, `workstation-review-*`) and skips destructive prep only for same-lane in-progress slots with deterministic slot path + branch prefix `codex/<slot>/...`
-  - production-line manager performs artifact fan-in from worker worktrees (`TASK_EVIDENCE.json` + handoff rows) before state reconciliation
+  - artifact fan-in is config-gated (`workflow.enable_artifact_fan_in`) with default `false`; when disabled, production-line manager emits `artifact_fan_in_disabled` and skips fan-in
+  - workstation manager enforces deterministic artifact-root symlink per slot worktree:
+    - `<worktree>/reports/optimus-prime -> <repo>/reports/optimus-prime`
+    - conflict policy is delete-and-replace for pre-existing non-symlink paths
   - dead PID recovery is evidence-first: reconcile from evidence when present, otherwise queue same-cycle same-slot redispatch with retry-watchdog metadata
   - `/op-resume --reset-exhausted-retries` clears continuation-limit counters:
     - gap retry maps

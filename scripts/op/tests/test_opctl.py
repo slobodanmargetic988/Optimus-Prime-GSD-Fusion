@@ -133,7 +133,11 @@ def test_no_banners_on_non_tty(
 
 
 def test_merge_payload_applies_configured_sleep_for_build(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(MODULE, "_resolve_configured_sleep_minutes", lambda _repo_root: 0.5)
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {"sleep_minutes": 0.5, "enable_artifact_fan_in": True},
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -142,10 +146,15 @@ def test_merge_payload_applies_configured_sleep_for_build(monkeypatch: pytest.Mo
     parsed = MODULE.parse_args()
     payload = MODULE.merge_payload(parsed)
     assert payload.get("sleep_minutes") == 0.5
+    assert payload.get("enable_artifact_fan_in") is True
 
 
 def test_merge_payload_preserves_explicit_sleep_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(MODULE, "_resolve_configured_sleep_minutes", lambda _repo_root: 0.5)
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {"sleep_minutes": 0.5, "enable_artifact_fan_in": True},
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -154,6 +163,19 @@ def test_merge_payload_preserves_explicit_sleep_override(monkeypatch: pytest.Mon
     parsed = MODULE.parse_args()
     payload = MODULE.merge_payload(parsed)
     assert payload.get("sleep_minutes") == 2.0
+    assert payload.get("enable_artifact_fan_in") is True
+
+
+def test_merge_payload_defaults_fan_in_false_for_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(MODULE, "_resolve_configured_workflow", lambda _repo_root: {})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["opctl.py", "--command", "/op-build", "--repo-root", "/tmp/repo"],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("enable_artifact_fan_in") is False
 
 
 def test_merge_payload_includes_reset_exhausted_retries_flag(monkeypatch: pytest.MonkeyPatch) -> None:

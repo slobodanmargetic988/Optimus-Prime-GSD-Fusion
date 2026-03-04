@@ -85,9 +85,10 @@ def _emit_start_banner(payload: dict[str, Any]) -> None:
         return
 
 
-def _resolve_configured_sleep_minutes(repo_root: str) -> float | None:
+def _resolve_configured_workflow(repo_root: str) -> dict[str, Any]:
+    resolved: dict[str, Any] = {}
     if resolve_context is None or resolve_effective_config is None:
-        return None
+        return resolved
     mode_payloads = [
         {"mode": "local", "repo_root": repo_root},
         {"mode": "global"},
@@ -109,10 +110,15 @@ def _resolve_configured_sleep_minutes(repo_root: str) -> float | None:
         try:
             sleep = float(value)
         except (TypeError, ValueError):
-            continue
-        if sleep > 0:
-            return sleep
-    return None
+            sleep = None
+        if isinstance(sleep, float) and sleep > 0:
+            resolved["sleep_minutes"] = sleep
+        fan_in_value = workflow.get("enable_artifact_fan_in")
+        if isinstance(fan_in_value, bool):
+            resolved["enable_artifact_fan_in"] = fan_in_value
+        if resolved:
+            return resolved
+    return resolved
 
 
 def parse_args() -> argparse.Namespace:
@@ -174,6 +180,25 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
     payload.setdefault("non_interactive", True)
     payload.setdefault("output_mode", "json")
 
+    command_raw = str(payload.get("command") or "").strip()
+    try:
+        canonical = normalize_command(command_raw).canonical
+    except ValueError:
+        canonical = ""
+
+    if canonical in {"op-build", "op-resume"} and (
+        "sleep_minutes" not in payload or "enable_artifact_fan_in" not in payload
+    ):
+        workflow = _resolve_configured_workflow(str(payload["repo_root"]))
+        if "sleep_minutes" not in payload:
+            configured_sleep = workflow.get("sleep_minutes")
+            if isinstance(configured_sleep, (int, float)):
+                payload["sleep_minutes"] = float(configured_sleep)
+        if "enable_artifact_fan_in" not in payload:
+            configured_fan_in = workflow.get("enable_artifact_fan_in")
+            if isinstance(configured_fan_in, bool):
+                payload["enable_artifact_fan_in"] = configured_fan_in
+
     if "sleep_minutes" not in payload:
         command_raw = str(payload.get("command") or "").strip()
         try:
@@ -181,9 +206,16 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         except ValueError:
             canonical = ""
         if canonical in {"op-build", "op-resume"}:
-            configured_sleep = _resolve_configured_sleep_minutes(str(payload["repo_root"]))
-            if configured_sleep is not None:
-                payload["sleep_minutes"] = configured_sleep
+            payload["sleep_minutes"] = 1.0
+
+    if "enable_artifact_fan_in" not in payload:
+        command_raw = str(payload.get("command") or "").strip()
+        try:
+            canonical = normalize_command(command_raw).canonical
+        except ValueError:
+            canonical = ""
+        if canonical in {"op-build", "op-resume"}:
+            payload["enable_artifact_fan_in"] = False
     return payload
 
 
