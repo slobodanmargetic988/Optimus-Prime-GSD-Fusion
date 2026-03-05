@@ -4111,6 +4111,122 @@ def test_tdd_red_expected_fail_evidence_advances_stage():
         assert any(item.get("code") == "tdd_expectation_met" for item in warnings if isinstance(item, dict))
 
 
+def test_gapfix_test_stage_uses_gap_stage_expectation_and_returns_to_testing():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = task_state["tasks"][0]
+        task["status"] = "review_done"
+        task["owner_slot"] = None
+        task["verification_contract"] = {
+            "mode": "hardening",
+            "dev_expectation": "expect_pass",
+            "test_expectation": "expect_fail",
+            "review_expectation": "expect_pass",
+            "expected_failure_reason_codes": ["tdd_expected_failure_observed"],
+            "infra_failure_reason_codes": ["verification_environment_error"],
+        }
+        task["gapfix_state"] = {
+            "active_batch_id": "batch-test-gap",
+            "active": True,
+            "target_gap_stage": "test",
+            "consumed_gap_ids": ["gap-test-1"],
+            "batch_started_cycle": 1,
+            "batch_last_updated_at": "2026-03-03T00:00:00Z",
+        }
+        evidence_path = root / task["evidence"]["task_evidence_ref"]
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["summary"] = {
+            "result": "fail",
+            "expectation": "expect_fail",
+            "expectation_met": True,
+            "failure_class": "expected_red",
+            "reason_codes": ["tdd_expected_failure_observed"],
+        }
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
+        assert task["status"] == "dev_done"
+        assert task["owner_slot"] is None
+        assert task["blocking_source"] == "none"
+        assert task["gapfix_state"]["active"] is False
+        assert task["gapfix_state"]["active_batch_id"] is None
+        assert any(
+            item.get("code") == "tdd_expectation_met" and item.get("stage_name") == "test"
+            for item in warnings
+            if isinstance(item, dict)
+        )
+
+
+def test_gapfix_review_stage_uses_gap_stage_expectation_and_returns_to_review():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = task_state["tasks"][0]
+        task["status"] = "dev_done"
+        task["owner_slot"] = None
+        task["verification_contract"] = {
+            "mode": "hardening",
+            "dev_expectation": "expect_pass",
+            "test_expectation": "expect_pass",
+            "review_expectation": "expect_fail",
+            "expected_failure_reason_codes": ["tdd_expected_failure_observed"],
+            "infra_failure_reason_codes": ["verification_environment_error"],
+        }
+        task["gapfix_state"] = {
+            "active_batch_id": "batch-review-gap",
+            "active": True,
+            "target_gap_stage": "review",
+            "consumed_gap_ids": ["gap-review-1"],
+            "batch_started_cycle": 1,
+            "batch_last_updated_at": "2026-03-03T00:00:00Z",
+        }
+        evidence_path = root / task["evidence"]["task_evidence_ref"]
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["summary"] = {
+            "result": "fail",
+            "expectation": "expect_fail",
+            "expectation_met": True,
+            "failure_class": "expected_red",
+            "reason_codes": ["tdd_expected_failure_observed"],
+        }
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
+        assert task["status"] == "tests_done"
+        assert task["owner_slot"] is None
+        assert task["blocking_source"] == "none"
+        assert task["gapfix_state"]["active"] is False
+        assert task["gapfix_state"]["active_batch_id"] is None
+        assert any(
+            item.get("code") == "tdd_expectation_met" and item.get("stage_name") == "review"
+            for item in warnings
+            if isinstance(item, dict)
+        )
+
+
 def test_handoff_blocked_is_non_authoritative_when_evidence_contract_advances():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

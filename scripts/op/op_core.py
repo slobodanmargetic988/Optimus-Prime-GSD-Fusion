@@ -3053,7 +3053,13 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         test_block = payload.get("test") if isinstance(payload.get("test"), dict) else {}
         evidence["uat_results"] = test_block.get("uat_results") if isinstance(test_block.get("uat_results"), list) else []
         stage = _current_stage_for_task_status(_normalize_task_status(task.get("status")), _as_str(task.get("owner_slot")))
-        expected = _expected_for_stage(contract, stage)
+        gapfix_target_stage: str | None = None
+        if _as_bool_field(gapfix_state.get("active")):
+            target = (_as_str(gapfix_state.get("target_gap_stage")) or "").lower()
+            if target in {"dev", "test", "review"}:
+                gapfix_target_stage = target
+        evidence_stage = gapfix_target_stage or stage
+        expected = _expected_for_stage(contract, evidence_stage)
         summary = payload["summary"]
         summary_result = (_as_str(summary.get("result")) or "").lower()
         reason_codes = summary.get("reason_codes") if isinstance(summary.get("reason_codes"), list) else []
@@ -3072,9 +3078,8 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
 
         expectation_eval = _evaluate_evidence_expectation(payload=payload, expected=expected)
         if expectation_eval.get("progress"):
-            if _as_bool_field(gapfix_state.get("active")) and stage == "dev":
-                target_gap_stage = (_as_str(gapfix_state.get("target_gap_stage")) or "dev").lower()
-                if target_gap_stage == "review":
+            if gapfix_target_stage:
+                if gapfix_target_stage == "review":
                     task["status"] = TASK_STATUS_TESTS_DONE
                 else:
                     task["status"] = TASK_STATUS_DEV_DONE
@@ -3095,13 +3100,13 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
                 {
                     "code": "tdd_expectation_met",
                     "message": (
-                        f"task {task_id} advanced at stage={stage} with expected={expected} "
+                        f"task {task_id} advanced at stage={evidence_stage} with expected={expected} "
                         f"(failure_class={_as_str(expectation_eval.get('failure_class')) or 'none'})"
                     ),
                     "stage": "build_loop",
                     "task_id": task_id,
                     "expected": expected,
-                    "stage_name": stage,
+                    "stage_name": evidence_stage,
                 }
             )
         elif expectation_eval.get("blocked"):
