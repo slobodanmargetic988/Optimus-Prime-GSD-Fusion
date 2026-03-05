@@ -587,6 +587,11 @@ def fallback_suffix_for_role(role: str) -> str:
     return ""
 
 
+def _repo_guard_script_path() -> Path:
+    # Resolve against the OP install/source root where this skill is bundled.
+    return (Path(__file__).resolve().parents[3] / "scripts" / "op" / "repo_guard_scanner.py").resolve()
+
+
 def render_packet(cfg: DispatchInput) -> str:
     fallback_suffix = fallback_suffix_for_role(cfg.role)
     mcp_line = "none" if cfg.mcp_mode == "disable-all" else ", ".join(cfg.mcp_allowlist)
@@ -644,7 +649,7 @@ def render_packet(cfg: DispatchInput) -> str:
     validator_ref = str(TASK_EVIDENCE_VALIDATOR_REF)
     schema_test_ref = str(TASK_EVIDENCE_SCHEMA_TEST_REF)
     schema_template_ref = str(TASK_EVIDENCE_TEMPLATE_REF)
-    repo_guard_script = str((cfg.repo_root / "scripts" / "op" / "repo_guard_scanner.py").resolve())
+    repo_guard_script = str(_repo_guard_script_path())
     test_sync_section = ""
     if cfg.role in {"tester", "flex-tester"} and cfg.test_source_branch:
         test_sync_section = (

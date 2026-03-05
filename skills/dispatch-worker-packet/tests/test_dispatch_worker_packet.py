@@ -169,6 +169,7 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("canonical guard script used by OP runtime", content)
             self.assertIn("repo_guard_scanner.py --input-json -", content)
             self.assertIn("dispatch_commit_link", content)
+            self.assertIn(str(MODULE._repo_guard_script_path()), content)
 
     def test_packet_render_requires_canonical_task_evidence_contract(self):
         with tempfile.TemporaryDirectory() as tmp:

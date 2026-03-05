@@ -14,3 +14,6 @@ reports/optimus-prime/runtime/locks/*.lock
 reports/optimus-prime/runtime/drills/latest/*
 !reports/optimus-prime/runtime/drills/latest/.gitkeep
 reports/optimus-prime/runtime/DB_DEPLOY_DECISIONS.jsonl
+
+# Local release bundle archives
+dist/optimus-prime-*.gz
