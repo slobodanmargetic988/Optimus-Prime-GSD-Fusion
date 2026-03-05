@@ -140,6 +140,7 @@ TERMINAL_HARD_STOPS = {
 }
 
 STALE_IN_PROGRESS_TIMEOUT_SEC = 900
+DEAD_PID_REDISPATCH_GRACE_SEC = 600
 NO_PROGRESS_THRESHOLD_CYCLES = 25
 TASK_FORWARD_PROGRESS_THRESHOLD_CYCLES = 25
 
@@ -465,7 +466,7 @@ def _evaluate_evidence_expectation(
             "failure_class": failure_class,
         }
     if expected == "expect_fail":
-        if expectation_met and summary_result in {"fail", "blocked"} and failure_class == "expected_red":
+        if expectation_met and summary_result in {"pass", "fail", "blocked"} and failure_class == "expected_red":
             return {
                 "progress": True,
                 "blocked": False,
@@ -974,6 +975,16 @@ def _seed_rate_registry_if_missing(
         )
         return warnings
 
+    existing_payload: dict[str, Any] | None = None
+    if registry_path.exists():
+        try:
+            loaded = _read_json(registry_path)
+            if isinstance(loaded, dict):
+                existing_payload = loaded
+        except OpError:
+            existing_payload = None
+    payload = _merge_preserved_profile_hard_blocks(existing_payload, payload)
+
     try:
         _atomic_write_json(registry_path, payload)
     except OSError as exc:
@@ -995,6 +1006,168 @@ def _seed_rate_registry_if_missing(
             }
         )
     return warnings
+
+
+def _profiles_map_from_rate_registry(payload: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    if not isinstance(payload, dict):
+        return out
+    profiles_raw = payload.get("profiles")
+    if isinstance(profiles_raw, dict):
+        for alias, row in profiles_raw.items():
+            if isinstance(row, dict):
+                out[str(alias)] = row
+    elif isinstance(profiles_raw, list):
+        for idx, row in enumerate(profiles_raw):
+            if not isinstance(row, dict):
+                continue
+            alias = _as_str(row.get("alias")) or f"profile-{idx+1}"
+            out[alias] = row
+    return out
+
+
+def _enforce_profile_hard_block_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    profiles_map = _profiles_map_from_rate_registry(payload)
+    if not profiles_map:
+        return payload
+    eligible: list[str] = []
+    gated: list[str] = []
+    soft_gated: list[str] = []
+    for alias, row in profiles_map.items():
+        permanently_blocked = _as_bool_field(row.get("permanently_blocked"))
+        if permanently_blocked:
+            row["recommended_action"] = "wind_down"
+            row["hard_gated"] = True
+            row["eligible_for_new_work"] = False
+            row["soft_concurrency_gated"] = True
+            errors = row.get("errors")
+            if not isinstance(errors, list):
+                errors = []
+                row["errors"] = errors
+            normalized_errors = [item for item in (_as_str(v) for v in errors) if item]
+            if "permanently_blocked" not in normalized_errors:
+                normalized_errors.append("permanently_blocked")
+            row["errors"] = normalized_errors
+        recommended = (_as_str(row.get("recommended_action")) or "").lower()
+        if recommended == "continue" and not permanently_blocked:
+            eligible.append(alias)
+        else:
+            gated.append(alias)
+        if permanently_blocked or _as_bool_field(row.get("soft_concurrency_gated")):
+            soft_gated.append(alias)
+    payload["eligible_profiles"] = sorted(set(eligible))
+    payload["gated_profiles"] = sorted(set(gated))
+    payload["soft_concurrency_gated_profiles"] = sorted(set(soft_gated))
+    return payload
+
+
+def _merge_preserved_profile_hard_blocks(existing_payload: dict[str, Any] | None, new_payload: dict[str, Any]) -> dict[str, Any]:
+    existing_map = _profiles_map_from_rate_registry(existing_payload)
+    new_map = _profiles_map_from_rate_registry(new_payload)
+    for alias, existing_row in existing_map.items():
+        if not _as_bool_field(existing_row.get("permanently_blocked")):
+            continue
+        target = new_map.get(alias)
+        if target is None:
+            target = {"alias": alias}
+            new_map[alias] = target
+            profiles = new_payload.get("profiles")
+            if isinstance(profiles, dict):
+                profiles[alias] = target
+        target["permanently_blocked"] = True
+        reason = _as_str(existing_row.get("permanent_block_reason"))
+        blocked_at = _as_str(existing_row.get("permanent_blocked_at"))
+        if reason:
+            target["permanent_block_reason"] = reason
+        if blocked_at:
+            target["permanent_blocked_at"] = blocked_at
+    return _enforce_profile_hard_block_payload(new_payload)
+
+
+def _set_profile_permanent_block(
+    repo_root: Path,
+    *,
+    alias: str,
+    reason_code: str,
+    stage: str = "build_loop",
+) -> dict[str, Any] | None:
+    alias_text = _as_str(alias)
+    reason_text = _as_str(reason_code)
+    if not alias_text or not reason_text:
+        return None
+    registry_path = _repo_path(repo_root, PROFILE_RATE_REGISTRY_JSON)
+    payload: dict[str, Any]
+    if registry_path.exists():
+        try:
+            loaded = _read_json(registry_path)
+            payload = loaded if isinstance(loaded, dict) else {}
+        except OpError:
+            payload = {}
+    else:
+        payload = {}
+    profiles_raw = payload.get("profiles")
+    if not isinstance(profiles_raw, dict):
+        profiles_raw = {}
+        payload["profiles"] = profiles_raw
+    row = profiles_raw.get(alias_text)
+    if not isinstance(row, dict):
+        row = {"alias": alias_text}
+        profiles_raw[alias_text] = row
+    already_blocked = _as_bool_field(row.get("permanently_blocked"))
+    row["permanently_blocked"] = True
+    row["permanent_block_reason"] = reason_text
+    if not _as_str(row.get("permanent_blocked_at")):
+        row["permanent_blocked_at"] = utc_now_iso()
+    errors = row.get("errors")
+    normalized_errors = [item for item in (_as_str(v) for v in (errors if isinstance(errors, list) else [])) if item]
+    for marker in ("auth_invalid_or_expired", reason_text):
+        if marker not in normalized_errors:
+            normalized_errors.append(marker)
+    row["errors"] = normalized_errors
+    row["recommended_action"] = "wind_down"
+    row["hard_gated"] = True
+    row["soft_concurrency_gated"] = True
+    row["eligible_for_new_work"] = False
+    payload = _enforce_profile_hard_block_payload(payload)
+    try:
+        _atomic_write_json(registry_path, payload)
+    except OSError as exc:
+        return {
+            "code": "profile_permanent_block_write_failed",
+            "message": f"unable to persist permanently_blocked for alias {alias_text}: {exc}",
+            "stage": stage,
+            "alias": alias_text,
+        }
+    if already_blocked:
+        return None
+    return {
+        "code": "profile_permanently_blocked",
+        "message": (
+            f"profile alias {alias_text} marked permanently_blocked due to dispatch auth failure ({reason_text})"
+        ),
+        "stage": stage,
+        "alias": alias_text,
+        "reason_code": reason_text,
+    }
+
+
+def _payload_contains_text(value: Any, needle: str) -> bool:
+    text = _as_str(needle).lower()
+    if not text:
+        return False
+    if isinstance(value, str):
+        return text in value.lower()
+    if isinstance(value, dict):
+        return any(_payload_contains_text(v, text) for v in value.values())
+    if isinstance(value, list):
+        return any(_payload_contains_text(v, text) for v in value)
+    return False
+
+
+def _is_refresh_token_reused_unauthorized(value: Any) -> bool:
+    if not _payload_contains_text(value, "refresh_token_reused"):
+        return False
+    return _payload_contains_text(value, "401") or _payload_contains_text(value, "unauthorized")
 
 
 def _ensure_managed_gitignore_block(repo_root: Path) -> None:
@@ -3917,8 +4090,11 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
             continue
         phase_id = _as_str(plan_task.get("phase_id")) or _as_str(task.get("phase_id")) or "phase-1"
         task_status = _normalize_task_status(task.get("status"))
+        merge_ready = task_status == TASK_STATUS_REVIEW_DONE
         evidence = task.get("evidence") if isinstance(task.get("evidence"), dict) else {}
         evidence_ref = _as_str(evidence.get("task_evidence_ref")) or str(_canonical_task_evidence_rel(task_id))
+        contract = _task_verification_contract(task, plan_task)
+        review_expectation = _expected_for_stage(contract, "review")
         verify_required = {
             cmd
             for cmd in ((_as_str(item) for item in plan_task.get("verify_commands", [])))
@@ -3934,7 +4110,7 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
                 cmd = _as_str(item.get("command"))
                 if cmd:
                     verify_passed.add(cmd)
-        if task_status in {TASK_STATUS_TESTS_DONE, TASK_STATUS_REVIEW_DONE, TASK_STATUS_BLOCKED}:
+        if merge_ready:
             for cmd in sorted(verify_required - verify_passed):
                 gap_id = _gap_id(plan_id, phase_id, task_id, f"verify:{cmd}", "fail")
                 active_rows[gap_id] = _default_gap_row(
@@ -3968,7 +4144,7 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
                     rid_text = _as_str(rid_item)
                     if rid_text:
                         passed_uat.add(rid_text)
-        if task_status in {TASK_STATUS_REVIEW_DONE, TASK_STATUS_BLOCKED}:
+        if merge_ready and review_expectation != "expect_fail":
             for rid in sorted(set(requirement_ids) - passed_uat):
                 gap_id = _gap_id(plan_id, phase_id, task_id, f"uat:{rid}", "blocked")
                 active_rows[gap_id] = _default_gap_row(
@@ -3983,21 +4159,6 @@ def _refresh_gap_artifacts(repo_root: Path, plan_packets: dict[str, Any], task_s
                     category="uat_missing",
                     reason_codes=["uat_requirement_not_passed"],
                 )
-
-        if _normalize_task_status(task.get("status")) == TASK_STATUS_BLOCKED:
-            gap_id = _gap_id(plan_id, phase_id, task_id, "task:blocked", "blocked")
-            active_rows[gap_id] = _default_gap_row(
-                plan_id=plan_id,
-                phase_id=phase_id,
-                task_id=task_id,
-                requirement_id=None,
-                result="blocked",
-                evidence_ref=evidence_ref,
-                reason="task state blocked",
-                gap_id=gap_id,
-                category="task_blocked",
-                reason_codes=["task_state_blocked"],
-            )
 
     now = utc_now_iso()
     merged_by_id: dict[str, dict[str, Any]] = {}
@@ -4423,27 +4584,8 @@ def _refresh_task_embedded_gaps(repo_root: Path, plan_packets: dict[str, Any], t
         evidence_path = _task_evidence_path(repo_root, task)
         evidence_ref = os.path.relpath(str(evidence_path), str(repo_root))
         status = _normalize_task_status(task.get("status"))
+        merge_ready = status == TASK_STATUS_REVIEW_DONE
         active_gap_ids: set[str] = set()
-
-        if status == TASK_STATUS_BLOCKED:
-            gap_id = _gap_id(plan_id, phase_id, task_id, "task:blocked", "blocked")
-            active_gap_ids.add(gap_id)
-            _upsert_task_gap(
-                task,
-                {
-                    "gap_id": gap_id,
-                    "category": "task_blocked",
-                    "severity": "P1",
-                    "stage": "dev",
-                    "status": "open",
-                    "reason_codes": ["task_state_blocked"],
-                    "retry_count": 0,
-                    "max_retries": 5,
-                    "created_at": now,
-                    "updated_at": now,
-                    "closure_ref": evidence_ref,
-                },
-            )
 
         verify_required = {
             cmd
@@ -4467,7 +4609,7 @@ def _refresh_task_embedded_gaps(repo_root: Path, plan_packets: dict[str, Any], t
         else:
             uat_passed = set()
 
-        if status in {TASK_STATUS_TESTS_DONE, TASK_STATUS_REVIEW_DONE, TASK_STATUS_BLOCKED}:
+        if merge_ready:
             for cmd in sorted(verify_required - verify_passed):
                 gap_id = _gap_id(plan_id, phase_id, task_id, f"verify:{cmd}", "fail")
                 active_gap_ids.add(gap_id)
@@ -4488,7 +4630,7 @@ def _refresh_task_embedded_gaps(repo_root: Path, plan_packets: dict[str, Any], t
                     },
                 )
 
-        if status in {TASK_STATUS_REVIEW_DONE, TASK_STATUS_BLOCKED} and review_expectation != "expect_fail":
+        if merge_ready and review_expectation != "expect_fail":
             req_ids = [rid for rid in ((_as_str(item) for item in plan_task.get("requirement_ids", []))) if rid]
             for rid in sorted(set(req_ids) - uat_passed):
                 gap_id = _gap_id(plan_id, phase_id, task_id, f"uat:{rid}", "blocked")
@@ -4809,7 +4951,13 @@ def _read_rate_gate_window(repo_root: Path) -> dict[str, Any]:
         five = data.get("five_hour") if isinstance(data.get("five_hour"), dict) else {}
         weekly = data.get("weekly") if isinstance(data.get("weekly"), dict) else {}
         recommended = (_as_str(data.get("recommended_action")) or "").lower()
-        hard = bool(data.get("hard_gated") or data.get("gated") or five.get("gated") or weekly.get("gated"))
+        hard = bool(
+            data.get("permanently_blocked")
+            or data.get("hard_gated")
+            or data.get("gated")
+            or five.get("gated")
+            or weekly.get("gated")
+        )
         if recommended in {"wind_down", "wait_until_reset"}:
             hard = True
         if not hard:
@@ -4905,7 +5053,13 @@ def _read_profile_rate_states(repo_root: Path, aliases: list[str]) -> dict[str, 
         remaining_candidates = [value for value in (five_remaining, weekly_remaining) if value is not None]
         score = min(remaining_candidates) if remaining_candidates else 50.0
 
-        hard_gated = bool(data.get("hard_gated") or data.get("gated") or five.get("gated") or weekly.get("gated"))
+        hard_gated = bool(
+            data.get("permanently_blocked")
+            or data.get("hard_gated")
+            or data.get("gated")
+            or five.get("gated")
+            or weekly.get("gated")
+        )
         if (five_remaining is not None and five_remaining <= 1.0) or (weekly_remaining is not None and weekly_remaining <= 1.0):
             hard_gated = True
         soft_gated = bool(data.get("soft_concurrency_gated"))
@@ -5519,7 +5673,11 @@ def _infer_dispatch_failure_reason_from_worker_log(worker_row: dict[str, Any] | 
     except OSError:
         return None
     patterns: tuple[tuple[str, str, str], ...] = (
-        ("refresh_token_reused", "worker_dispatch_auth_failed", "dispatch log shows refresh_token_reused auth failure"),
+        (
+            "refresh_token_reused",
+            "worker_dispatch_auth_failed",
+            "dispatch log shows refresh_token_reused 401 unauthorized auth failure",
+        ),
         ("invalid_grant", "worker_dispatch_auth_failed", "dispatch log shows invalid_grant auth failure"),
         ("token refresh failed", "worker_dispatch_auth_failed", "dispatch log shows token refresh failure"),
         ("unauthorized", "worker_dispatch_auth_failed", "dispatch log shows unauthorized auth failure"),
@@ -5561,6 +5719,14 @@ def _prepare_dead_pid_redispatch_assignments(
         completion_policy = {"missing_threshold": 3}
     missing_threshold = max(1, _coerce_nonneg_int(completion_policy.get("missing_threshold"), default=3))
     build_state["worker_completion_policy"] = {"missing_threshold": missing_threshold}
+    dead_pid_policy = build_state.get("dead_pid_recovery_policy")
+    if not isinstance(dead_pid_policy, dict):
+        dead_pid_policy = {"grace_sec": DEAD_PID_REDISPATCH_GRACE_SEC}
+    dead_pid_grace_sec = max(
+        60,
+        _coerce_nonneg_int(dead_pid_policy.get("grace_sec"), default=DEAD_PID_REDISPATCH_GRACE_SEC),
+    )
+    build_state["dead_pid_recovery_policy"] = {"grace_sec": dead_pid_grace_sec}
     plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
 
     status_to_stage: dict[str, tuple[str, str]] = {
@@ -5581,6 +5747,37 @@ def _prepare_dead_pid_redispatch_assignments(
         if not owner_slot or owner_slot in active_slots:
             continue
         worker_row = workers_by_slot.get(owner_slot)
+        worker_state = (
+            _as_str((worker_row or {}).get("state"))
+            or _as_str((worker_row or {}).get("session_state"))
+            or _as_str((worker_row or {}).get("status"))
+            or ""
+        ).lower()
+        dispatch_thread_id = _as_str((worker_row or {}).get("dispatch_thread_id"))
+        dispatch_started_at = _parse_iso_utc(
+            _as_str((worker_row or {}).get("dispatch_started_at"))
+            or _as_str((worker_row or {}).get("updated_at"))
+        )
+        if (
+            worker_state in {"running", "active", "busy"}
+            and dispatch_thread_id
+            and dispatch_started_at is not None
+            and (datetime.now(timezone.utc) - dispatch_started_at).total_seconds() < dead_pid_grace_sec
+        ):
+            warnings.append(
+                {
+                    "code": "dead_pid_awaiting_worker_heartbeat",
+                    "message": (
+                        f"task {task_id} slot {owner_slot} has no live pid yet, but running session thread "
+                        f"{dispatch_thread_id} is within grace window ({dead_pid_grace_sec}s); redispatch deferred"
+                    ),
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "slot": owner_slot,
+                    "grace_sec": dead_pid_grace_sec,
+                }
+            )
+            continue
         dispatch_failure_hint = _infer_dispatch_failure_reason_from_worker_log(worker_row)
         dispatch_failure_code = _as_str((dispatch_failure_hint or {}).get("code"))
         dispatch_failure_message = _as_str((dispatch_failure_hint or {}).get("message"))
@@ -5599,6 +5796,16 @@ def _prepare_dead_pid_redispatch_assignments(
                     "artifact": dispatch_failure_log or None,
                 }
             )
+            if _is_refresh_token_reused_unauthorized(dispatch_failure_message):
+                blocked_alias = _as_str((worker_row or {}).get("codex_profile_alias"))
+                block_warning = _set_profile_permanent_block(
+                    repo_root,
+                    alias=blocked_alias,
+                    reason_code="refresh_token_reused",
+                    stage="build_loop",
+                )
+                if isinstance(block_warning, dict):
+                    warnings.append(block_warning)
 
         evidence_path = _task_evidence_path(repo_root, task)
         evidence_payload: dict[str, Any] = {}
@@ -8881,6 +9088,8 @@ def _dispatch_next_task_from_assignments(
         active_task_id: str | None,
         dispatch_thread_id: str | None,
         dispatch_mode_used: str | None,
+        dispatch_pid: int | None = None,
+        dispatch_log: str | None = None,
         branch_name: str | None,
         worktree_root: str | None,
     ) -> None:
@@ -8904,6 +9113,10 @@ def _dispatch_next_task_from_assignments(
         row["dispatch_started_at"] = row["updated_at"]
         if _as_str(dispatch_mode_used):
             row["dispatch_mode"] = _as_str(dispatch_mode_used)
+        if isinstance(dispatch_pid, int) and dispatch_pid > 0:
+            row["dispatch_pid"] = dispatch_pid
+        if _as_str(dispatch_log):
+            row["dispatch_log"] = _as_str(dispatch_log)
         _write_worker_registry(
             registry_path,
             registry_base,
@@ -9412,6 +9625,8 @@ def _dispatch_next_task_from_assignments(
                 active_task_id=task_id,
                 dispatch_thread_id=_as_str(task.get("dispatch_thread_id")) or _as_str(dispatch_payload.get("dispatch_thread_id")),
                 dispatch_mode_used=effective_mode,
+                dispatch_pid=dispatch_payload.get("pid") if isinstance(dispatch_payload.get("pid"), int) else None,
+                dispatch_log=_as_str(dispatch_payload.get("dispatch_log")),
                 branch_name=branch_name,
                 worktree_root=worktree_root,
             )
@@ -9433,6 +9648,15 @@ def _dispatch_next_task_from_assignments(
                 if isinstance(item, dict) and _as_str(item.get("code"))
             ],
         )
+        if _is_refresh_token_reused_unauthorized({"result": result, "warnings": warning_rows}):
+            block_warning = _set_profile_permanent_block(
+                req.repo_root,
+                alias=selected_alias,
+                reason_code="refresh_token_reused",
+                stage="build_loop",
+            )
+            if isinstance(block_warning, dict):
+                all_warnings.append(block_warning)
         if first_failure is None:
             first_failure = result
         result_warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
@@ -9555,6 +9779,8 @@ def _dispatch_next_task(
         active_task_id: str | None,
         dispatch_thread_id: str | None,
         dispatch_mode_used: str | None,
+        dispatch_pid: int | None = None,
+        dispatch_log: str | None = None,
     ) -> None:
         row = workers_by_slot.get(slot_name)
         if not isinstance(row, dict):
@@ -9571,6 +9797,10 @@ def _dispatch_next_task(
         row["updated_at"] = utc_now_iso()
         if _as_str(dispatch_mode_used):
             row["dispatch_mode"] = _as_str(dispatch_mode_used)
+        if isinstance(dispatch_pid, int) and dispatch_pid > 0:
+            row["dispatch_pid"] = dispatch_pid
+        if _as_str(dispatch_log):
+            row["dispatch_log"] = _as_str(dispatch_log)
         _write_worker_registry(
             registry_path,
             registry_base,
@@ -9744,6 +9974,8 @@ def _dispatch_next_task(
                 active_task_id=_as_str(task_payload.get("task_id")),
                 dispatch_thread_id=_as_str(task_payload.get("dispatch_thread_id")),
                 dispatch_mode_used=dispatch_mode_used,
+                dispatch_pid=dispatch_payload.get("pid") if isinstance(dispatch_payload.get("pid"), int) else None,
+                dispatch_log=_as_str(dispatch_payload.get("dispatch_log")),
             )
             _mark_task_watchdog_started(task_payload, build_state)
         selection_warning = selection.get("warning")
@@ -9753,6 +9985,17 @@ def _dispatch_next_task(
             result["warnings"] = warning_rows
             if not isinstance(result.get("warning"), dict):
                 result["warning"] = selection_warning
+        if not _as_bool(result.get("ok"), default=False) and _is_refresh_token_reused_unauthorized(result):
+            block_warning = _set_profile_permanent_block(
+                req.repo_root,
+                alias=selected_alias,
+                reason_code="refresh_token_reused",
+                stage="build_loop",
+            )
+            if isinstance(block_warning, dict):
+                warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+                warning_rows.append(block_warning)
+                result["warnings"] = warning_rows
         return result
 
     plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
@@ -11785,6 +12028,20 @@ def _manager_workstation_cycle(
                     if _coerce_nonneg_int(ws_row.get("retry_count"), default=0) >= 10:
                         _handle_retry_exhausted(slot=slot, task_id=active_task_id, ws_row=ws_row)
                 else:
+                    warnings.append(
+                        {
+                            "code": "workstation_retry_skipped",
+                            "message": (
+                                f"skipping workstation retry for slot {slot}: prior prepare attempt still in progress "
+                                f"(attempt={_coerce_nonneg_int(ws_row.get('attempt'), default=0)}, elapsed_cycles={elapsed_cycles})"
+                            ),
+                            "stage": "build_loop",
+                            "slot": slot,
+                            "task_id": active_task_id,
+                            "reason": "prepare_in_progress",
+                            "elapsed_cycles": elapsed_cycles,
+                        }
+                    )
                     _emit_build_progress(
                         req,
                         f"workstation-manager: slot={slot} still preparing (pid={ws_row.get('pid')}, elapsed_cycles={elapsed_cycles})",
@@ -14711,7 +14968,7 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             raise OpError("input_error", "max_build_cycles must be integer", stage="input") from exc
         max_cycles_out = parsed if parsed > 0 else None
 
-    default_sleep = 1 if command in {"op-build", "op-resume"} else 0
+    default_sleep = 2 if command in {"op-build", "op-resume"} else 0
     sleep_minutes = payload.get("sleep_minutes", default_sleep)
     try:
         sleep_val = float(sleep_minutes)

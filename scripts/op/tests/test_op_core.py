@@ -977,12 +977,12 @@ def test_build_preflight_blocks_when_profile_selection_invalid():
         assert any(item.get("code") == "profile_selection_invalid" for item in out.get("warnings", []))
 
 
-def test_op_build_default_sleep_minutes_is_one():
+def test_op_build_default_sleep_minutes_is_two():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
         req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
-        assert req.sleep_minutes == 1.0
+        assert req.sleep_minutes == 2.0
         assert req.enable_artifact_fan_in is False
 
 
@@ -1579,7 +1579,7 @@ def test_gap_closure_retry_exhausts_after_five_attempts(monkeypatch: pytest.Monk
         for task in task_state["tasks"]:
             task["status"] = "review_done"
             task["owner_slot"] = None
-        task_state["tasks"][0]["status"] = "blocked"
+        task_state["tasks"][0]["status"] = "review_done"
         task_state["tasks"][0]["owner_slot"] = None
 
         _, gap_closure_payload = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
@@ -2157,6 +2157,45 @@ def test_select_profile_alias_excludes_profiles_with_auth_errors():
         assert result["alias"] == "codex-second"
 
 
+def test_select_profile_alias_excludes_permanently_blocked_profiles():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.parent.mkdir(parents=True, exist_ok=True)
+        rate_path.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "codex": {
+                            "recommended_action": "continue",
+                            "permanently_blocked": True,
+                            "permanent_block_reason": "refresh_token_reused",
+                        },
+                        "codex-second": {
+                            "recommended_action": "continue",
+                        },
+                    }
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        build_state = {
+            "profile_aliases": ["codex", "codex-second"],
+            "slot_profile_assignments": {},
+        }
+        result = MODULE._select_profile_alias_for_slot(
+            root,
+            build_state,
+            slot="dev-1",
+            slot_count=3,
+        )
+        assert result["ok"] is True
+        assert result["alias"] == "codex-second"
+
+
 def test_select_profile_alias_keeps_profiles_with_non_auth_snapshot_errors():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -2350,6 +2389,70 @@ def test_build_refreshes_rate_registry_each_cycle_even_when_registry_exists(monk
         assert calls["snapshot"] == 1
         refreshed = json.loads(rate_path.read_text(encoding="utf-8"))
         assert refreshed["profiles"]["codex"]["marker"] == "fresh"
+
+
+def test_seed_rate_registry_refresh_preserves_permanently_blocked_profile(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        write_profile_selection(root)
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.parent.mkdir(parents=True, exist_ok=True)
+        rate_path.write_text(
+            json.dumps(
+                {
+                    "profiles": {
+                        "codex": {
+                            "recommended_action": "wind_down",
+                            "permanently_blocked": True,
+                            "permanent_block_reason": "refresh_token_reused",
+                        }
+                    },
+                    "gated_profiles": ["codex"],
+                    "eligible_profiles": [],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        script_path = root / "fake_snapshot.py"
+        script_path.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+        script_path.chmod(0o755)
+        monkeypatch.setattr(MODULE, "_resolve_rate_snapshot_script", lambda _repo_root: script_path)
+        monkeypatch.setattr(
+            MODULE,
+            "_run",
+            lambda *_args, **_kwargs: (
+                0,
+                json.dumps(
+                    {
+                        "profiles": {
+                            "codex": {"recommended_action": "continue"},
+                            "codex-second": {"recommended_action": "continue"},
+                        },
+                        "eligible_profiles": ["codex", "codex-second"],
+                        "gated_profiles": [],
+                    }
+                ),
+                "",
+            ),
+        )
+
+        warnings = MODULE._seed_rate_registry_if_missing(root, force_refresh=True, emit_success_warning=False)
+        assert warnings == []
+        refreshed = json.loads(rate_path.read_text(encoding="utf-8"))
+        codex_row = refreshed.get("profiles", {}).get("codex", {})
+        assert codex_row.get("permanently_blocked") is True
+        assert codex_row.get("recommended_action") == "wind_down"
+        assert "codex" in (refreshed.get("gated_profiles") or [])
+
+
+def test_refresh_token_reused_unauthorized_detector_requires_auth_marker():
+    assert MODULE._is_refresh_token_reused_unauthorized("401 Unauthorized code: refresh_token_reused") is True
+    assert MODULE._is_refresh_token_reused_unauthorized("refresh_token_reused") is False
+    assert MODULE._is_refresh_token_reused_unauthorized("401 Unauthorized") is False
 
 
 def test_build_recovers_malformed_gap_closure_and_releases_lock():
@@ -3850,7 +3953,7 @@ def test_gap_closure_generated_tasks_require_requirement_ids():
         for task in task_state["tasks"]:
             task["status"] = "review_done"
             task["owner_slot"] = None
-        task_state["tasks"][0]["status"] = "blocked"
+        task_state["tasks"][0]["status"] = "review_done"
         task_state["tasks"][0]["owner_slot"] = None
 
         _, closure_payload = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
@@ -3923,8 +4026,6 @@ def test_dispatch_exhausted_gap_closure_continues_to_next_dispatchable_task(monk
         for task in task_state["tasks"]:
             task["status"] = "review_done"
             task["owner_slot"] = None
-        task_state["tasks"][0]["status"] = "blocked"
-        task_state["tasks"][1]["status"] = "blocked"
 
         _, gap_closure_payload = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
         MODULE._ensure_gap_closure_task_state(root, task_state, gap_closure_payload, plan_packets["plan_id"])
@@ -3999,7 +4100,7 @@ def test_dispatch_returns_blocked_only_after_full_scan_if_all_exhausted():
         for task in task_state["tasks"]:
             task["status"] = "review_done"
             task["owner_slot"] = None
-        task_state["tasks"][0]["status"] = "blocked"
+        task_state["tasks"][0]["status"] = "review_done"
         task_state["tasks"][1]["status"] = "blocked"
         _, gap_closure_payload = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
         MODULE._ensure_gap_closure_task_state(root, task_state, gap_closure_payload, plan_packets["plan_id"])
@@ -4097,6 +4198,42 @@ def test_tdd_red_expected_fail_evidence_advances_stage():
         payload = json.loads(evidence_path.read_text(encoding="utf-8"))
         payload["summary"] = {
             "result": "fail",
+            "expectation": "expect_fail",
+            "expectation_met": True,
+            "failure_class": "expected_red",
+            "reason_codes": ["tdd_expected_failure_observed"],
+        }
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
+        assert task["status"] == "dev_done"
+        assert task["owner_slot"] is None
+        assert task["blocking_source"] == "none"
+        assert any(item.get("code") == "tdd_expectation_met" for item in warnings if isinstance(item, dict))
+
+
+def test_tdd_red_expected_fail_evidence_advances_stage_when_summary_result_pass():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = task_state["tasks"][0]
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        evidence_path = root / task["evidence"]["task_evidence_ref"]
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["summary"] = {
+            "result": "pass",
             "expectation": "expect_fail",
             "expectation_met": True,
             "failure_class": "expected_red",
@@ -4612,7 +4749,7 @@ def test_gap_rows_have_category_and_reason_codes_after_refresh():
         task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
         build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
 
-        task_state["tasks"][0]["status"] = "blocked"
+        task_state["tasks"][0]["status"] = "review_done"
         task_state["tasks"][0]["owner_slot"] = None
         gaps_payload, _ = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
         open_rows = [row for row in gaps_payload.get("gaps", []) if isinstance(row, dict) and row.get("status") == "open"]
@@ -7072,6 +7209,104 @@ def test_dead_pid_without_progress_returns_forced_redispatch_assignment():
         assert build_state.get("dead_pid_retry_counts", {}).get("TASK-001") == 1
 
 
+def test_dead_pid_with_running_dispatch_thread_within_grace_defers_redispatch():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["lane_id"] = "phase-1/lane-a"
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["session_state"] = "running"
+                row["state"] = "running"
+                row["dispatch_pid"] = None
+                row["dispatch_thread_id"] = "thread-still-running"
+                row["dispatch_started_at"] = now_iso
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+
+        assignments, warnings = MODULE._prepare_dead_pid_redispatch_assignments(
+            root,
+            task_state,
+            plan_packets,
+            build_state,
+        )
+        warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
+        assert assignments == []
+        assert "dead_pid_awaiting_worker_heartbeat" in warning_codes
+        assert task.get("status") == "dev_working"
+        assert task.get("owner_slot") == "dev-1"
+        assert build_state.get("dead_pid_retry_counts", {}).get("TASK-001") is None
+
+
+def test_dead_pid_with_running_dispatch_thread_beyond_grace_redispatches():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["dead_pid_recovery_policy"] = {"grace_sec": 60}
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["lane_id"] = "phase-1/lane-a"
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        stale_iso = (datetime.now(timezone.utc) - timedelta(seconds=180)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["session_state"] = "running"
+                row["state"] = "running"
+                row["dispatch_pid"] = None
+                row["dispatch_thread_id"] = "thread-stale"
+                row["dispatch_started_at"] = stale_iso
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+
+        assignments, warnings = MODULE._prepare_dead_pid_redispatch_assignments(
+            root,
+            task_state,
+            plan_packets,
+            build_state,
+        )
+        warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
+        assert assignments
+        assert assignments[0].get("task_id") == "TASK-001"
+        assert "dead_pid_no_evidence_redispatch" in warning_codes
+        assert "dead_pid_awaiting_worker_heartbeat" not in warning_codes
+
+
 def test_dead_pid_with_progress_reconciles_without_redispatch():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -7341,6 +7576,30 @@ def test_reconcile_verify_gap_closes_on_passed_verify():
         assert any(item.get("code") == "task_gap_closed" for item in warnings)
 
 
+def test_refresh_task_embedded_gaps_does_not_generate_for_blocked_tasks():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "blocked"
+        task["gaps_that_need_patching"] = []
+
+        MODULE._refresh_task_embedded_gaps(root, plan_packets, task_state)
+        open_gaps = [row for row in task.get("gaps_that_need_patching", []) if row.get("status") == "open"]
+        assert not open_gaps
+
+
 def test_refresh_task_embedded_gaps_skips_uat_missing_for_expect_fail_review():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -7440,6 +7699,31 @@ def test_refresh_task_embedded_gaps_closes_existing_uat_missing_for_expect_fail_
         row = task["gaps_that_need_patching"][0]
         assert row["status"] == "closed"
         assert "gap_closed_by_evidence" in row.get("reason_codes", [])
+
+
+def test_refresh_gap_artifacts_does_not_generate_for_blocked_tasks():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "blocked"
+
+        gaps_payload, _ = MODULE._refresh_gap_artifacts(root, plan_packets, task_state, build_state)
+        rows = [row for row in gaps_payload.get("gaps", []) if isinstance(row, dict) and row.get("task_id") == "TASK-001"]
+        open_rows = [row for row in rows if row.get("status") == "open"]
+        assert not open_rows
 
 
 def test_reconcile_merge_blocked_gap_closes_on_done_registry_success():
@@ -9714,6 +9998,82 @@ def test_workstation_same_lane_skip_requires_exact_deterministic_path(monkeypatc
         assert "workstation_manager_retry_exhausted" not in warning_codes
 
 
+def test_workstation_retry_skipped_warning_emitted_when_prepare_in_progress(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        build_state["last_cycle"] = 5
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["lane_id"] = "phase-1/lane-a"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+                row["lane_id"] = "phase-1/lane-a"
+                row["previous_lane_id"] = "phase-1/lane-b"
+                row["branch"] = "codex/dev-1/task-001"
+                row["worktree_root"] = None
+            elif row.get("role") in {"developer", "tester", "reviewer"}:
+                row["lane_id"] = "phase-1/lane-z"
+                row["previous_lane_id"] = "phase-1/lane-z"
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+        expected_worktree = MODULE._expected_slot_worktree_path(root, "dev-1")
+        assert isinstance(expected_worktree, Path)
+        _write_workstation_registry_slot(
+            root,
+            slot="dev-1",
+            task_id="TASK-001",
+            lane_id="phase-1/lane-a",
+            stage="dev",
+            branch="codex/dev-1/task-001",
+            worktree_root=expected_worktree,
+        )
+        workstation_registry_path = planning / "WORKSTATION_REGISTRY.json"
+        workstation_registry = json.loads(workstation_registry_path.read_text(encoding="utf-8"))
+        slots = workstation_registry.get("slots") if isinstance(workstation_registry.get("slots"), dict) else {}
+        dev_slot = slots.get("dev-1") if isinstance(slots.get("dev-1"), dict) else {}
+        dev_slot["status"] = "preparing"
+        dev_slot["pid"] = 424242
+        dev_slot["attempt"] = 3
+        dev_slot["retry_count"] = 2
+        dev_slot["requested_cycle"] = 5
+        slots["dev-1"] = dev_slot
+        workstation_registry["slots"] = slots
+        workstation_registry_path.write_text(json.dumps(workstation_registry, indent=2) + "\n", encoding="utf-8")
+        monkeypatch.setattr(MODULE, "_poll_background_process", lambda *_args, **_kwargs: (False, None))
+        monkeypatch.setattr(
+            MODULE,
+            "_start_codex_exec_background",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("new workstation retry should not launch while preparing")),
+        )
+
+        out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+        warning_rows = [item for item in out.get("warnings", []) if isinstance(item, dict)]
+        assert any(
+            item.get("code") == "workstation_retry_skipped"
+            and item.get("slot") == "dev-1"
+            and item.get("reason") == "prepare_in_progress"
+            for item in warning_rows
+        )
+
+
 def test_worker_registry_normalizes_idle_worker_branch_from_rab_base_to_bootstrap():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -9991,7 +10351,15 @@ def test_dispatch_assignment_observations_written_with_reason_and_duration(monke
         def fake_dispatch(*_args, **_kwargs):
             task = _args[1]
             task["dispatch_thread_id"] = "thread-abc"
-            return {"ok": True, "dispatch": {"dispatch_mode_used": "exec", "dispatch_thread_id": "thread-abc"}}
+            return {
+                "ok": True,
+                "dispatch": {
+                    "dispatch_mode_used": "exec",
+                    "dispatch_thread_id": "thread-abc",
+                    "pid": 45678,
+                    "dispatch_log": str(root / ".codex-dispatch" / "dispatch.log"),
+                },
+            }
 
         monkeypatch.setattr(MODULE, "_dispatch_task_packet", fake_dispatch)
         assignments = [
@@ -10046,6 +10414,151 @@ def test_dispatch_assignment_observations_written_with_reason_and_duration(monke
             if line.strip()
         ]
         assert len(persisted_rows) >= len(observations)
+        registry_after = json.loads(registry_path.read_text(encoding="utf-8"))
+        dev1 = next(
+            row for row in registry_after.get("workers", []) if isinstance(row, dict) and row.get("slot") == "dev-1"
+        )
+        assert dev1.get("dispatch_pid") == 45678
+        assert dev1.get("dispatch_log") == str(root / ".codex-dispatch" / "dispatch.log")
+
+
+def test_dispatch_next_task_persists_dispatch_pid_and_log(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["profile_aliases"] = ["codex"]
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        monkeypatch.setattr(MODULE, "_select_profile_alias_for_slot", lambda *_args, **_kwargs: {"ok": True, "alias": "codex"})
+        monkeypatch.setattr(MODULE, "_active_worker_count_by_alias", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(
+            MODULE,
+            "_read_profile_rate_states",
+            lambda *_args, **_kwargs: {"codex": {"soft_gated": False}},
+        )
+
+        def fake_dispatch(_req, task_payload, *_args, **_kwargs):
+            task_payload["dispatch_thread_id"] = "thread-main-dispatch"
+            return {
+                "ok": True,
+                "dispatch": {
+                    "dispatch_mode_used": "exec",
+                    "dispatch_thread_id": "thread-main-dispatch",
+                    "pid": 56789,
+                    "dispatch_log": str(root / ".codex-dispatch" / "dispatch-main.log"),
+                },
+            }
+
+        monkeypatch.setattr(MODULE, "_dispatch_task_packet", fake_dispatch)
+
+        out = MODULE._dispatch_next_task(req, plan_packets, task_state, build_state, None)
+        assert out.get("ok") is True
+        registry_payload = json.loads((root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json").read_text(encoding="utf-8"))
+        dev1 = next(
+            row for row in registry_payload.get("workers", []) if isinstance(row, dict) and row.get("slot") == "dev-1"
+        )
+        assert dev1.get("dispatch_pid") == 56789
+        assert dev1.get("dispatch_log") == str(root / ".codex-dispatch" / "dispatch-main.log")
+
+
+def test_dispatch_next_task_marks_profile_permanently_blocked_on_refresh_token_reused_unauthorized(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["profile_aliases"] = ["codex"]
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        monkeypatch.setattr(MODULE, "_select_profile_alias_for_slot", lambda *_args, **_kwargs: {"ok": True, "alias": "codex"})
+        monkeypatch.setattr(MODULE, "_active_worker_count_by_alias", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(MODULE, "_read_profile_rate_states", lambda *_args, **_kwargs: {"codex": {"soft_gated": False}})
+        monkeypatch.setattr(
+            MODULE,
+            "_dispatch_task_packet",
+            lambda *_args, **_kwargs: {
+                "ok": False,
+                "code": "dispatch_failed",
+                "message": "401 Unauthorized code: refresh_token_reused",
+            },
+        )
+
+        out = MODULE._dispatch_next_task(req, plan_packets, task_state, build_state, None)
+        assert out.get("ok") is False
+        rate_payload = json.loads(
+            (root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json").read_text(encoding="utf-8")
+        )
+        codex_row = rate_payload.get("profiles", {}).get("codex", {})
+        assert codex_row.get("permanently_blocked") is True
+        assert codex_row.get("eligible_for_new_work") is False
+        assert codex_row.get("permanent_block_reason") == "refresh_token_reused"
+
+
+def test_dispatch_next_task_does_not_mark_profile_permanently_blocked_without_unauthorized(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["profile_aliases"] = ["codex"]
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        monkeypatch.setattr(MODULE, "_select_profile_alias_for_slot", lambda *_args, **_kwargs: {"ok": True, "alias": "codex"})
+        monkeypatch.setattr(MODULE, "_active_worker_count_by_alias", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(MODULE, "_read_profile_rate_states", lambda *_args, **_kwargs: {"codex": {"soft_gated": False}})
+        monkeypatch.setattr(
+            MODULE,
+            "_dispatch_task_packet",
+            lambda *_args, **_kwargs: {
+                "ok": False,
+                "code": "dispatch_failed",
+                "message": "refresh_token_reused",
+            },
+        )
+
+        out = MODULE._dispatch_next_task(req, plan_packets, task_state, build_state, None)
+        assert out.get("ok") is False
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        if rate_path.exists():
+            payload = json.loads(rate_path.read_text(encoding="utf-8"))
+            codex_row = payload.get("profiles", {}).get("codex", {})
+            assert codex_row.get("permanently_blocked") is not True
 
 
 def test_dispatch_next_task_from_assignments_respects_cycle_cap(monkeypatch: pytest.MonkeyPatch):
