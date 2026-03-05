@@ -2554,6 +2554,7 @@ def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str,
                 "blocking_source": "none",
                 "gapfix_state": _normalize_gapfix_state({}),
                 "progress_watchdog": _normalize_progress_watchdog({}),
+                "last_dispatch": None,
             }
         )
     return {
@@ -2679,6 +2680,23 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
             item["gapfix_state"] = _normalize_gapfix_state({})
         else:
             item["gapfix_state"] = _normalize_gapfix_state(gapfix_state)
+        last_dispatch = item.get("last_dispatch")
+        if last_dispatch is not None and not isinstance(last_dispatch, dict):
+            errors.append({"code": "task_state_invalid", "message": f"task {task_id} last_dispatch must be object|null"})
+        elif isinstance(last_dispatch, dict):
+            for key in (
+                "stage",
+                "role",
+                "branch_name",
+                "start_from_commit",
+                "start_from_branch",
+                "dispatched_at",
+            ):
+                value = last_dispatch.get(key)
+                if value is not None and not isinstance(value, str):
+                    errors.append(
+                        {"code": "task_state_invalid", "message": f"task {task_id} last_dispatch.{key} must be string|null"}
+                    )
         progress_watchdog = item.get("progress_watchdog")
         if not isinstance(progress_watchdog, dict):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} progress_watchdog must be object"})
@@ -2760,6 +2778,11 @@ def _run_tool_json(script: Path, payload: dict[str, Any], cwd: Path) -> dict[str
         except json.JSONDecodeError:
             pass
     return {"ok": False, "error": "runtime_error", "message": err.strip() or raw or "tool execution failed", "exit_code": code}
+
+
+def _repo_guard_scan(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    script = (repo_root / "scripts" / "op" / "repo_guard_scanner.py").resolve()
+    return _run_tool_json(script, payload, repo_root)
 
 
 def _as_bool_field(value: Any) -> bool:
@@ -3075,6 +3098,53 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
                     if rid
                 ]
             continue
+
+        last_dispatch = task.get("last_dispatch") if isinstance(task.get("last_dispatch"), dict) else {}
+        last_dispatch_role = (_as_str(last_dispatch.get("role")) or "").lower()
+        if last_dispatch_role == "developer":
+            branch_name = _as_str(last_dispatch.get("branch_name"))
+            start_from_commit = _as_str(last_dispatch.get("start_from_commit"))
+            guard = _repo_guard_scan(
+                repo_root,
+                {
+                    "mode": "dispatch_commit_link",
+                    "repo_root": str(repo_root),
+                    "branch_name": branch_name,
+                    "start_from_commit": start_from_commit,
+                },
+            )
+            if not _as_bool_field(guard.get("ok")):
+                task["status"] = TASK_STATUS_BLOCKED
+                task["owner_slot"] = None
+                task["blocking_source"] = "evidence"
+                task["last_progress_at"] = payload_updated_at
+                blocker_code = _as_str(guard.get("reason_code")) or "dispatch_commit_link_missing"
+                _append_task_blocker(
+                    task,
+                    summary=f"task evidence commit-link guard failed for {task_id}",
+                    details={
+                        "code": blocker_code,
+                        "stage": stage,
+                        "reason": _as_str(guard.get("message")) or _as_str(guard.get("inspect_error")) or "commit-link guard failed",
+                        "branch_name": branch_name,
+                        "start_from_commit": start_from_commit,
+                        "head_commit": _as_str(guard.get("head_commit")),
+                        "changed_paths": guard.get("changed_paths") if isinstance(guard.get("changed_paths"), list) else [],
+                        "forbidden_paths": guard.get("forbidden_paths") if isinstance(guard.get("forbidden_paths"), list) else [],
+                    },
+                )
+                warnings.append(
+                    {
+                        "code": blocker_code,
+                        "message": (
+                            f"task {task_id} blocked by dispatch commit-link guard "
+                            f"(role=developer, branch={branch_name or 'unknown'})"
+                        ),
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                    }
+                )
+                continue
 
         expectation_eval = _evaluate_evidence_expectation(payload=payload, expected=expected)
         if expectation_eval.get("progress"):
@@ -8501,6 +8571,14 @@ def _dispatch_task_packet(
         task["dispatch_thread_id"] = _as_str(result.get("dispatch_thread_id")) or _as_str(
             (result.get("dispatch") or {}).get("dispatch_thread_id")
         )
+        task["last_dispatch"] = {
+            "stage": stage,
+            "role": cfg["role"],
+            "branch_name": _as_str(payload.get("branch_name")) or None,
+            "start_from_commit": _as_str(payload.get("start_from_commit")) or None,
+            "start_from_branch": _as_str(payload.get("start_from_branch")) or None,
+            "dispatched_at": utc_now_iso(),
+        }
         task["active_branch"] = _as_str(payload.get("branch_name"))
         if stage == "dev":
             task["developer_branch"] = _as_str(payload.get("branch_name"))
@@ -10345,22 +10423,6 @@ def _manager_branch_merge_cycle(
     task_state: dict[str, Any],
     build_state: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    def _source_branch_forbidden_report_paths(repo_root: Path, source_branch: str) -> tuple[list[str], str | None]:
-        code, out, err = _run(["git", "ls-tree", "-r", "--name-only", source_branch], cwd=repo_root)
-        if code != 0:
-            message = (_as_str(err) or _as_str(out) or "").strip()
-            lowered = message.lower()
-            # During tests or stale branch scenarios, merge command itself remains the source of truth.
-            if "not a valid object name" in lowered or "unknown revision" in lowered:
-                return [], None
-            return [], message or "unable to inspect source branch tree"
-        forbidden = [
-            line.strip()
-            for line in (_as_str(out) or "").splitlines()
-            if line.strip().startswith("reports/optimus-prime/")
-        ]
-        return forbidden, None
-
     def _is_merge_conflict_failure(command_text: str, stdout_text: str, stderr_text: str) -> bool:
         cmd = _as_str(command_text).strip().lower()
         if "git merge" not in cmd:
@@ -10702,13 +10764,22 @@ def _manager_branch_merge_cycle(
                         "unable to resolve pre-merge HEAD on RAB-BASE",
                         stage="build_loop",
                     )
-                forbidden_paths, inspect_error = _source_branch_forbidden_report_paths(req.repo_root, branch_name)
-                if inspect_error:
+                scan = _repo_guard_scan(
+                    req.repo_root,
+                    {
+                        "mode": "merge_source_report_artifacts",
+                        "repo_root": str(req.repo_root),
+                        "source_branch": branch_name,
+                    },
+                )
+                if not _as_bool_field(scan.get("ok")):
+                    inspect_error = _as_str(scan.get("inspect_error")) or _as_str(scan.get("message"))
                     raise OpError(
                         "branch_manager_execution_failed",
                         f"unable to inspect source branch tree for {branch_name}: {inspect_error}",
                         stage="build_loop",
                     )
+                forbidden_paths = scan.get("forbidden_paths") if isinstance(scan.get("forbidden_paths"), list) else []
                 if forbidden_paths:
                     preview = ", ".join(forbidden_paths[:3])
                     if len(forbidden_paths) > 3:

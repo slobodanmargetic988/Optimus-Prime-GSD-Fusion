@@ -644,6 +644,7 @@ def render_packet(cfg: DispatchInput) -> str:
     validator_ref = str(TASK_EVIDENCE_VALIDATOR_REF)
     schema_test_ref = str(TASK_EVIDENCE_SCHEMA_TEST_REF)
     schema_template_ref = str(TASK_EVIDENCE_TEMPLATE_REF)
+    repo_guard_script = str((cfg.repo_root / "scripts" / "op" / "repo_guard_scanner.py").resolve())
     test_sync_section = ""
     if cfg.role in {"tester", "flex-tester"} and cfg.test_source_branch:
         test_sync_section = (
@@ -703,6 +704,12 @@ def render_packet(cfg: DispatchInput) -> str:
         f"- before each commit run: git diff --cached --name-only\n"
         f"- if staged paths include reports/optimus-prime/, unstage them before committing\n"
         f"- committing OP runtime artifacts is treated as infra failure with reason_code forbidden_op_artifact_commit\n\n"
+        f"## Pre-handoff Repo Guard (mandatory)\n"
+        f"- canonical guard script used by OP runtime: {repo_guard_script}\n"
+        f"- run before handoff (example): python3 {repo_guard_script} --input-json - <<'JSON'\n"
+        f"{{\"mode\":\"dispatch_commit_link\",\"repo_root\":\"{cfg.repo_root}\",\"branch_name\":\"{cfg.branch_name}\",\"start_from_commit\":\"{cfg.start_from_commit}\"}}\n"
+        f"JSON\n"
+        f"- handoff is valid only when scanner returns ok=true and reason_code is null\n\n"
         f"## Verification Contract (authoritative)\n"
         f"- mode: {verification_mode}\n"
         f"- stage_expectation: {stage_expectation}\n"

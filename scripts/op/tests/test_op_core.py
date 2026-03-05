@@ -4311,6 +4311,140 @@ def test_review_done_demotes_to_blocked_when_latest_evidence_contract_fails_and_
         assert any(item.get("code") == "tdd_expectation_not_met" for item in warnings if isinstance(item, dict))
 
 
+def test_sync_task_state_blocks_when_developer_dispatch_commit_link_missing(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = task_state["tasks"][0]
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["last_dispatch"] = {
+            "stage": "dev",
+            "role": "developer",
+            "branch_name": "codex/dev-1/task-001",
+            "start_from_commit": "a" * 40,
+            "start_from_branch": "RAB-BASE",
+            "dispatched_at": MODULE.utc_now_iso(),
+        }
+        evidence_path = root / task["evidence"]["task_evidence_ref"]
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["summary"] = {
+            "result": "fail",
+            "expectation": "expect_fail",
+            "expectation_met": True,
+            "failure_class": "expected_red",
+            "reason_codes": ["tdd_expected_failure_observed"],
+        }
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        monkeypatch.setattr(
+            MODULE,
+            "_repo_guard_scan",
+            lambda *_args, **_kwargs: {
+                "ok": False,
+                "mode": "dispatch_commit_link",
+                "reason_code": "dispatch_commit_link_missing",
+                "head_commit": "a" * 40,
+                "changed_paths": [],
+                "forbidden_paths": [],
+            },
+        )
+
+        warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
+        assert task["status"] == "blocked"
+        assert task["blocking_source"] == "evidence"
+        assert any(item.get("code") == "dispatch_commit_link_missing" for item in warnings if isinstance(item, dict))
+
+
+def test_sync_task_state_advances_when_developer_dispatch_commit_link_passes(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = task_state["tasks"][0]
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["last_dispatch"] = {
+            "stage": "dev",
+            "role": "developer",
+            "branch_name": "codex/dev-1/task-001",
+            "start_from_commit": "a" * 40,
+            "start_from_branch": "RAB-BASE",
+            "dispatched_at": MODULE.utc_now_iso(),
+        }
+        evidence_path = root / task["evidence"]["task_evidence_ref"]
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["summary"] = {
+            "result": "fail",
+            "expectation": "expect_fail",
+            "expectation_met": True,
+            "failure_class": "expected_red",
+            "reason_codes": ["tdd_expected_failure_observed"],
+        }
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        monkeypatch.setattr(
+            MODULE,
+            "_repo_guard_scan",
+            lambda *_args, **_kwargs: {
+                "ok": True,
+                "mode": "dispatch_commit_link",
+                "reason_code": None,
+                "head_commit": "b" * 40,
+                "changed_paths": ["src/app.py"],
+                "forbidden_paths": [],
+            },
+        )
+
+        warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
+        assert task["status"] == "dev_done"
+        assert task["owner_slot"] is None
+        assert any(item.get("code") == "tdd_expectation_met" for item in warnings if isinstance(item, dict))
+
+
+def test_validate_task_execution_state_allows_missing_last_dispatch_field():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        for task in task_state.get("tasks", []):
+            if isinstance(task, dict):
+                task.pop("last_dispatch", None)
+        errors = MODULE._validate_task_execution_state(task_state, plan_packets)
+        assert not any("last_dispatch" in str(item.get("message")) for item in errors if isinstance(item, dict))
+
+
 def test_task_evidence_summary_ready_for_test_normalized_to_pass():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -6109,6 +6243,12 @@ def test_test_stage_dispatch_packet_uses_dev_branch_head_and_slot_context(monkey
         assert payload.get("start_from_commit") == "a" * 40
         assert payload.get("test_source_branch") == f"codex/{run_id}/dev-1/task-001"
         assert payload.get("test_source_commit") == "a" * 40
+        task_row = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        last_dispatch = task_row.get("last_dispatch")
+        assert isinstance(last_dispatch, dict)
+        assert last_dispatch.get("stage") == "test"
+        assert last_dispatch.get("role") == "tester"
+        assert last_dispatch.get("start_from_commit") == "a" * 40
 
 
 def test_review_stage_dispatch_uses_developer_source_branch(monkeypatch: pytest.MonkeyPatch):
@@ -8299,12 +8439,16 @@ def test_branch_manager_blocks_source_branch_with_op_artifacts_without_retry_exh
             return 0
 
         command_log: list[str] = []
-        original_run = MODULE._run
 
-        def fake_run(args, cwd=None):
-            if args[:4] == ["git", "ls-tree", "-r", "--name-only"]:
-                return 0, "reports/optimus-prime/planning/UAT.md\nsrc/app.py\n", ""
-            return original_run(args, cwd=cwd)
+        def fake_repo_guard_scan(_repo_root, payload):
+            if payload.get("mode") == "merge_source_report_artifacts":
+                return {
+                    "ok": True,
+                    "mode": "merge_source_report_artifacts",
+                    "forbidden_paths": ["reports/optimus-prime/planning/UAT.md"],
+                    "inspect_error": None,
+                }
+            return {"ok": True}
 
         def fake_run_manager_command(command_text, **_kwargs):
             text = str(command_text).strip()
@@ -8320,7 +8464,7 @@ def test_branch_manager_blocks_source_branch_with_op_artifacts_without_retry_exh
             }
 
         monkeypatch.setattr(MODULE, "run_codex_exec", fake_codex_exec)
-        monkeypatch.setattr(MODULE, "_run", fake_run)
+        monkeypatch.setattr(MODULE, "_repo_guard_scan", fake_repo_guard_scan)
         monkeypatch.setattr(MODULE, "_run_manager_command", fake_run_manager_command)
         monkeypatch.setattr(MODULE, "_git_text", lambda *_args, **_kwargs: "pre-merge-sha")
 

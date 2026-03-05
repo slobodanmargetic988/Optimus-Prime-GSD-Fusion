@@ -165,6 +165,10 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("do not stage or commit any path under reports/optimus-prime/", content)
             self.assertIn("before each commit run: git diff --cached --name-only", content)
             self.assertIn("forbidden_op_artifact_commit", content)
+            self.assertIn("## Pre-handoff Repo Guard (mandatory)", content)
+            self.assertIn("canonical guard script used by OP runtime", content)
+            self.assertIn("repo_guard_scanner.py --input-json -", content)
+            self.assertIn("dispatch_commit_link", content)
 
     def test_packet_render_requires_canonical_task_evidence_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
