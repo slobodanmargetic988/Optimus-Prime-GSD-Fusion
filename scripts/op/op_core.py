@@ -2781,7 +2781,7 @@ def _run_tool_json(script: Path, payload: dict[str, Any], cwd: Path) -> dict[str
 
 
 def _repo_guard_scan(repo_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    script = (repo_root / "scripts" / "op" / "repo_guard_scanner.py").resolve()
+    script = (Path(__file__).resolve().parent / "repo_guard_scanner.py").resolve()
     return _run_tool_json(script, payload, repo_root)
 
 

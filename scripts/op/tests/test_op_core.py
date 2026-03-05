@@ -4726,6 +4726,26 @@ def test_derive_gap_requirement_ids_missing_fields_uses_fallback():
     assert fallback_used is True
 
 
+def test_repo_guard_scan_uses_installed_op_script_path(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_run_tool(script: Path, payload: dict[str, object], cwd: Path) -> dict[str, object]:
+        captured["script"] = script
+        captured["payload"] = payload
+        captured["cwd"] = cwd
+        return {"ok": True}
+
+    monkeypatch.setattr(MODULE, "_run_tool_json", fake_run_tool)
+    repo_root = Path("/tmp/myboard")
+    payload = {"mode": "dispatch_commit_link"}
+    out = MODULE._repo_guard_scan(repo_root, payload)
+    assert out.get("ok") is True
+    expected_script = (Path(MODULE.__file__).resolve().parent / "repo_guard_scanner.py").resolve()
+    assert captured["script"] == expected_script
+    assert captured["cwd"] == repo_root
+    assert captured["payload"] == payload
+
+
 def test_dispatch_task_packet_emits_gap_requirement_fallback_warning(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
