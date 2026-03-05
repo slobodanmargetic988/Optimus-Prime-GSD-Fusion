@@ -175,6 +175,7 @@ def test_merge_payload_defaults_fan_in_false_for_build(monkeypatch: pytest.Monke
     )
     parsed = MODULE.parse_args()
     payload = MODULE.merge_payload(parsed)
+    assert payload.get("sleep_minutes") == 2.0
     assert payload.get("enable_artifact_fan_in") is False
 
 

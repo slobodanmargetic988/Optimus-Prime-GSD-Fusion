@@ -206,7 +206,7 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         except ValueError:
             canonical = ""
         if canonical in {"op-build", "op-resume"}:
-            payload["sleep_minutes"] = 1.0
+            payload["sleep_minutes"] = 2.0
 
     if "enable_artifact_fan_in" not in payload:
         command_raw = str(payload.get("command") or "").strip()

@@ -74,7 +74,7 @@ def test_config_precedence_cli_over_project_over_global_over_defaults():
             assert effective["workflow"]["max_build_cycles"] == 99
             # strict_validation from profile defaults after merges.
             assert effective["workflow"]["strict_validation"] is True
-            assert effective["workflow"]["sleep_minutes"] == 1.0
+            assert effective["workflow"]["sleep_minutes"] == 2.0
             assert effective["workflow"]["enable_artifact_fan_in"] is False
         finally:
             if old_xdg is None:

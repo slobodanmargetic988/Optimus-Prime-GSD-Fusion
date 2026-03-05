@@ -16,7 +16,7 @@ PROFILES = {
         "workflow": {
             "max_build_cycles": 50,
             "strict_validation": True,
-            "sleep_minutes": 1.0,
+            "sleep_minutes": 2.0,
             "enable_artifact_fan_in": False,
         },
         "rate_gate": {"max_wait_hours": 2.0},
@@ -25,7 +25,7 @@ PROFILES = {
         "workflow": {
             "max_build_cycles": 20,
             "strict_validation": True,
-            "sleep_minutes": 1.0,
+            "sleep_minutes": 2.0,
             "enable_artifact_fan_in": False,
         },
         "rate_gate": {"max_wait_hours": 2.0},
@@ -34,7 +34,7 @@ PROFILES = {
         "workflow": {
             "max_build_cycles": 10,
             "strict_validation": False,
-            "sleep_minutes": 1.0,
+            "sleep_minutes": 2.0,
             "enable_artifact_fan_in": False,
         },
         "rate_gate": {"max_wait_hours": 1.0},
@@ -46,7 +46,7 @@ DEFAULT_CONFIG = {
     "workflow": {
         "max_build_cycles": 20,
         "strict_validation": True,
-        "sleep_minutes": 1.0,
+        "sleep_minutes": 2.0,
         "enable_artifact_fan_in": False,
     },
     "rate_gate": {"max_wait_hours": 2.0},
