@@ -3119,6 +3119,9 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
                 task["blocking_source"] = "evidence"
                 task["last_progress_at"] = payload_updated_at
                 blocker_code = _as_str(guard.get("reason_code")) or "dispatch_commit_link_missing"
+                guard_error = _as_str(guard.get("error"))
+                if not _as_str(guard.get("reason_code")) and guard_error in {"script_missing", "runtime_error"}:
+                    blocker_code = "dispatch_commit_link_inspection_failed"
                 _append_task_blocker(
                     task,
                     summary=f"task evidence commit-link guard failed for {task_id}",

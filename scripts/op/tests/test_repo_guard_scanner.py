@@ -152,3 +152,26 @@ def test_dispatch_commit_link_fails_when_branch_missing():
     assert out["ok"] is False
     assert out["reason_code"] == "dispatch_commit_link_inspection_failed"
     assert isinstance(out.get("inspect_error"), str)
+
+
+def test_cli_contract_stdin_mode_and_exit_code():
+    root = init_repo()
+    git(root, "checkout", "-b", "codex/dev-1/task-001")
+    payload = {
+        "mode": "dispatch_commit_link",
+        "repo_root": str(root),
+        "branch_name": "codex/dev-1/task-001",
+        "start_from_commit": git(root, "rev-parse", "HEAD"),
+    }
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), "--input-json", "-"],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    parsed = json.loads(proc.stdout)
+    assert parsed["ok"] is False
+    assert parsed["mode"] == "dispatch_commit_link"
+    assert parsed["reason_code"] == "dispatch_commit_link_missing"

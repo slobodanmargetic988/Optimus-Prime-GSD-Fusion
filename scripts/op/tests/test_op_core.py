@@ -4423,6 +4423,63 @@ def test_sync_task_state_advances_when_developer_dispatch_commit_link_passes(mon
         assert any(item.get("code") == "tdd_expectation_met" for item in warnings if isinstance(item, dict))
 
 
+def test_sync_task_state_maps_repo_guard_runtime_error_to_inspection_failed(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = task_state["tasks"][0]
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        task["last_dispatch"] = {
+            "stage": "dev",
+            "role": "developer",
+            "branch_name": "codex/dev-1/task-001",
+            "start_from_commit": "a" * 40,
+            "start_from_branch": "RAB-BASE",
+            "dispatched_at": MODULE.utc_now_iso(),
+        }
+        evidence_path = root / task["evidence"]["task_evidence_ref"]
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["summary"] = {
+            "result": "fail",
+            "expectation": "expect_fail",
+            "expectation_met": True,
+            "failure_class": "expected_red",
+            "reason_codes": ["tdd_expected_failure_observed"],
+        }
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        monkeypatch.setattr(
+            MODULE,
+            "_repo_guard_scan",
+            lambda *_args, **_kwargs: {
+                "ok": False,
+                "error": "runtime_error",
+                "message": "tool execution failed",
+            },
+        )
+
+        warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
+        assert task["status"] == "blocked"
+        assert task["blocking_source"] == "evidence"
+        assert any(
+            item.get("code") == "dispatch_commit_link_inspection_failed"
+            for item in warnings
+            if isinstance(item, dict)
+        )
+
+
 def test_validate_task_execution_state_allows_missing_last_dispatch_field():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
