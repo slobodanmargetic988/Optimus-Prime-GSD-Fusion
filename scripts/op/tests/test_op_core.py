@@ -7008,6 +7008,107 @@ def test_reconcile_verify_gap_closes_on_passed_verify():
         assert any(item.get("code") == "task_gap_closed" for item in warnings)
 
 
+def test_refresh_task_embedded_gaps_skips_uat_missing_for_expect_fail_review():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "review_done"
+        task["gaps_that_need_patching"] = []
+        evidence_path = MODULE._task_evidence_path(root, task)
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["summary"] = {
+            "result": "fail",
+            "expectation": "expect_fail",
+            "expectation_met": True,
+            "failure_class": "expected_red",
+            "reason_codes": ["tdd_expected_failure_observed"],
+        }
+        payload["test"]["uat_results"] = [
+            {
+                "requirement_id": "REQ-001",
+                "requirement_ids": ["REQ-001"],
+                "passed": False,
+                "notes": "red phase expected",
+            }
+        ]
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        MODULE._refresh_task_embedded_gaps(root, plan_packets, task_state)
+        open_gaps = [row for row in task["gaps_that_need_patching"] if row.get("status") == "open"]
+        assert all(row.get("category") != "uat_missing" for row in open_gaps)
+
+
+def test_refresh_task_embedded_gaps_closes_existing_uat_missing_for_expect_fail_review():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "review_done"
+        phase_id = task.get("phase_id") or "phase-1"
+        gap_id = MODULE._gap_id(plan_packets.get("plan_id") or "plan", phase_id, "TASK-001", "uat:REQ-001", "blocked")
+        task["gaps_that_need_patching"] = [
+            {
+                "gap_id": gap_id,
+                "category": "uat_missing",
+                "severity": "P1",
+                "stage": "review",
+                "status": "open",
+                "reason_codes": ["uat_requirement_not_passed"],
+                "retry_count": 0,
+                "max_retries": 5,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "closure_ref": None,
+            }
+        ]
+        evidence_path = MODULE._task_evidence_path(root, task)
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        payload["summary"] = {
+            "result": "fail",
+            "expectation": "expect_fail",
+            "expectation_met": True,
+            "failure_class": "expected_red",
+            "reason_codes": ["tdd_expected_failure_observed"],
+        }
+        payload["test"]["uat_results"] = [
+            {
+                "requirement_id": "REQ-001",
+                "requirement_ids": ["REQ-001"],
+                "passed": False,
+                "notes": "red phase expected",
+            }
+        ]
+        evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        MODULE._refresh_task_embedded_gaps(root, plan_packets, task_state)
+        row = task["gaps_that_need_patching"][0]
+        assert row["status"] == "closed"
+        assert "gap_closed_by_evidence" in row.get("reason_codes", [])
+
+
 def test_reconcile_merge_blocked_gap_closes_on_done_registry_success():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -8239,6 +8340,97 @@ def test_workstation_manager_success_updates_slot_worktree_and_branch(
         slot_row = next(item for item in registry_after.get("workers", []) if isinstance(item, dict) and item.get("slot") == "dev-1")
         assert slot_row.get("worktree_root") == str(target_path)
         assert slot_row.get("branch") == "codex/dev-1/task-001"
+
+
+def test_workstation_manager_auto_adds_force_reset_existing(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        monkeypatch.setattr(MODULE.sys.stdout, "isatty", lambda: True)
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        task["status"] = "dev_working"
+        task["owner_slot"] = "dev-1"
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "dev-1":
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+                row["lane_id"] = "phase-1/lane-a"
+                row["previous_lane_id"] = "phase-1/lane-b"
+                row["branch"] = "codex/dev-1/task-001"
+                row["worktree_root"] = None
+            elif row.get("role") in {"developer", "tester", "reviewer"}:
+                row["lane_id"] = "phase-1/lane-z"
+                row["previous_lane_id"] = "phase-1/lane-z"
+                row["worktree_root"] = str(root / "prepared-worktrees" / str(row.get("slot") or "slot"))
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+
+        target_path = MODULE._expected_slot_worktree_path(root, "dev-1")
+        assert isinstance(target_path, Path)
+        target_path.mkdir(parents=True, exist_ok=True)
+
+        _stub_workstation_async_llm(
+            monkeypatch,
+            lambda _prompt: {
+                "schema_version": "1.0",
+                "slot": "dev-1",
+                "lane_id": "phase-1/lane-a",
+                "task_id": "TASK-001",
+                "branch_name": "codex/dev-1/task-001",
+                "worktree_name": "workstation-dev-1",
+                "prepare_command": (
+                    f"python3 {MODULE._resolve_skill_script('workstation-preparation', 'prepare_workstation.py')} "
+                    f"--repo-root {root} --base-ref RAB-BASE --branch-name codex/dev-1/task-001 "
+                    "--slot-role developer --output json --worktree-name workstation-dev-1"
+                ),
+                "prereq_policy": "copy_env_files",
+            },
+        )
+
+        seen_prepare_command = {"value": ""}
+
+        def fake_run_manager_command(command_text, **_kwargs):
+            seen_prepare_command["value"] = str(command_text)
+            return {
+                "ok": True,
+                "code": None,
+                "message": "",
+                "stdout": json.dumps(
+                    {
+                        "ok": True,
+                        "target_path": str(target_path),
+                        "branch_name_resolved": "codex/dev-1/task-001",
+                    }
+                ),
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+            }
+
+        monkeypatch.setattr(MODULE, "_run_manager_command", fake_run_manager_command)
+        monkeypatch.setattr(
+            MODULE,
+            "_git_text",
+            lambda repo_root, *args: ("codex/dev-1/task-001" if str(repo_root) == str(target_path) else "abc123"),
+        )
+
+        out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
+        assert out.get("fatal") is False
+        assert "--force-reset-existing" in seen_prepare_command["value"]
 
 
 def test_workstation_manager_test_slot_uses_slot_prefix_and_dev_base_ref(

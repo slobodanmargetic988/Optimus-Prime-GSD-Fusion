@@ -4340,6 +4340,8 @@ def _refresh_task_embedded_gaps(repo_root: Path, plan_packets: dict[str, Any], t
                 row["updated_at"] = now
         phase_id = _as_str(task.get("phase_id")) or "phase-1"
         plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
+        contract = _task_verification_contract(task, plan_task)
+        review_expectation = _expected_for_stage(contract, "review")
         evidence_path = _task_evidence_path(repo_root, task)
         evidence_ref = os.path.relpath(str(evidence_path), str(repo_root))
         status = _normalize_task_status(task.get("status"))
@@ -4408,7 +4410,7 @@ def _refresh_task_embedded_gaps(repo_root: Path, plan_packets: dict[str, Any], t
                     },
                 )
 
-        if status in {TASK_STATUS_REVIEW_DONE, TASK_STATUS_BLOCKED}:
+        if status in {TASK_STATUS_REVIEW_DONE, TASK_STATUS_BLOCKED} and review_expectation != "expect_fail":
             req_ids = [rid for rid in ((_as_str(item) for item in plan_task.get("requirement_ids", []))) if rid]
             for rid in sorted(set(req_ids) - uat_passed):
                 gap_id = _gap_id(plan_id, phase_id, task_id, f"uat:{rid}", "blocked")
@@ -4465,9 +4467,12 @@ def _refresh_task_embedded_gaps(repo_root: Path, plan_packets: dict[str, Any], t
                 }
                 if status_now not in uat_resolved_statuses:
                     continue
-                req_ids = [rid for rid in ((_as_str(item) for item in plan_task.get("requirement_ids", []))) if rid]
-                if not set(req_ids).issubset(uat_passed):
-                    continue
+                if review_expectation == "expect_fail":
+                    pass
+                else:
+                    req_ids = [rid for rid in ((_as_str(item) for item in plan_task.get("requirement_ids", []))) if rid]
+                    if not set(req_ids).issubset(uat_passed):
+                        continue
             if category == "task_blocked":
                 blockers = task.get("blockers")
                 blockers_present = isinstance(blockers, list) and len(blockers) > 0
@@ -5818,6 +5823,28 @@ def _extract_command_option_value(
                 return str(cwd / path_like)
         return value
     return None
+
+
+def _ensure_command_flag(command_text: str, flag: str) -> str:
+    text = (command_text or "").strip()
+    if not text:
+        return text
+    wrapped = _unwrap_bash_lc(text)
+    if wrapped is not None:
+        updated = _ensure_command_flag(wrapped, flag)
+        if updated == wrapped:
+            return text
+        return f"bash -lc {shlex.quote(updated)}"
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        return f"{text} {flag}".strip()
+    if not tokens:
+        return text
+    if flag in tokens or any(token.startswith(f"{flag}=") for token in tokens):
+        return text
+    tokens.append(flag)
+    return shlex.join(tokens)
 
 
 def _validate_manager_command(
@@ -11101,8 +11128,9 @@ def _manager_workstation_cycle(
                 "message": "; ".join(action_errors),
             }
 
+        effective_prepare_command = _ensure_command_flag(prepare_command, "--force-reset-existing")
         prepare_result = _run_manager_command(
-            prepare_command,
+            effective_prepare_command,
             cwd=req.repo_root,
             timeout_sec=WORKSTATION_PREP_COMMAND_TIMEOUT_SEC,
             manager="workstation",
