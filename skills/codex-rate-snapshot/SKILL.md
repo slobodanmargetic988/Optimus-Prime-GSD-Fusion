@@ -13,8 +13,8 @@ Use this skill to read rate-limit data from Codex session logs (`*.jsonl`) inste
 
 The bundled script:
 - resolves one or more profile aliases to `CODEX_HOME`
-- finds the newest session JSONL for each profile
-- reads the latest `token_count` event with `payload.rate_limits`
+- scans recent session JSONL files for each profile (newest first)
+- selects the most recent `token_count` event with non-null `rate_limits`
 - computes remaining percentages for 5h and weekly windows
 - reads profile identity from `auth.json` (best effort)
 - applies configurable rate gates and outputs normalized JSON
@@ -36,6 +36,8 @@ This is intended for orchestrators (for example `optimus-prime`) to make dispatc
 - `--soft-gate-weekly-percent` (optional, default `25`)
 - `--soft-max-active-workers` (optional, default `3`)
 - `--wait-max-hours` (optional, default `4`)
+- `--max-session-files` (optional, default `20`)
+- `--max-snapshot-age-hours` (optional, default `24`)
 - `--json-pretty` (optional)
 
 ## Usage
@@ -77,6 +79,7 @@ Each profile entry includes:
 - `codex_home`
 - `account_identity` (best effort from `auth.json`)
 - `session_file`
+- `rate_limits_source`, `rate_limits_event_at`, `rate_snapshot_age_minutes`
 - `five_hour` and `weekly` windows (`used_percent`, `remaining_percent`, `reset_at`, `gated`)
 - `recommended_action` (`continue`, `wait_until_reset`, `wind_down`)
 - `soft_concurrency_gated` (true when 5h/weekly remaining is under soft throttle thresholds)
@@ -85,5 +88,8 @@ Each profile entry includes:
 ## Notes
 
 - If a profile has no readable session JSONL or no parsable `token_count` event, the profile is marked ineligible (`recommended_action=wind_down`).
+- If newest session data has null rate limits, the script falls back to older recent sessions and records `rate_limits_fallback_session_used`.
+- If newest session has null rate limits and `auth.json` access token is already expired, the profile is hard-gated (`recommended_action=wind_down`) with `auth_access_token_expired`.
+- If selected snapshot age exceeds `--max-snapshot-age-hours`, the profile is marked `recommended_action=wind_down` with `rate_limits_snapshot_stale`.
 - Identity detection is best effort and should not block parsing unless your orchestrator explicitly requires it.
 - This skill reads local files only; it does not call Codex `/status`.

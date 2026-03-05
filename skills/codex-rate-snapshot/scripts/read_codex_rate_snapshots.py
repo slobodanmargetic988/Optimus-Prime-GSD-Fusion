@@ -16,7 +16,7 @@ from typing import Any
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 RESET_KEYS = ("reset_at", "resets_at", "resetAt", "resetsAt", "reset_time", "resetTime")
-
+AUTH_SCAN_TAIL_LINES = 250
 
 @dataclass
 class WindowSnapshot:
@@ -34,6 +34,9 @@ class ProfileSnapshot:
     account_identity: str | None
     account_source: str | None
     session_file: str | None
+    rate_limits_source: str | None
+    rate_limits_event_at: str | None
+    rate_snapshot_age_minutes: float | None
     token_count_event_found: bool
     five_hour: WindowSnapshot
     weekly: WindowSnapshot
@@ -58,6 +61,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--soft-gate-weekly-percent", type=float, default=25.0)
     parser.add_argument("--soft-max-active-workers", type=int, default=3)
     parser.add_argument("--wait-max-hours", type=float, default=4.0)
+    parser.add_argument("--max-session-files", type=int, default=20)
+    parser.add_argument("--max-snapshot-age-hours", type=float, default=24.0)
     parser.add_argument("--json-pretty", action="store_true")
     return parser.parse_args()
 
@@ -94,14 +99,26 @@ def resolve_codex_home(value: str) -> Path:
 
 
 def newest_session_jsonl(codex_home: Path) -> Path | None:
+    files = recent_session_jsonl(codex_home, max_files=1)
+    return files[0] if files else None
+
+
+def recent_session_jsonl(codex_home: Path, max_files: int) -> list[Path]:
     sessions_root = codex_home / "sessions"
     if not sessions_root.exists():
-        return None
+        return []
     candidates = [p for p in sessions_root.rglob("*.jsonl") if p.is_file()]
     if not candidates:
-        return None
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0]
+        return []
+    # Select by last edit time (mtime), not creation time.
+    def _mtime_key(path: Path) -> tuple[int, int, str]:
+        stat = path.stat()
+        return int(stat.st_mtime_ns), int(stat.st_size), str(path)
+
+    sorted_candidates = sorted(candidates, key=_mtime_key, reverse=True)
+    if max_files <= 0:
+        return sorted_candidates
+    return sorted_candidates[:max_files]
 
 
 def _dict_get_path(obj: dict[str, Any], *keys: str) -> Any:
@@ -159,12 +176,114 @@ def latest_token_count_event(session_file: Path) -> dict[str, Any] | None:
                 continue
             if not isinstance(obj, dict):
                 continue
-            rate_limits = _find_rate_limits(obj)
-            if not rate_limits:
-                continue
             if _looks_like_token_count(obj) or "token_count" in line:
                 last_match = obj
     return last_match
+
+
+def event_timestamp_utc(event: dict[str, Any]) -> datetime | None:
+    raw_ts = event.get("timestamp")
+    if isinstance(raw_ts, str):
+        return parse_iso_datetime(raw_ts)
+    return None
+
+
+def latest_token_count_event_with_rate_limits(session_file: Path) -> tuple[dict[str, Any] | None, datetime | None]:
+    latest_with_limits: dict[str, Any] | None = None
+    latest_ts: datetime | None = None
+    with session_file.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            if not (_looks_like_token_count(obj) or "token_count" in line):
+                continue
+            rate_limits = _find_rate_limits(obj)
+            if not isinstance(rate_limits, dict):
+                continue
+            ts = event_timestamp_utc(obj)
+            if latest_with_limits is None:
+                latest_with_limits = obj
+                latest_ts = ts
+                continue
+            if ts is None:
+                continue
+            if latest_ts is None or ts >= latest_ts:
+                latest_with_limits = obj
+                latest_ts = ts
+    return latest_with_limits, latest_ts
+
+
+def latest_session_auth_state(session_file: Path) -> tuple[str | None, bool]:
+    try:
+        lines = session_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return None, False
+
+    # Hard-gate auth detection is scoped to recent structured event messages.
+    # Avoid scanning raw text across tool outputs, which can include copied strings
+    # like "refresh_token_reused" without representing an actual auth failure.
+    latest_error_code: str | None = None
+    latest_error_ts: datetime | None = None
+    latest_recovery_ts: datetime | None = None
+
+    for line in reversed(lines[-AUTH_SCAN_TAIL_LINES:]):
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if obj.get("type") != "event_msg":
+            continue
+        payload = obj.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        event_ts = event_timestamp_utc(obj)
+
+        # Strong auth-recovery signal: successful token_count with usable rate_limits.
+        if payload.get("type") == "token_count":
+            if _find_rate_limits(obj):
+                if event_ts is not None and (latest_recovery_ts is None or event_ts > latest_recovery_ts):
+                    latest_recovery_ts = event_ts
+            continue
+
+        text_parts: list[str] = []
+        for key in ("text", "message", "error"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                text_parts.append(value.strip().lower())
+        excerpt = "\n".join(text_parts) if text_parts else ""
+        if excerpt:
+            if "refresh_token_reused" in excerpt and ("unauthorized" in excerpt or "401" in excerpt):
+                latest_error_code = "refresh_token_reused"
+                if event_ts is not None and (latest_error_ts is None or event_ts > latest_error_ts):
+                    latest_error_ts = event_ts
+                continue
+            if "invalid_grant" in excerpt:
+                latest_error_code = "invalid_grant"
+                if event_ts is not None and (latest_error_ts is None or event_ts > latest_error_ts):
+                    latest_error_ts = event_ts
+                continue
+
+        # Secondary recovery signal: regular assistant/system message emitted after failure.
+        # Keep this permissive for resilience in logs where token_count may be sparse.
+        if payload.get("type") in {"assistant_message", "system_message"}:
+            if event_ts is not None and (latest_recovery_ts is None or event_ts > latest_recovery_ts):
+                latest_recovery_ts = event_ts
+            continue
+
+    if latest_error_code is None:
+        return None, False
+    if latest_error_ts is None or latest_recovery_ts is None:
+        return latest_error_code, False
+    return latest_error_code, latest_recovery_ts > latest_error_ts
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -283,6 +402,42 @@ def maybe_read_auth_identity(codex_home: Path) -> tuple[str | None, str | None]:
     return None, None
 
 
+def maybe_read_auth_json(codex_home: Path) -> tuple[dict[str, Any] | None, Path | None]:
+    candidates = [codex_home / "auth.json", codex_home / "config" / "auth.json"]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            return data, path
+    return None, None
+
+
+def token_expiry_from_auth(codex_home: Path) -> tuple[datetime | None, str | None]:
+    data, path = maybe_read_auth_json(codex_home)
+    if not isinstance(data, dict):
+        return None, None
+    tokens = data.get("tokens")
+    if not isinstance(tokens, dict):
+        return None, None
+    token = tokens.get("access_token")
+    if not isinstance(token, str) or "." not in token:
+        return None, None
+    claims = decode_jwt_claims(token)
+    if not isinstance(claims, dict):
+        return None, None
+    exp = claims.get("exp")
+    if not isinstance(exp, (int, float)):
+        return None, None
+    dt = _parse_unix_timestamp(exp)
+    if dt is None:
+        return None, None
+    return dt, (str(path) if path is not None else None)
+
+
 def extract_email_from_auth_tokens(data: Any) -> str | None:
     if not isinstance(data, dict):
         return None
@@ -371,9 +526,12 @@ def build_profile_snapshot(
     soft_gate_5h: float,
     soft_gate_weekly: float,
     wait_max_hours: float,
+    max_session_files: int = 20,
+    max_snapshot_age_hours: float = 24.0,
 ) -> ProfileSnapshot:
     errors: list[str] = []
     session_file = newest_session_jsonl(codex_home)
+    session_files = recent_session_jsonl(codex_home, max_session_files)
     account_identity, account_source = maybe_read_auth_identity(codex_home)
 
     if session_file is None:
@@ -386,6 +544,9 @@ def build_profile_snapshot(
             account_identity=account_identity,
             account_source=account_source,
             session_file=None,
+            rate_limits_source=None,
+            rate_limits_event_at=None,
+            rate_snapshot_age_minutes=None,
             token_count_event_found=False,
             five_hour=five,
             weekly=weekly,
@@ -396,11 +557,61 @@ def build_profile_snapshot(
             errors=errors,
         )
 
+    auth_error, auth_error_resolved = latest_session_auth_state(session_file)
+    if auth_error:
+        if auth_error_resolved:
+            errors.append(f"{auth_error}_resolved")
+        else:
+            errors.append(auth_error)
     event = None
+    event_with_rate_limits = None
+    rate_limits_source_file: Path | None = None
+    rate_limits_event_dt: datetime | None = None
     try:
         event = latest_token_count_event(session_file)
+        for candidate in session_files:
+            found_event, found_ts = latest_token_count_event_with_rate_limits(candidate)
+            if found_event is None:
+                continue
+            if event_with_rate_limits is None:
+                event_with_rate_limits = found_event
+                rate_limits_source_file = candidate
+                rate_limits_event_dt = found_ts
+                continue
+            current_ts = rate_limits_event_dt
+            if current_ts is None:
+                event_with_rate_limits = found_event
+                rate_limits_source_file = candidate
+                rate_limits_event_dt = found_ts
+                continue
+            if found_ts is not None and found_ts >= current_ts:
+                event_with_rate_limits = found_event
+                rate_limits_source_file = candidate
+                rate_limits_event_dt = found_ts
     except Exception as exc:  # noqa: BLE001
         errors.append(f"session_read_error:{exc}")
+
+    if auth_error and not auth_error_resolved:
+        five = WindowSnapshot(None, None, None, None, True)
+        weekly = WindowSnapshot(None, None, None, None, True)
+        return ProfileSnapshot(
+            alias=alias,
+            codex_home=str(codex_home),
+            account_identity=account_identity,
+            account_source=account_source,
+            session_file=str(session_file),
+            rate_limits_source=None,
+            rate_limits_event_at=None,
+            rate_snapshot_age_minutes=None,
+            token_count_event_found=event is not None,
+            five_hour=five,
+            weekly=weekly,
+            recommended_action="wind_down",
+            soft_concurrency_gated=True,
+            wait_until_reset_candidate=False,
+            wait_seconds=None,
+            errors=errors,
+        )
 
     if event is None:
         errors.append("token_count_event_not_found")
@@ -412,19 +623,82 @@ def build_profile_snapshot(
             account_identity=account_identity,
             account_source=account_source,
             session_file=str(session_file),
+            rate_limits_source=None,
+            rate_limits_event_at=None,
+            rate_snapshot_age_minutes=None,
             token_count_event_found=False,
             five_hour=five,
             weekly=weekly,
-            recommended_action="wind_down",
-            soft_concurrency_gated=True,
+            recommended_action="continue",
+            soft_concurrency_gated=False,
             wait_until_reset_candidate=False,
             wait_seconds=None,
             errors=errors,
         )
 
-    rate_limits = _find_rate_limits(event) or {}
+    access_expiry_dt, access_expiry_source = token_expiry_from_auth(codex_home)
+    if access_expiry_dt is not None and access_expiry_dt <= now_utc():
+        # If newest run has no usable rate-limits and access token is already expired,
+        # treat profile auth as unhealthy for dispatch.
+        if _find_rate_limits(event) is None:
+            errors.append("auth_access_token_expired")
+            if access_expiry_source:
+                errors.append(f"auth_access_token_source:{access_expiry_source}")
+            five = WindowSnapshot(None, None, None, None, True)
+            weekly = WindowSnapshot(None, None, None, None, True)
+            return ProfileSnapshot(
+                alias=alias,
+                codex_home=str(codex_home),
+                account_identity=account_identity,
+                account_source=account_source,
+                session_file=str(session_file),
+                rate_limits_source=None,
+                rate_limits_event_at=None,
+                rate_snapshot_age_minutes=None,
+                token_count_event_found=True,
+                five_hour=five,
+                weekly=weekly,
+                recommended_action="wind_down",
+                soft_concurrency_gated=True,
+                wait_until_reset_candidate=False,
+                wait_seconds=None,
+                errors=errors,
+            )
+
+    snapshot_event = event_with_rate_limits if event_with_rate_limits is not None else event
+    if event_with_rate_limits is None:
+        errors.append("rate_limits_not_found_in_recent_sessions")
+    elif rate_limits_source_file is not None and rate_limits_source_file != session_file:
+        errors.append("rate_limits_fallback_session_used")
+
+    rate_limits = _find_rate_limits(snapshot_event) or {}
     five = build_window(rate_limits.get("primary"), gate_5h)
     weekly = build_window(rate_limits.get("secondary"), gate_weekly)
+    event_ts = rate_limits_event_dt or event_timestamp_utc(snapshot_event)
+    snapshot_age_minutes = None
+    if event_ts is not None:
+        snapshot_age_minutes = round((now_utc() - event_ts).total_seconds() / 60.0, 2)
+
+    if five.remaining_percent is None or weekly.remaining_percent is None:
+        errors.append("rate_limits_missing")
+        return ProfileSnapshot(
+            alias=alias,
+            codex_home=str(codex_home),
+            account_identity=account_identity,
+            account_source=account_source,
+            session_file=str(rate_limits_source_file or session_file),
+            rate_limits_source="token_count_event",
+            rate_limits_event_at=event_ts.isoformat() if event_ts is not None else None,
+            rate_snapshot_age_minutes=snapshot_age_minutes,
+            token_count_event_found=True,
+            five_hour=five,
+            weekly=weekly,
+            recommended_action="continue",
+            soft_concurrency_gated=False,
+            wait_until_reset_candidate=False,
+            wait_seconds=None,
+            errors=errors,
+        )
 
     any_gated = five.gated or weekly.gated
     wait_candidate = False
@@ -447,6 +721,9 @@ def build_profile_snapshot(
                 recommended_action = "wind_down"
         else:
             recommended_action = "wind_down"
+    if snapshot_age_minutes is not None and snapshot_age_minutes > max_snapshot_age_hours * 60.0:
+        errors.append("rate_limits_snapshot_stale")
+        recommended_action = "wind_down"
 
     soft_concurrency_gated = window_soft_gated(five, soft_gate_5h) or window_soft_gated(weekly, soft_gate_weekly)
 
@@ -455,7 +732,10 @@ def build_profile_snapshot(
         codex_home=str(codex_home),
         account_identity=account_identity,
         account_source=account_source,
-        session_file=str(session_file),
+        session_file=str(rate_limits_source_file or session_file),
+        rate_limits_source="token_count_event",
+        rate_limits_event_at=event_ts.isoformat() if event_ts is not None else None,
+        rate_snapshot_age_minutes=snapshot_age_minutes,
         token_count_event_found=True,
         five_hour=five,
         weekly=weekly,
@@ -499,6 +779,9 @@ def to_json_obj(profile: ProfileSnapshot) -> dict[str, Any]:
         "account_identity": profile.account_identity,
         "account_source": profile.account_source,
         "session_file": profile.session_file,
+        "rate_limits_source": profile.rate_limits_source,
+        "rate_limits_event_at": profile.rate_limits_event_at,
+        "rate_snapshot_age_minutes": profile.rate_snapshot_age_minutes,
         "token_count_event_found": profile.token_count_event_found,
         "five_hour": window_obj(profile.five_hour),
         "weekly": window_obj(profile.weekly),
@@ -531,6 +814,8 @@ def main() -> int:
                 soft_gate_5h=args.soft_gate_5h_percent,
                 soft_gate_weekly=args.soft_gate_weekly_percent,
                 wait_max_hours=args.wait_max_hours,
+                max_session_files=args.max_session_files,
+                max_snapshot_age_hours=args.max_snapshot_age_hours,
             )
         )
 
@@ -546,6 +831,8 @@ def main() -> int:
             "five_hour_percent": args.gate_5h_percent,
             "weekly_percent": args.gate_weekly_percent,
             "wait_max_hours": args.wait_max_hours,
+            "max_session_files": args.max_session_files,
+            "max_snapshot_age_hours": args.max_snapshot_age_hours,
         },
         "soft_concurrency": {
             "five_hour_percent": args.soft_gate_5h_percent,
