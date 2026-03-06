@@ -9,6 +9,7 @@
 - At each pause: summarize work and list blockers.
 - Schema approvals remain explicit human decisions.
 - Prompt approvals can happen after implementation.
+- Implementation can start once planning-question closure is reached; schema/prompt review continues post-implementation.
 - If file relevance is uncertain during cleanup: keep it and mark review-needed.
 
 ## Tracker Columns

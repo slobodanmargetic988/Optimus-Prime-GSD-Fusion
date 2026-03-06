@@ -96,3 +96,34 @@ This file locks decisions approved in chat so they are not lost across sessions.
   - `--max-parallel-workers`
 - default max parallel workers remains 8.
 - BOSS reads parallelism limits from configured config/artifact path via prompt guidance.
+- schema closure set remains all remaining artifacts (no scope reduction).
+- `plan_packets` and `task_execution_state` statuses are aligned:
+  - `pending`, `in_progress`, `done`, `blocked`
+- `profile_snapshot` row minimum fields are locked:
+  - `alias`, `codex_home`, `window_5h_remaining_pct`, `window_week_remaining_pct`, `hard_gated`, `soft_gated`, `reset_at`
+- `cycle_manager_decision` remains minimal (no `next_action`).
+- `watchdog_state` minimum fields are locked:
+  - `cycle_number`, `monitored_branch`, `last_commit_sha`, `last_commit_seen_cycle`, `idle_cycles`, `threshold_cycles`
+- `worker_registry.last_update` uses full UTC timestamp.
+- `dispatch_registry` minimum event fields are locked:
+  - `cycle_number`, `worker_id`, `packet_id`, `thread_id`, `pid`, `status`, `timestamp`, `message`
+- `production_line_register.assignment_state` enum is locked:
+  - `assigned`, `unassigned`, `deferred`
+- `worker_packet.required_done_marker` uses template:
+  - `[DONE][lane:<lane_id>][task:<task_id>]`
+- `cycle_summary.dispatch_counts` fields are locked:
+  - `attempted`, `launched`, `launch_failed`, `unknown`
+- `task_execution_state.attempts` uses stage-keyed counters:
+  - `dev`, `lane_test`, `test_fix`, `lane_review`, `review_fix`, `deep_review`, `deep_fix`
+- `last_handoff_outcome.status` enum is locked:
+  - `success`, `blocked`, `failed`, `unknown`
+- task blocker row minimum fields are locked:
+  - `blocker_code`, `message`, `first_seen_cycle`, `last_seen_cycle`, `active`
+- `workstation_prep` keeps full agreed row fields:
+  - `workstation_id`, `branch`, `worktree`, `prepared_at`, `status`, `preparation_notes`, `git_head_sha`
+- manager prompt minimum sections are locked:
+  - role, inputs(paths), required outputs(files+schema), failure handling, tool usage rules
+- worker prompt minimum sections are locked:
+  - task objective, constraints, required commit marker, expected artifact/evidence outputs, stop/escalation rules
+- validator/helper references should use absolute install-location paths.
+- implementation can start once planning questions are answered; schema/prompt review continues post-implementation.

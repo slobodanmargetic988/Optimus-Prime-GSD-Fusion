@@ -125,6 +125,8 @@
   - `current_task_id`, `current_packet_id`
   - `pid`, `thread_id`
   - `last_update`
+- `worker_registry` time format:
+  - `last_update` uses full UTC timestamp
 - `worker_registry` `pid/thread_id` writer:
   - BOSS updates from dispatch receipts
 - `dispatch_registry` role:
@@ -132,10 +134,16 @@
   - `worker_registry` remains latest worker state
 - `dispatch_registry` status enum:
   - `launched`, `launch_failed`, `unknown`
+- `dispatch_registry` event row minimum fields:
+  - `cycle_number`, `worker_id`, `packet_id`, `thread_id`, `pid`, `status`, `timestamp`, `message`
 - `production_line_register` row minimum fields:
   - `worker_id`, `lane_id`, `task_id`, `packet_id`, `profile_alias`, `assignment_state`, `reason`
+- `production_line_register` assignment state enum:
+  - `assigned`, `unassigned`, `deferred`
 - `worker_packet` minimum fields:
   - `packet_id`, `worker_id`, `lane_id`, `task_id`, `profile_alias`, `prompt`, `required_done_marker`
+- `worker_packet` done-marker template:
+  - `[DONE][lane:<lane_id>][task:<task_id>]`
 - `plan_packets` status enum:
   - `pending`, `in_progress`, `done`, `blocked`
 - `plan_packets` structure model:
@@ -150,6 +158,22 @@
   - separate from `plan_packets`
   - authoritative writer: BOSS
   - minimum sections: task rows, blockers, attempts, `last_handoff_outcome`
+- `task_execution_state` task status enum:
+  - `pending`, `in_progress`, `done`, `blocked`
+- `task_execution_state` attempts model:
+  - stage-keyed counters (`dev`, `lane_test`, `test_fix`, `lane_review`, `review_fix`, `deep_review`, `deep_fix`)
+- `task_execution_state` `last_handoff_outcome.status` enum:
+  - `success`, `blocked`, `failed`, `unknown`
+- `task_execution_state` blocker row minimum fields:
+  - `blocker_code`, `message`, `first_seen_cycle`, `last_seen_cycle`, `active`
+- `profile_snapshot` row minimum fields:
+  - `alias`, `codex_home`
+  - `window_5h_remaining_pct`, `window_week_remaining_pct`
+  - `hard_gated`, `soft_gated`, `reset_at`
+- `cycle_manager_decision` remains proceed-gate minimal:
+  - no `next_action` field
+- lane size policy:
+  - no schema-level task cap; parallelism limits come from runtime config
 
 ## Parallelism and Canary
 - Default max parallel workers remains 8 (configurable).
@@ -171,7 +195,7 @@
   - `cycle_number`
   - `manager_statuses` as map `{status, note}` keyed by manager name
   - `task_counts` (`pending`, `in_progress`, `done`, `blocked`)
-  - `dispatch_counts`
+  - `dispatch_counts` (`attempted`, `launched`, `launch_failed`, `unknown`)
   - `notes`
 - `watchdog_exit_signal.json` minimum fields:
   - `cycle_number`
@@ -179,9 +203,28 @@
   - `message`
   - `monitored_branch`
   - `idle_cycles`
+- `watchdog_state.json` minimum fields:
+  - `cycle_number`, `monitored_branch`, `last_commit_sha`, `last_commit_seen_cycle`, `idle_cycles`, `threshold_cycles`
 
 ## Initialize Workstation Artifact
 - `workstation_prep` is written by initialize code once per run before cycle start.
+- `workstation_prep` row minimum fields:
+  - `workstation_id`, `branch`, `worktree`, `prepared_at`, `status`, `preparation_notes`, `git_head_sha`
+
+## Prompt Contract Minimums
+- manager prompts must include:
+  - role
+  - inputs (artifact paths)
+  - required outputs (files + schema contract)
+  - failure handling
+  - tool usage rules
+- worker prompts must include:
+  - task objective
+  - constraints
+  - required commit marker
+  - expected artifact/evidence outputs
+  - stop/escalation rules
+- validator/helper script references use absolute install-location paths (not repo-relative paths)
 
 ## Phase 2 Placeholder
 - Additional worker prompt types planned later (post-canary):
