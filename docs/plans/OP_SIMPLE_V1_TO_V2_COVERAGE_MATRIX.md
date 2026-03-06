@@ -22,7 +22,7 @@ This document maps V1 backlog intent (T001-T101) to the active V2 spec so we can
 | T015-T022 | Lane lifecycle, parallelization, role-mix, DONE contract | V2 spec: `Lane/TDD Behavior`, DONE marker format; session lock includes defaults | PARTIAL | Define lane state machine artifact contract + worker mix decision schema + explicit dependency handling policy text |
 | T023-T026 | `worker_registry` schema and approval | Mentioned conceptually in V2/session lock, not finalized as approved V2 schema artifact | OPEN | Draft minimal V2 schema + field rationale + human approval pass |
 | T027-T030 | `profile_snapshot` schema and approval | Mentioned conceptually; no finalized V2 schema doc | OPEN | Draft/approve minimal V2 `profile_snapshot` schema |
-| T031-T034 | `profile_assignment` schema and approval | Mentioned conceptually; no finalized V2 schema doc | OPEN | Draft/approve minimal V2 `profile_assignment` schema |
+| T031-T034 | `profile_assignment` schema and approval | V2 explicitly removes standalone `profile_assignment`; assignment lives in BOSS-updated `worker_registry` fields | LOCKED (policy replaced) | None |
 | T035-T038 | `cycle_manager_decision` schema and approval | Cycle-manager behavior exists in V2; no formal schema contract | OPEN | Draft/approve `cycle_manager_decision` schema and fail/timeout semantics |
 | T039-T042 | `production_line_register` (BOSS register) schema and approval | BOSS role is locked; no finalized V2 register schema | OPEN | Draft/approve `production_line_register` schema aligned to BOSS ownership |
 | T043-T046 | `worker_packet` schema and approval | V2 locks dispatch path and DONE marker; packet schema not finalized | OPEN | Draft/approve worker packet schemas per worker type family |
@@ -34,7 +34,7 @@ This document maps V1 backlog intent (T001-T101) to the active V2 spec so we can
 | T067-T068 | Deterministic schema validation/CI lint | V2 changed policy: no in-cycle strict validation for LLM artifacts | LOCKED (policy changed) | Capture replacement tasks: prompt-linked helper validators + deterministic-only validation list |
 | T069-T086 | Manager/worker prompt draft/review/approval chain | V2 policy: implement prompts first, approval can follow | PARTIAL | Define prompt contracts (manager + worker families) sufficiently for implementation without approval gate |
 | T087-T092 | Runtime scaffold (`op-simple` entrypoint, loop, cycle counter, termination check) | Explicit in V2 backlog checkpoint 1 | LOCKED (planning) | None before implementation |
-| T093-T095 | Foreground manager integrations (`cycle/profile/BOSS`) | V2 defines order and ownership | PARTIAL | Lock concrete I/O contracts (inputs, outputs, artifact paths, timeout budgets) per manager |
+| T093-T095 | Foreground manager integrations (`cycle/profile/BOSS`) | V2 defines order, ownership, canonical outputs, and minimum contracts for cycle/profile/BOSS | LOCKED | None |
 | T096 | Rate-gate wait/continue implementation | V2 cycle text now explicitly includes rate-gate stage and profile-manager ownership | LOCKED | None |
 | T097-T098 | Dispatcher async send + runtime tracking | V2 defines fire-and-forget and thread-dispatch usage | PARTIAL | Lock registry update semantics for partial-send/failure events |
 | T099 | DONE completion detector | V2 assigns ownership to BOSS and explicitly chooses no deterministic DONE evidence handoff artifact | LOCKED (policy replaced) | None |
@@ -48,7 +48,6 @@ Implementation should start only when all items below are true:
 3. Minimal schema set is approved (human-readable field rationale + example JSON):
    - `worker_registry`
    - `profile_snapshot`
-   - `profile_assignment`
    - `cycle_manager_decision`
    - `production_line_register`
    - `worker_packet`

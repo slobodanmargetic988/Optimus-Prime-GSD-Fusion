@@ -44,3 +44,36 @@ This file locks decisions approved in chat so they are not lost across sessions.
 - Prior schema decisions can be auto-imported as locked unless contradicted.
 - Conflict resolution rule: newest explicit user statement wins.
 - Preferred schema documentation format: single catalog with fields+rationale+example JSON per artifact.
+- Manager packets include deterministic artifact path map each call.
+- Manager default read scope is `current/`; `history/` is opt-in only.
+- Canonical manager outputs are fixed under `.op-simple/current/`:
+  - `cycle_manager_decision.json`
+  - `profile_snapshot.json`
+  - `production_line_register.json`
+  - `worker_packets.json`
+  - `plan_packets.json`
+  - `worker_registry.json`
+  - `dispatch_registry.json`
+  - `cycle_summary.json`
+  - `watchdog_state.json`
+  - `watchdog_exit_signal.json`
+- `profile-manager` is snapshot-only.
+- `profile_assignment` artifact is removed.
+- `cycle_manager_decision` minimum fields are locked:
+  - `cycle_number`, `decision`, `reason_code`, `message`, `worker_registry_ready`
+- BOSS outputs atomically each cycle:
+  - `production_line_register.json`, `worker_packets.json`, `plan_packets.json`, `cycle_summary.json`, `worker_registry.json` updates
+- `worker_registry` includes `pid` and `thread_id` and is latest worker state.
+- `dispatch_registry` remains event/history log with status enum:
+  - `launched`, `launch_failed`, `unknown`
+- `worker_registry` pid/thread writer: BOSS (from dispatch receipts).
+- `plan_packets` status enum:
+  - `pending`, `in_progress`, `done`, `blocked`
+- `production_line_register` minimum row shape is locked:
+  - `worker_id`, `lane_id`, `task_id`, `packet_id`, `profile_alias`, `assignment_state`, `reason`
+- `worker_packet` minimum fields are locked:
+  - `packet_id`, `worker_id`, `lane_id`, `task_id`, `profile_alias`, `prompt`, `required_done_marker`
+- `watchdog_exit_signal` minimum fields are locked:
+  - `cycle_number`, `reason_code`, `message`, `monitored_branch`, `idle_cycles`
+- `cycle_summary.manager_statuses` shape is locked:
+  - map of manager name -> `{status, note}`

@@ -39,7 +39,7 @@
 |---|---|---|---|---|---|---|
 | V2-T012 | Create schema catalog doc (single catalog format) and auto-import previously approved schema decisions | AI | V2-T002 | READY | - | 2026-03-06 |
 | V2-T013 | Reconcile schema conflicts using \"newest explicit user statement wins\" rule | AI | V2-T012 | READY | - | 2026-03-06 |
-| V2-T014 | Finalize manager I/O contracts (cycle-manager, profile-manager, BOSS, dispatcher, watchdog, summary) | AI | V2-T013 | READY | - | 2026-03-06 |
+| V2-T014 | Finalize manager I/O contracts (cycle-manager, profile-manager snapshot-only, BOSS, dispatcher, watchdog, summary) | AI | V2-T013 | READY | - | 2026-03-06 |
 | V2-T015 | Finalize remaining PARTIAL/OPEN items in coverage matrix and mark equivalence gate status | AI | V2-T014 | READY | - | 2026-03-06 |
 | V2-T016 | Human review: approve equivalence gate closure before implementation starts | HUMAN | V2-T015 | BLOCKED_HUMAN | approval required | 2026-03-06 |
 

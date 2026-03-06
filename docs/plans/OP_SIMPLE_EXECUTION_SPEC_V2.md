@@ -22,6 +22,22 @@
   - `./.op-simple/current/` canonical files overwritten each cycle
   - `./.op-simple/history/cycle-<n>/` snapshots (enabled by default, unlimited retention)
 - Prompt layout: `scripts/op_simple/prompts/` with manager and worker subfolders.
+- Manager packets always include deterministic artifact path map.
+- Manager read scope defaults:
+  - read from `./.op-simple/current/` by default
+  - read from `./.op-simple/history/` only when explicitly needed
+
+## Canonical Manager Artifacts (`.op-simple/current/`)
+- `cycle_manager_decision.json`
+- `profile_snapshot.json`
+- `production_line_register.json`
+- `worker_packets.json`
+- `plan_packets.json`
+- `worker_registry.json`
+- `dispatch_registry.json`
+- `cycle_summary.json`
+- `watchdog_state.json`
+- `watchdog_exit_signal.json`
 
 ## In-Cycle Order (V2)
 1. Increment cycle counter (code).
@@ -49,6 +65,8 @@
 - Dispatcher writes deterministic launch receipts to `dispatch_launch_log.jsonl` and continues.
 - Dispatcher does not write deterministic failure-state artifacts for reassignment; BOSS handles recovery.
 - OP code does not generate deterministic DONE evidence handoff artifacts; BOSS gathers evidence via prompt/tooling.
+- `profile-manager` is snapshot-only in V2.
+- `profile_assignment` artifact is removed in V2.
 
 ## BOSS Timeout Marker
 - Marker file: `boss_evidence.json`.
@@ -82,6 +100,44 @@
 - DONE detection owner: BOSS (LLM) from repo/artifact context.
 - Worker liveness owner: BOSS (LLM).
 
+## Manager I/O Contracts (Locked)
+- `cycle-manager`:
+  - output: `cycle_manager_decision.json`
+  - minimum fields: `cycle_number`, `decision` (`proceed|skip_cycle`), `reason_code`, `message`, `worker_registry_ready`
+- `profile-manager`:
+  - output: `profile_snapshot.json` only
+- `BOSS`:
+  - produces atomically each cycle:
+    - `production_line_register.json`
+    - `worker_packets.json`
+    - `plan_packets.json`
+    - `cycle_summary.json`
+    - `worker_registry.json` updates
+- `work-dispatcher`:
+  - writes deterministic launch receipts to `dispatch_launch_log.jsonl`
+  - no deterministic reassignment/failure artifact for BOSS recovery
+
+## Artifact Field Locks (Current)
+- `worker_registry` row minimum fields:
+  - `worker_id`, `worktree`, `branch`, `status`
+  - `current_task_profile`, `next_task_profile`
+  - `current_task_id`, `current_packet_id`
+  - `pid`, `thread_id`
+  - `last_update`
+- `worker_registry` `pid/thread_id` writer:
+  - BOSS updates from dispatch receipts
+- `dispatch_registry` role:
+  - dispatch event/history log
+  - `worker_registry` remains latest worker state
+- `dispatch_registry` status enum:
+  - `launched`, `launch_failed`, `unknown`
+- `production_line_register` row minimum fields:
+  - `worker_id`, `lane_id`, `task_id`, `packet_id`, `profile_alias`, `assignment_state`, `reason`
+- `worker_packet` minimum fields:
+  - `packet_id`, `worker_id`, `lane_id`, `task_id`, `profile_alias`, `prompt`, `required_done_marker`
+- `plan_packets` status enum:
+  - `pending`, `in_progress`, `done`, `blocked`
+
 ## Parallelism and Canary
 - Default max parallel workers remains 8 (configurable).
 - First vertical target: `cycle-manager -> profile-manager -> BOSS -> dispatcher` with real dispatch and DONE marker observed.
@@ -94,10 +150,16 @@
   - reset to zero on any new commit detected on monitored branch
 - Minimum cycle summary payload:
   - `cycle_number`
-  - `manager_statuses`
+  - `manager_statuses` as map `{status, note}` keyed by manager name
   - `task_counts` (`pending`, `in_progress`, `done`, `blocked`)
   - `dispatch_counts`
   - `notes`
+- `watchdog_exit_signal.json` minimum fields:
+  - `cycle_number`
+  - `reason_code`
+  - `message`
+  - `monitored_branch`
+  - `idle_cycles`
 
 ## Initialize Workstation Artifact
 - `workstation_prep` is written by initialize code once per run before cycle start.
