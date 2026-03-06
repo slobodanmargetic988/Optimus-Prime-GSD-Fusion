@@ -603,3 +603,153 @@ def test_max_build_cycles_applies_to_current_run_not_global_counter(tmp_path: Pa
     assert out["ok"] is True
     assert out["data"]["cycles_this_run"] == 1
     assert out["data"]["cycle_number"] == 11
+
+
+def test_profile_rows_from_disk_excludes_default_when_multiple_profiles(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    default_profile = tmp_path / ".codex"
+    secondary_profile = tmp_path / ".codex-second"
+    default_profile.mkdir(parents=True, exist_ok=True)
+    secondary_profile.mkdir(parents=True, exist_ok=True)
+    (default_profile / "auth.json").write_text("{}", encoding="utf-8")
+    (secondary_profile / "auth.json").write_text("{}", encoding="utf-8")
+
+    rows = MODULE._profile_rows_from_disk()
+    aliases = {str(row.get("alias")) for row in rows if isinstance(row, dict)}
+
+    assert "codex" not in aliases
+    assert "codex-second" in aliases
+
+
+def test_profile_rows_from_disk_keeps_default_when_single_profile(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    default_profile = tmp_path / ".codex"
+    default_profile.mkdir(parents=True, exist_ok=True)
+    (default_profile / "auth.json").write_text("{}", encoding="utf-8")
+
+    rows = MODULE._profile_rows_from_disk()
+    aliases = [str(row.get("alias")) for row in rows if isinstance(row, dict)]
+
+    assert aliases == ["codex"]
+
+
+def test_select_boss_profile_from_snapshot_prefers_highest_weekly_not_5h_gated(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-first",
+                    "codex_home": "/tmp/codex-first",
+                    "window_5h_remaining_pct": 0.5,
+                    "window_week_remaining_pct": 99.0,
+                },
+                {
+                    "alias": "codex-second",
+                    "codex_home": "/tmp/codex-second",
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 65.0,
+                },
+                {
+                    "alias": "codex-third",
+                    "codex_home": "/tmp/codex-third",
+                    "window_5h_remaining_pct": 60.0,
+                    "window_week_remaining_pct": 75.0,
+                },
+            ],
+        },
+    )
+
+    alias, home = MODULE._select_boss_profile_from_snapshot(cfg)
+
+    assert alias == "codex-third"
+    assert home == "/tmp/codex-third"
+
+
+def test_select_boss_profile_from_snapshot_falls_back_on_missing_or_malformed(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    alias, home = MODULE._select_boss_profile_from_snapshot(cfg)
+    assert alias is None
+    assert home is None
+
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {"schema_version": "1.0", "profiles": "bad"},
+    )
+    alias, home = MODULE._select_boss_profile_from_snapshot(cfg)
+    assert alias is None
+    assert home is None
+
+
+def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-second",
+                    "codex_home": "/tmp/codex-second",
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 90.0,
+                }
+            ],
+        },
+    )
+
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+    captured: dict[str, str | None] = {"codex_home": None}
+
+    def fake_codex_exec_prompt(*_args, **kwargs):
+        captured["codex_home"] = kwargs.get("codex_home")
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=1,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "ok"
+    assert captured["codex_home"] == "/tmp/codex-second"
+    assert out.message == "manager_profile_alias=codex-second"

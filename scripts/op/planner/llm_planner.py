@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -174,6 +175,7 @@ def run_codex_exec(
     output_last_message: Path,
     stdout_path: Path,
     stderr_path: Path,
+    codex_home: str | None = None,
 ) -> int:
     output_last_message.parent.mkdir(parents=True, exist_ok=True)
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
@@ -191,6 +193,12 @@ def run_codex_exec(
         str(output_last_message),
         "-",
     ]
+    env = None
+    codex_home_text = (codex_home or "").strip()
+    if codex_home_text:
+        env = os.environ.copy()
+        env["CODEX_HOME"] = codex_home_text
+
     proc = subprocess.run(
         cmd,
         cwd=str(repo_root),
@@ -198,6 +206,7 @@ def run_codex_exec(
         text=True,
         capture_output=True,
         check=False,
+        env=env,
     )
     stdout_path.write_text(proc.stdout or "", encoding="utf-8")
     stderr_path.write_text(proc.stderr or "", encoding="utf-8")

@@ -665,6 +665,8 @@ def _codex_exec_prompt(
     cycle_number: int,
     timeout_seconds: int,
     prompt_text: str,
+    *,
+    codex_home: str | None = None,
 ) -> ManagerResult:
     started_at = utc_now_iso()
     start_time = time.monotonic()
@@ -685,6 +687,12 @@ def _codex_exec_prompt(
         "-",
     ]
 
+    env = None
+    codex_home_text = (codex_home or "").strip()
+    if codex_home_text:
+        env = os.environ.copy()
+        env["CODEX_HOME"] = codex_home_text
+
     try:
         completed = subprocess.run(
             cmd,
@@ -694,6 +702,7 @@ def _codex_exec_prompt(
             capture_output=True,
             timeout=max(1, int(timeout_seconds)),
             check=False,
+            env=env,
         )
         stdout_path.write_text(completed.stdout or "", encoding="utf-8")
         stderr_path.write_text(completed.stderr or "", encoding="utf-8")
@@ -766,6 +775,8 @@ def _profile_rows_from_disk() -> list[dict[str, Any]]:
                 "reset_at": None,
             }
         )
+    if len(rows) > 1:
+        rows = [row for row in rows if str(row.get("alias") or "").strip() != "codex"]
     return rows
 
 
@@ -877,6 +888,10 @@ def _invoke_manager(
     else:
         template = _load_prompt_template(cfg, manager_name)
         path_map = _artifact_path_map(cfg)
+        selected_manager_alias: str | None = None
+        selected_manager_home: str | None = None
+        if manager_name == "BOSS":
+            selected_manager_alias, selected_manager_home = _select_boss_profile_from_snapshot(cfg)
         packet = {
             "schema_version": SCHEMA_VERSION,
             "manager": manager_name,
@@ -895,7 +910,20 @@ def _invoke_manager(
         prompt_text += json.dumps(packet, indent=2, sort_keys=False)
         prompt_text += "\n```\n"
         timeout = int(MANAGER_TIMEOUT_SECONDS.get(manager_name, 300))
-        result = _codex_exec_prompt(cfg, manager_name, cycle_number, timeout, prompt_text)
+        result = _codex_exec_prompt(
+            cfg,
+            manager_name,
+            cycle_number,
+            timeout,
+            prompt_text,
+            codex_home=selected_manager_home,
+        )
+        if selected_manager_alias:
+            result.message = (
+                f"{result.message}; manager_profile_alias={selected_manager_alias}"
+                if result.message
+                else f"manager_profile_alias={selected_manager_alias}"
+            )
 
     _append_manager_log(
         cfg,
@@ -961,6 +989,55 @@ def _extract_remaining_percent(window: Any) -> float | None:
         except (TypeError, ValueError):
             return None
     return None
+
+
+def _select_boss_profile_from_snapshot(cfg: RunConfig) -> tuple[str | None, str | None]:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], default={})
+    if not isinstance(payload, dict):
+        return None, None
+    rows = payload.get("profiles")
+    if not isinstance(rows, list):
+        return None, None
+
+    ranked: list[tuple[float, float, str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        alias = str(row.get("alias") or "").strip()
+        codex_home = str(row.get("codex_home") or "").strip()
+        if not alias or not codex_home:
+            continue
+
+        five_hour_remaining = _extract_remaining_percent(row.get("window_5h_remaining_pct"))
+        if five_hour_remaining is None:
+            try:
+                five_hour_remaining = float(row.get("window_5h_remaining_pct"))
+            except (TypeError, ValueError):
+                five_hour_remaining = None
+        if five_hour_remaining is None and isinstance(row.get("five_hour"), dict):
+            five_hour_remaining = _extract_remaining_percent(row.get("five_hour"))
+        if five_hour_remaining is None or five_hour_remaining <= 1.0:
+            continue
+
+        week_remaining = _extract_remaining_percent(row.get("window_week_remaining_pct"))
+        if week_remaining is None:
+            try:
+                week_remaining = float(row.get("window_week_remaining_pct"))
+            except (TypeError, ValueError):
+                week_remaining = None
+        if week_remaining is None and isinstance(row.get("weekly"), dict):
+            week_remaining = _extract_remaining_percent(row.get("weekly"))
+        if week_remaining is None:
+            continue
+
+        ranked.append((week_remaining, five_hour_remaining, alias, codex_home))
+
+    if not ranked:
+        return None, None
+
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    _week_remaining, _five_hour_remaining, alias, codex_home = ranked[0]
+    return alias, codex_home
 
 
 def _resolve_rate_snapshot_script(cfg: RunConfig) -> Path | None:
