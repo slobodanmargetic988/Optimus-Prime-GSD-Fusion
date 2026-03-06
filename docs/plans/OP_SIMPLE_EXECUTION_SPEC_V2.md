@@ -20,7 +20,7 @@
 - Artifact root: `./.op-simple/`.
 - Artifact layout:
   - `./.op-simple/current/` canonical files overwritten each cycle
-  - optional `./.op-simple/history/cycle-<n>/` snapshots
+  - `./.op-simple/history/cycle-<n>/` snapshots (enabled by default, unlimited retention)
 - Prompt layout: `scripts/op_simple/prompts/` with manager and worker subfolders.
 
 ## In-Cycle Order (V2)
@@ -29,10 +29,11 @@
 3. Run `cycle-manager` foreground LLM.
 4. Run `profile-manager` foreground LLM.
 5. Run `BOSS` foreground LLM (renamed from production-line-manager).
-6. Run `work-dispatcher` in fire-and-forget mode.
-7. Run `watchdog`.
-8. Print summary.
-9. Fixed sleep: 5 minutes.
+6. Run rate-gate wait stage (profile-manager-owned behavior).
+7. Run `work-dispatcher` in fire-and-forget mode.
+8. Run `watchdog`.
+9. Print summary.
+10. Fixed sleep: 5 minutes.
 
 ## Stop Priority
 1. Manual terminate file.
@@ -45,7 +46,9 @@
 - LLM prompts should include links to artifact validator/helper scripts.
 - Deterministic generation + immediate deterministic validation is allowed for deterministic artifacts only.
 - `dispatch_registry` ownership is LLM manager side in this model.
-- Dispatcher records launch attempts and continues; BOSS handles recovery.
+- Dispatcher writes deterministic launch receipts to `dispatch_launch_log.jsonl` and continues.
+- Dispatcher does not write deterministic failure-state artifacts for reassignment; BOSS handles recovery.
+- OP code does not generate deterministic DONE evidence handoff artifacts; BOSS gathers evidence via prompt/tooling.
 
 ## BOSS Timeout Marker
 - Marker file: `boss_evidence.json`.
@@ -59,6 +62,12 @@
 - BOSS is instructed to consume/delete marker via tool call.
 
 ## Manager Timeout Handling (Locked)
+- Timeout budgets:
+  - `cycle-manager`: 5 minutes
+  - `profile-manager`: 7 minutes
+  - `BOSS`: 12 minutes
+  - `watchdog`: 2 minutes
+  - `summary`: 2 minutes
 - `cycle-manager`: on timeout, skip cycle body and start next cycle.
 - `profile-manager`: on timeout, proceed with previous profile assignments.
 - `BOSS`: on timeout, sleep 3 minutes, skip remainder of cycle, restart cycle, and emit BOSS-timeout marker.
@@ -77,6 +86,21 @@
 - Default max parallel workers remains 8 (configurable).
 - First vertical target: `cycle-manager -> profile-manager -> BOSS -> dispatcher` with real dispatch and DONE marker observed.
 - Canary success criteria: 5 consecutive successful cycles with no manual intervention.
+
+## Watchdog and Summary Contracts
+- Watchdog monitored branch source:
+  - `.op-simple/current/initialize_state.json`
+- Watchdog idle counter reset rule:
+  - reset to zero on any new commit detected on monitored branch
+- Minimum cycle summary payload:
+  - `cycle_number`
+  - `manager_statuses`
+  - `task_counts` (`pending`, `in_progress`, `done`, `blocked`)
+  - `dispatch_counts`
+  - `notes`
+
+## Initialize Workstation Artifact
+- `workstation_prep` is written by initialize code once per run before cycle start.
 
 ## Phase 2 Placeholder
 - Additional worker prompt types planned later (post-canary):
