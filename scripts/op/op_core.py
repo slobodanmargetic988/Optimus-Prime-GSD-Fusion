@@ -290,6 +290,7 @@ class OpRequest:
     non_interactive: bool
     output_mode: str
     max_build_cycles: int | None
+    max_parallel_workers: int
     sleep_minutes: float
     enable_artifact_fan_in: bool
     dry_run: bool
@@ -566,6 +567,8 @@ def _emit_build_progress(req: OpRequest, message: str) -> None:
         label = "op-initialize"
     elif command in {"op-build", "op-resume"}:
         label = "op-build"
+    elif command in {"op-simple-build"}:
+        label = "op-simple-build"
     else:
         label = "op-runtime"
     stamp = datetime.now().astimezone().strftime("%H:%M:%S")
@@ -14195,6 +14198,24 @@ def command_health(req: OpRequest) -> dict[str, Any]:
     )
 
 
+def command_simple_build(req: OpRequest) -> dict[str, Any]:
+    from op_simple_build import run_op_simple_build
+
+    result = run_op_simple_build(req)
+    return _response(
+        req,
+        ok=bool(result.get("ok")),
+        status=_as_str(result.get("status")) or ("completed" if result.get("ok") else "failed"),
+        summary=_as_str(result.get("summary")) or "OP Simple build finished.",
+        warnings=result.get("warnings") if isinstance(result.get("warnings"), list) else [],
+        errors=result.get("errors") if isinstance(result.get("errors"), list) else [],
+        artifacts=result.get("artifacts") if isinstance(result.get("artifacts"), list) else [],
+        next_action=_as_str(result.get("next_action")),
+        state_ref=_as_str(result.get("state_ref")),
+        data=result.get("data") if isinstance(result.get("data"), dict) else None,
+    )
+
+
 def command_status(req: OpRequest) -> dict[str, Any]:
     planning_root = _repo_path(req.repo_root, PLANNING_REL)
     warnings: list[dict[str, Any]] = []
@@ -14968,12 +14989,19 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             raise OpError("input_error", "max_build_cycles must be integer", stage="input") from exc
         max_cycles_out = parsed if parsed > 0 else None
 
-    default_sleep = 2 if command in {"op-build", "op-resume"} else 0
+    default_sleep = 5 if command == "op-simple-build" else 2 if command in {"op-build", "op-resume"} else 0
     sleep_minutes = payload.get("sleep_minutes", default_sleep)
     try:
         sleep_val = float(sleep_minutes)
     except (TypeError, ValueError) as exc:
         raise OpError("input_error", "sleep_minutes must be numeric", stage="input") from exc
+    max_parallel_workers_raw = payload.get("max_parallel_workers", 8)
+    try:
+        max_parallel_workers = int(max_parallel_workers_raw)
+    except (TypeError, ValueError) as exc:
+        raise OpError("input_error", "max_parallel_workers must be integer", stage="input") from exc
+    if max_parallel_workers <= 0:
+        max_parallel_workers = 8
     enable_artifact_fan_in = _as_bool(payload.get("enable_artifact_fan_in"), default=False)
 
     return OpRequest(
@@ -14988,6 +15016,7 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         non_interactive=_as_bool(payload.get("non_interactive"), default=True),
         output_mode=_as_str(payload.get("output_mode")) or "json",
         max_build_cycles=max_cycles_out,
+        max_parallel_workers=max_parallel_workers,
         sleep_minutes=max(0.0, sleep_val),
         enable_artifact_fan_in=enable_artifact_fan_in,
         dry_run=_as_bool(payload.get("dry_run"), default=False),
@@ -15006,6 +15035,8 @@ def execute_request(req: OpRequest) -> dict[str, Any]:
         return command_initialize(req)
     if req.command == "op-build":
         return command_build(req)
+    if req.command == "op-simple-build":
+        return command_simple_build(req)
     if req.command == "op-health":
         return command_health(req)
     if req.command == "op-status":

@@ -417,6 +417,7 @@ def test_command_normalization_accepts_new_commands():
             "$op-status": "op-status",
             "op-report": "op-report",
             "op-resume": "op-resume",
+            "op-simple-build": "op-simple-build",
         }
         for raw, expected in cases.items():
             req = MODULE.parse_request({"command": raw, "repo_root": str(root)})
@@ -998,6 +999,32 @@ def test_op_build_request_accepts_enable_artifact_fan_in_override():
             }
         )
         assert req.enable_artifact_fan_in is True
+
+
+def test_op_simple_build_default_sleep_and_parallel_workers():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request({"command": "/op-simple-build", "repo_root": str(root)})
+        assert req.sleep_minutes == 5.0
+        assert req.max_parallel_workers == 8
+
+
+def test_op_simple_build_dry_run_runs_without_codex():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        out = run_payload(
+            {
+                "command": "/op-simple-build",
+                "repo_root": str(root),
+                "dry_run": True,
+                "max_build_cycles": 1,
+            }
+        )
+        assert out["ok"] is True
+        assert out["status"] == "completed"
+        assert (root / ".op-simple" / "current" / "cycle_summary.json").exists()
 
 
 def test_op_plan_emits_task_execution_state():

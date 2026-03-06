@@ -110,6 +110,25 @@ def test_plan_prints_start_banner_on_tty(monkeypatch: pytest.MonkeyPatch, capsys
     assert payload["command"] == "/op-plan"
 
 
+def test_simple_build_prints_start_banner_on_tty(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "run_from_payload",
+        lambda payload: _ok_result(str(payload.get("command") or "")),
+    )
+    monkeypatch.setattr(sys, "argv", ["opctl.py", "--command", "/op-simple-build", "--repo-root", "/tmp/repo", "--json-pretty"])
+    monkeypatch.setattr(MODULE.sys.stdout, "isatty", lambda: True)
+
+    rc = MODULE.main()
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "[opctl] /op-simple-build started for /tmp/repo." in out
+    assert "Runtime state lives in: /tmp/repo/.op-simple/current" in out
+    payload = json.loads(out[out.find("{") :].strip())
+    assert payload["command"] == "/op-simple-build"
+
+
 def test_no_banners_on_non_tty(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -176,6 +195,24 @@ def test_merge_payload_defaults_fan_in_false_for_build(monkeypatch: pytest.Monke
     parsed = MODULE.parse_args()
     payload = MODULE.merge_payload(parsed)
     assert payload.get("sleep_minutes") == 2.0
+    assert payload.get("enable_artifact_fan_in") is False
+
+
+def test_merge_payload_applies_configured_parallel_for_simple_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {"sleep_minutes": 5.0, "enable_artifact_fan_in": False, "max_parallel_workers": 13},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["opctl.py", "--command", "/op-simple-build", "--repo-root", "/tmp/repo"],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("sleep_minutes") == 5.0
+    assert payload.get("max_parallel_workers") == 13
     assert payload.get("enable_artifact_fan_in") is False
 
 

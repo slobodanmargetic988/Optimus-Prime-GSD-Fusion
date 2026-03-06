@@ -63,6 +63,17 @@ def _emit_start_banner(payload: dict[str, Any]) -> None:
             flush=True,
         )
         return
+    if canonical == "op-simple-build":
+        print(f"[opctl] /op-simple-build started for {repo_root}.", flush=True)
+        print(
+            f"[opctl] Runtime state lives in: {repo_root}/.op-simple/current",
+            flush=True,
+        )
+        print(
+            f"[opctl] While waiting, run: opctl /op-status --repo-root {repo_root} --json-pretty",
+            flush=True,
+        )
+        return
     if canonical == "op-initialize":
         print(
             f"[opctl] /op-initialize started for {repo_root}. Initializing project and git baseline. This can take a few minutes.",
@@ -113,6 +124,13 @@ def _resolve_configured_workflow(repo_root: str) -> dict[str, Any]:
             sleep = None
         if isinstance(sleep, float) and sleep > 0:
             resolved["sleep_minutes"] = sleep
+        configured_parallel = workflow.get("max_parallel_workers")
+        try:
+            parallel_workers = int(configured_parallel)
+        except (TypeError, ValueError):
+            parallel_workers = None
+        if isinstance(parallel_workers, int) and parallel_workers > 0:
+            resolved["max_parallel_workers"] = parallel_workers
         fan_in_value = workflow.get("enable_artifact_fan_in")
         if isinstance(fan_in_value, bool):
             resolved["enable_artifact_fan_in"] = fan_in_value
@@ -122,7 +140,9 @@ def _resolve_configured_workflow(repo_root: str) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="OP command surface (map/new-project/plan/initialize/build/health/status/report/resume)")
+    parser = argparse.ArgumentParser(
+        description="OP command surface (map/new-project/plan/initialize/build/simple-build/health/status/report/resume)"
+    )
     parser.add_argument("--input-json", help="JSON payload path or '-' for stdin")
     parser.add_argument("--command")
     parser.add_argument("--repo-root")
@@ -135,6 +155,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--non-interactive", action="store_true")
     parser.add_argument("--output-mode", choices=["json", "json+text"], default=None)
     parser.add_argument("--max-build-cycles", type=int)
+    parser.add_argument("--max-parallel-workers", type=int)
     parser.add_argument("--sleep-minutes", type=float)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--reset-exhausted-retries", action="store_true")
@@ -169,6 +190,8 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["output_mode"] = args.output_mode
     if args.max_build_cycles is not None:
         payload["max_build_cycles"] = args.max_build_cycles
+    if args.max_parallel_workers is not None:
+        payload["max_parallel_workers"] = args.max_parallel_workers
     if args.sleep_minutes is not None:
         payload["sleep_minutes"] = args.sleep_minutes
     if args.dry_run:
@@ -186,14 +209,20 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
     except ValueError:
         canonical = ""
 
-    if canonical in {"op-build", "op-resume"} and (
-        "sleep_minutes" not in payload or "enable_artifact_fan_in" not in payload
+    if canonical in {"op-build", "op-resume", "op-simple-build"} and (
+        "sleep_minutes" not in payload
+        or "enable_artifact_fan_in" not in payload
+        or "max_parallel_workers" not in payload
     ):
         workflow = _resolve_configured_workflow(str(payload["repo_root"]))
         if "sleep_minutes" not in payload:
             configured_sleep = workflow.get("sleep_minutes")
             if isinstance(configured_sleep, (int, float)):
                 payload["sleep_minutes"] = float(configured_sleep)
+        if "max_parallel_workers" not in payload:
+            configured_parallel = workflow.get("max_parallel_workers")
+            if isinstance(configured_parallel, int) and configured_parallel > 0:
+                payload["max_parallel_workers"] = configured_parallel
         if "enable_artifact_fan_in" not in payload:
             configured_fan_in = workflow.get("enable_artifact_fan_in")
             if isinstance(configured_fan_in, bool):
@@ -207,6 +236,8 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
             canonical = ""
         if canonical in {"op-build", "op-resume"}:
             payload["sleep_minutes"] = 2.0
+        elif canonical == "op-simple-build":
+            payload["sleep_minutes"] = 5.0
 
     if "enable_artifact_fan_in" not in payload:
         command_raw = str(payload.get("command") or "").strip()
@@ -214,8 +245,16 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
             canonical = normalize_command(command_raw).canonical
         except ValueError:
             canonical = ""
-        if canonical in {"op-build", "op-resume"}:
+        if canonical in {"op-build", "op-resume", "op-simple-build"}:
             payload["enable_artifact_fan_in"] = False
+    if "max_parallel_workers" not in payload:
+        command_raw = str(payload.get("command") or "").strip()
+        try:
+            canonical = normalize_command(command_raw).canonical
+        except ValueError:
+            canonical = ""
+        if canonical == "op-simple-build":
+            payload["max_parallel_workers"] = 8
     return payload
 
 
