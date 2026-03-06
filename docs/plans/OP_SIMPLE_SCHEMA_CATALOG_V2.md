@@ -325,8 +325,6 @@ Runtime freshness rule: every required BOSS-authored artifact must include top-l
   "schema_version": "1.0",
   "cycle_number": 7,
   "manager_statuses": {
-    "cycle-manager": {"status": "skipped", "note": "execution skipped; BOSS owns cycle gating"},
-    "profile-manager": {"status": "skipped", "note": "execution skipped; BOSS owns profile snapshot"},
     "BOSS": {"status": "ok", "note": ""},
     "work-dispatcher": {"status": "ok", "note": "dispatch cycle completed"},
     "watchdog": {"status": "ok", "note": "watchdog healthy"},

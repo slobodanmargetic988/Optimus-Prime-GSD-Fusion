@@ -85,8 +85,6 @@ def test_bundle_manifest_includes_op_simple_runtime_assets():
         required = {
             "scripts/op/op_simple_build.py",
             "scripts/op_simple/prompts/managers/boss.md",
-            "scripts/op_simple/prompts/managers/cycle-manager.md",
-            "scripts/op_simple/prompts/managers/profile-manager.md",
             "docs/plans/OP_SIMPLE_SCHEMA_CATALOG_V2.md",
         }
         for rel in required:

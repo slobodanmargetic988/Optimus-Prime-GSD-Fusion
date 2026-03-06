@@ -48,8 +48,6 @@ ARTIFACT_FILES = {
 }
 
 MANAGER_TIMEOUT_SECONDS = {
-    "cycle-manager": 300,
-    "profile-manager": 420,
     "BOSS": 720,
     "watchdog": 120,
     "summary": 120,
@@ -823,27 +821,6 @@ def _profile_rows_from_disk() -> list[dict[str, Any]]:
     return rows
 
 
-def _write_cycle_manager_stub(cfg: RunConfig, cycle_number: int) -> None:
-    payload = {
-        "schema_version": SCHEMA_VERSION,
-        "cycle_number": cycle_number,
-        "decision": "proceed",
-        "reason_code": "dry_run_default",
-        "message": "dry run proceeds",
-        "worker_registry_ready": True,
-    }
-    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["cycle_manager_decision"], payload)
-
-
-def _write_profile_manager_stub(cfg: RunConfig) -> None:
-    payload = {
-        "schema_version": SCHEMA_VERSION,
-        "updated_at": utc_now_iso(),
-        "profiles": _profile_rows_from_disk(),
-    }
-    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], payload)
-
-
 def _write_boss_stub(cfg: RunConfig, cycle_number: int) -> None:
     worker_registry = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
     workers = worker_registry.get("workers") if isinstance(worker_registry, dict) else None
@@ -970,11 +947,7 @@ def _invoke_manager(
     expected_artifacts: list[str],
 ) -> ManagerResult:
     if cfg.dry_run:
-        if manager_name == "cycle-manager":
-            _write_cycle_manager_stub(cfg, cycle_number)
-        elif manager_name == "profile-manager":
-            _write_profile_manager_stub(cfg)
-        elif manager_name == "BOSS":
+        if manager_name == "BOSS":
             _write_boss_stub(cfg, cycle_number)
         started = utc_now_iso()
         finished = utc_now_iso()
@@ -2048,15 +2021,6 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
             manager_statuses: dict[str, dict[str, str]] = {}
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
-            manager_statuses["cycle-manager"] = {
-                "status": "skipped",
-                "note": "execution skipped; BOSS owns cycle gating",
-            }
-            manager_statuses["profile-manager"] = {
-                "status": "skipped",
-                "note": "execution skipped; BOSS owns profile snapshot",
-            }
-
             boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
             boss_result = _invoke_manager(
                 cfg,
