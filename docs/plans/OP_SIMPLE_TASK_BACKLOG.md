@@ -1,5 +1,8 @@
 # OP Simple Task Backlog
 
+> Freeze Notice (2026-03-06): This file is V1 historical context.
+> Active tracker: `docs/plans/OP_SIMPLE_TASK_BACKLOG_V2.md`.
+
 ## Execution Rules
 - Work in batches of 5 completed tasks, then pause.
 - After each batch: summarize completed work, list blockers, ask for direction.
