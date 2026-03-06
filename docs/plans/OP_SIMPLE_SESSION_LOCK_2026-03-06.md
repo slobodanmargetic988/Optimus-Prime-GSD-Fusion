@@ -11,11 +11,12 @@ This file locks decisions approved in chat so they are not lost across sessions.
 - Delete rule: remove legacy `/op-build` orchestration not referenced by initialize or `/op-simple-build`.
 - Uncertain files: keep and mark review-needed.
 - BOSS naming lock: production-line-manager is renamed to `BOSS`.
-- Cycle order lock: `cycle-manager -> profile-manager -> BOSS -> work-dispatcher -> watchdog -> summary`.
+- Cycle order lock (current runtime): `BOSS -> rate-gate -> work-dispatcher -> watchdog -> summary`.
 - Cycle pacing: fixed 5-minute sleep.
 - Stop priority: terminate file > project_done > insurmountable_blocker > watchdog.
 - DONE marker: `[DONE][lane:<id>][task:<id>]`.
 - BOSS owns done/liveness interpretation; dispatcher is fire-and-forget.
+- `cycle-manager` and `profile-manager` calls are skipped in runtime; BOSS absorbs preflight intent.
 - BOSS timeout marker exists and is timeout-only (`boss_evidence.json`).
 - No deterministic in-cycle schema/lint enforcement for LLM artifacts.
 - Schema contracts still exist and remain human-approved.
@@ -26,7 +27,7 @@ This file locks decisions approved in chat so they are not lost across sessions.
 - Canary target: 5 successful consecutive cycles with no manual intervention.
 - Check-in cadence for coding work: every 5 completed tasks.
 - Rate-gate stage runs after BOSS and before dispatcher.
-- Rate-gate wait ownership stays in profile-manager behavior.
+- Rate-gate wait is pure-code owned and refreshes snapshot via `codex-rate-snapshot`.
 - One canonical output file per manager under `.op-simple/current/`.
 - Dispatcher writes deterministic launch receipts to `dispatch_launch_log.jsonl`.
 - Dispatcher does not write deterministic failure artifacts for reassignment.
@@ -35,12 +36,8 @@ This file locks decisions approved in chat so they are not lost across sessions.
 - Watchdog branch source: `.op-simple/current/initialize_state.json`.
 - Watchdog idle counter resets on any new commit on monitored branch.
 - Workstation prep artifact is written once by initialize code before cycle start.
-- Manager timeout budgets:
-  - `cycle-manager` 5m
-  - `profile-manager` 7m
+- Active foreground LLM timeout budget:
   - `BOSS` 12m
-  - `watchdog` 2m
-  - `summary` 2m
 - Prior schema decisions can be auto-imported as locked unless contradicted.
 - Conflict resolution rule: newest explicit user statement wins.
 - Preferred schema documentation format: single catalog with fields+rationale+example JSON per artifact.
@@ -57,12 +54,14 @@ This file locks decisions approved in chat so they are not lost across sessions.
   - `cycle_summary.json`
   - `watchdog_state.json`
   - `watchdog_exit_signal.json`
-- `profile-manager` is snapshot-only.
+- profile snapshot refresh is code-owned in rate-gate stage.
 - `profile_assignment` artifact is removed.
 - `cycle_manager_decision` minimum fields are locked:
   - `cycle_number`, `decision`, `reason_code`, `message`, `worker_registry_ready`
 - BOSS outputs atomically each cycle:
-  - `production_line_register.json`, `worker_packets.json`, `plan_packets.json`, `cycle_summary.json`, `worker_registry.json` updates
+  - `production_line_register.json`, `worker_packets.json`, `plan_packets.json`, `task_execution_state.json`, `cycle_summary.json`, `worker_registry.json` updates
+- every required BOSS-authored artifact must carry the current top-level `cycle_number`.
+- runtime converts the cycle to deterministic `skip_cycle` and suppresses dispatch when BOSS exits non-zero, the binary is missing, a required artifact is missing, or a required artifact has missing/stale `cycle_number`.
 - `worker_registry` includes `pid` and `thread_id` and is latest worker state.
 - `dispatch_registry` remains event/history log with status enum:
   - `launched`, `launch_failed`, `unknown`
@@ -87,7 +86,7 @@ This file locks decisions approved in chat so they are not lost across sessions.
 - keep separate `task_execution_state.json` artifact.
 - `task_execution_state` is written by BOSS.
 - `task_execution_state` minimum sections:
-  - task rows, blockers, attempts, `last_handoff_outcome`
+  - `tasks`, `blockers`, `attempts`, `last_handoff_outcome`
 - no schema-enforced lane task cap; parallelism is configurable.
 - OP Simple reuses existing config resolution stack (`scripts/install/config.py`).
 - parallelism config key:
@@ -96,6 +95,11 @@ This file locks decisions approved in chat so they are not lost across sessions.
   - `--max-parallel-workers`
 - default max parallel workers remains 8.
 - BOSS reads parallelism limits from configured config/artifact path via prompt guidance.
+- multi-profile runtime policy: exclude default `.codex` when multiple profiles are available.
+- BOSS profile is code-selected from `profile_snapshot.json`: highest weekly budget that is not 5h hard-gated.
+- Planner profile is code-selected from `PROFILE_SELECTION.json` + `PROFILE_RATE_REGISTRY.json` with same rule.
+- Fallback for missing/malformed snapshot/registry remains default profile behavior.
+- `/op-initialize` ordering lock: seed rate snapshot before planner execution.
 - schema closure set remains all remaining artifacts (no scope reduction).
 - `plan_packets` and `task_execution_state` statuses are aligned:
   - `pending`, `in_progress`, `done`, `blocked`

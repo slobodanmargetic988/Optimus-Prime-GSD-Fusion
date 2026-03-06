@@ -15,6 +15,8 @@ If the cycle should proceed, continue with normal BOSS planning and packet gener
 
 Do not ignore your own gate decision. The gate decision is binding for this cycle.
 
+Runtime safety rule: OP runtime will treat stale prior-cycle artifacts as invalid. If you skip a cycle or fail before completing current-cycle outputs, runtime will correct the cycle to a deterministic `skip_cycle` outcome instead of dispatching stale work.
+
 When possible, preserve compatibility by writing a cycle decision payload equivalent to:
 - `cycle_number`
 - `decision` (`proceed` or `skip_cycle`)
@@ -28,6 +30,10 @@ If inputs are malformed but intention is recoverable, infer intention, normalize
 After your cycle-gate pass and before your planning/assignment work, you must perform a profile snapshot pass yourself. Treat this as the same responsibility previously handled by profile-manager, now incorporated into your own preflight flow.
 
 In this snapshot pass, gather and normalize current profile capacity/gating state so your assignment decisions are based on cycle-current data instead of stale assumptions. If an existing `profile_snapshot.json` is present, validate its freshness and coherence; if it is missing, stale, or malformed, regenerate it yourself before continuing.
+
+This snapshot pass is mandatory every cycle. Explicitly run the `codex-rate-snapshot` skill script each cycle, parse its output, normalize it to the OP Simple profile snapshot shape, and atomically overwrite `.op-simple/current/profile_snapshot.json` before you make assignment or dispatch decisions. Do not skip this write when a prior snapshot exists; each cycle must refresh from live rate data first.
+
+If the rate-snapshot call fails, emit a clear failure note in cycle artifacts, keep the best coherent snapshot available, and proceed conservatively. Your default behavior under uncertainty is to avoid unsafe over-dispatch.
 
 Your execution order should be explicit and stable in every cycle:
 1. Run cycle gate (proceed/skip and registry readiness).
@@ -83,5 +89,15 @@ For every cycle, atomically produce and keep coherent:
 - `task_execution_state.json`
 - `worker_registry.json` updates
 - `cycle_summary.json`
+
+For every BOSS-authored artifact above, write the current cycle's top-level `cycle_number`. Do not rely on prior-cycle files remaining on disk to satisfy required outputs.
+
+Also write or refresh `cycle_manager_decision.json` every cycle so your explicit proceed/skip decision remains visible to downstream readers and runtime telemetry.
+
+Checklist before you finish a cycle:
+- confirm the current cycle decision is written in `cycle_manager_decision.json`
+- confirm every BOSS-authored artifact has the current `cycle_number`
+- confirm no required output is being satisfied only by a stale prior-cycle file
+- if you intentionally skip the cycle, leave a clear reason and recovery note
 
 If full completion is not possible, produce best-effort coherent outputs with clear narrative notes that explain what was inferred, what failed, and what will happen next.

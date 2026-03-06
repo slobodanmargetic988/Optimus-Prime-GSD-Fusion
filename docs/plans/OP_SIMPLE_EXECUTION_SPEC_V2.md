@@ -9,6 +9,7 @@
 - Product direction: replace old build runtime behavior on this branch; no backward compatibility target.
 - Command target: `/op-simple-build`.
 - Initialize boundary: keep `/op-initialize` mostly intact and adapt only where needed.
+- Initialize order (locked): profile detection/state update -> rate snapshot seed -> planner.
 - Reference policy for old behavior: use `main` branch history, not in-branch legacy copies.
 
 ## Runtime Model (V2)
@@ -43,14 +44,12 @@
 ## In-Cycle Order (V2)
 1. Increment cycle counter (code).
 2. Check termination file (code).
-3. Run `cycle-manager` foreground LLM.
-4. Run `profile-manager` foreground LLM.
-5. Run `BOSS` foreground LLM (renamed from production-line-manager).
-6. Run rate-gate wait stage (profile-manager-owned behavior).
-7. Run `work-dispatcher` in fire-and-forget mode.
-8. Run `watchdog`.
-9. Print summary.
-10. Fixed sleep: 5 minutes.
+3. Run `BOSS` foreground LLM (renamed from production-line-manager).
+4. Run rate-gate wait stage (pure code, snapshot refresh via skill).
+5. Run `work-dispatcher` in fire-and-forget mode.
+6. Run `watchdog` (pure code).
+7. Print summary.
+8. Fixed sleep: 5 minutes.
 
 ## Stop Priority
 1. Manual terminate file.
@@ -62,12 +61,28 @@
 - OP code does not hard-validate or lint LLM-generated manager artifacts in-cycle.
 - LLM prompts should include links to artifact validator/helper scripts.
 - Deterministic generation + immediate deterministic validation is allowed for deterministic artifacts only.
-- `dispatch_registry` ownership is LLM manager side in this model.
+- `dispatch_registry` is maintained by deterministic dispatcher code as event/history log.
 - Dispatcher writes deterministic launch receipts to `dispatch_launch_log.jsonl` and continues.
 - Dispatcher does not write deterministic failure-state artifacts for reassignment; BOSS handles recovery.
 - OP code does not generate deterministic DONE evidence handoff artifacts; BOSS gathers evidence via prompt/tooling.
-- `profile-manager` is snapshot-only in V2.
+- `cycle-manager` and `profile-manager` calls are currently skipped in runtime; BOSS absorbs cycle preflight intent.
 - `profile_assignment` artifact is removed in V2.
+
+## Profile Selection Policy (Runtime)
+- Multi-profile source policy:
+  - when multiple `.codex*` profiles are detected, default `.codex` is excluded from selectable pool.
+  - when only one profile exists, default `.codex` remains valid.
+- BOSS profile selection (pure code):
+  - source: `.op-simple/current/profile_snapshot.json`
+  - choose profile with highest weekly remaining percentage that is not 5h hard-gated
+  - runtime applies chosen profile by setting `CODEX_HOME` on BOSS `codex exec`
+  - fallback on missing/malformed snapshot: use default runtime profile behavior
+- Planner profile selection (pure code):
+  - source: `PROFILE_SELECTION.json` + `PROFILE_RATE_REGISTRY.json`
+  - same selection rule: highest weekly remaining, excluding 5h hard-gated
+  - exclude `codex` when multiple selected aliases exist
+  - runtime applies chosen profile by setting `CODEX_HOME` for planner `codex exec`
+  - fallback on missing/malformed artifacts: use default runtime profile behavior
 
 ## BOSS Timeout Marker
 - Marker file: `boss_evidence.json`.
@@ -80,19 +95,12 @@
   - `timestamp`
 - BOSS is instructed to consume/delete marker via tool call.
 
-## Manager Timeout Handling (Locked)
-- Timeout budgets:
-  - `cycle-manager`: 5 minutes
-  - `profile-manager`: 7 minutes
+## Timeout Handling (Locked)
+- Active foreground LLM timeout:
   - `BOSS`: 12 minutes
-  - `watchdog`: 2 minutes
-  - `summary`: 2 minutes
-- `cycle-manager`: on timeout, skip cycle body and start next cycle.
-- `profile-manager`: on timeout, proceed with previous profile assignments.
 - `BOSS`: on timeout, sleep 3 minutes, skip remainder of cycle, restart cycle, and emit BOSS-timeout marker.
 - `work-dispatcher`: fire-and-forget; do not block on per-send hang; continue with other sends.
-- `watchdog`: timeout means no stop signal this cycle.
-- `summary`: skip summary and print timeout skip note.
+- `watchdog` and `summary` are pure-code stages in current runtime (no LLM timeout contract).
 
 ## Lane/TDD Behavior
 - Keep lane-based TDD mode.
@@ -102,21 +110,26 @@
 - Worker liveness owner: BOSS (LLM).
 
 ## Manager I/O Contracts (Locked)
-- `cycle-manager`:
-  - output: `cycle_manager_decision.json`
-  - minimum fields: `cycle_number`, `decision` (`proceed|skip_cycle`), `reason_code`, `message`, `worker_registry_ready`
-- `profile-manager`:
-  - output: `profile_snapshot.json` only
 - `BOSS`:
   - produces atomically each cycle:
     - `production_line_register.json`
     - `worker_packets.json`
     - `plan_packets.json`
+    - `task_execution_state.json`
     - `cycle_summary.json`
     - `worker_registry.json` updates
+  - every required BOSS-authored artifact must carry top-level `cycle_number` equal to the current runtime cycle
+  - if BOSS returns non-zero, the binary is missing, a required artifact is missing, or a required artifact has missing/stale `cycle_number`, runtime converts the cycle into deterministic `skip_cycle` and does not dispatch that cycle
 - `work-dispatcher`:
   - writes deterministic launch receipts to `dispatch_launch_log.jsonl`
   - no deterministic reassignment/failure artifact for BOSS recovery
+- `cycle_manager_decision.json`:
+  - retained as canonical artifact/stub for compatibility and telemetry continuity
+  - runtime writes deterministic `skip_cycle` decisions when BOSS fails safety checks
+  - BOSS should refresh it each cycle for proceed/skip visibility
+- `profile_snapshot.json`:
+  - refreshed by pure code rate-gate stage via `codex-rate-snapshot`
+  - may also be updated by BOSS behavior, but code refresh remains authoritative for gating checks
 
 ## Artifact Field Locks (Current)
 - `worker_registry` row minimum fields:
@@ -157,7 +170,7 @@
 - `task_execution_state` artifact policy:
   - separate from `plan_packets`
   - authoritative writer: BOSS
-  - minimum sections: task rows, blockers, attempts, `last_handoff_outcome`
+  - minimum top-level sections: `tasks`, `blockers`, `attempts`, `last_handoff_outcome`
 - `task_execution_state` task status enum:
   - `pending`, `in_progress`, `done`, `blocked`
 - `task_execution_state` attempts model:
@@ -183,7 +196,7 @@
   - per-run override: `/op-simple-build --max-parallel-workers <n>`
 - BOSS capacity lookup policy:
   - BOSS reads configured parallelism limits from configured artifact/config path via prompt guidance (no extra packet fields required)
-- First vertical target: `cycle-manager -> profile-manager -> BOSS -> dispatcher` with real dispatch and DONE marker observed.
+- First vertical target: `BOSS -> rate-gate -> dispatcher` with real dispatch and DONE marker observed.
 - Canary success criteria: 5 consecutive successful cycles with no manual intervention.
 
 ## Watchdog and Summary Contracts

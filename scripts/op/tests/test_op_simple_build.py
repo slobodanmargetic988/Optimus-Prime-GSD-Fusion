@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 
 OP_SIMPLE_BUILD_PATH = Path(__file__).resolve().parents[1] / "op_simple_build.py"
+BOSS_PROMPT_PATH = Path(__file__).resolve().parents[2] / "op_simple" / "prompts" / "managers" / "boss.md"
 SPEC = importlib.util.spec_from_file_location("op_simple_build", OP_SIMPLE_BUILD_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
@@ -38,6 +39,67 @@ def make_req(root: Path, **overrides: object) -> SimpleNamespace:
     }
     payload.update(overrides)
     return SimpleNamespace(**payload)
+
+
+def write_boss_artifacts(root: Path, cycle_number: int, *, overrides: dict[str, dict[str, object]] | None = None) -> None:
+    override_map = overrides or {}
+    base_payloads: dict[str, dict[str, object]] = {
+        "production_line_register": {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": cycle_number,
+            "assignments": [],
+        },
+        "worker_packets": {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": cycle_number,
+            "packets": [],
+        },
+        "plan_packets": {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": cycle_number,
+            "phase": "multi-phase",
+            "phases": [],
+            "requirements": [],
+            "tasks": [],
+        },
+        "task_execution_state": {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": cycle_number,
+            "tasks": [],
+            "blockers": [],
+            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
+            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
+        },
+        "worker_registry": {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": cycle_number,
+            "workers": [],
+        },
+        "cycle_summary": {
+            "schema_version": "1.0",
+            "cycle_number": cycle_number,
+            "manager_statuses": {},
+            "task_counts": {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0},
+            "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+            "project_done": False,
+            "insurmountable_blocker": False,
+            "termination": {},
+            "stop_reason": "",
+            "notes": "",
+        },
+    }
+    for artifact_key, payload in base_payloads.items():
+        if artifact_key in override_map and override_map[artifact_key] is None:
+            continue
+        merged = dict(payload)
+        if artifact_key in override_map:
+            merged.update(override_map[artifact_key])
+        MODULE._atomic_write_json(root / MODULE.ARTIFACT_FILES[artifact_key], merged)
 
 
 def test_stop_priority_terminate_file_wins(tmp_path: Path) -> None:
@@ -104,6 +166,136 @@ def test_summary_preserves_termination_markers(tmp_path: Path) -> None:
     assert summary["project_done"] is True
     assert summary["insurmountable_blocker"] is True
     assert MODULE._termination_from_summary(summary) == "project_done"
+
+
+def test_boss_failure_skips_cycle_and_writes_conservative_summary(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+
+    def fake_invoke_manager(*_args, **kwargs):
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="failed",
+            timeout=False,
+            returncode=1,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            message="codex exec returned non-zero",
+            reason_code="manager_non_zero_exit",
+        )
+
+    def fail_rate_gate(*_args, **_kwargs):
+        raise AssertionError("rate-gate should not run when BOSS fails")
+
+    def fail_dispatch(*_args, **_kwargs):
+        raise AssertionError("dispatch should not run when BOSS fails")
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+    monkeypatch.setattr(MODULE, "_run_rate_gate_wait", fail_rate_gate)
+    monkeypatch.setattr(MODULE, "_dispatch_packets", fail_dispatch)
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, dry_run=True, max_build_cycles=1, sleep_minutes=0))
+
+    assert out["ok"] is True
+    decision = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_manager_decision"]).read_text(encoding="utf-8"))
+    assert decision["decision"] == "skip_cycle"
+    assert decision["reason_code"] == "manager_non_zero_exit"
+    assert decision["worker_registry_ready"] is True
+
+    summary = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_summary"]).read_text(encoding="utf-8"))
+    assert summary["dispatch_counts"] == {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
+    assert "cycle skipped by runtime safety rules" in summary["notes"]
+    assert summary["manager_statuses"]["work-dispatcher"]["status"] == "skipped"
+    assert summary["manager_statuses"]["summary"]["status"] == "ok"
+    assert (tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"]).exists()
+
+
+def test_invoke_manager_boss_fails_when_required_artifact_missing(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+
+    def fake_codex_exec_prompt(*_args, **_kwargs):
+        write_boss_artifacts(
+            tmp_path,
+            3,
+            overrides={"cycle_summary": None},
+        )
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=3,
+        context={},
+        expected_artifacts=list(MODULE.BOSS_REQUIRED_ARTIFACTS),
+    )
+
+    assert out.status == "failed"
+    assert out.reason_code == "boss_missing_artifact"
+    assert out.details == {"artifact_key": "cycle_summary"}
+
+
+def test_invoke_manager_boss_fails_when_required_artifact_cycle_number_is_stale(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+
+    def fake_codex_exec_prompt(*_args, **_kwargs):
+        write_boss_artifacts(
+            tmp_path,
+            4,
+            overrides={"worker_packets": {"cycle_number": 3}},
+        )
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=4,
+        context={},
+        expected_artifacts=list(MODULE.BOSS_REQUIRED_ARTIFACTS),
+    )
+
+    assert out.status == "failed"
+    assert out.reason_code == "boss_stale_artifact"
+    assert out.details == {"artifact_key": "worker_packets", "cycle_number": 3}
 
 
 def test_dispatch_packets_writes_launch_and_registry(tmp_path: Path, monkeypatch) -> None:
@@ -451,6 +643,47 @@ def test_ensure_workstation_prep_prepares_slots_and_seeds_worker_registry(tmp_pa
     assert registry["workers"][0]["status"] == "idle"
 
 
+def test_ensure_initialize_state_refreshes_run_specific_fields(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=5,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.INITIALIZE_STATE_FILE,
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "monitored_branch": "old-branch",
+            "workflow": {"max_parallel_workers": 2, "preserve_me": True},
+            "run_context": {"run_base_branch": "old-branch"},
+            "custom": {"note": "keep"},
+        },
+    )
+
+    out = MODULE._ensure_initialize_state(
+        cfg,
+        run_meta={
+            "run_base_branch": "op-simple-canary-123",
+            "run_base_from_branch": "main",
+            "run_base_from_commit": "abc123",
+            "run_base_created_at": "2026-01-02T00:00:00Z",
+            "created_new": True,
+            "dry_run": False,
+        },
+    )
+
+    assert out["monitored_branch"] == "op-simple-canary-123"
+    assert out["workflow"]["max_parallel_workers"] == 5
+    assert out["workflow"]["preserve_me"] is True
+    assert out["custom"] == {"note": "keep"}
+    assert out["run_context"]["run_base_branch"] == "op-simple-canary-123"
+
+
 def test_seed_plan_artifacts_from_planner_when_current_plan_empty(tmp_path: Path) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -493,6 +726,29 @@ def test_seed_plan_artifacts_from_planner_when_current_plan_empty(tmp_path: Path
     assert len(current_plan["tasks"]) == 1
     task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
     assert len(task_state["tasks"]) == 1
+    assert task_state["blockers"] == []
+    assert set(task_state["attempts"]) == set(MODULE.TASK_ATTEMPT_STAGES)
+    assert task_state["last_handoff_outcome"]["status"] == "unknown"
+
+
+def test_ensure_default_artifacts_write_task_execution_state_sections(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=2,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    MODULE._ensure_default_artifacts(cfg)
+
+    task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
+    assert task_state["tasks"] == []
+    assert task_state["blockers"] == []
+    assert set(task_state["attempts"]) == set(MODULE.TASK_ATTEMPT_STAGES)
+    assert task_state["last_handoff_outcome"]["status"] == "unknown"
 
 
 def test_installed_fallback_paths_for_prompts_and_schema(tmp_path: Path, monkeypatch) -> None:
@@ -590,6 +846,16 @@ def test_run_prefers_project_done_over_watchdog_stop(tmp_path: Path, monkeypatch
     assert out["data"]["stop_reason"] == "project_done"
 
 
+def test_run_persists_summary_manager_status_entry(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, dry_run=True, max_build_cycles=1, sleep_minutes=0))
+
+    assert out["ok"] is True
+    summary = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_summary"]).read_text(encoding="utf-8"))
+    assert summary["manager_statuses"]["summary"]["status"] == "ok"
+
+
 def test_max_build_cycles_applies_to_current_run_not_global_counter(tmp_path: Path) -> None:
     build_repo(tmp_path)
     (tmp_path / ".op-simple" / "current").mkdir(parents=True, exist_ok=True)
@@ -676,6 +942,123 @@ def test_select_boss_profile_from_snapshot_prefers_highest_weekly_not_5h_gated(t
     assert home == "/tmp/codex-third"
 
 
+def test_select_boss_profile_from_snapshot_excludes_default_codex_when_multiple_profiles_exist(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex",
+                    "codex_home": "/tmp/codex",
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 99.0,
+                    "hard_gated": False,
+                },
+                {
+                    "alias": "codex-second",
+                    "codex_home": "/tmp/codex-second",
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 60.0,
+                    "hard_gated": False,
+                },
+            ],
+        },
+    )
+
+    alias, home = MODULE._select_boss_profile_from_snapshot(cfg)
+
+    assert alias == "codex-second"
+    assert home == "/tmp/codex-second"
+
+
+def test_select_boss_profile_from_snapshot_skips_hard_gated_profiles(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-first",
+                    "codex_home": "/tmp/codex-first",
+                    "window_5h_remaining_pct": 90.0,
+                    "window_week_remaining_pct": 95.0,
+                    "hard_gated": True,
+                },
+                {
+                    "alias": "codex-second",
+                    "codex_home": "/tmp/codex-second",
+                    "window_5h_remaining_pct": 50.0,
+                    "window_week_remaining_pct": 60.0,
+                    "hard_gated": False,
+                },
+            ],
+        },
+    )
+
+    alias, home = MODULE._select_boss_profile_from_snapshot(cfg)
+
+    assert alias == "codex-second"
+    assert home == "/tmp/codex-second"
+
+
+def test_select_boss_profile_from_snapshot_returns_none_when_all_profiles_hard_gated(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-first",
+                    "codex_home": "/tmp/codex-first",
+                    "window_5h_remaining_pct": 90.0,
+                    "window_week_remaining_pct": 95.0,
+                    "hard_gated": True,
+                },
+                {
+                    "alias": "codex-second",
+                    "codex_home": "/tmp/codex-second",
+                    "window_5h_remaining_pct": 55.0,
+                    "window_week_remaining_pct": 50.0,
+                    "hard_gated": True,
+                },
+            ],
+        },
+    )
+
+    alias, home = MODULE._select_boss_profile_from_snapshot(cfg)
+
+    assert alias is None
+    assert home is None
+
+
 def test_select_boss_profile_from_snapshot_falls_back_on_missing_or_malformed(tmp_path: Path) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -753,3 +1136,11 @@ def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypa
     assert out.status == "ok"
     assert captured["codex_home"] == "/tmp/codex-second"
     assert out.message == "manager_profile_alias=codex-second"
+
+
+def test_boss_prompt_mentions_cycle_number_and_runtime_skip_correction() -> None:
+    prompt = BOSS_PROMPT_PATH.read_text(encoding="utf-8")
+
+    assert "cycle_manager_decision.json" in prompt
+    assert "current cycle's top-level `cycle_number`" in prompt
+    assert "runtime will correct the cycle to a deterministic `skip_cycle` outcome" in prompt

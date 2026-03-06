@@ -3,6 +3,8 @@
 This catalog is the schema reference for OP Simple runtime artifacts.
 Each section includes the minimal field set and one valid JSON example.
 
+Runtime freshness rule: every required BOSS-authored artifact must include top-level `cycle_number`, and runtime accepts it only when that value matches the current cycle.
+
 ## 1) worker_registry.json
 
 | Field | Type | Why it exists |
@@ -268,44 +270,36 @@ Each section includes the minimal field set and one valid JSON example.
 | updated_at | string(UTC) | Recency |
 | cycle_number | integer | Cycle correlation |
 | tasks | array | Runtime state rows |
+| blockers | array | Cycle-level blocker rows |
+| attempts | object | Cycle-level stage counters |
+| last_handoff_outcome | object | Last cycle-level handoff outcome |
 | tasks[].task_id | string | Task identity |
 | tasks[].status | string | `pending|in_progress|done|blocked` |
-| tasks[].attempts | object | Stage-keyed counters |
-| tasks[].blockers | array | Active/inactive blocker rows |
-| tasks[].last_handoff_outcome | object | Last dispatch/handoff outcome |
 
 ```json
 {
   "schema_version": "1.0",
   "updated_at": "2026-03-06T12:00:00Z",
   "cycle_number": 7,
+  "blockers": [],
+  "attempts": {
+    "dev": 1,
+    "lane_test": 0,
+    "test_fix": 0,
+    "lane_review": 0,
+    "review_fix": 0,
+    "deep_review": 0,
+    "deep_fix": 0
+  },
+  "last_handoff_outcome": {
+    "status": "success",
+    "reason_codes": [],
+    "timestamp": "2026-03-06T11:58:00Z"
+  },
   "tasks": [
     {
       "task_id": "TASK-123",
-      "status": "in_progress",
-      "attempts": {
-        "dev": 1,
-        "lane_test": 0,
-        "test_fix": 0,
-        "lane_review": 0,
-        "review_fix": 0,
-        "deep_review": 0,
-        "deep_fix": 0
-      },
-      "blockers": [
-        {
-          "blocker_code": "waiting_dependency",
-          "message": "Awaiting TASK-122",
-          "first_seen_cycle": 6,
-          "last_seen_cycle": 7,
-          "active": true
-        }
-      ],
-      "last_handoff_outcome": {
-        "status": "success",
-        "reason_codes": [],
-        "timestamp": "2026-03-06T11:58:00Z"
-      }
+      "status": "in_progress"
     }
   ]
 }
@@ -331,8 +325,8 @@ Each section includes the minimal field set and one valid JSON example.
   "schema_version": "1.0",
   "cycle_number": 7,
   "manager_statuses": {
-    "cycle-manager": {"status": "ok", "note": ""},
-    "profile-manager": {"status": "ok", "note": ""},
+    "cycle-manager": {"status": "skipped", "note": "execution skipped; BOSS owns cycle gating"},
+    "profile-manager": {"status": "skipped", "note": "execution skipped; BOSS owns profile snapshot"},
     "BOSS": {"status": "ok", "note": ""},
     "work-dispatcher": {"status": "ok", "note": "dispatch cycle completed"},
     "watchdog": {"status": "ok", "note": "watchdog healthy"},

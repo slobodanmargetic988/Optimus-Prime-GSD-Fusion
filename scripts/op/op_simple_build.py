@@ -61,6 +61,15 @@ WAIT_RESCAN_SECONDS = 900
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
 
 PLANNER_PLAN_PACKETS_FILE = Path("reports/optimus-prime/planning/PLAN_PACKETS.json")
+BOSS_REQUIRED_ARTIFACTS = [
+    "production_line_register",
+    "worker_packets",
+    "plan_packets",
+    "task_execution_state",
+    "worker_registry",
+    "cycle_summary",
+]
+TASK_ATTEMPT_STAGES = ("dev", "lane_test", "test_fix", "lane_review", "review_fix", "deep_review", "deep_fix")
 
 
 @dataclass
@@ -75,6 +84,8 @@ class ManagerResult:
     stdout_path: str | None = None
     stderr_path: str | None = None
     message: str | None = None
+    reason_code: str | None = None
+    details: dict[str, Any] | None = None
 
 
 @dataclass
@@ -129,6 +140,30 @@ def _safe_unlink(path: Path) -> None:
         path.unlink()
     except FileNotFoundError:
         return
+
+
+def _default_attempts() -> dict[str, int]:
+    return {stage: 0 for stage in TASK_ATTEMPT_STAGES}
+
+
+def _default_last_handoff_outcome() -> dict[str, Any]:
+    return {
+        "status": "unknown",
+        "reason_codes": [],
+        "timestamp": None,
+    }
+
+
+def _task_execution_state_payload(cycle_number: int, tasks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": int(cycle_number),
+        "tasks": tasks or [],
+        "blockers": [],
+        "attempts": _default_attempts(),
+        "last_handoff_outcome": _default_last_handoff_outcome(),
+    }
 
 
 def _is_pid_running(pid: int) -> bool:
@@ -212,6 +247,7 @@ def _default_initialize_state(repo_root: Path, max_parallel_workers: int, run_me
         "dry_run": False,
     }
     if isinstance(run_meta, dict):
+        monitored_branch = str(run_meta.get("run_base_branch") or "").strip() or monitored_branch
         run_context.update(
             {
                 "run_base_branch": run_meta.get("run_base_branch") or run_context["run_base_branch"],
@@ -240,9 +276,15 @@ def _ensure_initialize_state(cfg: RunConfig, run_meta: dict[str, Any] | None = N
     workflow = state.get("workflow") if isinstance(state.get("workflow"), dict) else {}
     if not isinstance(workflow.get("max_parallel_workers"), int) or int(workflow.get("max_parallel_workers")) <= 0:
         workflow["max_parallel_workers"] = cfg.max_parallel_workers
+    if isinstance(run_meta, dict):
+        workflow["max_parallel_workers"] = cfg.max_parallel_workers
     state["workflow"] = workflow
     if not isinstance(state.get("monitored_branch"), str) or not str(state.get("monitored_branch")).strip():
         state["monitored_branch"] = _git_text(cfg.repo_root, "branch", "--show-current") or "main"
+    if isinstance(run_meta, dict):
+        run_base_branch = str(run_meta.get("run_base_branch") or "").strip()
+        if run_base_branch:
+            state["monitored_branch"] = run_base_branch
     run_context = state.get("run_context") if isinstance(state.get("run_context"), dict) else {}
     if isinstance(run_meta, dict):
         run_context.update(
@@ -473,29 +515,29 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
         "production_line_register": {
             "schema_version": SCHEMA_VERSION,
             "updated_at": utc_now_iso(),
+            "cycle_number": 0,
             "assignments": [],
         },
         "worker_packets": {
             "schema_version": SCHEMA_VERSION,
             "updated_at": utc_now_iso(),
+            "cycle_number": 0,
             "packets": [],
         },
         "plan_packets": {
             "schema_version": SCHEMA_VERSION,
             "updated_at": utc_now_iso(),
+            "cycle_number": 0,
             "phase": "multi-phase",
             "phases": [],
             "requirements": [],
             "tasks": [],
         },
-        "task_execution_state": {
-            "schema_version": SCHEMA_VERSION,
-            "updated_at": utc_now_iso(),
-            "tasks": [],
-        },
+        "task_execution_state": _task_execution_state_payload(0),
         "worker_registry": {
             "schema_version": SCHEMA_VERSION,
             "updated_at": utc_now_iso(),
+            "cycle_number": 0,
             "workers": [],
         },
         "dispatch_registry": {
@@ -582,12 +624,10 @@ def _seed_plan_artifacts_from_planner(cfg: RunConfig) -> bool:
     task_state = _read_json(task_state_path, default={})
     task_rows = task_state.get("tasks") if isinstance(task_state, dict) else None
     if not isinstance(task_rows, list) or not task_rows:
-        task_payload = {
-            "schema_version": SCHEMA_VERSION,
-            "updated_at": utc_now_iso(),
-            "cycle_number": _load_cycle_counter(cfg),
-            "tasks": [task for task in planner_tasks if isinstance(task, dict)],
-        }
+        task_payload = _task_execution_state_payload(
+            _load_cycle_counter(cfg),
+            [task for task in planner_tasks if isinstance(task, dict)],
+        )
         _atomic_write_json(task_state_path, task_payload)
     return True
 
@@ -718,6 +758,7 @@ def _codex_exec_prompt(
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
             message=None if completed.returncode == 0 else "codex exec returned non-zero",
+            reason_code=None if completed.returncode == 0 else "manager_non_zero_exit",
         )
     except subprocess.TimeoutExpired:
         finished_at = utc_now_iso()
@@ -732,6 +773,7 @@ def _codex_exec_prompt(
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
             message="manager call timed out",
+            reason_code="manager_timeout",
         )
     except FileNotFoundError:
         finished_at = utc_now_iso()
@@ -746,6 +788,7 @@ def _codex_exec_prompt(
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
             message="codex binary not found",
+            reason_code="manager_binary_missing",
         )
 
 
@@ -834,6 +877,9 @@ def _write_boss_stub(cfg: RunConfig, cycle_number: int) -> None:
             "updated_at": utc_now_iso(),
             "cycle_number": cycle_number,
             "tasks": [],
+            "blockers": [],
+            "attempts": _default_attempts(),
+            "last_handoff_outcome": _default_last_handoff_outcome(),
         },
         "worker_registry": {
             "schema_version": SCHEMA_VERSION,
@@ -856,6 +902,63 @@ def _write_boss_stub(cfg: RunConfig, cycle_number: int) -> None:
     }
     for key, payload in payloads.items():
         _atomic_write_json(cfg.repo_root / ARTIFACT_FILES[key], payload)
+
+
+def _validate_manager_artifacts(
+    cfg: RunConfig,
+    manager_name: str,
+    expected_artifacts: list[str],
+    cycle_number: int,
+) -> tuple[str | None, str | None, dict[str, Any] | None]:
+    for artifact_key in expected_artifacts:
+        artifact_path = cfg.repo_root / ARTIFACT_FILES[artifact_key]
+        if not artifact_path.exists():
+            code = "boss_missing_artifact" if manager_name == "BOSS" else "manager_missing_artifact"
+            return (
+                code,
+                f"missing expected artifact: {artifact_key}",
+                {"artifact_key": artifact_key},
+            )
+        if manager_name != "BOSS":
+            continue
+        payload = _read_json(artifact_path, default=None)
+        if not isinstance(payload, dict):
+            return (
+                "boss_invalid_artifact",
+                f"required BOSS artifact is not a JSON object: {artifact_key}",
+                {"artifact_key": artifact_key},
+            )
+        try:
+            artifact_cycle_number = int(payload.get("cycle_number"))
+        except (TypeError, ValueError):
+            artifact_cycle_number = None
+        if artifact_cycle_number != cycle_number:
+            return (
+                "boss_stale_artifact",
+                f"required BOSS artifact has stale or missing cycle_number: {artifact_key}",
+                {"artifact_key": artifact_key, "cycle_number": artifact_cycle_number},
+            )
+    return None, None, None
+
+
+def _write_cycle_manager_decision(
+    cfg: RunConfig,
+    cycle_number: int,
+    *,
+    decision: str,
+    reason_code: str,
+    message: str,
+    worker_registry_ready: bool,
+) -> None:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "cycle_number": cycle_number,
+        "decision": decision,
+        "reason_code": reason_code,
+        "message": message,
+        "worker_registry_ready": worker_registry_ready,
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["cycle_manager_decision"], payload)
 
 
 def _invoke_manager(
@@ -925,6 +1028,14 @@ def _invoke_manager(
                 else f"manager_profile_alias={selected_manager_alias}"
             )
 
+    if result.status == "ok":
+        reason_code, message, details = _validate_manager_artifacts(cfg, manager_name, expected_artifacts, cycle_number)
+        if reason_code:
+            result.status = "failed"
+            result.reason_code = reason_code
+            result.message = message
+            result.details = details
+
     _append_manager_log(
         cfg,
         {
@@ -942,16 +1053,6 @@ def _invoke_manager(
             "message": result.message,
         },
     )
-
-    if result.status == "ok":
-        missing = []
-        for artifact_key in expected_artifacts:
-            artifact_path = cfg.repo_root / ARTIFACT_FILES[artifact_key]
-            if not artifact_path.exists():
-                missing.append(artifact_key)
-        if missing:
-            result.status = "failed"
-            result.message = "missing expected artifacts: " + ", ".join(sorted(missing))
     return result
 
 
@@ -999,13 +1100,17 @@ def _select_boss_profile_from_snapshot(cfg: RunConfig) -> tuple[str | None, str 
     if not isinstance(rows, list):
         return None, None
 
+    candidate_rows = [row for row in rows if isinstance(row, dict)]
+    if len(candidate_rows) > 1:
+        candidate_rows = [row for row in candidate_rows if str(row.get("alias") or "").strip() != "codex"]
+
     ranked: list[tuple[float, float, str, str]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
+    for row in candidate_rows:
         alias = str(row.get("alias") or "").strip()
         codex_home = str(row.get("codex_home") or "").strip()
         if not alias or not codex_home:
+            continue
+        if bool(row.get("hard_gated")):
             continue
 
         five_hour_remaining = _extract_remaining_percent(row.get("window_5h_remaining_pct"))
@@ -1705,9 +1810,16 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, A
     return should_stop, exit_signal
 
 
-def _render_cycle_summary(cfg: RunConfig, cycle_number: int, manager_statuses: dict[str, dict[str, str]], dispatch_counts: dict[str, int]) -> dict[str, Any]:
+def _render_cycle_summary(
+    cfg: RunConfig,
+    cycle_number: int,
+    manager_statuses: dict[str, dict[str, str]],
+    dispatch_counts: dict[str, int],
+    *,
+    base_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     summary_path = cfg.repo_root / ARTIFACT_FILES["cycle_summary"]
-    summary = _read_json(summary_path, default={})
+    summary = base_summary if isinstance(base_summary, dict) else _read_json(summary_path, default={})
     if not isinstance(summary, dict):
         summary = {}
 
@@ -1945,14 +2057,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 "note": "execution skipped; BOSS owns profile snapshot",
             }
 
-            boss_expected = [
-                "production_line_register",
-                "worker_packets",
-                "plan_packets",
-                "task_execution_state",
-                "worker_registry",
-                "cycle_summary",
-            ]
+            boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
             boss_result = _invoke_manager(
                 cfg,
                 manager_name="BOSS",
@@ -1986,16 +2091,35 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             if boss_result.status != "ok":
                 warnings.append(
                     {
-                        "code": "boss_failed",
+                        "code": boss_result.reason_code or "boss_failed",
                         "message": boss_result.message or "BOSS failed",
                         "stage": "op-simple-build",
                     }
                 )
-
-            _run_rate_gate_wait(cfg, cycle_number, warnings)
-
-            dispatch_counts = _dispatch_packets(cfg, cycle_number)
-            manager_statuses["work-dispatcher"] = {"status": "ok", "note": "dispatch cycle completed"}
+                worker_registry_ready = True
+                if isinstance(boss_result.details, dict) and boss_result.details.get("artifact_key") == "worker_registry":
+                    worker_registry_ready = False
+                _write_cycle_manager_decision(
+                    cfg,
+                    cycle_number,
+                    decision="skip_cycle",
+                    reason_code=boss_result.reason_code or "boss_failed",
+                    message=boss_result.message or "BOSS failed",
+                    worker_registry_ready=worker_registry_ready,
+                )
+                manager_statuses["rate-gate"] = {
+                    "status": "skipped",
+                    "note": "cycle skipped after BOSS failure",
+                }
+                manager_statuses["work-dispatcher"] = {
+                    "status": "skipped",
+                    "note": "cycle skipped after BOSS failure",
+                }
+            else:
+                _run_rate_gate_wait(cfg, cycle_number, warnings)
+                manager_statuses["rate-gate"] = {"status": "ok", "note": "rate gate completed"}
+                dispatch_counts = _dispatch_packets(cfg, cycle_number)
+                manager_statuses["work-dispatcher"] = {"status": "ok", "note": "dispatch cycle completed"}
 
             watchdog_stop, watchdog_signal = _watchdog_tick(cfg, cycle_number)
             manager_statuses["watchdog"] = {
@@ -2003,8 +2127,28 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 "note": watchdog_signal.get("message") if watchdog_stop else "watchdog healthy",
             }
 
-            summary = _render_cycle_summary(cfg, cycle_number, manager_statuses, dispatch_counts)
             manager_statuses["summary"] = {"status": "ok", "note": "summary written"}
+            base_summary: dict[str, Any] | None = None
+            if boss_result.status != "ok":
+                base_summary = {
+                    "schema_version": SCHEMA_VERSION,
+                    "cycle_number": cycle_number,
+                    "manager_statuses": {},
+                    "task_counts": {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0},
+                    "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+                    "project_done": False,
+                    "insurmountable_blocker": False,
+                    "termination": {},
+                    "stop_reason": "",
+                    "notes": f"cycle skipped by runtime safety rules: {boss_result.message or 'BOSS failed'}",
+                }
+            summary = _render_cycle_summary(
+                cfg,
+                cycle_number,
+                manager_statuses,
+                dispatch_counts,
+                base_summary=base_summary,
+            )
 
             terminate_path = cfg.repo_root / TERMINATE_FILE_NAME
             if terminate_path.exists():
