@@ -91,7 +91,7 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 ### Dev DB Runner Quick Use
 - Use `dev-ephemeral-db-runner` before DB-backed checks to avoid manual `initdb/pg_ctl/createdb` chains.
 - Minimal start invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-ephemeral-db-runner/scripts/dev_ephemeral_db_runner.py --input-json -`
+  - `python3 /Users/slobodan/Projects/Agents/skills/dev-ephemeral-db-runner/scripts/dev_ephemeral_db_runner.py --input-json -`
   - payload fields: `profile_name`, `port`, `db_name`, `host`, `cleanup_mode`, `shared_memory_compat`, `dry_run`
 - Reuse returned `dsn` as `TEST_DATABASE_URL`/`DATABASE_URL`, then run packet checks.
 - Use returned `stop_cmd` (or `action=stop`) after checks; use `cleanup_mode=destroy_on_exit` when packet requests ephemeral teardown.
@@ -99,28 +99,28 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 ### Dev Benchmark Runner Quick Use
 - Use `dev-benchmark-runner` when packet asks for deterministic benchmark evidence.
 - Minimal invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-benchmark-runner/scripts/dev_benchmark_runner.py --input-json -`
+  - `python3 /Users/slobodan/Projects/Agents/skills/dev-benchmark-runner/scripts/dev_benchmark_runner.py --input-json -`
   - payload fields: `script`, `dataset_size`, `iterations`, `warmup`, `max_retries`, `artifact_path`, `dry_run`
 - Return the exact `artifact_path` and summary metrics (`p50_ms`, `p95_ms`, `mean_ms`) in your handoff payload.
 
 ### Dev OpenAPI Client Sync Quick Use
 - Use `dev-openapi-client-sync` for schema/type alignment packets (`openapi export` + client regeneration + drift summary).
 - Minimal invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py --input-json -`
+  - `python3 /Users/slobodan/Projects/Agents/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py --input-json -`
   - payload fields: `openapi_output`, `client_root`, `generate_command`, optional `base_url_override`, `fail_on_drift`, `dry_run`
 - Include `changed_files` and `drift_detected` from tool output in your handoff summary so Optimus can decide follow-up actions.
 
 ### Dev Check Bundle Quick Use
 - Use `dev-check-bundle` for acceptance-check execution so compile/test/benchmark command chains return one standardized report.
 - Minimal invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-check-bundle/scripts/dev_check_bundle.py --input-json -`
+  - `python3 /Users/slobodan/Projects/Agents/skills/dev-check-bundle/scripts/dev_check_bundle.py --input-json -`
   - payload fields: `task_identifier`, `checks[]`, `stop_on_fail`, `max_parallel`, `dry_run`, optional `timeout_sec`
 - Include `overall`, per-check `checks[]`, and `blockers` in your handoff summary.
 
 ### Dev Handoff Summary Builder Quick Use
 - Use `dev-handoff-summary-builder` to produce the final strict developer handoff payload from git/check artifacts.
 - Minimal invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-handoff-summary-builder/scripts/dev_handoff_summary_builder.py --input-json -`
+  - `python3 /Users/slobodan/Projects/Agents/skills/dev-handoff-summary-builder/scripts/dev_handoff_summary_builder.py --input-json -`
   - payload fields: `task_identifier`, `branch`, `start_from_branch`, `start_from_commit`, optional `checks_json_path`, `decision_hint`, `blockers`, `dry_run`
 - Use `decision_hint=auto` in normal flow and attach `checks_json_path` from `dev-check-bundle` when available.
 

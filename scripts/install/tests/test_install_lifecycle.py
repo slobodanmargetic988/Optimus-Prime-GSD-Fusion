@@ -45,10 +45,18 @@ def test_global_install_and_uninstall_flow():
         installed = INSTALL.run_install(payload)
         assert installed["ok"] is True
         state_path = Path(installed["data"]["install_state_path"])
+        install_root = Path(installed["data"]["install_root"])
         state = json.loads(state_path.read_text(encoding="utf-8"))
         assert state["installed_version"] == "1.2.3-test"
         assert (Path(home) / ".local" / "bin" / "opctl").exists()
         assert (Path(home) / ".local" / "bin" / "op").exists()
+        worker_template_readmes = {
+            "scripts/op_simple/prompts/workers/optimus-fullstack-developer/README.md",
+            "scripts/op_simple/prompts/workers/optimus-fullstack-tester/README.md",
+            "scripts/op_simple/prompts/workers/optimus-reviewer/README.md",
+        }
+        for rel in worker_template_readmes:
+            assert (install_root / rel).is_file()
         codex_skills = Path(home) / ".codex" / "skills"
         required = {
             "dispatch-worker-packet",
