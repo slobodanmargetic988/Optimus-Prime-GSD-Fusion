@@ -158,10 +158,16 @@ def test_dispatch_packets_writes_launch_and_registry(tmp_path: Path, monkeypatch
             ],
         },
     )
+    (tmp_path / "workstation-1").mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(MODULE, "_resolve_dispatch_script", lambda _cfg: Path("/tmp/fake-dispatch.py"))
+    captured_cmds: list[list[str]] = []
 
     def fake_run(*_args, **_kwargs):
+        if _args:
+            first = _args[0]
+            if isinstance(first, list):
+                captured_cmds.append(first)
         payload = {
             "status": "started",
             "session_id": "thread-123",
@@ -174,6 +180,12 @@ def test_dispatch_packets_writes_launch_and_registry(tmp_path: Path, monkeypatch
     counters = MODULE._dispatch_packets(cfg, cycle_number=3)
 
     assert counters == {"attempted": 1, "launched": 1, "launch_failed": 0, "unknown": 0}
+    assert captured_cmds, "expected dispatch command invocation"
+    assert "--cwd" in captured_cmds[0]
+    cwd_idx = captured_cmds[0].index("--cwd")
+    assert captured_cmds[0][cwd_idx + 1] == str((tmp_path / "workstation-1").resolve())
+    assert "--no-full-auto" in captured_cmds[0]
+    assert any("--dangerously-bypass-approvals-and-sandbox" in token for token in captured_cmds[0])
 
     launch_rows = [json.loads(line) for line in (tmp_path / MODULE.DISPATCH_LAUNCH_LOG_FILE).read_text(encoding="utf-8").splitlines()]
     assert len(launch_rows) == 1
@@ -315,6 +327,107 @@ def test_dispatch_respects_parallel_worker_cap(tmp_path: Path, monkeypatch) -> N
     assert not (tmp_path / MODULE.DISPATCH_LAUNCH_LOG_FILE).exists()
 
 
+def test_ensure_workstation_prep_prepares_slots_and_seeds_worker_registry(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=2,
+        dry_run=False,
+    )
+    (tmp_path / ".op-simple" / "current").mkdir(parents=True, exist_ok=True)
+    init_state = MODULE._ensure_initialize_state(
+        cfg,
+        run_meta={
+            "run_base_branch": "op-simple-canary-test",
+            "run_base_from_branch": "main",
+            "run_base_from_commit": git(tmp_path, "rev-parse", "HEAD"),
+            "run_base_created_at": "2026-01-01T00:00:00Z",
+            "created_new": True,
+            "dry_run": False,
+        },
+    )
+    fake_script = tmp_path / "fake_prepare.py"
+    fake_script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    monkeypatch.setattr(MODULE, "_resolve_workstation_prepare_script", lambda _cfg: fake_script)
+
+    real_run = MODULE.subprocess.run
+
+    def fake_run(cmd, *args, **kwargs):
+        if isinstance(cmd, list) and len(cmd) >= 2 and cmd[0] == "python3" and cmd[1] == str(fake_script):
+            worktree_name = cmd[cmd.index("--worktree-name") + 1]
+            branch_name = cmd[cmd.index("--branch-name") + 1]
+            target_path = tmp_path / worktree_name
+            target_path.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "ok": True,
+                "target_path": str(target_path),
+                "branch_name_resolved": branch_name,
+                "message": "prepared",
+            }
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=json.dumps(payload), stderr="")
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
+    out = MODULE._ensure_workstation_prep(cfg, initialize_state=init_state, force_refresh=True)
+
+    assert len(out["workstations"]) == 2
+    assert out["workstations"][0]["workstation_id"] == "workstation-1"
+    assert out["workstations"][0]["branch"].startswith("op-simple-canary-test-w")
+    assert Path(out["workstations"][0]["worktree"]).exists()
+
+    registry = json.loads((tmp_path / MODULE.ARTIFACT_FILES["worker_registry"]).read_text(encoding="utf-8"))
+    assert len(registry["workers"]) == 2
+    assert registry["workers"][0]["worker_id"] == "worker-1"
+    assert registry["workers"][0]["status"] == "idle"
+
+
+def test_seed_plan_artifacts_from_planner_when_current_plan_empty(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=2,
+        dry_run=False,
+    )
+    (tmp_path / ".op-simple" / "current").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "reports" / "optimus-prime" / "planning").mkdir(parents=True, exist_ok=True)
+    planner_payload = {
+        "schema_version": "1.0",
+        "tasks": [
+            {
+                "task_id": "TASK-001",
+                "phase_id": "phase-1",
+                "lane_id": "phase-1/lane-a",
+                "status": "pending",
+            }
+        ],
+    }
+    (tmp_path / "reports" / "optimus-prime" / "planning" / "PLAN_PACKETS.json").write_text(
+        json.dumps(planner_payload, indent=2),
+        encoding="utf-8",
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["plan_packets"],
+        {"schema_version": "1.0", "tasks": []},
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {"schema_version": "1.0", "tasks": []},
+    )
+
+    seeded = MODULE._seed_plan_artifacts_from_planner(cfg)
+
+    assert seeded is True
+    current_plan = json.loads((tmp_path / MODULE.ARTIFACT_FILES["plan_packets"]).read_text(encoding="utf-8"))
+    assert len(current_plan["tasks"]) == 1
+    task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
+    assert len(task_state["tasks"]) == 1
+
+
 def test_installed_fallback_paths_for_prompts_and_schema(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir(parents=True, exist_ok=True)
@@ -408,3 +521,18 @@ def test_run_prefers_project_done_over_watchdog_stop(tmp_path: Path, monkeypatch
 
     assert out["ok"] is True
     assert out["data"]["stop_reason"] == "project_done"
+
+
+def test_max_build_cycles_applies_to_current_run_not_global_counter(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    (tmp_path / ".op-simple" / "current").mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.CYCLE_COUNTER_FILE,
+        {"schema_version": "1.0", "cycle_number": 10, "updated_at": "2026-01-01T00:00:00Z"},
+    )
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, max_build_cycles=1, dry_run=True, sleep_minutes=0))
+
+    assert out["ok"] is True
+    assert out["data"]["cycles_this_run"] == 1
+    assert out["data"]["cycle_number"] == 11

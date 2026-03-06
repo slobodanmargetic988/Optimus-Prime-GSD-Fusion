@@ -59,6 +59,8 @@ WATCHDOG_IDLE_THRESHOLD = 10
 WAIT_HEARTBEAT_SECONDS = 300
 WAIT_RESCAN_SECONDS = 900
 
+PLANNER_PLAN_PACKETS_FILE = Path("reports/optimus-prime/planning/PLAN_PACKETS.json")
+
 
 @dataclass
 class ManagerResult:
@@ -265,34 +267,190 @@ def _ensure_initialize_state(cfg: RunConfig, run_meta: dict[str, Any] | None = N
     return state
 
 
-def _ensure_workstation_prep(cfg: RunConfig) -> dict[str, Any]:
+def _resolve_workstation_prepare_script(cfg: RunConfig) -> Path | None:
+    candidates: list[Path] = []
+    codex_home = os.environ.get("CODEX_HOME")
+    if codex_home:
+        candidates.append(
+            Path(codex_home).expanduser() / "skills" / "workstation-preparation" / "scripts" / "prepare_workstation.py"
+        )
+    candidates.append(Path.home() / ".codex" / "skills" / "workstation-preparation" / "scripts" / "prepare_workstation.py")
+    candidates.append(cfg.repo_root / "skills" / "workstation-preparation" / "scripts" / "prepare_workstation.py")
+    installed_root = SCRIPTS_ROOT.parent
+    candidates.append(installed_root / "skills" / "workstation-preparation" / "scripts" / "prepare_workstation.py")
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def _seed_worker_registry_from_workstations(cfg: RunConfig, workstations: list[dict[str, Any]], cycle_number: int = 0) -> None:
+    workers: list[dict[str, Any]] = []
+    for idx, row in enumerate(workstations, start=1):
+        worker_id = f"worker-{idx}"
+        workers.append(
+            {
+                "worker_id": worker_id,
+                "worktree": str(row.get("worktree") or ""),
+                "branch": str(row.get("branch") or ""),
+                "status": "idle",
+                "current_task_profile": None,
+                "next_task_profile": None,
+                "current_task_id": None,
+                "current_packet_id": None,
+                "pid": None,
+                "thread_id": None,
+                "last_update": utc_now_iso(),
+            }
+        )
+
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": int(cycle_number or 0),
+        "workers": workers,
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], payload)
+
+
+def _ensure_workstation_prep(
+    cfg: RunConfig,
+    initialize_state: dict[str, Any] | None = None,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
     target = cfg.repo_root / ARTIFACT_FILES["workstation_prep"]
     payload = _read_json(target, default={})
-    if isinstance(payload, dict) and isinstance(payload.get("workstations"), list) and payload.get("workstations"):
-        return payload
+    state = initialize_state if isinstance(initialize_state, dict) else _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
+    run_context = state.get("run_context") if isinstance(state, dict) and isinstance(state.get("run_context"), dict) else {}
+    run_base_branch = str(run_context.get("run_base_branch") or "").strip() or (_git_text(cfg.repo_root, "branch", "--show-current") or "main")
+    max_slots = max(1, min(10, int(cfg.max_parallel_workers or 1)))
 
-    current_branch = _git_text(cfg.repo_root, "branch", "--show-current") or "main"
-    current_sha = _git_text(cfg.repo_root, "rev-parse", "HEAD") or ""
-    rows = []
-    for idx in range(1, 11):
-        rows.append(
+    if not force_refresh and isinstance(payload, dict):
+        rows = payload.get("workstations")
+        if isinstance(rows, list) and rows:
+            valid_rows = []
+            for row in rows[:max_slots]:
+                if not isinstance(row, dict):
+                    continue
+                branch_ok = str(row.get("branch") or "").strip().startswith(run_base_branch)
+                worktree_raw = str(row.get("worktree") or "").strip()
+                worktree_ok = bool(worktree_raw) and Path(worktree_raw).exists()
+                if branch_ok and worktree_ok:
+                    valid_rows.append(row)
+            if len(valid_rows) == max_slots:
+                return payload
+
+    if cfg.dry_run:
+        current_sha = _git_text(cfg.repo_root, "rev-parse", "HEAD") or ""
+        rows = []
+        for idx in range(1, max_slots + 1):
+            rows.append(
+                {
+                    "workstation_id": f"workstation-{idx}",
+                    "branch": f"{run_base_branch}-w{idx:02d}",
+                    "worktree": str((cfg.repo_root / f"workstation-{idx}").resolve()),
+                    "prepared_at": utc_now_iso(),
+                    "status": "prepared",
+                    "preparation_notes": "dry-run baseline",
+                    "git_head_sha": current_sha,
+                }
+            )
+        out = {
+            "schema_version": SCHEMA_VERSION,
+            "prepared_at": utc_now_iso(),
+            "workstations": rows,
+        }
+        _atomic_write_json(target, out)
+        _seed_worker_registry_from_workstations(cfg, rows, cycle_number=_load_cycle_counter(cfg))
+        return out
+
+    script = _resolve_workstation_prepare_script(cfg)
+    if script is None:
+        raise SimpleBuildError(
+            "op_simple_workstation_prep_script_missing",
+            "Cannot prepare workstations: workstation-preparation script is not available.",
+        )
+
+    prepared_rows: list[dict[str, Any]] = []
+    failures: list[str] = []
+    for idx in range(1, max_slots + 1):
+        workstation_id = f"workstation-{idx}"
+        worker_branch = f"{run_base_branch}-w{idx:02d}"
+        cmd = [
+            "python3",
+            str(script),
+            "--repo-root",
+            str(cfg.repo_root),
+            "--worktree-name",
+            workstation_id,
+            "--branch-name",
+            worker_branch,
+            "--base-ref",
+            run_base_branch,
+            "--worktrees-parent",
+            str(cfg.repo_root),
+            "--force-reset-existing",
+            "--output",
+            "json",
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(cfg.repo_root),
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            failures.append(f"{workstation_id}: prepare_workstation timeout")
+            continue
+
+        raw_out = (proc.stdout or "").strip()
+        parsed: dict[str, Any] = {}
+        if raw_out:
+            try:
+                parsed = json.loads(raw_out)
+            except json.JSONDecodeError:
+                parsed = {}
+
+        ok = proc.returncode == 0 and bool(parsed.get("ok", True))
+        if not ok:
+            err_text = str(parsed.get("error") or "").strip()
+            if not err_text:
+                err_text = (proc.stderr or "").strip() or "prepare_workstation failed"
+            failures.append(f"{workstation_id}: {err_text}")
+            continue
+
+        target_path = str(parsed.get("target_path") or (cfg.repo_root / workstation_id))
+        resolved_branch = str(parsed.get("branch_name_resolved") or worker_branch)
+        head_sha = _git_text(Path(target_path), "rev-parse", "HEAD") if target_path else ""
+        prepared_rows.append(
             {
-                "workstation_id": f"workstation-{idx}",
-                "branch": current_branch,
-                "worktree": str((cfg.repo_root / f"workstation-{idx}").resolve()),
+                "workstation_id": workstation_id,
+                "branch": resolved_branch,
+                "worktree": str(Path(target_path).resolve()) if target_path else "",
                 "prepared_at": utc_now_iso(),
                 "status": "prepared",
-                "preparation_notes": "initialize baseline",
-                "git_head_sha": current_sha,
+                "preparation_notes": str(parsed.get("message") or "prepared"),
+                "git_head_sha": head_sha,
             }
+        )
+
+    if failures:
+        raise SimpleBuildError(
+            "op_simple_workstation_prep_failed",
+            "Cannot prepare all workstation slots: " + "; ".join(failures),
         )
 
     out = {
         "schema_version": SCHEMA_VERSION,
         "prepared_at": utc_now_iso(),
-        "workstations": rows,
+        "workstations": prepared_rows,
     }
     _atomic_write_json(target, out)
+    _seed_worker_registry_from_workstations(cfg, prepared_rows, cycle_number=_load_cycle_counter(cfg))
     return out
 
 
@@ -375,6 +533,62 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             continue
         payload = defaults.get(key, {"schema_version": SCHEMA_VERSION, "updated_at": utc_now_iso()})
         _atomic_write_json(abs_path, payload)
+
+
+def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
+    reset_keys = [
+        "cycle_manager_decision",
+        "profile_snapshot",
+        "production_line_register",
+        "worker_packets",
+        "plan_packets",
+        "task_execution_state",
+        "worker_registry",
+        "dispatch_registry",
+        "cycle_summary",
+        "watchdog_state",
+        "watchdog_exit_signal",
+        "workstation_prep",
+    ]
+    for key in reset_keys:
+        path = cfg.repo_root / ARTIFACT_FILES[key]
+        _safe_unlink(path)
+    _safe_unlink(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE)
+
+
+def _seed_plan_artifacts_from_planner(cfg: RunConfig) -> bool:
+    current_plan_path = cfg.repo_root / ARTIFACT_FILES["plan_packets"]
+    current_plan = _read_json(current_plan_path, default={})
+    if isinstance(current_plan, dict):
+        current_tasks = current_plan.get("tasks")
+        if isinstance(current_tasks, list) and current_tasks:
+            return False
+
+    planner_path = cfg.repo_root / PLANNER_PLAN_PACKETS_FILE
+    planner_payload = _read_json(planner_path, default={})
+    if not isinstance(planner_payload, dict):
+        return False
+    planner_tasks = planner_payload.get("tasks")
+    if not isinstance(planner_tasks, list) or not planner_tasks:
+        return False
+
+    plan_payload = dict(planner_payload)
+    plan_payload["schema_version"] = SCHEMA_VERSION
+    plan_payload["updated_at"] = utc_now_iso()
+    _atomic_write_json(current_plan_path, plan_payload)
+
+    task_state_path = cfg.repo_root / ARTIFACT_FILES["task_execution_state"]
+    task_state = _read_json(task_state_path, default={})
+    task_rows = task_state.get("tasks") if isinstance(task_state, dict) else None
+    if not isinstance(task_rows, list) or not task_rows:
+        task_payload = {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "cycle_number": _load_cycle_counter(cfg),
+            "tasks": [task for task in planner_tasks if isinstance(task, dict)],
+        }
+        _atomic_write_json(task_state_path, task_payload)
+    return True
 
 
 def _artifact_path_map(cfg: RunConfig) -> dict[str, str]:
@@ -463,7 +677,6 @@ def _codex_exec_prompt(
         "codex",
         "exec",
         "--dangerously-bypass-approvals-and-sandbox",
-        "--full-auto",
         "--cd",
         str(cfg.repo_root),
         "--output-last-message",
@@ -822,6 +1035,23 @@ def _profile_alias_to_home(cfg: RunConfig) -> dict[str, str]:
     return out
 
 
+def _worker_registry_index(cfg: RunConfig) -> dict[str, dict[str, Any]]:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
+    if not isinstance(payload, dict):
+        return {}
+    rows = payload.get("workers")
+    if not isinstance(rows, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        worker_id = str(row.get("worker_id") or "").strip()
+        if worker_id:
+            out[worker_id] = row
+    return out
+
+
 def _load_worker_packets(cfg: RunConfig) -> list[dict[str, Any]]:
     payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_packets"], default={})
     rows: list[dict[str, Any]] = []
@@ -919,16 +1149,16 @@ def _active_worker_count(cfg: RunConfig) -> int:
     workers = payload.get("workers")
     if not isinstance(workers, list):
         return 0
-    active_statuses = {"in_progress", "dev_working", "testing", "reviewing"}
     active_count = 0
     for row in workers:
         if not isinstance(row, dict):
             continue
-        status = str(row.get("status") or "").strip().lower()
         pid = row.get("pid")
         thread_id = row.get("thread_id")
         has_live_marker = pid not in {None, ""} or (isinstance(thread_id, str) and bool(thread_id.strip()))
-        if status in active_statuses or has_live_marker:
+        # Count only workers with concrete runtime liveness markers so
+        # pre-dispatch "in_progress" placeholders do not consume capacity.
+        if has_live_marker:
             active_count += 1
     return active_count
 
@@ -941,6 +1171,7 @@ def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
 
     script = _resolve_dispatch_script(cfg)
     alias_to_home = _profile_alias_to_home(cfg)
+    worker_by_id = _worker_registry_index(cfg)
     event_rows: list[dict[str, Any]] = []
     active_count = _active_worker_count(cfg)
 
@@ -952,6 +1183,9 @@ def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
         packet_id = str(row.get("packet_id") or "")
         prompt = str(row.get("prompt") or "").strip()
         profile_alias = str(row.get("profile_alias") or "")
+        worker_row = worker_by_id.get(worker_id) if worker_id else None
+        worker_worktree_raw = str((worker_row or {}).get("worktree") or "").strip()
+        worker_worktree = Path(worker_worktree_raw).expanduser() if worker_worktree_raw else None
 
         timestamp = utc_now_iso()
         event = {
@@ -981,14 +1215,24 @@ def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
             _append_jsonl(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE, event)
             continue
 
+        if worker_worktree is None or not worker_worktree.exists() or not worker_worktree.is_dir():
+            event["status"] = "launch_failed"
+            event["message"] = "worker worktree missing or invalid"
+            counters["launch_failed"] += 1
+            event_rows.append(event)
+            _append_jsonl(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE, event)
+            continue
+
         cmd = [
             "python3",
             str(script),
             "--cwd",
-            str(cfg.repo_root),
+            str(worker_worktree.resolve()),
             "--prompt",
             prompt,
             "--background",
+            "--no-full-auto",
+            "--extra-arg=--dangerously-bypass-approvals-and-sandbox",
         ]
         profile_home = alias_to_home.get(profile_alias)
         if profile_home:
@@ -1307,13 +1551,22 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
         run_meta = _create_run_base_branch(cfg)
         init_state = _ensure_initialize_state(cfg, run_meta=run_meta)
-        _ensure_workstation_prep(cfg)
+        if bool((init_state.get("run_context") or {}).get("created_new")):
+            _reset_runtime_state_for_new_run(cfg)
+        _ensure_workstation_prep(
+            cfg,
+            initialize_state=init_state,
+            force_refresh=bool((init_state.get("run_context") or {}).get("created_new")),
+        )
         _ensure_default_artifacts(cfg)
+        _seed_plan_artifacts_from_planner(cfg)
 
         cycle_number = _load_cycle_counter(cfg)
+        cycles_this_run = 0
 
         while True:
             cycle_number += 1
+            cycles_this_run += 1
             _write_cycle_counter(cfg, cycle_number)
 
             terminate_path = cfg.repo_root / TERMINATE_FILE_NAME
@@ -1334,7 +1587,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             )
             manager_statuses["cycle-manager"] = {"status": cycle_result.status, "note": cycle_result.message or ""}
             if cycle_result.timeout:
-                if cfg.max_build_cycles is not None and cycle_number >= cfg.max_build_cycles:
+                if cfg.max_build_cycles is not None and cycles_this_run >= cfg.max_build_cycles:
                     final_summary = f"Reached max_build_cycles={cfg.max_build_cycles} after cycle-manager timeout."
                     break
                 if cfg.sleep_minutes > 0:
@@ -1357,7 +1610,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 if stop_reason:
                     final_summary = f"OP Simple build stopped: {stop_reason}."
                     break
-                if cfg.max_build_cycles is not None and cycle_number >= cfg.max_build_cycles:
+                if cfg.max_build_cycles is not None and cycles_this_run >= cfg.max_build_cycles:
                     final_summary = f"Reached max_build_cycles={cfg.max_build_cycles}."
                     break
                 if cfg.sleep_minutes > 0:
@@ -1413,7 +1666,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     },
                 )
                 time.sleep(180)
-                if cfg.max_build_cycles is not None and cycle_number >= cfg.max_build_cycles:
+                if cfg.max_build_cycles is not None and cycles_this_run >= cfg.max_build_cycles:
                     final_summary = f"Reached max_build_cycles={cfg.max_build_cycles} after BOSS timeout."
                     break
                 continue
@@ -1456,7 +1709,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 final_summary = f"OP Simple build stopped: {stop_reason}."
                 break
 
-            if cfg.max_build_cycles is not None and cycle_number >= cfg.max_build_cycles:
+            if cfg.max_build_cycles is not None and cycles_this_run >= cfg.max_build_cycles:
                 final_summary = f"Reached max_build_cycles={cfg.max_build_cycles}."
                 break
 
@@ -1465,6 +1718,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
         data = {
             "cycle_number": cycle_number,
+            "cycles_this_run": cycles_this_run,
             "stop_reason": stop_reason,
             "max_parallel_workers": cfg.max_parallel_workers,
             "artifact_root": str((cfg.repo_root / SIMPLE_ROOT).resolve()),
