@@ -16,6 +16,35 @@ SPEC.loader.exec_module(MODULE)
 
 
 class CodexRateSnapshotTests(unittest.TestCase):
+    def _write_token_count_event(
+        self,
+        session_file: Path,
+        *,
+        event_ts,
+        primary_used: float,
+        primary_reset,
+        weekly_used: float,
+        weekly_reset,
+    ) -> None:
+        payload = {
+            "timestamp": event_ts.isoformat().replace("+00:00", "Z"),
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "rate_limits": {
+                    "primary": {
+                        "used_percent": primary_used,
+                        "resets_at": primary_reset.isoformat().replace("+00:00", "Z"),
+                    },
+                    "secondary": {
+                        "used_percent": weekly_used,
+                        "resets_at": weekly_reset.isoformat().replace("+00:00", "Z"),
+                    },
+                },
+            },
+        }
+        session_file.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
     def test_newest_session_jsonl_uses_last_modified_time(self):
         with TemporaryDirectory() as tmp:
             home = Path(tmp) / ".codex-test"
@@ -249,6 +278,97 @@ class CodexRateSnapshotTests(unittest.TestCase):
             )
             self.assertEqual(profile.recommended_action, "continue")
             self.assertNotIn("refresh_token_reused", profile.errors)
+
+    def test_stale_over_5h_resets_5h_window_to_full(self):
+        with TemporaryDirectory() as tmp:
+            home = Path(tmp) / ".codex-test"
+            session_dir = home / "sessions" / "2026" / "03" / "06"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            session_file = session_dir / "rollout.jsonl"
+            now = MODULE.now_utc()
+            self._write_token_count_event(
+                session_file,
+                event_ts=now - timedelta(hours=6),
+                primary_used=90.0,  # stale + would be hard-gated before reset policy
+                primary_reset=now + timedelta(hours=1),
+                weekly_used=5.0,  # healthy weekly
+                weekly_reset=now + timedelta(days=2),
+            )
+            profile = MODULE.build_profile_snapshot(
+                alias="test",
+                codex_home=home,
+                gate_5h=15.0,
+                gate_weekly=10.0,
+                soft_gate_5h=40.0,
+                soft_gate_weekly=25.0,
+                wait_max_hours=4.0,
+            )
+            self.assertEqual(profile.five_hour.remaining_percent, 100.0)
+            self.assertFalse(profile.five_hour.gated)
+            self.assertEqual(profile.recommended_action, "continue")
+            self.assertIn("rate_limits_snapshot_stale", profile.errors)
+
+    def test_stale_weekly_below_gate_with_future_reset_stays_gated(self):
+        with TemporaryDirectory() as tmp:
+            home = Path(tmp) / ".codex-test"
+            session_dir = home / "sessions" / "2026" / "03" / "06"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            session_file = session_dir / "rollout.jsonl"
+            now = MODULE.now_utc()
+            self._write_token_count_event(
+                session_file,
+                event_ts=now - timedelta(hours=6),
+                primary_used=85.0,
+                primary_reset=now + timedelta(hours=1),
+                weekly_used=95.0,  # below weekly gate (remaining=5)
+                weekly_reset=now + timedelta(hours=3),
+            )
+            profile = MODULE.build_profile_snapshot(
+                alias="test",
+                codex_home=home,
+                gate_5h=15.0,
+                gate_weekly=10.0,
+                soft_gate_5h=40.0,
+                soft_gate_weekly=25.0,
+                wait_max_hours=4.0,
+            )
+            self.assertEqual(profile.five_hour.remaining_percent, 100.0)
+            self.assertFalse(profile.five_hour.gated)
+            self.assertEqual(profile.weekly.remaining_percent, 5.0)
+            self.assertTrue(profile.weekly.gated)
+            self.assertIn("weekly_stale_gate_preserved", profile.errors)
+            self.assertIn(profile.recommended_action, {"wait_until_reset", "wind_down"})
+
+    def test_stale_weekly_below_gate_with_past_reset_resets_to_full(self):
+        with TemporaryDirectory() as tmp:
+            home = Path(tmp) / ".codex-test"
+            session_dir = home / "sessions" / "2026" / "03" / "06"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            session_file = session_dir / "rollout.jsonl"
+            now = MODULE.now_utc()
+            self._write_token_count_event(
+                session_file,
+                event_ts=now - timedelta(hours=6),
+                primary_used=85.0,
+                primary_reset=now + timedelta(hours=1),
+                weekly_used=95.0,  # below weekly gate (remaining=5)
+                weekly_reset=now - timedelta(hours=1),
+            )
+            profile = MODULE.build_profile_snapshot(
+                alias="test",
+                codex_home=home,
+                gate_5h=15.0,
+                gate_weekly=10.0,
+                soft_gate_5h=40.0,
+                soft_gate_weekly=25.0,
+                wait_max_hours=4.0,
+            )
+            self.assertEqual(profile.five_hour.remaining_percent, 100.0)
+            self.assertFalse(profile.five_hour.gated)
+            self.assertEqual(profile.weekly.remaining_percent, 100.0)
+            self.assertFalse(profile.weekly.gated)
+            self.assertEqual(profile.recommended_action, "continue")
+            self.assertNotIn("weekly_stale_gate_preserved", profile.errors)
 
 
 if __name__ == "__main__":
