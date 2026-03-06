@@ -315,6 +315,36 @@ def test_dispatch_respects_parallel_worker_cap(tmp_path: Path, monkeypatch) -> N
     assert not (tmp_path / MODULE.DISPATCH_LAUNCH_LOG_FILE).exists()
 
 
+def test_installed_fallback_paths_for_prompts_and_schema(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir(parents=True, exist_ok=True)
+    build_repo(project_root)
+
+    installed_scripts = tmp_path / "installed" / "scripts"
+    prompt_dir = installed_scripts / "op_simple" / "prompts" / "managers"
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    (prompt_dir / "boss.md").write_text("installed prompt\n", encoding="utf-8")
+
+    schema_path = installed_scripts.parent / "docs" / "plans" / "OP_SIMPLE_SCHEMA_CATALOG_V2.md"
+    schema_path.parent.mkdir(parents=True, exist_ok=True)
+    schema_path.write_text("# schema\n", encoding="utf-8")
+
+    cfg = MODULE.RunConfig(
+        repo_root=project_root,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+
+    monkeypatch.setattr(MODULE, "SCRIPTS_ROOT", installed_scripts)
+
+    resolved_prompt = MODULE._manager_prompt_template_path(cfg, "BOSS")
+    assert resolved_prompt == (prompt_dir / "boss.md")
+    assert MODULE._load_prompt_template(cfg, "BOSS").strip() == "installed prompt"
+    assert MODULE._schema_catalog_path(cfg) == schema_path.resolve()
+
+
 def test_run_prefers_project_done_over_watchdog_stop(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
 

@@ -24,6 +24,7 @@ from scripts.install.common import SCHEMA_VERSION, parse_git_commit, sha256_file
 PLATFORMS = ["darwin", "linux"]
 PAYLOAD_PATHS = [
     "scripts/op",
+    "scripts/op_simple",
     "scripts/install",
     "scripts/test-train",
     "scripts/runtime-heal.sh",
@@ -42,6 +43,7 @@ PAYLOAD_PATHS = [
     "skills/thread-dispatch",
     "skills/workstation-preparation",
     "agents/optimus-prime",
+    "docs/plans/OP_SIMPLE_SCHEMA_CATALOG_V2.md",
     "README.md",
     "VERSION",
 ]

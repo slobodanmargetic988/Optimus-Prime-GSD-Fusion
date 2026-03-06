@@ -15,6 +15,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPTS_ROOT = SCRIPT_DIR.parent
+
 SCHEMA_VERSION = "1.0"
 
 TERMINATE_FILE_NAME = "terminate_run.json"
@@ -293,10 +296,40 @@ def _artifact_path_map(cfg: RunConfig) -> dict[str, str]:
     return out
 
 
+def _manager_prompt_base_dirs(cfg: RunConfig) -> list[Path]:
+    candidates = [
+        cfg.repo_root / "scripts" / "op_simple" / "prompts" / "managers",
+        SCRIPTS_ROOT / "op_simple" / "prompts" / "managers",
+    ]
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for item in candidates:
+        key = str(item.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 def _manager_prompt_template_path(cfg: RunConfig, manager_name: str) -> Path:
-    base = cfg.repo_root / "scripts" / "op_simple" / "prompts" / "managers"
     slug = manager_name.lower().replace(" ", "-")
-    return base / f"{slug}.md"
+    candidates = [base / f"{slug}.md" for base in _manager_prompt_base_dirs(cfg)]
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
+
+def _schema_catalog_path(cfg: RunConfig) -> Path:
+    candidates = [
+        cfg.repo_root / "docs" / "plans" / "OP_SIMPLE_SCHEMA_CATALOG_V2.md",
+        SCRIPTS_ROOT.parent / "docs" / "plans" / "OP_SIMPLE_SCHEMA_CATALOG_V2.md",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path.resolve()
+    return candidates[0].resolve()
 
 
 def _load_prompt_template(cfg: RunConfig, manager_name: str) -> str:
@@ -545,7 +578,7 @@ def _invoke_manager(
             "context": context,
             "artifact_paths": path_map,
             "validator_paths": {
-                "op_simple_schema_catalog": str((cfg.repo_root / "docs" / "plans" / "OP_SIMPLE_SCHEMA_CATALOG_V2.md").resolve()),
+                "op_simple_schema_catalog": str(_schema_catalog_path(cfg)),
             },
             "required_outputs": [path_map[item] for item in expected_artifacts],
         }
