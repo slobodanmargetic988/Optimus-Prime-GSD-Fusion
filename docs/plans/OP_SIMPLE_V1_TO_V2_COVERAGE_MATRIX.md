@@ -19,7 +19,7 @@ This document maps V1 backlog intent (T001-T101) to the active V2 spec so we can
 |---|---|---|---|---|
 | T001-T012 | MVP boundaries, cadence, cycle order baseline, removed-step freeze | V2 spec: `Locked Direction`, `Runtime Model`, `In-Cycle Order`; V2 backlog execution rules | LOCKED | None |
 | T013-T014 | Rate-gate placement/policy | V2 spec locks rate-gate stage after BOSS and before dispatcher, owned by profile-manager wait behavior | LOCKED | None |
-| T015-T022 | Lane lifecycle, parallelization, role-mix, DONE contract | V2 spec: `Lane/TDD Behavior`, DONE marker format; session lock includes defaults | PARTIAL | Define lane state machine artifact contract + worker mix decision schema + explicit dependency handling policy text |
+| T015-T022 | Lane lifecycle, parallelization, role-mix, DONE contract | V2 now locks old plan topology (`phases/requirements/tasks`), lane ID format, phase DAG, lane-level verification adaptation, and configurable parallelism policy | PARTIAL | Finalize explicit lane state machine schema fields and stage transition statuses |
 | T023-T026 | `worker_registry` schema and approval | Mentioned conceptually in V2/session lock, not finalized as approved V2 schema artifact | OPEN | Draft minimal V2 schema + field rationale + human approval pass |
 | T027-T030 | `profile_snapshot` schema and approval | Mentioned conceptually; no finalized V2 schema doc | OPEN | Draft/approve minimal V2 `profile_snapshot` schema |
 | T031-T034 | `profile_assignment` schema and approval | V2 explicitly removes standalone `profile_assignment`; assignment lives in BOSS-updated `worker_registry` fields | LOCKED (policy replaced) | None |
@@ -27,7 +27,7 @@ This document maps V1 backlog intent (T001-T101) to the active V2 spec so we can
 | T039-T042 | `production_line_register` (BOSS register) schema and approval | BOSS role is locked; no finalized V2 register schema | OPEN | Draft/approve `production_line_register` schema aligned to BOSS ownership |
 | T043-T046 | `worker_packet` schema and approval | V2 locks dispatch path and DONE marker; packet schema not finalized | OPEN | Draft/approve worker packet schemas per worker type family |
 | T047-T050 | `dispatch_registry` schema (`pid/thread`) | V2 directional decision says LLM-side ownership; schema not finalized | OPEN | Draft/approve dispatch registry schema + clarify authoritative writer/readers |
-| T051-T054 | Simplified `plan_packets` schema | V2 says BOSS manages planning; no schema finalized | OPEN | Draft/approve minimal `plan_packets` schema and status enums |
+| T051-T054 | Simplified `plan_packets` schema | V2 locks status enum, old topology shape, and mandatory verification_contract with lane-flow adaptations | PARTIAL | Draft/approve concrete schema doc with final field list/examples |
 | T055-T058 | `cycle_summary` schema | V2 summary stage exists; minimum summary fields are now locked, full schema artifact not yet finalized | PARTIAL | Draft/approve summary payload schema and timeout fallback output format |
 | T059-T062 | Watchdog schemas and exit signaling | V2 now locks branch source and idle reset rule, but explicit watchdog state/exit schema remains open | PARTIAL | Draft/approve watchdog state + exit signal schema |
 | T063-T066 | Workstation artifact (replacing sanitation) | V2/session lock says initialize retained + no runtime sanitation artifact | PARTIAL | Finalize initialize-time workstation prep artifact schema and ownership |
@@ -36,7 +36,7 @@ This document maps V1 backlog intent (T001-T101) to the active V2 spec so we can
 | T087-T092 | Runtime scaffold (`op-simple` entrypoint, loop, cycle counter, termination check) | Explicit in V2 backlog checkpoint 1 | LOCKED (planning) | None before implementation |
 | T093-T095 | Foreground manager integrations (`cycle/profile/BOSS`) | V2 defines order, ownership, canonical outputs, and minimum contracts for cycle/profile/BOSS | LOCKED | None |
 | T096 | Rate-gate wait/continue implementation | V2 cycle text now explicitly includes rate-gate stage and profile-manager ownership | LOCKED | None |
-| T097-T098 | Dispatcher async send + runtime tracking | V2 defines fire-and-forget and thread-dispatch usage | PARTIAL | Lock registry update semantics for partial-send/failure events |
+| T097-T098 | Dispatcher async send + runtime tracking | V2 defines fire-and-forget, dispatch launch log, and split (`dispatch_registry` history vs `worker_registry` latest state) with BOSS pid/thread updates | PARTIAL | Finalize concrete schema docs for both registries and event rows |
 | T099 | DONE completion detector | V2 assigns ownership to BOSS and explicitly chooses no deterministic DONE evidence handoff artifact | LOCKED (policy replaced) | None |
 | T100 | Simplified watchdog no-commit rule | V2 threshold/role/branch-source/reset rule are locked | LOCKED | None |
 | T101 | Cycle summary from BOSS payload | V2 summary stage exists and minimum fields are locked; full schema still pending | PARTIAL | Finalize required summary schema and print contract |

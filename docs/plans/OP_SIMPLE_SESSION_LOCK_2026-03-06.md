@@ -77,3 +77,22 @@ This file locks decisions approved in chat so they are not lost across sessions.
   - `cycle_number`, `reason_code`, `message`, `monitored_branch`, `idle_cycles`
 - `cycle_summary.manager_statuses` shape is locked:
   - map of manager name -> `{status, note}`
+- `plan_packets` keeps old OP topology shape:
+  - `phases[]`, `requirements[]`, `tasks[]`
+- phase dependency model remains acyclic DAG (`depends_on_phase_ids`).
+- lane ID format remains `<phase_id>/lane-[a-c]`.
+- `requirement_ids` is mandatory on each task but may be empty.
+- `verification_contract` remains mandatory and is adapted for lane-level test/review flow.
+- drop per-task `verify_commands` from `plan_packets`.
+- keep separate `task_execution_state.json` artifact.
+- `task_execution_state` is written by BOSS.
+- `task_execution_state` minimum sections:
+  - task rows, blockers, attempts, `last_handoff_outcome`
+- no schema-enforced lane task cap; parallelism is configurable.
+- OP Simple reuses existing config resolution stack (`scripts/install/config.py`).
+- parallelism config key:
+  - `workflow.max_parallel_workers`
+- per-run parallelism override flag:
+  - `--max-parallel-workers`
+- default max parallel workers remains 8.
+- BOSS reads parallelism limits from configured config/artifact path via prompt guidance.

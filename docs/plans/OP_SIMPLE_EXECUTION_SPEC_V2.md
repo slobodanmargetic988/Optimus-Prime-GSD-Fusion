@@ -33,6 +33,7 @@
 - `production_line_register.json`
 - `worker_packets.json`
 - `plan_packets.json`
+- `task_execution_state.json`
 - `worker_registry.json`
 - `dispatch_registry.json`
 - `cycle_summary.json`
@@ -137,9 +138,27 @@
   - `packet_id`, `worker_id`, `lane_id`, `task_id`, `profile_alias`, `prompt`, `required_done_marker`
 - `plan_packets` status enum:
   - `pending`, `in_progress`, `done`, `blocked`
+- `plan_packets` structure model:
+  - keep old OP topology shape with `phases[]`, `requirements[]`, `tasks[]`
+  - phases form an acyclic DAG via `depends_on_phase_ids`
+  - `lane_id` format remains `<phase_id>/lane-[a-c]`
+- task fields policy:
+  - `requirement_ids` field is mandatory but may be empty
+  - keep old rich task shape, but drop per-task `verify_commands`
+  - `verification_contract` remains mandatory, adapted for lane-level test/review flow (not per-task dev->test->review loop)
+- `task_execution_state` artifact policy:
+  - separate from `plan_packets`
+  - authoritative writer: BOSS
+  - minimum sections: task rows, blockers, attempts, `last_handoff_outcome`
 
 ## Parallelism and Canary
 - Default max parallel workers remains 8 (configurable).
+- parallelism limit source:
+  - resolved global OP config stack (`scripts/install/config.py`)
+  - key: `workflow.max_parallel_workers`
+  - per-run override: `/op-simple-build --max-parallel-workers <n>`
+- BOSS capacity lookup policy:
+  - BOSS reads configured parallelism limits from configured artifact/config path via prompt guidance (no extra packet fields required)
 - First vertical target: `cycle-manager -> profile-manager -> BOSS -> dispatcher` with real dispatch and DONE marker observed.
 - Canary success criteria: 5 consecutive successful cycles with no manual intervention.
 
