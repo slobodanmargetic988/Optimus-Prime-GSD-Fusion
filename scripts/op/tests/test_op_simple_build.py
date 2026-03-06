@@ -345,6 +345,44 @@ def test_installed_fallback_paths_for_prompts_and_schema(tmp_path: Path, monkeyp
     assert MODULE._schema_catalog_path(cfg) == schema_path.resolve()
 
 
+def test_create_run_base_branch_creates_unique_branch_from_main(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    before_main = git(tmp_path, "rev-parse", "main")
+
+    run_meta = MODULE._create_run_base_branch(cfg)
+
+    current = git(tmp_path, "branch", "--show-current")
+    assert current == run_meta["run_base_branch"]
+    assert current.startswith("op-simple-canary-")
+    assert run_meta["run_base_from_branch"] == "main"
+    assert run_meta["run_base_from_commit"] == before_main
+    assert run_meta["created_new"] is True
+
+
+def test_create_run_base_branch_dry_run_uses_current_branch(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+
+    run_meta = MODULE._create_run_base_branch(cfg)
+
+    assert run_meta["created_new"] is False
+    assert run_meta["run_base_branch"] == "main"
+    assert git(tmp_path, "branch", "--show-current") == "main"
+
+
 def test_run_prefers_project_done_over_watchdog_stop(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
 

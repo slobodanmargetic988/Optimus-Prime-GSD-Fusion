@@ -145,8 +145,80 @@ def _git_text(repo_root: Path, *args: str) -> str:
     return (proc.stdout or "").strip()
 
 
-def _default_initialize_state(repo_root: Path, max_parallel_workers: int) -> dict[str, Any]:
+def _git_run(repo_root: Path, *args: str) -> tuple[int, str, str]:
+    proc = subprocess.run(["git", *args], cwd=str(repo_root), capture_output=True, text=True, check=False)
+    return int(proc.returncode), (proc.stdout or "").strip(), (proc.stderr or "").strip()
+
+
+def _create_run_base_branch(cfg: RunConfig) -> dict[str, Any]:
+    active_branch = _git_text(cfg.repo_root, "branch", "--show-current") or "main"
+    if cfg.dry_run:
+        return {
+            "run_base_branch": active_branch,
+            "run_base_from_branch": "main",
+            "run_base_from_commit": _git_text(cfg.repo_root, "rev-parse", "HEAD") or "",
+            "run_base_created_at": utc_now_iso(),
+            "created_new": False,
+            "dry_run": True,
+        }
+
+    source_branch = "main"
+    source_ref = f"refs/heads/{source_branch}"
+    source_commit = _git_text(cfg.repo_root, "rev-parse", "--verify", source_ref)
+    if not source_commit:
+        raise SimpleBuildError(
+            "op_simple_missing_main_branch",
+            "Cannot start /op-simple-build: source branch 'main' does not exist.",
+        )
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    for _attempt in range(10):
+        candidate = f"op-simple-canary-{timestamp}-{uuid.uuid4().hex[:8]}"
+        code, _out, err = _git_run(cfg.repo_root, "checkout", "-b", candidate, source_ref)
+        if code == 0:
+            return {
+                "run_base_branch": candidate,
+                "run_base_from_branch": source_branch,
+                "run_base_from_commit": source_commit,
+                "run_base_created_at": utc_now_iso(),
+                "created_new": True,
+                "dry_run": False,
+            }
+        err_l = err.lower()
+        if "already exists" in err_l:
+            continue
+        raise SimpleBuildError(
+            "op_simple_base_branch_create_failed",
+            f"Cannot create run base branch from '{source_branch}': {err or 'unknown git error'}",
+        )
+
+    raise SimpleBuildError(
+        "op_simple_base_branch_exhausted",
+        "Cannot create unique run base branch after multiple attempts.",
+    )
+
+
+def _default_initialize_state(repo_root: Path, max_parallel_workers: int, run_meta: dict[str, Any] | None = None) -> dict[str, Any]:
     monitored_branch = _git_text(repo_root, "branch", "--show-current") or "main"
+    run_context = {
+        "run_base_branch": monitored_branch,
+        "run_base_from_branch": "main",
+        "run_base_from_commit": _git_text(repo_root, "rev-parse", "HEAD") or "",
+        "run_base_created_at": utc_now_iso(),
+        "created_new": False,
+        "dry_run": False,
+    }
+    if isinstance(run_meta, dict):
+        run_context.update(
+            {
+                "run_base_branch": run_meta.get("run_base_branch") or run_context["run_base_branch"],
+                "run_base_from_branch": run_meta.get("run_base_from_branch") or run_context["run_base_from_branch"],
+                "run_base_from_commit": run_meta.get("run_base_from_commit") or run_context["run_base_from_commit"],
+                "run_base_created_at": run_meta.get("run_base_created_at") or run_context["run_base_created_at"],
+                "created_new": bool(run_meta.get("created_new")),
+                "dry_run": bool(run_meta.get("dry_run")),
+            }
+        )
     return {
         "schema_version": SCHEMA_VERSION,
         "updated_at": utc_now_iso(),
@@ -154,19 +226,39 @@ def _default_initialize_state(repo_root: Path, max_parallel_workers: int) -> dic
         "workflow": {
             "max_parallel_workers": max_parallel_workers,
         },
+        "run_context": run_context,
     }
 
 
-def _ensure_initialize_state(cfg: RunConfig) -> dict[str, Any]:
+def _ensure_initialize_state(cfg: RunConfig, run_meta: dict[str, Any] | None = None) -> dict[str, Any]:
     state = _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
     if not isinstance(state, dict) or not state:
-        state = _default_initialize_state(cfg.repo_root, cfg.max_parallel_workers)
+        state = _default_initialize_state(cfg.repo_root, cfg.max_parallel_workers, run_meta=run_meta)
     workflow = state.get("workflow") if isinstance(state.get("workflow"), dict) else {}
     if not isinstance(workflow.get("max_parallel_workers"), int) or int(workflow.get("max_parallel_workers")) <= 0:
         workflow["max_parallel_workers"] = cfg.max_parallel_workers
     state["workflow"] = workflow
     if not isinstance(state.get("monitored_branch"), str) or not str(state.get("monitored_branch")).strip():
         state["monitored_branch"] = _git_text(cfg.repo_root, "branch", "--show-current") or "main"
+    run_context = state.get("run_context") if isinstance(state.get("run_context"), dict) else {}
+    if isinstance(run_meta, dict):
+        run_context.update(
+            {
+                "run_base_branch": run_meta.get("run_base_branch"),
+                "run_base_from_branch": run_meta.get("run_base_from_branch"),
+                "run_base_from_commit": run_meta.get("run_base_from_commit"),
+                "run_base_created_at": run_meta.get("run_base_created_at"),
+                "created_new": bool(run_meta.get("created_new")),
+                "dry_run": bool(run_meta.get("dry_run")),
+            }
+        )
+    run_context.setdefault("run_base_branch", state.get("monitored_branch"))
+    run_context.setdefault("run_base_from_branch", "main")
+    run_context.setdefault("run_base_from_commit", _git_text(cfg.repo_root, "rev-parse", "HEAD") or "")
+    run_context.setdefault("run_base_created_at", utc_now_iso())
+    run_context.setdefault("created_new", False)
+    run_context.setdefault("dry_run", bool(cfg.dry_run))
+    state["run_context"] = run_context
     state["updated_at"] = utc_now_iso()
     state["schema_version"] = SCHEMA_VERSION
     _atomic_write_json(cfg.repo_root / INITIALIZE_STATE_FILE, state)
@@ -1213,7 +1305,8 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         (cfg.repo_root / CURRENT_DIR).mkdir(parents=True, exist_ok=True)
         (cfg.repo_root / HISTORY_DIR).mkdir(parents=True, exist_ok=True)
 
-        init_state = _ensure_initialize_state(cfg)
+        run_meta = _create_run_base_branch(cfg)
+        init_state = _ensure_initialize_state(cfg, run_meta=run_meta)
         _ensure_workstation_prep(cfg)
         _ensure_default_artifacts(cfg)
 
@@ -1375,6 +1468,8 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             "stop_reason": stop_reason,
             "max_parallel_workers": cfg.max_parallel_workers,
             "artifact_root": str((cfg.repo_root / SIMPLE_ROOT).resolve()),
+            "run_base_branch": str((init_state.get("run_context") or {}).get("run_base_branch") or ""),
+            "run_base_from_branch": str((init_state.get("run_context") or {}).get("run_base_from_branch") or ""),
         }
         return {
             "ok": final_status == "completed",
