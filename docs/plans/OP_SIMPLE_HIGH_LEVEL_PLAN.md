@@ -150,3 +150,21 @@ Delivery target model:
 - This autonomous builder targets roughly 80% completion in this first cycle system.
 - Planned next stage: second cycle focused on testers (MSP/browser-testing skills) to drive to roughly 95%.
 - Final 95% -> 100% is user-driven with explicit minor-change prompts and is out of scope for auto-builder.
+
+## Latest Runtime Overrides (2026-03-06)
+
+- Runtime currently skips standalone `cycle-manager` and `profile-manager` calls.
+- `BOSS` is the only foreground LLM manager in-cycle and absorbs preflight intent.
+- Effective in-cycle order now is:
+  1. cycle counter + terminate check (code)
+  2. `BOSS` (foreground LLM)
+  3. rate-gate/snapshot wait stage (pure code)
+  4. `work-dispatcher` (pure code)
+  5. watchdog + summary (pure code)
+- Rate snapshot refresh is code-owned and run every cycle via `codex-rate-snapshot`.
+- Multi-profile policy now excludes default `.codex` when multiple `.codex*` profiles exist.
+- BOSS profile selection is pure code:
+  - select highest weekly budget profile that is not 5h hard-gated
+  - fallback to default behavior on missing/malformed snapshot
+- Planner now follows same profile-selection policy and gets `CODEX_HOME` override from code when selection succeeds.
+- `/op-initialize` order now seeds rate snapshot before planner runs.

@@ -22,30 +22,26 @@ Out of scope:
 ## In-Cycle Order
 1. Increment cycle counter (pure code).
 2. Check `terminate_run.json` at repo root; if present, stop loop.
-3. Run `cycle-manager` (foreground LLM, blocking):
-   - ensure worker registry exists (create if missing)
-   - no lane planning decisions at this step
-4. Run `profile-manager` (hybrid: code + LLM):
-   - snapshot all profiles/rate state
-   - assign `next-task-profile` per workstation
-   - preserve `current-task-profile` for in-progress tasks
-5. Run `BOSS` manager (LLM + schema validation tooling):
+3. Run `BOSS` manager (LLM + schema validation tooling):
+   - owns cycle preflight intent previously planned for cycle/profile managers
+   - verifies worker/plan state and prepares next actions
    - lane-aware scheduling and parallelism decisions
    - worker/task routing decisions
    - packet preparation for dispatcher
    - plan-packet updates as source of truth
    - cycle summary payload generation
-6. Run rate-gate wait/continue gate (profile-manager-owned wait loop):
+4. Run rate-gate wait/continue gate (pure code wait loop):
+   - refresh profile snapshot via `codex-rate-snapshot` at wait entry
    - always auto-wait when rate-gated
    - emit heartbeat every 5 minutes while waiting
    - re-run profile snapshot and profile re-scan every 15 minutes while waiting
-7. Run `work-dispatcher` (pure code):
+5. Run `work-dispatcher` (pure code):
    - dispatch prepared packets to eligible ready workers as background tasks
    - write dispatch tracking for each send (`pid`, `thread_id`)
-8. Run simplified watchdog (pure code):
+6. Run simplified watchdog (pure code):
    - monitor configured branch for commit activity
    - emit stop signal when no new commits for threshold cycles (default 10)
-9. Print cycle summary from BOSS payload (pure code).
+7. Print cycle summary from BOSS payload (pure code).
 
 ## Explicitly Removed From Old Loop
 - gap-consumption-manager
@@ -58,4 +54,5 @@ Out of scope:
 ## Notes
 - Final prompt/schema details are tracked separately in backlog tasks.
 - `BOSS` is the authority manager name for lane planning/coordination.
-- `BOSS` is the only manager that authors termination decisions.
+- `cycle-manager` and `profile-manager` are currently skipped in runtime execution.
+- `BOSS` is the only foreground LLM manager in the current cycle chain.

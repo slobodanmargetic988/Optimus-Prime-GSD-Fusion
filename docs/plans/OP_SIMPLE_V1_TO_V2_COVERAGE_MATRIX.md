@@ -18,7 +18,7 @@ This document maps V1 backlog intent (T001-T101) to the active V2 spec so we can
 | V1 Range | V1 Intent Cluster | V2 Mapping | Coverage | Remaining Planning Needed |
 |---|---|---|---|---|
 | T001-T012 | MVP boundaries, cadence, cycle order baseline, removed-step freeze | V2 spec: `Locked Direction`, `Runtime Model`, `In-Cycle Order`; V2 backlog execution rules | LOCKED | None |
-| T013-T014 | Rate-gate placement/policy | V2 spec locks rate-gate stage after BOSS and before dispatcher, owned by profile-manager wait behavior | LOCKED | None |
+| T013-T014 | Rate-gate placement/policy | V2 spec locks rate-gate stage after BOSS and before dispatcher, owned by pure-code wait behavior | LOCKED | None |
 | T015-T022 | Lane lifecycle, parallelization, role-mix, DONE contract | V2 now locks old plan topology (`phases/requirements/tasks`), lane ID format, phase DAG, lane-level verification adaptation, and configurable parallelism policy | PARTIAL | Finalize explicit lane state machine schema fields and stage transition statuses |
 | T023-T026 | `worker_registry` schema and approval | V2 now locks worker row fields, pid/thread ownership, and UTC timestamp policy | LOCKED | None |
 | T027-T030 | `profile_snapshot` schema and approval | V2 now locks profile snapshot minimum row fields and gating percentages | LOCKED | None |
@@ -34,8 +34,8 @@ This document maps V1 backlog intent (T001-T101) to the active V2 spec so we can
 | T067-T068 | Deterministic schema validation/CI lint | V2 changed policy: no in-cycle strict validation for LLM artifacts | LOCKED (policy changed) | Capture replacement tasks: prompt-linked helper validators + deterministic-only validation list |
 | T069-T086 | Manager/worker prompt draft/review/approval chain | V2 now locks minimum manager/worker prompt contract sections and absolute validator-path policy | LOCKED | None |
 | T087-T092 | Runtime scaffold (`op-simple` entrypoint, loop, cycle counter, termination check) | Explicit in V2 backlog checkpoint 1 | LOCKED (planning) | None before implementation |
-| T093-T095 | Foreground manager integrations (`cycle/profile/BOSS`) | V2 defines order, ownership, canonical outputs, and minimum contracts for cycle/profile/BOSS | LOCKED | None |
-| T096 | Rate-gate wait/continue implementation | V2 cycle text now explicitly includes rate-gate stage and profile-manager ownership | LOCKED | None |
+| T093-T095 | Foreground manager integrations (`cycle/profile/BOSS`) | V2 runtime now executes BOSS as sole foreground LLM manager; cycle/profile intent is absorbed and documented | LOCKED (runtime adaptation) | None |
+| T096 | Rate-gate wait/continue implementation | V2 cycle text explicitly includes rate-gate stage with code-owned snapshot refresh and wait loop | LOCKED | None |
 | T097-T098 | Dispatcher async send + runtime tracking | V2 defines fire-and-forget, dispatch launch log, and split (`dispatch_registry` history vs `worker_registry` latest state) with BOSS pid/thread updates | LOCKED | None |
 | T099 | DONE completion detector | V2 assigns ownership to BOSS and explicitly chooses no deterministic DONE evidence handoff artifact | LOCKED (policy replaced) | None |
 | T100 | Simplified watchdog no-commit rule | V2 threshold/role/branch-source/reset rule are locked | LOCKED | None |
@@ -44,7 +44,7 @@ This document maps V1 backlog intent (T001-T101) to the active V2 spec so we can
 ## V1 T001-T101 Equivalence Gate for V2
 Implementation should start only when all items below are true:
 1. All clusters above are `LOCKED` or explicitly replaced by approved V2 policy.
-2. Manager I/O contracts are decision-complete for `cycle-manager`, `profile-manager`, `BOSS`, `work-dispatcher`, `watchdog`, `summary`.
+2. Manager/stage I/O contracts are decision-complete for active runtime chain (`BOSS`, `work-dispatcher`, `watchdog`, `summary`, code-owned rate-gate stage), with cycle/profile artifacts retained for compatibility.
 3. Minimal schema set is approved (human-readable field rationale + example JSON):
    - `worker_registry`
    - `profile_snapshot`
