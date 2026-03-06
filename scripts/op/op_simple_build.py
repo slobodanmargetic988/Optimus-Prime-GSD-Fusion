@@ -58,6 +58,7 @@ MANAGER_TIMEOUT_SECONDS = {
 WATCHDOG_IDLE_THRESHOLD = 10
 WAIT_HEARTBEAT_SECONDS = 300
 WAIT_RESCAN_SECONDS = 900
+RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
 
 PLANNER_PLAN_PACKETS_FILE = Path("reports/optimus-prime/planning/PLAN_PACKETS.json")
 
@@ -933,30 +934,296 @@ def _read_cycle_decision(cfg: RunConfig) -> dict[str, Any]:
     return payload
 
 
-def _profiles_all_hard_gated(cfg: RunConfig) -> bool:
-    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], default={})
-    if not isinstance(payload, dict):
-        return False
-    rows = payload.get("profiles")
-    if not isinstance(rows, list) or not rows:
-        return False
-    hard_values = []
+def _parse_iso_datetime(raw: str) -> datetime | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _extract_remaining_percent(window: Any) -> float | None:
+    if not isinstance(window, dict):
+        return None
+    for key in ("remaining_percent", "remaining_pct", "remaining"):
+        value = window.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _resolve_rate_snapshot_script(cfg: RunConfig) -> Path | None:
+    codex_home = os.environ.get("CODEX_HOME")
+    candidates: list[Path] = []
+    candidates.append(cfg.repo_root / RATE_SNAPSHOT_SCRIPT_REL)
+    candidates.append(SCRIPTS_ROOT.parent / RATE_SNAPSHOT_SCRIPT_REL)
+    if codex_home:
+        candidates.append(Path(codex_home).expanduser() / RATE_SNAPSHOT_SCRIPT_REL)
+    candidates.append(Path.home() / ".codex" / RATE_SNAPSHOT_SCRIPT_REL)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def _rate_snapshot_profile_args() -> list[str]:
+    rows = _profile_rows_from_disk()
+    args: list[str] = []
+    seen: set[str] = set()
     for row in rows:
         if not isinstance(row, dict):
             continue
-        hard_values.append(bool(row.get("hard_gated")))
-    return bool(hard_values) and all(hard_values)
+        alias = str(row.get("alias") or "").strip()
+        if not alias or alias in seen:
+            continue
+        seen.add(alias)
+        if alias == "codex":
+            args.append("codex=default")
+            continue
+        codex_home = str(row.get("codex_home") or "").strip()
+        if not codex_home:
+            continue
+        args.append(f"{alias}={codex_home}")
+    if not args:
+        args.append("codex=default")
+    return args
+
+
+def _profile_rows_from_rate_snapshot_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    profiles = payload.get("profiles")
+    profile_rows: list[tuple[str, dict[str, Any]]] = []
+    if isinstance(profiles, dict):
+        for alias, row in profiles.items():
+            if isinstance(row, dict):
+                profile_rows.append((str(alias), row))
+    elif isinstance(profiles, list):
+        for idx, row in enumerate(profiles):
+            if not isinstance(row, dict):
+                continue
+            alias = str(row.get("alias") or f"profile-{idx + 1}")
+            profile_rows.append((alias, row))
+
+    out: list[dict[str, Any]] = []
+    for alias, row in profile_rows:
+        alias_text = (alias or "").strip() or str(row.get("alias") or "").strip()
+        if not alias_text:
+            continue
+        five = row.get("five_hour") if isinstance(row.get("five_hour"), dict) else {}
+        weekly = row.get("weekly") if isinstance(row.get("weekly"), dict) else {}
+        five_remaining = _extract_remaining_percent(five)
+        week_remaining = _extract_remaining_percent(weekly)
+        recommended = str(row.get("recommended_action") or "").strip().lower()
+        hard_gated = bool(
+            row.get("hard_gated")
+            or row.get("gated")
+            or five.get("gated")
+            or weekly.get("gated")
+        )
+        if recommended in {"wait_until_reset", "wind_down"}:
+            hard_gated = True
+        if row.get("eligible_for_new_work") is False:
+            hard_gated = True
+        if (five_remaining is not None and five_remaining <= 1.0) or (week_remaining is not None and week_remaining <= 1.0):
+            hard_gated = True
+        soft_gated = bool(row.get("soft_concurrency_gated"))
+        if (five_remaining is not None and five_remaining <= 5.0) or (week_remaining is not None and week_remaining <= 5.0):
+            soft_gated = True
+
+        reset_at = (
+            str(row.get("reset_at") or "").strip()
+            or str(row.get("next_reset_at") or "").strip()
+            or str(five.get("reset_at") or five.get("resets_at") or five.get("resetAt") or "").strip()
+            or str(weekly.get("reset_at") or weekly.get("resets_at") or weekly.get("resetAt") or "").strip()
+        )
+        if not reset_at:
+            reset_at = None
+
+        out.append(
+            {
+                "alias": alias_text,
+                "codex_home": str(row.get("codex_home") or "").strip(),
+                "window_5h_remaining_pct": five_remaining,
+                "window_week_remaining_pct": week_remaining,
+                "hard_gated": hard_gated,
+                "soft_gated": soft_gated,
+                "reset_at": reset_at,
+                "recommended_action": recommended or None,
+            }
+        )
+    return out
+
+
+def _refresh_profile_snapshot_via_skill(cfg: RunConfig, cycle_number: int) -> tuple[bool, str]:
+    script = _resolve_rate_snapshot_script(cfg)
+    if script is None:
+        return False, "codex-rate-snapshot script not found"
+
+    cmd: list[str] = ["python3", str(script)]
+    for arg in _rate_snapshot_profile_args():
+        cmd.extend(["--profile", arg])
+    cmd.append("--json-pretty")
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cfg.repo_root),
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "codex-rate-snapshot timed out"
+
+    if proc.returncode != 0:
+        err = (proc.stderr or "").strip() or (proc.stdout or "").strip() or "unknown error"
+        return False, f"codex-rate-snapshot failed: {err}"
+
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        return False, f"codex-rate-snapshot emitted invalid JSON: {exc}"
+    if not isinstance(payload, dict):
+        return False, "codex-rate-snapshot output must be a JSON object"
+
+    rows = _profile_rows_from_rate_snapshot_payload(payload)
+    if not rows:
+        return False, "codex-rate-snapshot returned no usable profile rows"
+
+    snapshot_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": cycle_number,
+        "source": "codex-rate-snapshot",
+        "generated_at": str(payload.get("generated_at") or ""),
+        "profiles": rows,
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], snapshot_payload)
+    return True, f"profile snapshot refreshed via codex-rate-snapshot ({len(rows)} profiles)"
+
+
+def _profiles_all_hard_gated(cfg: RunConfig) -> bool:
+    return _profile_snapshot_gate_state(cfg) == "all_hard_gated"
+
+
+def _profile_snapshot_gate_state(cfg: RunConfig) -> str:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], default={})
+    if not isinstance(payload, dict):
+        return "unknown"
+    rows = payload.get("profiles")
+    if not isinstance(rows, list) or not rows:
+        return "unknown"
+    has_row = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        has_row = True
+        if not bool(row.get("hard_gated")):
+            return "has_ungated"
+    if not has_row:
+        return "unknown"
+    return "all_hard_gated"
+
+
+def _refresh_rate_gate_snapshot(cfg: RunConfig) -> bool:
+    snapshot_path = cfg.repo_root / ARTIFACT_FILES["profile_snapshot"]
+    payload = _read_json(snapshot_path, default={})
+    if not isinstance(payload, dict):
+        return False
+    rows = payload.get("profiles")
+    if not isinstance(rows, list):
+        return False
+
+    now = datetime.now(timezone.utc)
+    changed = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if not bool(row.get("hard_gated")):
+            continue
+        reset_at = _parse_iso_datetime(str(row.get("reset_at") or ""))
+        if reset_at is None or reset_at > now:
+            continue
+        row["hard_gated"] = False
+        if "soft_gated" in row:
+            row["soft_gated"] = False
+        changed = True
+
+    if changed:
+        payload["schema_version"] = SCHEMA_VERSION
+        payload["updated_at"] = utc_now_iso()
+        _atomic_write_json(snapshot_path, payload)
+    return changed
 
 
 def _run_rate_gate_wait(cfg: RunConfig, cycle_number: int, warnings: list[dict[str, Any]]) -> None:
     if cfg.dry_run:
         return
-    if not _profiles_all_hard_gated(cfg):
+    refreshed, refresh_message = _refresh_profile_snapshot_via_skill(cfg, cycle_number)
+    entry_returncode = 0 if refreshed else 1
+    if not refreshed:
+        fallback_refreshed = _refresh_rate_gate_snapshot(cfg)
+        if fallback_refreshed:
+            refresh_message = f"{refresh_message}; fallback reset_at refresh applied"
+            entry_returncode = 0
+    _append_manager_log(
+        cfg,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "cycle_number": cycle_number,
+            "manager": "rate-gate",
+            "status": "entry_rescan",
+            "timeout": False,
+            "returncode": entry_returncode,
+            "started_at": utc_now_iso(),
+            "finished_at": utc_now_iso(),
+            "duration_seconds": 0,
+            "message": refresh_message,
+        },
+    )
+    if not refreshed:
+        warnings.append(
+            {
+                "code": "rate_gate_snapshot_refresh_failed",
+                "message": refresh_message,
+                "stage": "op-simple-build",
+            }
+        )
+    gate_state = _profile_snapshot_gate_state(cfg)
+    if gate_state == "has_ungated":
         return
+    if gate_state == "unknown":
+        warnings.append(
+            {
+                "code": "rate_gate_snapshot_unknown",
+                "message": "profile snapshot gating state is unknown; entering conservative rate-gate wait",
+                "stage": "op-simple-build",
+            }
+        )
 
     next_heartbeat = time.monotonic()
     next_rescan = time.monotonic()
-    while _profiles_all_hard_gated(cfg):
+    while True:
+        gate_state = _profile_snapshot_gate_state(cfg)
+        if gate_state == "has_ungated":
+            return
         if (cfg.repo_root / TERMINATE_FILE_NAME).exists():
             warnings.append(
                 {
@@ -985,21 +1252,36 @@ def _run_rate_gate_wait(cfg: RunConfig, cycle_number: int, warnings: list[dict[s
             )
             next_heartbeat = now + WAIT_HEARTBEAT_SECONDS
         if now >= next_rescan:
-            profile_result = _invoke_manager(
+            refreshed, message = _refresh_profile_snapshot_via_skill(cfg, cycle_number)
+            rescan_returncode = 0 if refreshed else 1
+            if not refreshed:
+                fallback_refreshed = _refresh_rate_gate_snapshot(cfg)
+                if fallback_refreshed:
+                    message = f"{message}; fallback reset_at refresh applied"
+                    rescan_returncode = 0
+                else:
+                    warnings.append(
+                        {
+                            "code": "rate_gate_snapshot_refresh_failed",
+                            "message": message,
+                            "stage": "op-simple-build",
+                        }
+                    )
+            _append_manager_log(
                 cfg,
-                manager_name="profile-manager",
-                cycle_number=cycle_number,
-                context={"reason": "rate_wait_rescan"},
-                expected_artifacts=["profile_snapshot"],
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "cycle_number": cycle_number,
+                    "manager": "rate-gate",
+                    "status": "rescan",
+                    "timeout": False,
+                    "returncode": rescan_returncode,
+                    "started_at": utc_now_iso(),
+                    "finished_at": utc_now_iso(),
+                    "duration_seconds": 0,
+                    "message": message,
+                },
             )
-            if profile_result.status != "ok":
-                warnings.append(
-                    {
-                        "code": "profile_rescan_failed",
-                        "message": profile_result.message or "profile-manager rescan failed",
-                        "stage": "op-simple-build",
-                    }
-                )
             next_rescan = now + WAIT_RESCAN_SECONDS
         time.sleep(5)
 
@@ -1577,62 +1859,14 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
             manager_statuses: dict[str, dict[str, str]] = {}
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
-
-            cycle_result = _invoke_manager(
-                cfg,
-                manager_name="cycle-manager",
-                cycle_number=cycle_number,
-                context={"max_parallel_workers": init_state.get("workflow", {}).get("max_parallel_workers")},
-                expected_artifacts=["cycle_manager_decision", "worker_registry"],
-            )
-            manager_statuses["cycle-manager"] = {"status": cycle_result.status, "note": cycle_result.message or ""}
-            if cycle_result.timeout:
-                if cfg.max_build_cycles is not None and cycles_this_run >= cfg.max_build_cycles:
-                    final_summary = f"Reached max_build_cycles={cfg.max_build_cycles} after cycle-manager timeout."
-                    break
-                if cfg.sleep_minutes > 0:
-                    time.sleep(cfg.sleep_minutes * 60.0)
-                continue
-            if cycle_result.status != "ok":
-                warnings.append(
-                    {
-                        "code": "cycle_manager_failed",
-                        "message": cycle_result.message or "cycle-manager failed",
-                        "stage": "op-simple-build",
-                    }
-                )
-
-            decision = _read_cycle_decision(cfg)
-            if str(decision.get("decision") or "proceed") == "skip_cycle":
-                summary = _render_cycle_summary(cfg, cycle_number, manager_statuses, dispatch_counts)
-                stop_reason = _termination_from_summary(summary)
-                _snapshot_cycle(cfg, cycle_number)
-                if stop_reason:
-                    final_summary = f"OP Simple build stopped: {stop_reason}."
-                    break
-                if cfg.max_build_cycles is not None and cycles_this_run >= cfg.max_build_cycles:
-                    final_summary = f"Reached max_build_cycles={cfg.max_build_cycles}."
-                    break
-                if cfg.sleep_minutes > 0:
-                    time.sleep(cfg.sleep_minutes * 60.0)
-                continue
-
-            profile_result = _invoke_manager(
-                cfg,
-                manager_name="profile-manager",
-                cycle_number=cycle_number,
-                context={"reason": "cycle"},
-                expected_artifacts=["profile_snapshot"],
-            )
-            manager_statuses["profile-manager"] = {"status": profile_result.status, "note": profile_result.message or ""}
-            if profile_result.status != "ok":
-                warnings.append(
-                    {
-                        "code": "profile_manager_failed",
-                        "message": profile_result.message or "profile-manager failed",
-                        "stage": "op-simple-build",
-                    }
-                )
+            manager_statuses["cycle-manager"] = {
+                "status": "skipped",
+                "note": "execution skipped; BOSS owns cycle gating",
+            }
+            manager_statuses["profile-manager"] = {
+                "status": "skipped",
+                "note": "execution skipped; BOSS owns profile snapshot",
+            }
 
             boss_expected = [
                 "production_line_register",

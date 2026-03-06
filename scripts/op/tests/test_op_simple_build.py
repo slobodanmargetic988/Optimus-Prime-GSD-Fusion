@@ -50,7 +50,7 @@ def test_stop_priority_terminate_file_wins(tmp_path: Path) -> None:
     assert out["data"]["stop_reason"] == "operator_terminate_file"
 
 
-def test_cycle_manager_timeout_respects_max_cycles(tmp_path: Path, monkeypatch) -> None:
+def test_boss_timeout_respects_max_cycles(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
 
     def fake_invoke_manager(*_args, **kwargs):
@@ -72,7 +72,7 @@ def test_cycle_manager_timeout_respects_max_cycles(tmp_path: Path, monkeypatch) 
     out = MODULE.run_op_simple_build(make_req(tmp_path, dry_run=False, max_build_cycles=1, sleep_minutes=0))
 
     assert out["ok"] is True
-    assert "after cycle-manager timeout" in out["summary"]
+    assert "after BOSS timeout" in out["summary"]
 
 
 def test_summary_preserves_termination_markers(tmp_path: Path) -> None:
@@ -236,36 +236,103 @@ def test_rate_gate_wait_logs_heartbeat_and_rescan(tmp_path: Path, monkeypatch) -
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
 
-    checks = {"count": 0}
+    states = iter(["all_hard_gated", "all_hard_gated", "has_ungated"])
 
-    def fake_all_hard_gated(_cfg):
-        checks["count"] += 1
-        return checks["count"] <= 2
+    def fake_gate_state(_cfg):
+        try:
+            return next(states)
+        except StopIteration:  # pragma: no cover - defensive fallback
+            return "has_ungated"
 
-    calls = {"count": 0}
+    refresh_calls = {"count": 0}
 
-    def fake_invoke(*_args, **_kwargs):
-        calls["count"] += 1
-        return MODULE.ManagerResult(
-            manager="profile-manager",
-            status="ok",
-            timeout=False,
-            returncode=0,
-            started_at="2026-01-01T00:00:00Z",
-            finished_at="2026-01-01T00:00:01Z",
-            duration_seconds=1.0,
-        )
+    def fake_refresh(*_args, **_kwargs):
+        refresh_calls["count"] += 1
+        return True, "snapshot refreshed"
 
-    monkeypatch.setattr(MODULE, "_profiles_all_hard_gated", fake_all_hard_gated)
-    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke)
+    monkeypatch.setattr(MODULE, "_profile_snapshot_gate_state", fake_gate_state)
+    monkeypatch.setattr(MODULE, "_refresh_profile_snapshot_via_skill", fake_refresh)
     monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
 
     warnings: list[dict[str, object]] = []
     MODULE._run_rate_gate_wait(cfg, cycle_number=7, warnings=warnings)
 
-    assert calls["count"] == 1
+    assert refresh_calls["count"] >= 2
     rows = [json.loads(line) for line in (tmp_path / MODULE.MANAGER_CALL_LOG_FILE).read_text(encoding="utf-8").splitlines()]
     assert any(row.get("manager") == "rate-gate" and row.get("status") == "heartbeat" for row in rows)
+
+
+def test_rate_gate_wait_conservative_when_snapshot_unknown(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    states = iter(["unknown", "unknown", "has_ungated"])
+
+    def fake_gate_state(_cfg):
+        try:
+            return next(states)
+        except StopIteration:  # pragma: no cover - defensive fallback
+            return "has_ungated"
+
+    monkeypatch.setattr(MODULE, "_profile_snapshot_gate_state", fake_gate_state)
+    monkeypatch.setattr(MODULE, "_refresh_profile_snapshot_via_skill", lambda *_args, **_kwargs: (False, "refresh failed"))
+    monkeypatch.setattr(MODULE, "_refresh_rate_gate_snapshot", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+
+    warnings: list[dict[str, object]] = []
+    MODULE._run_rate_gate_wait(cfg, cycle_number=8, warnings=warnings)
+
+    assert any(item.get("code") == "rate_gate_snapshot_unknown" for item in warnings)
+    rows = [json.loads(line) for line in (tmp_path / MODULE.MANAGER_CALL_LOG_FILE).read_text(encoding="utf-8").splitlines()]
+    assert any(row.get("manager") == "rate-gate" and row.get("status") == "heartbeat" for row in rows)
+
+
+def test_rate_gate_rescan_logs_failure_returncode(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    states = iter(["all_hard_gated", "all_hard_gated", "has_ungated"])
+
+    def fake_gate_state(_cfg):
+        try:
+            return next(states)
+        except StopIteration:  # pragma: no cover - defensive fallback
+            return "has_ungated"
+
+    calls = {"count": 0}
+
+    def fake_refresh(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return True, "entry refresh ok"
+        return False, "rescan refresh failed"
+
+    monkeypatch.setattr(MODULE, "_profile_snapshot_gate_state", fake_gate_state)
+    monkeypatch.setattr(MODULE, "_refresh_profile_snapshot_via_skill", fake_refresh)
+    monkeypatch.setattr(MODULE, "_refresh_rate_gate_snapshot", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+
+    warnings: list[dict[str, object]] = []
+    MODULE._run_rate_gate_wait(cfg, cycle_number=9, warnings=warnings)
+
+    rows = [json.loads(line) for line in (tmp_path / MODULE.MANAGER_CALL_LOG_FILE).read_text(encoding="utf-8").splitlines()]
+    rescan_rows = [row for row in rows if row.get("manager") == "rate-gate" and row.get("status") == "rescan"]
+    assert rescan_rows
+    assert any(int(row.get("returncode") or 0) == 1 for row in rescan_rows)
 
 
 def test_dispatch_respects_parallel_worker_cap(tmp_path: Path, monkeypatch) -> None:
