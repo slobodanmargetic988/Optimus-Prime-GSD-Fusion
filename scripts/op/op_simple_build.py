@@ -174,6 +174,7 @@ def _read_boss_session_state(cfg: RunConfig) -> dict[str, str]:
     session_id = str(payload.get("session_id") or "").strip()
     codex_home = str(payload.get("codex_home") or "").strip()
     profile_alias = str(payload.get("profile_alias") or "").strip()
+    previous_profile_alias = str(payload.get("previous_profile_alias") or "").strip()
     if not session_id:
         return {}
     out = {"session_id": session_id}
@@ -181,16 +182,26 @@ def _read_boss_session_state(cfg: RunConfig) -> dict[str, str]:
         out["codex_home"] = codex_home
     if profile_alias:
         out["profile_alias"] = profile_alias
+    if previous_profile_alias:
+        out["previous_profile_alias"] = previous_profile_alias
     return out
 
 
-def _write_boss_session_state(cfg: RunConfig, *, session_id: str, codex_home: str | None, profile_alias: str | None) -> None:
+def _write_boss_session_state(
+    cfg: RunConfig,
+    *,
+    session_id: str,
+    codex_home: str | None,
+    profile_alias: str | None,
+    previous_profile_alias: str | None = None,
+) -> None:
     payload = {
         "schema_version": SCHEMA_VERSION,
         "updated_at": utc_now_iso(),
         "session_id": session_id,
         "codex_home": _effective_codex_home(codex_home),
         "profile_alias": str(profile_alias or "").strip(),
+        "previous_profile_alias": str(previous_profile_alias or profile_alias or "").strip(),
     }
     _atomic_write_json(cfg.repo_root / BOSS_SESSION_STATE_FILE, payload)
 
@@ -1058,14 +1069,27 @@ def _invoke_manager(
         selected_manager_alias: str | None = None
         selected_manager_home: str | None = None
         resume_session_id: str | None = None
+        prior_profile_alias: str | None = None
+        prior_previous_profile_alias: str | None = None
         if manager_name == "BOSS":
             boss_session_state = _read_boss_session_state(cfg)
-            resume_session_id = str(boss_session_state.get("session_id") or "").strip() or None
-            if resume_session_id:
-                selected_manager_alias = str(boss_session_state.get("profile_alias") or "").strip() or None
-                selected_manager_home = str(boss_session_state.get("codex_home") or "").strip() or None
-            else:
-                selected_manager_alias, selected_manager_home = _select_boss_profile_from_snapshot(cfg)
+            prior_session_id = str(boss_session_state.get("session_id") or "").strip() or None
+            prior_profile_alias = str(boss_session_state.get("profile_alias") or "").strip() or None
+            prior_previous_profile_alias = str(boss_session_state.get("previous_profile_alias") or "").strip() or None
+            selected_manager_alias, selected_manager_home = _select_boss_profile_from_snapshot(
+                cfg,
+                preferred_alias=prior_profile_alias,
+            )
+            if prior_session_id and selected_manager_alias and prior_profile_alias:
+                profile_matches = selected_manager_alias == prior_profile_alias
+                previous_profile_matches = (
+                    prior_previous_profile_alias in {None, "", prior_profile_alias}
+                    or selected_manager_alias == prior_previous_profile_alias
+                )
+                if profile_matches and previous_profile_matches:
+                    resume_session_id = prior_session_id
+                else:
+                    resume_session_id = None
         packet = {
             "schema_version": SCHEMA_VERSION,
             "manager": manager_name,
@@ -1095,15 +1119,47 @@ def _invoke_manager(
             model=cfg.boss_model if manager_name == "BOSS" else None,
             reasoning_effort=cfg.boss_reasoning_effort if manager_name == "BOSS" else None,
         )
+        if manager_name == "BOSS" and resume_session_id and result.status == "failed" and not result.timeout:
+            retry = _codex_exec_prompt(
+                cfg,
+                manager_name,
+                cycle_number,
+                timeout,
+                prompt_text,
+                codex_home=selected_manager_home,
+                resume_session_id=None,
+                model=cfg.boss_model,
+                reasoning_effort=cfg.boss_reasoning_effort,
+            )
+            if retry.status == "ok":
+                result = retry
+                result.message = "fresh_session_retry_after_resume_failure"
+            else:
+                result.message = (
+                    f"{result.message or 'resume_failed'}; fresh_session_retry_failed"
+                    if result.message
+                    else "fresh_session_retry_failed"
+                )
         if manager_name == "BOSS" and result.status == "ok":
             persisted_session_id = str(result.session_id or resume_session_id or "").strip()
             if persisted_session_id:
+                switched_profile = bool(
+                    selected_manager_alias and prior_profile_alias and selected_manager_alias != prior_profile_alias
+                )
+                previous_profile_alias = (
+                    prior_profile_alias
+                    if switched_profile
+                    else selected_manager_alias or prior_profile_alias or ""
+                )
                 _write_boss_session_state(
                     cfg,
                     session_id=persisted_session_id,
                     codex_home=selected_manager_home,
                     profile_alias=selected_manager_alias,
+                    previous_profile_alias=previous_profile_alias,
                 )
+        if manager_name == "BOSS" and result.status != "ok":
+            _safe_unlink(cfg.repo_root / BOSS_SESSION_STATE_FILE)
         if selected_manager_alias:
             result.message = (
                 f"{result.message}; manager_profile_alias={selected_manager_alias}"
@@ -1176,7 +1232,7 @@ def _extract_remaining_percent(window: Any) -> float | None:
     return None
 
 
-def _select_boss_profile_from_snapshot(cfg: RunConfig) -> tuple[str | None, str | None]:
+def _select_boss_profile_from_snapshot(cfg: RunConfig, *, preferred_alias: str | None = None) -> tuple[str | None, str | None]:
     payload = _read_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], default={})
     if not isinstance(payload, dict):
         return None, None
@@ -1223,6 +1279,12 @@ def _select_boss_profile_from_snapshot(cfg: RunConfig) -> tuple[str | None, str 
 
     if not ranked:
         return None, None
+
+    preferred_alias_text = str(preferred_alias or "").strip()
+    if preferred_alias_text:
+        for week_remaining, _five_hour_remaining, alias, codex_home in ranked:
+            if alias == preferred_alias_text and week_remaining >= 50.0:
+                return alias, codex_home
 
     ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
     _week_remaining, _five_hour_remaining, alias, codex_home = ranked[0]

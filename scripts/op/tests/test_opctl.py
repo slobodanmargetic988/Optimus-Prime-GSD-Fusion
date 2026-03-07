@@ -257,6 +257,47 @@ def test_merge_payload_preserves_explicit_boss_model_and_reasoning_override(monk
     assert payload.get("boss_reasoning_effort") == "medium"
 
 
+def test_merge_payload_loads_global_boss_config_even_when_other_workflow_fields_are_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {
+            "sleep_minutes": 5.0,
+            "enable_artifact_fan_in": False,
+            "max_parallel_workers": 13,
+            "boss_model": "GPT-5.3-Codex",
+            "boss_reasoning_effort": "xhigh",
+        },
+    )
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "command": "/op-simple-build",
+                "repo_root": "/tmp/repo",
+                "sleep_minutes": 2.0,
+                "enable_artifact_fan_in": True,
+                "max_parallel_workers": 4,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["opctl.py", "--input-json", str(payload_path)],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("sleep_minutes") == 2.0
+    assert payload.get("enable_artifact_fan_in") is True
+    assert payload.get("max_parallel_workers") == 4
+    assert payload.get("boss_model") == "GPT-5.3-Codex"
+    assert payload.get("boss_reasoning_effort") == "xhigh"
+
+
 def test_merge_payload_includes_reset_exhausted_retries_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         sys,

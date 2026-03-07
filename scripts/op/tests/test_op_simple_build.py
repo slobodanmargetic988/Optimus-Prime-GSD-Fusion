@@ -1012,6 +1012,80 @@ def test_select_boss_profile_from_snapshot_prefers_highest_weekly_not_5h_gated(t
     assert home == "/tmp/codex-third"
 
 
+def test_select_boss_profile_from_snapshot_keeps_preferred_alias_when_weekly_over_50(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-preferred",
+                    "codex_home": "/tmp/codex-preferred",
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 55.0,
+                },
+                {
+                    "alias": "codex-higher",
+                    "codex_home": "/tmp/codex-higher",
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 95.0,
+                },
+            ],
+        },
+    )
+
+    alias, home = MODULE._select_boss_profile_from_snapshot(cfg, preferred_alias="codex-preferred")
+
+    assert alias == "codex-preferred"
+    assert home == "/tmp/codex-preferred"
+
+
+def test_select_boss_profile_from_snapshot_switches_when_preferred_weekly_below_50(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-preferred",
+                    "codex_home": "/tmp/codex-preferred",
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 49.0,
+                },
+                {
+                    "alias": "codex-higher",
+                    "codex_home": "/tmp/codex-higher",
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 95.0,
+                },
+            ],
+        },
+    )
+
+    alias, home = MODULE._select_boss_profile_from_snapshot(cfg, preferred_alias="codex-preferred")
+
+    assert alias == "codex-higher"
+    assert home == "/tmp/codex-higher"
+
+
 def test_select_boss_profile_from_snapshot_excludes_default_codex_when_multiple_profiles_exist(tmp_path: Path) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -1241,15 +1315,25 @@ def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatc
             "session_id": "123e4567-e89b-12d3-a456-426614174001",
             "codex_home": "/tmp/codex-third",
             "profile_alias": "codex-third",
+            "previous_profile_alias": "codex-third",
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-third",
+                    "codex_home": "/tmp/codex-third",
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 80.0,
+                }
+            ],
         },
     )
 
     monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
-
-    def should_not_select(*_args, **_kwargs):
-        raise AssertionError("profile selection should not run when BOSS session already exists")
-
-    monkeypatch.setattr(MODULE, "_select_boss_profile_from_snapshot", should_not_select)
     captured: dict[str, str | None] = {
         "codex_home": None,
         "resume_session_id": None,
@@ -1289,6 +1373,168 @@ def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatc
     assert captured["model"] == "GPT-5.3-Codex"
     assert captured["reasoning_effort"] == "xhigh"
     assert out.message == "manager_profile_alias=codex-third"
+
+
+def test_invoke_manager_boss_switches_profile_and_starts_new_thread(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.BOSS_SESSION_STATE_FILE,
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "session_id": "123e4567-e89b-12d3-a456-426614174010",
+            "codex_home": "/tmp/codex-old",
+            "profile_alias": "codex-old",
+            "previous_profile_alias": "codex-old",
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-old",
+                    "codex_home": "/tmp/codex-old",
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 49.0,
+                },
+                {
+                    "alias": "codex-new",
+                    "codex_home": "/tmp/codex-new",
+                    "window_5h_remaining_pct": 90.0,
+                    "window_week_remaining_pct": 95.0,
+                },
+            ],
+        },
+    )
+
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+    captured: dict[str, str | None] = {"resume_session_id": None, "codex_home": None}
+
+    def fake_codex_exec_prompt(*_args, **kwargs):
+        captured["resume_session_id"] = kwargs.get("resume_session_id")
+        captured["codex_home"] = kwargs.get("codex_home")
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            session_id="123e4567-e89b-12d3-a456-426614174011",
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=2,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "ok"
+    assert captured["resume_session_id"] is None
+    assert captured["codex_home"] == "/tmp/codex-new"
+    assert out.message == "manager_profile_alias=codex-new"
+    session_state = MODULE._read_json(tmp_path / MODULE.BOSS_SESSION_STATE_FILE, default={})
+    assert session_state["profile_alias"] == "codex-new"
+    assert session_state["previous_profile_alias"] == "codex-old"
+    assert session_state["session_id"] == "123e4567-e89b-12d3-a456-426614174011"
+
+
+def test_invoke_manager_boss_resume_failure_retries_fresh_session_and_persists_new_session(
+    tmp_path: Path, monkeypatch
+) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.BOSS_SESSION_STATE_FILE,
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "session_id": "123e4567-e89b-12d3-a456-426614174020",
+            "codex_home": "/tmp/codex-resume",
+            "profile_alias": "codex-resume",
+            "previous_profile_alias": "codex-resume",
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-resume",
+                    "codex_home": "/tmp/codex-resume",
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 80.0,
+                }
+            ],
+        },
+    )
+
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+    attempts: list[str | None] = []
+
+    def fake_codex_exec_prompt(*_args, **kwargs):
+        attempts.append(kwargs.get("resume_session_id"))
+        if kwargs.get("resume_session_id"):
+            return MODULE.ManagerResult(
+                manager="BOSS",
+                status="failed",
+                timeout=False,
+                returncode=1,
+                started_at="2026-01-01T00:00:00Z",
+                finished_at="2026-01-01T00:00:01Z",
+                duration_seconds=1.0,
+                message="resume failed",
+                reason_code="manager_non_zero_exit",
+            )
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:01Z",
+            finished_at="2026-01-01T00:00:02Z",
+            duration_seconds=1.0,
+            session_id="123e4567-e89b-12d3-a456-426614174021",
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=2,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "ok"
+    assert attempts == ["123e4567-e89b-12d3-a456-426614174020", None]
+    assert out.message == "fresh_session_retry_after_resume_failure; manager_profile_alias=codex-resume"
+    session_state = MODULE._read_json(tmp_path / MODULE.BOSS_SESSION_STATE_FILE, default={})
+    assert session_state["session_id"] == "123e4567-e89b-12d3-a456-426614174021"
 
 
 def test_boss_prompt_mentions_cycle_number_and_runtime_skip_correction() -> None:

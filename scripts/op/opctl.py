@@ -221,11 +221,7 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
     except ValueError:
         canonical = ""
 
-    if canonical in {"op-build", "op-resume", "op-simple-build"} and (
-        "sleep_minutes" not in payload
-        or "enable_artifact_fan_in" not in payload
-        or "max_parallel_workers" not in payload
-    ):
+    if canonical in {"op-build", "op-resume", "op-simple-build"}:
         workflow = _resolve_configured_workflow(str(payload["repo_root"]))
         if "sleep_minutes" not in payload:
             configured_sleep = workflow.get("sleep_minutes")
