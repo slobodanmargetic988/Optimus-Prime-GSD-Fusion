@@ -1165,6 +1165,24 @@ def test_op_simple_build_default_sleep_and_parallel_workers():
         req = MODULE.parse_request({"command": "/op-simple-build", "repo_root": str(root)})
         assert req.sleep_minutes == 5.0
         assert req.max_parallel_workers == 8
+        assert req.boss_model == "GPT-5.3-Codex"
+        assert req.boss_reasoning_effort == "xhigh"
+
+
+def test_op_simple_build_accepts_boss_model_and_reasoning_override():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-simple-build",
+                "repo_root": str(root),
+                "boss_model": "gpt-5.4-codex-experimental",
+                "boss_reasoning_effort": "medium",
+            }
+        )
+        assert req.boss_model == "gpt-5.4-codex-experimental"
+        assert req.boss_reasoning_effort == "medium"
 
 
 def test_op_simple_build_dry_run_runs_without_codex():

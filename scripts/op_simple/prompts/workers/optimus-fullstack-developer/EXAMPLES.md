@@ -19,7 +19,7 @@ Inputs: acceptance_criteria: Timezone saves correctly, is returned by API, and i
 Inputs: tracking_mode: automated-handoff
 Inputs: packet_version: 2
 Inputs: test_focus: backend tests for profile update + frontend settings tests + build
-Constraints: No Linear updates. Keep summary concise and machine-readable.
+Constraints: No external tracker updates. Keep summary concise and machine-readable.
 Output: Code + commit(s) + concise summary for Optimus
 ```
 
@@ -83,5 +83,5 @@ Output: blocked summary for Optimus with exact unblock requirement
 ```text
 Stops after confirming blocker is external and required for acceptance.
 Returns blocked summary with exact missing secret and required user action.
-Does not update Linear and does not produce noisy narrative text.
+Does not update external trackers and does not produce noisy narrative text.
 ```

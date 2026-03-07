@@ -134,6 +134,12 @@ def _resolve_configured_workflow(repo_root: str) -> dict[str, Any]:
         fan_in_value = workflow.get("enable_artifact_fan_in")
         if isinstance(fan_in_value, bool):
             resolved["enable_artifact_fan_in"] = fan_in_value
+        boss_model = workflow.get("boss_model")
+        if isinstance(boss_model, str) and boss_model.strip():
+            resolved["boss_model"] = boss_model.strip()
+        boss_reasoning_effort = workflow.get("boss_reasoning_effort")
+        if isinstance(boss_reasoning_effort, str) and boss_reasoning_effort.strip():
+            resolved["boss_reasoning_effort"] = boss_reasoning_effort.strip()
         if resolved:
             return resolved
     return resolved
@@ -157,6 +163,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-build-cycles", type=int)
     parser.add_argument("--max-parallel-workers", type=int)
     parser.add_argument("--sleep-minutes", type=float)
+    parser.add_argument("--boss-model")
+    parser.add_argument("--boss-reasoning-effort")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--reset-exhausted-retries", action="store_true")
     parser.add_argument("--json-pretty", action="store_true")
@@ -194,6 +202,10 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["max_parallel_workers"] = args.max_parallel_workers
     if args.sleep_minutes is not None:
         payload["sleep_minutes"] = args.sleep_minutes
+    if args.boss_model is not None:
+        payload["boss_model"] = args.boss_model
+    if args.boss_reasoning_effort is not None:
+        payload["boss_reasoning_effort"] = args.boss_reasoning_effort
     if args.dry_run:
         payload["dry_run"] = True
     if args.reset_exhausted_retries:
@@ -227,6 +239,14 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
             configured_fan_in = workflow.get("enable_artifact_fan_in")
             if isinstance(configured_fan_in, bool):
                 payload["enable_artifact_fan_in"] = configured_fan_in
+        if canonical == "op-simple-build" and "boss_model" not in payload:
+            configured_model = workflow.get("boss_model")
+            if isinstance(configured_model, str) and configured_model.strip():
+                payload["boss_model"] = configured_model.strip()
+        if canonical == "op-simple-build" and "boss_reasoning_effort" not in payload:
+            configured_effort = workflow.get("boss_reasoning_effort")
+            if isinstance(configured_effort, str) and configured_effort.strip():
+                payload["boss_reasoning_effort"] = configured_effort.strip()
 
     if "sleep_minutes" not in payload:
         command_raw = str(payload.get("command") or "").strip()

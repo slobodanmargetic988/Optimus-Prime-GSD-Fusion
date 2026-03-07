@@ -295,6 +295,8 @@ class OpRequest:
     enable_artifact_fan_in: bool
     dry_run: bool
     reset_exhausted_retries: bool
+    boss_model: str = "GPT-5.3-Codex"
+    boss_reasoning_effort: str = "xhigh"
 
 
 def utc_now_iso() -> str:
@@ -15079,6 +15081,8 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
     if max_parallel_workers <= 0:
         max_parallel_workers = 8
     enable_artifact_fan_in = _as_bool(payload.get("enable_artifact_fan_in"), default=False)
+    boss_model = _as_str(payload.get("boss_model")) or "GPT-5.3-Codex"
+    boss_reasoning_effort = _as_str(payload.get("boss_reasoning_effort")) or "xhigh"
 
     return OpRequest(
         command=command,
@@ -15097,6 +15101,8 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         enable_artifact_fan_in=enable_artifact_fan_in,
         dry_run=_as_bool(payload.get("dry_run"), default=False),
         reset_exhausted_retries=_as_bool(payload.get("reset_exhausted_retries"), default=False),
+        boss_model=boss_model,
+        boss_reasoning_effort=boss_reasoning_effort,
     )
 
 

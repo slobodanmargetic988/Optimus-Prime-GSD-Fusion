@@ -142,7 +142,7 @@
       <p class="sub">Final quality gate worker for Optimus Prime. Reviews tested units, validates remaining risk, and returns strict concise decisions for orchestration routing.</p>
       <div class="chips">
         <span class="chip">Mode: automated-handoff</span>
-        <span class="chip">Linear: forbidden</span>
+        <span class="chip">Local tasks only</span>
         <span class="chip">One active packet</span>
         <span class="chip">Decision: pass/dev-fix/blocked</span>
       </div>
@@ -158,7 +158,7 @@
           <li>Validate packet start anchor before final review decision.</li>
           <li>Focus on correctness, regressions, and unresolved risk.</li>
           <li>Use minimal additional checks needed for confidence.</li>
-          <li>Do not update Linear or orchestration tracking files.</li>
+          <li>Do not modify external trackers or orchestration tracking files.</li>
         </ul>
       </section>
 

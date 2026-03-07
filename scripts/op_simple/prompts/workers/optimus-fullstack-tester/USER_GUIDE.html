@@ -143,7 +143,7 @@
       <p class="sub">Testing worker profile for Optimus Prime. Runs focused checks, gives deterministic routing decision, and keeps all output compact and machine-oriented.</p>
       <div class="chips">
         <span class="chip">Mode: automated-handoff</span>
-        <span class="chip">Linear: forbidden</span>
+        <span class="chip">Local tasks only</span>
         <span class="chip">One active packet</span>
         <span class="chip">Decision: review/dev-fix/blocked</span>
       </div>
@@ -158,7 +158,7 @@
           <li>Test only the assigned packet scope and acceptance criteria.</li>
           <li>Validate packet start anchor before certifying test outcome.</li>
           <li>Use minimum checks needed to prove pass/fail.</li>
-          <li>Do not update Linear or orchestration files.</li>
+          <li>Do not modify external trackers or orchestration files.</li>
           <li>Do not start next task until reviewer outcome is known for current task.</li>
         </ul>
       </section>

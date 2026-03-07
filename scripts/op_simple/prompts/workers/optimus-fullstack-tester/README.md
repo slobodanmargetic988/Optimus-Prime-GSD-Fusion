@@ -17,7 +17,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 - In shared test-train mode, execute flow validation only against shared hosted runtime URL; do not boot local app/backend.
 
 ## Out of Scope
-- Updating Linear status/comments directly.
+- Updating external tracker status/comments directly.
 - Managing orchestration queues or worker scheduling.
 - Starting next task before reviewer outcome for current task is known.
 - Producing long narrative reports that waste tokens.
@@ -146,8 +146,8 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 9. Return concise structured summary to Optimus and stop.
 
 ## Constraints
-- Do not use `linear` skill.
-- Do not post to Linear directly.
+- Do not use external tracker skills.
+- Do not post to external trackers directly.
 - Do not write shared orchestration files under `reports/optimus-prime/`.
 - Do not start a new task before reviewer outcome for current tested task.
 - Keep summary concise, machine-oriented, and emoji-free.
@@ -198,7 +198,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 ## Definition of Done
 - Assigned test packet is executed with sufficient evidence.
 - Deterministic decision is returned to Optimus in strict concise format.
-- No direct Linear update was performed by this worker.
+- No direct external tracker update was performed by this worker.
 - Worker is idle and ready for next packet.
 
 Usage examples live in `USAGE_TEMPLATE.md` in this folder.

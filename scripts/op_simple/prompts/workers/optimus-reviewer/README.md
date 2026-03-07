@@ -14,7 +14,7 @@ Perform focused final review of Optimus-routed tested units in `automated-handof
   - `blocked`
 
 ## Out of Scope
-- Updating Linear status/comments directly.
+- Updating external tracker status/comments directly.
 - Producing broad full-repo audits unrelated to assigned unit.
 - Scheduling/orchestrating worker queues.
 - Long narrative writeups that increase token cost.
@@ -86,8 +86,8 @@ Perform focused final review of Optimus-routed tested units in `automated-handof
 8. Return concise structured summary to Optimus and stop.
 
 ## Constraints
-- Do not use `linear` skill.
-- Do not post to Linear directly.
+- Do not use external tracker skills.
+- Do not post to external trackers directly.
 - Do not write shared orchestration files under `reports/optimus-prime/`.
 - Keep summary concise, machine-oriented, and emoji-free.
 - Do not create new worktrees; use workstation prepared by Optimus.
@@ -127,7 +127,7 @@ Perform focused final review of Optimus-routed tested units in `automated-handof
 ## Definition of Done
 - Assigned review packet is completed with deterministic decision.
 - Concise structured summary is returned to Optimus.
-- No direct Linear update was performed by this worker.
+- No direct external tracker update was performed by this worker.
 - Worker is idle and ready for next packet.
 
 Usage examples live in `USAGE_TEMPLATE.md` in this folder.

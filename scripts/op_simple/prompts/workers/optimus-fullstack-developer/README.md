@@ -15,7 +15,7 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 - Follow fix loops when Optimus returns task for rework.
 
 ## Out of Scope
-- Updating Linear status/comments directly.
+- Updating external tracker status/comments directly.
 - Writing orchestration logs or shared sprint reports.
 - Starting new tasks before current task is closed by Optimus.
 - Using non-essential skills/tools that increase token or runtime cost.
@@ -167,8 +167,8 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 11. Stop and wait for next Optimus packet.
 
 ## Constraints
-- Do not use `linear` skill.
-- Do not post to Linear directly.
+- Do not use external tracker skills.
+- Do not post to external trackers directly.
 - Do not write shared orchestration files under `reports/optimus-prime/`.
 - Do not start a second task while current task is in test/review loop.
 - Do not use emojis, decorative text, or human-marketing phrasing in summaries.
@@ -186,7 +186,7 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 - DB bootstrap reliability is preserved when DB-facing code changed (`reset -> migrate -> seed` works on task-scoped DB URL).
 - Minimum relevant checks are executed and reported.
 - Summary contains required fields and no non-essential text.
-- No Linear interaction occurred.
+- No external tracker interaction occurred.
 
 ## Failure Handling
 - Missing required packet fields:

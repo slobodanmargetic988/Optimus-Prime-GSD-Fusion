@@ -41,6 +41,24 @@ def make_req(root: Path, **overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**payload)
 
 
+def test_build_config_defaults_boss_model_and_reasoning(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(make_req(tmp_path))
+    assert cfg.boss_model == "GPT-5.3-Codex"
+    assert cfg.boss_reasoning_effort == "xhigh"
+
+
+def test_build_config_accepts_boss_model_and_reasoning_override(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(
+        make_req(
+            tmp_path,
+            boss_model="gpt-5.4-codex-experimental",
+            boss_reasoning_effort="medium",
+        )
+    )
+    assert cfg.boss_model == "gpt-5.4-codex-experimental"
+    assert cfg.boss_reasoning_effort == "medium"
+
+
 def write_boss_artifacts(root: Path, cycle_number: int, *, overrides: dict[str, dict[str, object]] | None = None) -> None:
     override_map = overrides or {}
     base_payloads: dict[str, dict[str, object]] = {
@@ -296,6 +314,58 @@ def test_invoke_manager_boss_fails_when_required_artifact_cycle_number_is_stale(
     assert out.status == "failed"
     assert out.reason_code == "boss_stale_artifact"
     assert out.details == {"artifact_key": "worker_packets", "cycle_number": 3}
+
+
+def test_codex_exec_prompt_resume_uses_model_and_reasoning_flags(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        captured["cwd"] = kwargs.get("cwd")
+        captured["env"] = kwargs.get("env")
+        captured["input"] = kwargs.get("input")
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout="session id: 123e4567-e89b-12d3-a456-426614174002\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
+    out = MODULE._codex_exec_prompt(
+        cfg,
+        "BOSS",
+        7,
+        30,
+        "prompt body",
+        codex_home="/tmp/codex-home",
+        resume_session_id="123e4567-e89b-12d3-a456-426614174001",
+        model="GPT-5.3-Codex",
+        reasoning_effort="xhigh",
+    )
+
+    assert out.status == "ok"
+    assert out.session_id == "123e4567-e89b-12d3-a456-426614174002"
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[:3] == ["codex", "exec", "resume"]
+    assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+    assert "--model" in cmd
+    model_idx = cmd.index("--model")
+    assert cmd[model_idx + 1] == "GPT-5.3-Codex"
+    assert "-c" in cmd
+    config_idx = cmd.index("-c")
+    assert cmd[config_idx + 1] == 'model_reasoning_effort="xhigh"'
+    assert "123e4567-e89b-12d3-a456-426614174001" in cmd
 
 
 def test_dispatch_packets_writes_launch_and_registry(tmp_path: Path, monkeypatch) -> None:
@@ -1109,10 +1179,18 @@ def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypa
     )
 
     monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
-    captured: dict[str, str | None] = {"codex_home": None}
+    captured: dict[str, str | None] = {
+        "codex_home": None,
+        "resume_session_id": None,
+        "model": None,
+        "reasoning_effort": None,
+    }
 
     def fake_codex_exec_prompt(*_args, **kwargs):
         captured["codex_home"] = kwargs.get("codex_home")
+        captured["resume_session_id"] = kwargs.get("resume_session_id")
+        captured["model"] = kwargs.get("model")
+        captured["reasoning_effort"] = kwargs.get("reasoning_effort")
         return MODULE.ManagerResult(
             manager="BOSS",
             status="ok",
@@ -1121,6 +1199,7 @@ def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypa
             started_at="2026-01-01T00:00:00Z",
             finished_at="2026-01-01T00:00:01Z",
             duration_seconds=1.0,
+            session_id="123e4567-e89b-12d3-a456-426614174000",
         )
 
     monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
@@ -1135,7 +1214,81 @@ def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypa
 
     assert out.status == "ok"
     assert captured["codex_home"] == "/tmp/codex-second"
+    assert captured["resume_session_id"] is None
+    assert captured["model"] == "GPT-5.3-Codex"
+    assert captured["reasoning_effort"] == "xhigh"
     assert out.message == "manager_profile_alias=codex-second"
+    session_state = MODULE._read_json(tmp_path / MODULE.BOSS_SESSION_STATE_FILE, default={})
+    assert session_state["session_id"] == "123e4567-e89b-12d3-a456-426614174000"
+    assert session_state["codex_home"] == "/tmp/codex-second"
+
+
+def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.BOSS_SESSION_STATE_FILE,
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "session_id": "123e4567-e89b-12d3-a456-426614174001",
+            "codex_home": "/tmp/codex-third",
+            "profile_alias": "codex-third",
+        },
+    )
+
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+
+    def should_not_select(*_args, **_kwargs):
+        raise AssertionError("profile selection should not run when BOSS session already exists")
+
+    monkeypatch.setattr(MODULE, "_select_boss_profile_from_snapshot", should_not_select)
+    captured: dict[str, str | None] = {
+        "codex_home": None,
+        "resume_session_id": None,
+        "model": None,
+        "reasoning_effort": None,
+    }
+
+    def fake_codex_exec_prompt(*_args, **kwargs):
+        captured["codex_home"] = kwargs.get("codex_home")
+        captured["resume_session_id"] = kwargs.get("resume_session_id")
+        captured["model"] = kwargs.get("model")
+        captured["reasoning_effort"] = kwargs.get("reasoning_effort")
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            session_id=None,
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=2,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "ok"
+    assert captured["codex_home"] == "/tmp/codex-third"
+    assert captured["resume_session_id"] == "123e4567-e89b-12d3-a456-426614174001"
+    assert captured["model"] == "GPT-5.3-Codex"
+    assert captured["reasoning_effort"] == "xhigh"
+    assert out.message == "manager_profile_alias=codex-third"
 
 
 def test_boss_prompt_mentions_cycle_number_and_runtime_skip_correction() -> None:

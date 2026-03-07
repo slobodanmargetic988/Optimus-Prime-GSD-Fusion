@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -31,6 +32,7 @@ MANAGER_CALL_LOG_FILE = CURRENT_DIR / "manager_call_log.jsonl"
 DISPATCH_LAUNCH_LOG_FILE = CURRENT_DIR / "dispatch_launch_log.jsonl"
 INITIALIZE_STATE_FILE = CURRENT_DIR / "initialize_state.json"
 BOSS_EVIDENCE_FILE = CURRENT_DIR / "boss_evidence.json"
+BOSS_SESSION_STATE_FILE = CURRENT_DIR / "boss_session_state.json"
 
 ARTIFACT_FILES = {
     "cycle_manager_decision": CURRENT_DIR / "cycle_manager_decision.json",
@@ -68,6 +70,7 @@ BOSS_REQUIRED_ARTIFACTS = [
     "cycle_summary",
 ]
 TASK_ATTEMPT_STAGES = ("dev", "lane_test", "test_fix", "lane_review", "review_fix", "deep_review", "deep_fix")
+SESSION_ID_REGEX = re.compile(r"(?:session id|session_id)\s*[:=]\s*([0-9a-fA-F-]{36})", re.IGNORECASE)
 
 
 @dataclass
@@ -84,6 +87,7 @@ class ManagerResult:
     message: str | None = None
     reason_code: str | None = None
     details: dict[str, Any] | None = None
+    session_id: str | None = None
 
 
 @dataclass
@@ -93,6 +97,8 @@ class RunConfig:
     max_build_cycles: int | None
     max_parallel_workers: int
     dry_run: bool
+    boss_model: str = "GPT-5.3-Codex"
+    boss_reasoning_effort: str = "xhigh"
 
 
 class SimpleBuildError(Exception):
@@ -138,6 +144,55 @@ def _safe_unlink(path: Path) -> None:
         path.unlink()
     except FileNotFoundError:
         return
+
+
+def _extract_session_id(*parts: str) -> str | None:
+    for part in parts:
+        text = (part or "").strip()
+        if not text:
+            continue
+        match = SESSION_ID_REGEX.search(text)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _effective_codex_home(codex_home: str | None) -> str:
+    codex_home_text = (codex_home or "").strip()
+    if codex_home_text:
+        return str(Path(codex_home_text).expanduser())
+    env_home = (os.environ.get("CODEX_HOME") or "").strip()
+    if env_home:
+        return str(Path(env_home).expanduser())
+    return str(Path.home() / ".codex")
+
+
+def _read_boss_session_state(cfg: RunConfig) -> dict[str, str]:
+    payload = _read_json(cfg.repo_root / BOSS_SESSION_STATE_FILE, default={})
+    if not isinstance(payload, dict):
+        return {}
+    session_id = str(payload.get("session_id") or "").strip()
+    codex_home = str(payload.get("codex_home") or "").strip()
+    profile_alias = str(payload.get("profile_alias") or "").strip()
+    if not session_id:
+        return {}
+    out = {"session_id": session_id}
+    if codex_home:
+        out["codex_home"] = codex_home
+    if profile_alias:
+        out["profile_alias"] = profile_alias
+    return out
+
+
+def _write_boss_session_state(cfg: RunConfig, *, session_id: str, codex_home: str | None, profile_alias: str | None) -> None:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "session_id": session_id,
+        "codex_home": _effective_codex_home(codex_home),
+        "profile_alias": str(profile_alias or "").strip(),
+    }
+    _atomic_write_json(cfg.repo_root / BOSS_SESSION_STATE_FILE, payload)
 
 
 def _default_attempts() -> dict[str, int]:
@@ -595,6 +650,7 @@ def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
         path = cfg.repo_root / ARTIFACT_FILES[key]
         _safe_unlink(path)
     _safe_unlink(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE)
+    _safe_unlink(cfg.repo_root / BOSS_SESSION_STATE_FILE)
 
 
 def _seed_plan_artifacts_from_planner(cfg: RunConfig) -> bool:
@@ -637,6 +693,7 @@ def _artifact_path_map(cfg: RunConfig) -> dict[str, str]:
     out["dispatch_launch_log"] = str((cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE).resolve())
     out["manager_call_log"] = str((cfg.repo_root / MANAGER_CALL_LOG_FILE).resolve())
     out["boss_evidence"] = str((cfg.repo_root / BOSS_EVIDENCE_FILE).resolve())
+    out["boss_session_state"] = str((cfg.repo_root / BOSS_SESSION_STATE_FILE).resolve())
     out["terminate_file"] = str((cfg.repo_root / TERMINATE_FILE_NAME).resolve())
     return out
 
@@ -705,6 +762,9 @@ def _codex_exec_prompt(
     prompt_text: str,
     *,
     codex_home: str | None = None,
+    resume_session_id: str | None = None,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> ManagerResult:
     started_at = utc_now_iso()
     start_time = time.monotonic()
@@ -714,16 +774,46 @@ def _codex_exec_prompt(
     stderr_path = cycle_dir / f"manager-{safe_name}.stderr.log"
     last_message_path = cycle_dir / f"manager-{safe_name}.last_message.txt"
 
-    cmd = [
-        "codex",
-        "exec",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--cd",
-        str(cfg.repo_root),
-        "--output-last-message",
-        str(last_message_path),
-        "-",
-    ]
+    reasoning_effort_text = str(reasoning_effort or "").strip()
+    model_text = str(model or "").strip()
+    if resume_session_id:
+        cmd = [
+            "codex",
+            "exec",
+            "resume",
+            "--dangerously-bypass-approvals-and-sandbox",
+        ]
+        if model_text:
+            cmd.extend(["--model", model_text])
+        if reasoning_effort_text:
+            cmd.extend(["-c", f'model_reasoning_effort="{reasoning_effort_text}"'])
+        cmd.extend(
+            [
+                "--output-last-message",
+                str(last_message_path),
+                str(resume_session_id),
+                "-",
+            ]
+        )
+    else:
+        cmd = [
+            "codex",
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+        ]
+        if model_text:
+            cmd.extend(["--model", model_text])
+        if reasoning_effort_text:
+            cmd.extend(["-c", f'model_reasoning_effort="{reasoning_effort_text}"'])
+        cmd.extend(
+            [
+                "--cd",
+                str(cfg.repo_root),
+                "--output-last-message",
+                str(last_message_path),
+                "-",
+            ]
+        )
 
     env = None
     codex_home_text = (codex_home or "").strip()
@@ -757,6 +847,7 @@ def _codex_exec_prompt(
             stderr_path=str(stderr_path),
             message=None if completed.returncode == 0 else "codex exec returned non-zero",
             reason_code=None if completed.returncode == 0 else "manager_non_zero_exit",
+            session_id=_extract_session_id(completed.stdout or "", completed.stderr or ""),
         )
     except subprocess.TimeoutExpired:
         finished_at = utc_now_iso()
@@ -966,8 +1057,15 @@ def _invoke_manager(
         path_map = _artifact_path_map(cfg)
         selected_manager_alias: str | None = None
         selected_manager_home: str | None = None
+        resume_session_id: str | None = None
         if manager_name == "BOSS":
-            selected_manager_alias, selected_manager_home = _select_boss_profile_from_snapshot(cfg)
+            boss_session_state = _read_boss_session_state(cfg)
+            resume_session_id = str(boss_session_state.get("session_id") or "").strip() or None
+            if resume_session_id:
+                selected_manager_alias = str(boss_session_state.get("profile_alias") or "").strip() or None
+                selected_manager_home = str(boss_session_state.get("codex_home") or "").strip() or None
+            else:
+                selected_manager_alias, selected_manager_home = _select_boss_profile_from_snapshot(cfg)
         packet = {
             "schema_version": SCHEMA_VERSION,
             "manager": manager_name,
@@ -993,7 +1091,19 @@ def _invoke_manager(
             timeout,
             prompt_text,
             codex_home=selected_manager_home,
+            resume_session_id=resume_session_id,
+            model=cfg.boss_model if manager_name == "BOSS" else None,
+            reasoning_effort=cfg.boss_reasoning_effort if manager_name == "BOSS" else None,
         )
+        if manager_name == "BOSS" and result.status == "ok":
+            persisted_session_id = str(result.session_id or resume_session_id or "").strip()
+            if persisted_session_id:
+                _write_boss_session_state(
+                    cfg,
+                    session_id=persisted_session_id,
+                    codex_home=selected_manager_home,
+                    profile_alias=selected_manager_alias,
+                )
         if selected_manager_alias:
             result.message = (
                 f"{result.message}; manager_profile_alias={selected_manager_alias}"
@@ -1023,6 +1133,7 @@ def _invoke_manager(
             "duration_seconds": result.duration_seconds,
             "stdout_path": result.stdout_path,
             "stderr_path": result.stderr_path,
+            "session_id": result.session_id,
             "message": result.message,
         },
     )
@@ -1939,6 +2050,8 @@ def _build_config(req: Any) -> RunConfig:
         max_parallel_workers = 8
     if max_parallel_workers <= 0:
         max_parallel_workers = 8
+    boss_model = str(getattr(req, "boss_model", "") or "").strip() or "GPT-5.3-Codex"
+    boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "xhigh"
 
     return RunConfig(
         repo_root=repo_root,
@@ -1946,6 +2059,8 @@ def _build_config(req: Any) -> RunConfig:
         max_build_cycles=max_cycles,
         max_parallel_workers=max_parallel_workers,
         dry_run=bool(getattr(req, "dry_run", False)),
+        boss_model=boss_model,
+        boss_reasoning_effort=boss_reasoning_effort,
     )
 
 
@@ -1960,6 +2075,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             str((cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE).resolve()),
             str((cfg.repo_root / CYCLE_COUNTER_FILE).resolve()),
             str((cfg.repo_root / RUN_LOCK_FILE).resolve()),
+            str((cfg.repo_root / BOSS_SESSION_STATE_FILE).resolve()),
         ]
     )
 

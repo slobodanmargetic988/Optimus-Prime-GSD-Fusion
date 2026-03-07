@@ -19,6 +19,8 @@ PROFILES = {
             "sleep_minutes": 2.0,
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 8,
+            "boss_model": "GPT-5.3-Codex",
+            "boss_reasoning_effort": "xhigh",
         },
         "rate_gate": {"max_wait_hours": 2.0},
     },
@@ -29,6 +31,8 @@ PROFILES = {
             "sleep_minutes": 2.0,
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 8,
+            "boss_model": "GPT-5.3-Codex",
+            "boss_reasoning_effort": "xhigh",
         },
         "rate_gate": {"max_wait_hours": 2.0},
     },
@@ -39,6 +43,8 @@ PROFILES = {
             "sleep_minutes": 2.0,
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 8,
+            "boss_model": "GPT-5.3-Codex",
+            "boss_reasoning_effort": "xhigh",
         },
         "rate_gate": {"max_wait_hours": 1.0},
     },
@@ -52,6 +58,8 @@ DEFAULT_CONFIG = {
         "sleep_minutes": 2.0,
         "enable_artifact_fan_in": False,
         "max_parallel_workers": 8,
+        "boss_model": "GPT-5.3-Codex",
+        "boss_reasoning_effort": "xhigh",
     },
     "rate_gate": {"max_wait_hours": 2.0},
     "paths": {},
@@ -170,6 +178,26 @@ def _validate_config(config: dict[str, Any]) -> list[dict[str, Any]]:
                     "fix": "Set workflow.max_parallel_workers to a positive integer.",
                 }
             )
+        boss_model = as_str(workflow.get("boss_model"))
+        if not boss_model:
+            errors.append(
+                {
+                    "code": "config_validation_error",
+                    "field": "workflow.boss_model",
+                    "message": "workflow.boss_model must be a non-empty string",
+                    "fix": "Set workflow.boss_model to a valid model identifier (for example GPT-5.3-Codex).",
+                }
+            )
+        boss_reasoning_effort = as_str(workflow.get("boss_reasoning_effort"))
+        if not boss_reasoning_effort:
+            errors.append(
+                {
+                    "code": "config_validation_error",
+                    "field": "workflow.boss_reasoning_effort",
+                    "message": "workflow.boss_reasoning_effort must be a non-empty string",
+                    "fix": "Set workflow.boss_reasoning_effort to a valid effort value (for example xhigh).",
+                }
+            )
     rate_gate = config.get("rate_gate")
     if not isinstance(rate_gate, dict):
         errors.append(
@@ -270,6 +298,20 @@ def resolve_effective_config(payload: dict[str, Any], ctx: InstallContext) -> di
         workflow["max_parallel_workers"] = int(cli_parallel_workers)
         effective["workflow"] = workflow
         sources.append({"source": "cli_max_parallel_workers", "path": None})
+
+    cli_boss_model = as_str(payload.get("boss_model"))
+    if cli_boss_model:
+        workflow = effective.get("workflow") if isinstance(effective.get("workflow"), dict) else {}
+        workflow["boss_model"] = cli_boss_model
+        effective["workflow"] = workflow
+        sources.append({"source": "cli_boss_model", "path": None})
+
+    cli_boss_reasoning_effort = as_str(payload.get("boss_reasoning_effort"))
+    if cli_boss_reasoning_effort:
+        workflow = effective.get("workflow") if isinstance(effective.get("workflow"), dict) else {}
+        workflow["boss_reasoning_effort"] = cli_boss_reasoning_effort
+        effective["workflow"] = workflow
+        sources.append({"source": "cli_boss_reasoning_effort", "path": None})
 
     errors = _validate_config(effective)
     return {
