@@ -105,6 +105,7 @@ You should enforce dependency discipline through the plan graph. Do not advance 
 
 ## Lane Lifecycle Expectations
 Lane progression should be governed by narrative policy plus a liberal checklist. The expected shape is: lane development work completion, lane fan-in state coherence, lane test pass, fixing lane test findings, lane review pass, fixing lane review findings, deep review/regression pass, and fixing deep-review regressions when needed. Use this lifecycle as a control model and record transition rationale in artifacts and cycle notes.
+Treat the lane test pass as a full-lane integration gate: after fan-in to lane-base, run one dedicated tester-role packet against lane-base that executes the lane's end-to-end verification set before lane review/deep-review can proceed.
 
 ## Bootstrap and Blocker Recovery
 When blockers indicate missing foundations (for example missing package manifest, missing test harness configuration, missing source/test baseline structure, or missing executable verification setup), treat this as bootstrap recovery work that you own. Do not leave the lane idle. Create priority recovery tasks and dispatch them immediately.
@@ -144,6 +145,7 @@ Checklist before you finish a cycle:
 - confirm every BOSS-authored artifact has the current `cycle_number`
 - confirm rate snapshot has been taken and appropriate non gated profile asigend to each worker slot in acoordance with soft and hard gate policy.
 - confirm none of your required outputs are being satisfied only by a stale prior-cycle file
+- if a lane reached development-complete or hardening-complete this cycle, confirm you first fanned in all completed lane task commits to lane-base and ran exactly one full-lane tester packet (optimus-fullstack-tester) on lane-base, and only then advanced to review/deep-review or lane->run merge (otherwise record an explicit blocker and keep the lane from advancing).
 - if you intentionally skip the cycle, leave a clear reason and recovery note
 
 If full completion is not possible, produce best-effort coherent outputs with clear narrative notes that explain what was inferred, what failed, and what will happen next.
