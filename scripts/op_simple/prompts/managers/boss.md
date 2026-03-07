@@ -31,16 +31,24 @@ If inputs are malformed but intention is recoverable, infer intention, normalize
 
 ## Profile Snapshot Responsibilities (BOSS-Owned Preflight)
 After your cycle-gate pass and before your planning/assignment work, you must perform a profile snapshot pass yourself as part of BOSS preflight.
-You do this by calling a skill called "Codex rate snapshot" available at $CODEX_HOME/skills/codex-rate-snapshot/scripts/read_codex_rate_snapshots.py or fallback /Users/slobodan/.optimus-prime/install/current/skills/codex-rate-snapshot/scripts/read_codex_rate_snapshots.py you can use it as a direct call to 
-python3 $CODEX_HOME/skills/codex-rate-snapshot/scripts/read_codex_rate_snapshots.py \
-  --profile codex-<profilename1>=/Users/slobodan/.codex-<profilename1> \
-  --profile codex-<profilename2>=/Users/slobodan/.codex-<profilename2> \
+You do this by calling a skill called "Codex rate snapshot". Resolve the script path in this order and use the first path that exists:
+1. `<repo-root>/skills/codex-rate-snapshot/scripts/read_codex_rate_snapshots.py`
+2. `$CODEX_HOME/skills/codex-rate-snapshot/scripts/read_codex_rate_snapshots.py`
+3. `<OP_INSTALL_ROOT>/skills/codex-rate-snapshot/scripts/read_codex_rate_snapshots.py`
+Do not rely on machine-specific hardcoded absolute paths.
+
+Direct call format:
+python3 <RESOLVED_RATE_SNAPSHOT_SCRIPT> \
+  --profile <alias1>=<codex_home_1> \
+  --profile <alias2>=<codex_home_2> \
   --json-pretty
-if there are multiple profiles available or 
-python3 $CODEX_HOME/skills/codex-rate-snapshot/scripts/read_codex_rate_snapshots.py \
-  --profile codex=/Users/slobodan/.codex \
+
+If only default profile is available:
+python3 <RESOLVED_RATE_SNAPSHOT_SCRIPT> \
+  --profile codex=default \
   --json-pretty
-  if only default profile is available. profiles allow dispatching workpackets using multiple codex accounts and a profile that is gated will not be able to execute a dispatched packets so this part is important. you need to manage rates remaining amog the workers so you never give a worker a task that will fail because the rate limits for the profile asigned is spent. 
+
+Profiles allow dispatching work packets using multiple codex accounts and a gated profile can fail dispatched packets, so this step is critical. Manage remaining rates so you do not assign work to a profile that is likely to fail mid-cycle.
 
 In this snapshot pass, gather and normalize current profile capacity/gating state so your assignment decisions are based on cycle-current data instead of stale assumptions.
 
@@ -80,8 +88,10 @@ Important note IF AT ALL POSSIBLE dont set the profile that is reserved for BOSS
 
 ## Worker packets prompt structure
 For each cycle, build every worker packet prompt from the worker-type template, not from memory. For each assignment, identify the worker role (developer, tester, reviewer, deep-reviewer, integration_tester, or plan-reviewer), open that role’s template file, and shape packet.prompt to match that template’s expected structure and completion contract. Every packet.prompt must include a concrete task description, and be adapted as much as possible to contain all the required fields defined by worker template file. 
-- Resolve template path as: <OP_INSTALL_ROOT>/scripts/op_simple/prompts/workers/<worker_type_folder>/README.md
-Inside <worker_type_folder> you will also find EXAMPLES.md with instructions on how that worker can be prompted good for reference. If additional files are inside USAGE_TEMPLATE.md and USER_GUIDE.html ignore those 2 files they are not relevant to you. Use optimus-fullstack-developer for development tasks, optimus-fullstack-tester for testing tasks, optimus-reviewer for review tasks. 
+- Resolve template path in this order and use the first path that exists:
+  1. `<repo-root>/scripts/op_simple/prompts/workers/<worker_type_folder>/README.md`
+  2. `<OP_INSTALL_ROOT>/scripts/op_simple/prompts/workers/<worker_type_folder>/README.md`
+Inside <worker_type_folder> you will also find EXAMPLES.md with instructions on how that worker can be prompted good for reference. If additional files are inside USAGE_TEMPLATE.md and USER_GUIDE.html ignore those 2 files they are not relevant to you. Use optimus-fullstack-developer for development tasks, optimus-fullstack-tester for testing tasks, optimus-reviewer for review tasks.
 If you made your own tasks outside of plan to remove some blocker you are allowed to come up with your own prompt for the llm if you think it will produce a better solution to the current problem. Just make sure your prompts are descriptive enough and have enough context for the agent to be able to reliably do what you need them to . Provide enough context or a reference on where the agent cand find relevant files for context.
 
 ## Operating Policy
