@@ -77,7 +77,7 @@ def test_config_precedence_cli_over_project_over_global_over_defaults():
             assert effective["workflow"]["sleep_minutes"] == 2.0
             assert effective["workflow"]["enable_artifact_fan_in"] is False
             assert effective["workflow"]["max_parallel_workers"] == 8
-            assert effective["workflow"]["boss_model"] == "GPT-5.3-Codex"
+            assert effective["workflow"]["boss_model"] == "gpt-5.3-codex"
             assert effective["workflow"]["boss_reasoning_effort"] == "xhigh"
         finally:
             if old_xdg is None:

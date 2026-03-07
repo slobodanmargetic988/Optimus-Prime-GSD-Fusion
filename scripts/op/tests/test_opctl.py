@@ -206,7 +206,7 @@ def test_merge_payload_applies_configured_parallel_for_simple_build(monkeypatch:
             "sleep_minutes": 5.0,
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 13,
-            "boss_model": "GPT-5.3-Codex",
+            "boss_model": "gpt-5.3-codex",
             "boss_reasoning_effort": "xhigh",
         },
     )
@@ -220,7 +220,7 @@ def test_merge_payload_applies_configured_parallel_for_simple_build(monkeypatch:
     assert payload.get("sleep_minutes") == 5.0
     assert payload.get("max_parallel_workers") == 13
     assert payload.get("enable_artifact_fan_in") is False
-    assert payload.get("boss_model") == "GPT-5.3-Codex"
+    assert payload.get("boss_model") == "gpt-5.3-codex"
     assert payload.get("boss_reasoning_effort") == "xhigh"
 
 
@@ -232,7 +232,7 @@ def test_merge_payload_preserves_explicit_boss_model_and_reasoning_override(monk
             "sleep_minutes": 5.0,
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 13,
-            "boss_model": "GPT-5.3-Codex",
+            "boss_model": "gpt-5.3-codex",
             "boss_reasoning_effort": "xhigh",
         },
     )
@@ -267,7 +267,7 @@ def test_merge_payload_loads_global_boss_config_even_when_other_workflow_fields_
             "sleep_minutes": 5.0,
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 13,
-            "boss_model": "GPT-5.3-Codex",
+            "boss_model": "gpt-5.3-codex",
             "boss_reasoning_effort": "xhigh",
         },
     )
@@ -294,7 +294,7 @@ def test_merge_payload_loads_global_boss_config_even_when_other_workflow_fields_
     assert payload.get("sleep_minutes") == 2.0
     assert payload.get("enable_artifact_fan_in") is True
     assert payload.get("max_parallel_workers") == 4
-    assert payload.get("boss_model") == "GPT-5.3-Codex"
+    assert payload.get("boss_model") == "gpt-5.3-codex"
     assert payload.get("boss_reasoning_effort") == "xhigh"
 
 

@@ -43,7 +43,7 @@ def make_req(root: Path, **overrides: object) -> SimpleNamespace:
 
 def test_build_config_defaults_boss_model_and_reasoning(tmp_path: Path) -> None:
     cfg = MODULE._build_config(make_req(tmp_path))
-    assert cfg.boss_model == "GPT-5.3-Codex"
+    assert cfg.boss_model == "gpt-5.3-codex"
     assert cfg.boss_reasoning_effort == "xhigh"
 
 
@@ -349,7 +349,7 @@ def test_codex_exec_prompt_resume_uses_model_and_reasoning_flags(tmp_path: Path,
         "prompt body",
         codex_home="/tmp/codex-home",
         resume_session_id="123e4567-e89b-12d3-a456-426614174001",
-        model="GPT-5.3-Codex",
+        model="gpt-5.3-codex",
         reasoning_effort="xhigh",
     )
 
@@ -361,7 +361,7 @@ def test_codex_exec_prompt_resume_uses_model_and_reasoning_flags(tmp_path: Path,
     assert "--dangerously-bypass-approvals-and-sandbox" in cmd
     assert "--model" in cmd
     model_idx = cmd.index("--model")
-    assert cmd[model_idx + 1] == "GPT-5.3-Codex"
+    assert cmd[model_idx + 1] == "gpt-5.3-codex"
     assert "-c" in cmd
     config_idx = cmd.index("-c")
     assert cmd[config_idx + 1] == 'model_reasoning_effort="xhigh"'
@@ -1289,7 +1289,7 @@ def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypa
     assert out.status == "ok"
     assert captured["codex_home"] == "/tmp/codex-second"
     assert captured["resume_session_id"] is None
-    assert captured["model"] == "GPT-5.3-Codex"
+    assert captured["model"] == "gpt-5.3-codex"
     assert captured["reasoning_effort"] == "xhigh"
     assert out.message == "manager_profile_alias=codex-second"
     session_state = MODULE._read_json(tmp_path / MODULE.BOSS_SESSION_STATE_FILE, default={})
@@ -1370,7 +1370,7 @@ def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatc
     assert out.status == "ok"
     assert captured["codex_home"] == "/tmp/codex-third"
     assert captured["resume_session_id"] == "123e4567-e89b-12d3-a456-426614174001"
-    assert captured["model"] == "GPT-5.3-Codex"
+    assert captured["model"] == "gpt-5.3-codex"
     assert captured["reasoning_effort"] == "xhigh"
     assert out.message == "manager_profile_alias=codex-third"
 

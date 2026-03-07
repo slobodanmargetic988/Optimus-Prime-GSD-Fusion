@@ -97,7 +97,7 @@ class RunConfig:
     max_build_cycles: int | None
     max_parallel_workers: int
     dry_run: bool
-    boss_model: str = "GPT-5.3-Codex"
+    boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "xhigh"
 
 
@@ -2112,7 +2112,7 @@ def _build_config(req: Any) -> RunConfig:
         max_parallel_workers = 8
     if max_parallel_workers <= 0:
         max_parallel_workers = 8
-    boss_model = str(getattr(req, "boss_model", "") or "").strip() or "GPT-5.3-Codex"
+    boss_model = str(getattr(req, "boss_model", "") or "").strip() or "gpt-5.3-codex"
     boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "xhigh"
 
     return RunConfig(

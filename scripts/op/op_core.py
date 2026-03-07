@@ -295,7 +295,7 @@ class OpRequest:
     enable_artifact_fan_in: bool
     dry_run: bool
     reset_exhausted_retries: bool
-    boss_model: str = "GPT-5.3-Codex"
+    boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "xhigh"
 
 
@@ -15081,7 +15081,7 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
     if max_parallel_workers <= 0:
         max_parallel_workers = 8
     enable_artifact_fan_in = _as_bool(payload.get("enable_artifact_fan_in"), default=False)
-    boss_model = _as_str(payload.get("boss_model")) or "GPT-5.3-Codex"
+    boss_model = _as_str(payload.get("boss_model")) or "gpt-5.3-codex"
     boss_reasoning_effort = _as_str(payload.get("boss_reasoning_effort")) or "xhigh"
 
     return OpRequest(

@@ -1165,7 +1165,7 @@ def test_op_simple_build_default_sleep_and_parallel_workers():
         req = MODULE.parse_request({"command": "/op-simple-build", "repo_root": str(root)})
         assert req.sleep_minutes == 5.0
         assert req.max_parallel_workers == 8
-        assert req.boss_model == "GPT-5.3-Codex"
+        assert req.boss_model == "gpt-5.3-codex"
         assert req.boss_reasoning_effort == "xhigh"
 
 
