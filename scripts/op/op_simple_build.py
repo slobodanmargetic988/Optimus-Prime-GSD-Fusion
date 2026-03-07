@@ -97,6 +97,7 @@ class RunConfig:
     max_build_cycles: int | None
     max_parallel_workers: int
     dry_run: bool
+    run_base_source_branch: str = "main"
     boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "xhigh"
 
@@ -254,23 +255,23 @@ def _git_run(repo_root: Path, *args: str) -> tuple[int, str, str]:
 
 def _create_run_base_branch(cfg: RunConfig) -> dict[str, Any]:
     active_branch = _git_text(cfg.repo_root, "branch", "--show-current") or "main"
+    source_branch = str(cfg.run_base_source_branch or "").strip() or "main"
     if cfg.dry_run:
         return {
             "run_base_branch": active_branch,
-            "run_base_from_branch": "main",
+            "run_base_from_branch": source_branch,
             "run_base_from_commit": _git_text(cfg.repo_root, "rev-parse", "HEAD") or "",
             "run_base_created_at": utc_now_iso(),
             "created_new": False,
             "dry_run": True,
         }
 
-    source_branch = "main"
     source_ref = f"refs/heads/{source_branch}"
     source_commit = _git_text(cfg.repo_root, "rev-parse", "--verify", source_ref)
     if not source_commit:
         raise SimpleBuildError(
-            "op_simple_missing_main_branch",
-            "Cannot start /op-simple-build: source branch 'main' does not exist.",
+            "op_simple_missing_source_branch",
+            f"Cannot start /op-simple-build: source branch '{source_branch}' does not exist.",
         )
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -2112,6 +2113,7 @@ def _build_config(req: Any) -> RunConfig:
         max_parallel_workers = 8
     if max_parallel_workers <= 0:
         max_parallel_workers = 8
+    run_base_source_branch = str(getattr(req, "run_base_source_branch", "") or "").strip() or "main"
     boss_model = str(getattr(req, "boss_model", "") or "").strip() or "gpt-5.3-codex"
     boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "xhigh"
 
@@ -2121,6 +2123,7 @@ def _build_config(req: Any) -> RunConfig:
         max_build_cycles=max_cycles,
         max_parallel_workers=max_parallel_workers,
         dry_run=bool(getattr(req, "dry_run", False)),
+        run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,
         boss_reasoning_effort=boss_reasoning_effort,
     )

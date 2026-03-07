@@ -1185,6 +1185,20 @@ def test_op_simple_build_accepts_boss_model_and_reasoning_override():
         assert req.boss_reasoning_effort == "medium"
 
 
+def test_op_simple_build_accepts_run_base_source_branch_override():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-simple-build",
+                "repo_root": str(root),
+                "run_base_source_branch": "op-simple-canary-prev",
+            }
+        )
+        assert req.run_base_source_branch == "op-simple-canary-prev"
+
+
 def test_op_simple_build_dry_run_runs_without_codex():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

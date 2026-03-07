@@ -33,7 +33,7 @@
 | V2-T006 | Wire dispatcher fire-and-forget path using thread-dispatch | AI | V2-T004 | DONE | - | 2026-03-06 |
 | V2-T007 | Wire watchdog + stop priority handling | AI | V2-T003 | DONE | - | 2026-03-06 |
 | V2-T008 | Add summary print stage and timeout-skip behavior | AI | V2-T004 | DONE | - | 2026-03-06 |
-| V2-T009 | Run first vertical with real packet dispatch and DONE marker observation | AI | V2-T005,V2-T006,V2-T007,V2-T008 | BLOCKED_DEP | awaiting live canary dispatch run | 2026-03-06 |
+| V2-T009 | Run first vertical with real packet dispatch and DONE marker observation | AI | V2-T005,V2-T006,V2-T007,V2-T008 | DONE | - | 2026-03-07 |
 
 ## Planning Closure (V1 T001-T101 Equivalence)
 | ID | Task | Owner | Depends On | Status | Blocked By | Last Update |
@@ -42,10 +42,10 @@
 | V2-T013 | Reconcile schema conflicts using \"newest explicit user statement wins\" rule | AI | V2-T012 | DONE | - | 2026-03-06 |
 | V2-T014 | Finalize manager I/O contracts (cycle-manager, profile-manager snapshot-only, BOSS, dispatcher, watchdog, summary) including `task_execution_state` ownership | AI | V2-T013 | DONE | - | 2026-03-06 |
 | V2-T015 | Finalize remaining PARTIAL/OPEN items in coverage matrix and mark equivalence gate status | AI | V2-T014 | READY | - | 2026-03-06 |
-| V2-T016 | Human review: approve equivalence gate closure before implementation starts | HUMAN | V2-T015 | BLOCKED_HUMAN | approval required | 2026-03-06 |
+| V2-T016 | Human review: approve equivalence gate closure before implementation starts | HUMAN | V2-T015 | DONE | - | 2026-03-07 |
 
 ## Phase 2 Placeholder
 | ID | Task | Owner | Depends On | Status | Blocked By | Last Update |
 |---|---|---|---|---|---|---|
-| V2-T010 | Add prompt packs for additional worker types (`integration_tester`, `plan-reviewer`) | AI | V2-T009 | BLOCKED_DEP | post-canary | 2026-03-06 |
-| V2-T011 | Bootstrap new `tetris` GitHub repo task (deferred until after Checkpoint 1) | JOINT | V2-T005 | BLOCKED_DEP | deferred by user | 2026-03-06 |
+| V2-T010 | Add prompt packs for additional worker types (`integration_tester`, `plan-reviewer`) | AI | V2-T009 | DONE | - | 2026-03-07 |
+| V2-T011 | Bootstrap new `tetris` GitHub repo task (deferred until after Checkpoint 1) | JOINT | V2-T005 | DONE | - | 2026-03-07 |

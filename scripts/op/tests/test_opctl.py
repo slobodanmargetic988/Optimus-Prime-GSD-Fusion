@@ -257,6 +257,30 @@ def test_merge_payload_preserves_explicit_boss_model_and_reasoning_override(monk
     assert payload.get("boss_reasoning_effort") == "medium"
 
 
+def test_merge_payload_includes_run_base_source_branch_for_simple_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-simple-build",
+            "--repo-root",
+            "/tmp/repo",
+            "--run-base-source-branch",
+            "op-simple-canary-prev",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("run_base_source_branch") == "op-simple-canary-prev"
+
+
 def test_merge_payload_loads_global_boss_config_even_when_other_workflow_fields_are_present(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

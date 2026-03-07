@@ -163,6 +163,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-build-cycles", type=int)
     parser.add_argument("--max-parallel-workers", type=int)
     parser.add_argument("--sleep-minutes", type=float)
+    parser.add_argument("--run-base-source-branch")
     parser.add_argument("--boss-model")
     parser.add_argument("--boss-reasoning-effort")
     parser.add_argument("--dry-run", action="store_true")
@@ -202,6 +203,8 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["max_parallel_workers"] = args.max_parallel_workers
     if args.sleep_minutes is not None:
         payload["sleep_minutes"] = args.sleep_minutes
+    if args.run_base_source_branch is not None:
+        payload["run_base_source_branch"] = args.run_base_source_branch
     if args.boss_model is not None:
         payload["boss_model"] = args.boss_model
     if args.boss_reasoning_effort is not None:
