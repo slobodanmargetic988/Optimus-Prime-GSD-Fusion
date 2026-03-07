@@ -163,7 +163,7 @@
       <p class="sub">A specialized worker profile for Optimus Prime. This agent executes one packet at a time, avoids unnecessary tools, and returns compact machine-friendly summaries.</p>
       <div class="chips">
         <span class="chip">Mode: automated-handoff</span>
-        <span class="chip">Linear: forbidden</span>
+        <span class="chip">Local tasks only</span>
         <span class="chip">One active task only</span>
         <span class="chip">Emoji-free summaries</span>
       </div>
@@ -178,7 +178,7 @@
           <li>Trust Optimus packet as source of truth for task scope and acceptance criteria.</li>
           <li>Validate packet start anchor before creating/continuing task branch.</li>
           <li>Use the pre-assigned workstation; do not create worktrees.</li>
-          <li>Do not touch Linear or orchestration tracking files.</li>
+          <li>Do not modify external trackers or orchestration tracking files.</li>
           <li>Complete one unit, then stop and wait for next packet.</li>
           <li>Run only checks needed to validate touched scope.</li>
         </ul>

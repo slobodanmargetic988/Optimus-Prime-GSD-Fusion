@@ -290,10 +290,14 @@ class OpRequest:
     non_interactive: bool
     output_mode: str
     max_build_cycles: int | None
+    max_parallel_workers: int
     sleep_minutes: float
     enable_artifact_fan_in: bool
     dry_run: bool
     reset_exhausted_retries: bool
+    run_base_source_branch: str | None = None
+    boss_model: str = "gpt-5.3-codex"
+    boss_reasoning_effort: str = "xhigh"
 
 
 def utc_now_iso() -> str:
@@ -566,6 +570,8 @@ def _emit_build_progress(req: OpRequest, message: str) -> None:
         label = "op-initialize"
     elif command in {"op-build", "op-resume"}:
         label = "op-build"
+    elif command in {"op-simple-build"}:
+        label = "op-simple-build"
     else:
         label = "op-runtime"
     stamp = datetime.now().astimezone().strftime("%H:%M:%S")
@@ -5007,6 +5013,80 @@ def _extract_remaining_percent(window: Any) -> float | None:
     return None
 
 
+def _select_planner_profile_from_rate_registry(repo_root: Path, *, stage: str = "plan") -> tuple[str | None, str | None]:
+    try:
+        selection = _load_profile_selection_required(repo_root, stage=stage)
+    except OpError:
+        return None, None
+
+    alias_to_home = selection.get("alias_to_home") if isinstance(selection.get("alias_to_home"), dict) else {}
+    selected_aliases = [
+        alias for alias in (_as_str(item) for item in selection.get("selected_aliases", [])) if alias
+    ]
+    if len(selected_aliases) > 1:
+        selected_aliases = [alias for alias in selected_aliases if alias != "codex"]
+    if not selected_aliases:
+        return None, None
+
+    path = _repo_path(repo_root, PROFILE_RATE_REGISTRY_JSON)
+    if not path.exists():
+        return None, None
+    try:
+        payload = _read_json(path)
+    except OpError:
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    profiles = _profiles_map_from_rate_registry(payload)
+    if not profiles:
+        return None, None
+
+    ranked: list[tuple[float, float, str, str]] = []
+    for alias in selected_aliases:
+        home = _as_str(alias_to_home.get(alias))
+        if not home:
+            continue
+        row = profiles.get(alias)
+        if not isinstance(row, dict):
+            continue
+        five = row.get("five_hour") if isinstance(row.get("five_hour"), dict) else row.get("5h")
+        if not isinstance(five, dict):
+            five = {}
+        weekly = row.get("weekly") if isinstance(row.get("weekly"), dict) else {}
+        if not isinstance(weekly, dict):
+            weekly = {}
+
+        five_remaining = _extract_remaining_percent(five)
+        if five_remaining is None:
+            raw_five = row.get("window_5h_remaining_pct")
+            try:
+                five_remaining = float(raw_five) if raw_five is not None else None
+            except (TypeError, ValueError):
+                five_remaining = None
+        five_hard_gated = bool(five.get("gated")) or (five_remaining is not None and five_remaining <= 1.0)
+        if five_hard_gated:
+            continue
+
+        weekly_remaining = _extract_remaining_percent(weekly)
+        if weekly_remaining is None:
+            raw_weekly = row.get("window_week_remaining_pct")
+            try:
+                weekly_remaining = float(raw_weekly) if raw_weekly is not None else None
+            except (TypeError, ValueError):
+                weekly_remaining = None
+        if weekly_remaining is None:
+            continue
+
+        ranked.append((weekly_remaining, five_remaining or 0.0, alias, home))
+
+    if not ranked:
+        return None, None
+
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    _weekly_remaining, _five_remaining, alias, home = ranked[0]
+    return alias, home
+
+
 def _read_profile_rate_states(repo_root: Path, aliases: list[str]) -> dict[str, dict[str, Any]]:
     states: dict[str, dict[str, Any]] = {}
     default_state = {
@@ -7368,6 +7448,7 @@ def _run_llm_plan_generation(
     planning_root = _repo_path(req.repo_root, PLANNING_REL)
     llm_root = _repo_path(req.repo_root, PLANNER_REL)
     attempts_log_path = _repo_path(req.repo_root, PLANNER_ATTEMPTS_JSONL)
+    _planner_alias, planner_codex_home = _select_planner_profile_from_rate_registry(req.repo_root, stage="plan")
     errors_for_retry: list[dict[str, Any]] = []
     final_validation: dict[str, Any] | None = None
     warnings: list[dict[str, Any]] = []
@@ -7400,6 +7481,7 @@ def _run_llm_plan_generation(
                 output_last_message=last_message_path,
                 stdout_path=stdout_path,
                 stderr_path=stderr_path,
+                codex_home=planner_codex_home,
             )
         except OSError as exc:
             finished_at = utc_now_iso()
@@ -7938,6 +8020,12 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
     state_payload["updated_at"] = utc_now_iso()
     _atomic_write_json(state_path, state_payload)
 
+    rate_seed_warnings = _seed_rate_registry_if_missing(
+        req.repo_root,
+        stage="initialize",
+        profile_selection=profile_selection,
+    )
+
     plan_result = command_plan(req)
     state_payload = _read_json(state_path)
     if not isinstance(state_payload, dict):
@@ -7946,12 +8034,6 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
     state_payload["profile_selection_ref"] = str(profile_selection_path)
     state_payload["updated_at"] = utc_now_iso()
     _atomic_write_json(state_path, state_payload)
-
-    rate_seed_warnings = _seed_rate_registry_if_missing(
-        req.repo_root,
-        stage="initialize",
-        profile_selection=profile_selection,
-    )
 
     artifacts = []
     artifacts.extend(git_bootstrap_artifacts)
@@ -14195,6 +14277,24 @@ def command_health(req: OpRequest) -> dict[str, Any]:
     )
 
 
+def command_simple_build(req: OpRequest) -> dict[str, Any]:
+    from op_simple_build import run_op_simple_build
+
+    result = run_op_simple_build(req)
+    return _response(
+        req,
+        ok=bool(result.get("ok")),
+        status=_as_str(result.get("status")) or ("completed" if result.get("ok") else "failed"),
+        summary=_as_str(result.get("summary")) or "OP Simple build finished.",
+        warnings=result.get("warnings") if isinstance(result.get("warnings"), list) else [],
+        errors=result.get("errors") if isinstance(result.get("errors"), list) else [],
+        artifacts=result.get("artifacts") if isinstance(result.get("artifacts"), list) else [],
+        next_action=_as_str(result.get("next_action")),
+        state_ref=_as_str(result.get("state_ref")),
+        data=result.get("data") if isinstance(result.get("data"), dict) else None,
+    )
+
+
 def command_status(req: OpRequest) -> dict[str, Any]:
     planning_root = _repo_path(req.repo_root, PLANNING_REL)
     warnings: list[dict[str, Any]] = []
@@ -14968,13 +15068,23 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             raise OpError("input_error", "max_build_cycles must be integer", stage="input") from exc
         max_cycles_out = parsed if parsed > 0 else None
 
-    default_sleep = 2 if command in {"op-build", "op-resume"} else 0
+    default_sleep = 5 if command == "op-simple-build" else 2 if command in {"op-build", "op-resume"} else 0
     sleep_minutes = payload.get("sleep_minutes", default_sleep)
     try:
         sleep_val = float(sleep_minutes)
     except (TypeError, ValueError) as exc:
         raise OpError("input_error", "sleep_minutes must be numeric", stage="input") from exc
+    max_parallel_workers_raw = payload.get("max_parallel_workers", 8)
+    try:
+        max_parallel_workers = int(max_parallel_workers_raw)
+    except (TypeError, ValueError) as exc:
+        raise OpError("input_error", "max_parallel_workers must be integer", stage="input") from exc
+    if max_parallel_workers <= 0:
+        max_parallel_workers = 8
     enable_artifact_fan_in = _as_bool(payload.get("enable_artifact_fan_in"), default=False)
+    run_base_source_branch = _as_str(payload.get("run_base_source_branch"))
+    boss_model = _as_str(payload.get("boss_model")) or "gpt-5.3-codex"
+    boss_reasoning_effort = _as_str(payload.get("boss_reasoning_effort")) or "xhigh"
 
     return OpRequest(
         command=command,
@@ -14988,10 +15098,14 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         non_interactive=_as_bool(payload.get("non_interactive"), default=True),
         output_mode=_as_str(payload.get("output_mode")) or "json",
         max_build_cycles=max_cycles_out,
+        max_parallel_workers=max_parallel_workers,
         sleep_minutes=max(0.0, sleep_val),
         enable_artifact_fan_in=enable_artifact_fan_in,
         dry_run=_as_bool(payload.get("dry_run"), default=False),
         reset_exhausted_retries=_as_bool(payload.get("reset_exhausted_retries"), default=False),
+        run_base_source_branch=run_base_source_branch,
+        boss_model=boss_model,
+        boss_reasoning_effort=boss_reasoning_effort,
     )
 
 
@@ -15006,6 +15120,8 @@ def execute_request(req: OpRequest) -> dict[str, Any]:
         return command_initialize(req)
     if req.command == "op-build":
         return command_build(req)
+    if req.command == "op-simple-build":
+        return command_simple_build(req)
     if req.command == "op-health":
         return command_health(req)
     if req.command == "op-status":

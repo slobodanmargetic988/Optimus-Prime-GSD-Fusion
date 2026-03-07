@@ -74,3 +74,24 @@ def test_build_bundle_excludes_runtime_cache_artifacts():
     finally:
         if probe.exists():
             probe.unlink()
+
+
+def test_bundle_manifest_includes_op_simple_runtime_assets():
+    repo_root = Path(__file__).resolve().parents[3]
+    with tempfile.TemporaryDirectory() as tmp:
+        out = MODULE.build_bundle(repo_root, Path(tmp), "9.9.13-test")
+        manifest = json.loads((Path(out["bundle_dir"]) / "bundle_manifest.json").read_text(encoding="utf-8"))
+        managed = set(manifest["managed_files"])
+        required = {
+            "scripts/op/op_simple_build.py",
+            "scripts/op_simple/prompts/managers/boss.md",
+            "scripts/op_simple/prompts/workers/optimus-fullstack-developer/README.md",
+            "scripts/op_simple/prompts/workers/optimus-fullstack-tester/README.md",
+            "scripts/op_simple/prompts/workers/optimus-reviewer/README.md",
+            "skills/dev-check-bundle/SKILL.md",
+            "docs/plans/OP_SIMPLE_SCHEMA_CATALOG_V2.md",
+        }
+        for rel in required:
+            assert rel in managed
+        templates_manifest = set(manifest.get("templates_manifest") or [])
+        assert templates_manifest == set()

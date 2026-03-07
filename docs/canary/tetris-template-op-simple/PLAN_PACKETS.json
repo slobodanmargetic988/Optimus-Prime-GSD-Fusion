@@ -1,0 +1,1258 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-03-06T21:10:00Z",
+  "plan_id": "plan-tetris-canary-template-20260306T211000Z",
+  "phase": "multi-phase",
+  "phases": [
+    {
+      "phase_id": "phase-0",
+      "task_ids": [
+        "TASK-001",
+        "TASK-002",
+        "TASK-003"
+      ],
+      "depends_on_phase_ids": [],
+      "entry_criteria": [
+        "empty_or_minimal_repo_ready"
+      ],
+      "exit_criteria": [
+        "workspace_bootstrapped",
+        "verification_commands_resolve",
+        "telemetry_baseline_defined"
+      ]
+    },
+    {
+      "phase_id": "phase-1",
+      "task_ids": [
+        "TASK-004",
+        "TASK-005",
+        "TASK-006",
+        "TASK-007",
+        "TASK-008",
+        "TASK-009",
+        "TASK-010",
+        "TASK-011",
+        "TASK-012",
+        "TASK-013",
+        "TASK-014",
+        "TASK-015"
+      ],
+      "depends_on_phase_ids": [
+        "phase-0"
+      ],
+      "entry_criteria": [
+        "phase_0_exit_criteria_met"
+      ],
+      "exit_criteria": [
+        "red_tests_defined_for_all_core_features",
+        "all_phase_1_tasks_are_expected_red"
+      ]
+    },
+    {
+      "phase_id": "phase-2",
+      "task_ids": [
+        "TASK-016",
+        "TASK-017",
+        "TASK-018",
+        "TASK-019",
+        "TASK-020",
+        "TASK-021",
+        "TASK-022",
+        "TASK-023",
+        "TASK-024",
+        "TASK-025",
+        "TASK-026",
+        "TASK-027",
+        "TASK-028",
+        "TASK-029",
+        "TASK-030"
+      ],
+      "depends_on_phase_ids": [
+        "phase-1"
+      ],
+      "entry_criteria": [
+        "phase_1_red_tests_present"
+      ],
+      "exit_criteria": [
+        "core_gameplay_is_playable",
+        "pause_reset_and_scoreboard_requirements_met",
+        "e2e_canary_checks_green"
+      ]
+    }
+  ],
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "title": "Bootstrap browser game workspace and build scripts",
+      "acceptance_criteria": [
+        "Project contains reproducible install, dev, build, lint, and test scripts.",
+        "Base app starts locally with deterministic entrypoint."
+      ],
+      "verify_commands": [
+        "npm run build"
+      ]
+    },
+    {
+      "id": "REQ-002",
+      "title": "Establish deterministic unit and e2e harness",
+      "acceptance_criteria": [
+        "Unit and e2e commands are executable from package scripts.",
+        "Seeded test setup is documented and wired."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --runInBand"
+      ]
+    },
+    {
+      "id": "REQ-003",
+      "title": "Capture canary telemetry baseline and verification artifacts",
+      "acceptance_criteria": [
+        "Canary run emits consistent artifacts for pass/fail triage.",
+        "Telemetry expectations are stated for plan consumers."
+      ],
+      "verify_commands": [
+        "npm run test:smoke"
+      ]
+    },
+    {
+      "id": "REQ-004",
+      "title": "Core engine state and tick lifecycle",
+      "acceptance_criteria": [
+        "Game state transitions are deterministic across ticks.",
+        "Tick loop can advance and pause without corruption."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/engine-state.spec.ts"
+      ]
+    },
+    {
+      "id": "REQ-005",
+      "title": "Piece generation, spawn, and collision rules",
+      "acceptance_criteria": [
+        "Piece bag generation is deterministic in seeded mode.",
+        "Spawn and collision checks prevent invalid board writes."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/piece-spawn-collision.spec.ts"
+      ]
+    },
+    {
+      "id": "REQ-006",
+      "title": "Arrow key and WASD input support",
+      "acceptance_criteria": [
+        "Player can control movement/rotation using arrow keys and WASD.",
+        "Input mapping handles conflicting or repeated events safely."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/controls.spec.ts"
+      ]
+    },
+    {
+      "id": "REQ-007",
+      "title": "Pause menu with resume and reset behavior",
+      "acceptance_criteria": [
+        "Pause action opens a menu showing Resume and Reset.",
+        "Reset starts a clean game state with no stale timers."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/pause-reset.spec.ts"
+      ]
+    },
+    {
+      "id": "REQ-008",
+      "title": "Board and HUD rendering synchronization",
+      "acceptance_criteria": [
+        "Board and HUD render from canonical state each frame.",
+        "HUD includes score, level, lines, and queue data."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/render-hud.spec.ts"
+      ]
+    },
+    {
+      "id": "REQ-009",
+      "title": "Scoring, line clear, and level progression",
+      "acceptance_criteria": [
+        "Line clear outcomes produce expected score deltas.",
+        "Level progression updates gravity and speed behavior."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/scoring-level.spec.ts"
+      ]
+    },
+    {
+      "id": "REQ-010",
+      "title": "Game-over detection and state lock",
+      "acceptance_criteria": [
+        "Engine identifies game-over deterministically.",
+        "No additional movement is applied after game-over until restart."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/game-over.spec.ts"
+      ]
+    },
+    {
+      "id": "REQ-011",
+      "title": "Game-over name capture and score submission",
+      "acceptance_criteria": [
+        "Player can enter name at game-over and submit score.",
+        "Invalid name input is blocked with clear feedback."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/name-capture.spec.ts"
+      ]
+    },
+    {
+      "id": "REQ-012",
+      "title": "Leaderboard persistence with top-10 ordering",
+      "acceptance_criteria": [
+        "Scores are persisted and sorted descending.",
+        "Top 10 list is displayed on results screen."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/leaderboard-top10.spec.ts"
+      ]
+    },
+    {
+      "id": "REQ-013",
+      "title": "Player rank visibility and New Game action",
+      "acceptance_criteria": [
+        "If score is outside top 10, player rank is shown below the list.",
+        "Results screen provides New Game action to start immediately."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/results-rank-new-game.spec.ts"
+      ]
+    },
+    {
+      "id": "REQ-014",
+      "title": "End-to-end gameplay and results flow coverage",
+      "acceptance_criteria": [
+        "Playwright covers play, pause, reset, game-over, and results flow.",
+        "Score submission and rank visibility are asserted in browser flow."
+      ],
+      "verify_commands": [
+        "npm run test:e2e -- --project=chromium"
+      ]
+    },
+    {
+      "id": "REQ-015",
+      "title": "Accessibility and performance hardening for canary confidence",
+      "acceptance_criteria": [
+        "Keyboard-only flow works end-to-end.",
+        "Core loop remains stable under extended play sessions."
+      ],
+      "verify_commands": [
+        "npm run test:smoke"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "TASK-001",
+      "title": "Initialize Vite TypeScript app and package scripts",
+      "phase_id": "phase-0",
+      "lane_id": "phase-0/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "bootstrap_adjustment_required"
+        ],
+        "infra_failure_reason_codes": [
+          "verification_environment_error"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-001"
+      ],
+      "depends_on": [],
+      "must_haves": [
+        "Create runnable scripts for dev, build, lint, and test targets.",
+        "Ensure app entrypoint renders in browser."
+      ],
+      "verify_commands": [
+        "npm run build"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-002",
+      "title": "Wire deterministic unit and e2e harness commands",
+      "phase_id": "phase-0",
+      "lane_id": "phase-0/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "test_harness_bootstrap_gap"
+        ],
+        "infra_failure_reason_codes": [
+          "verification_command_target_missing"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-002"
+      ],
+      "depends_on": [
+        "TASK-001"
+      ],
+      "must_haves": [
+        "Configure unit and e2e commands to run from package scripts.",
+        "Add deterministic seed bootstrap for tests."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/bootstrap.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-003",
+      "title": "Define canary telemetry baseline and artifact expectations",
+      "phase_id": "phase-0",
+      "lane_id": "phase-0/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "telemetry_contract_missing"
+        ],
+        "infra_failure_reason_codes": [
+          "artifact_write_error"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-003"
+      ],
+      "depends_on": [
+        "TASK-001"
+      ],
+      "must_haves": [
+        "Document canonical canary artifacts and expected statuses.",
+        "Define pass/fail evidence paths for runtime consumption."
+      ],
+      "verify_commands": [
+        "npm run test:smoke"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-004",
+      "title": "Write red tests for deterministic engine state transitions",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "test_runner_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-004"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Cover idle, running, paused, and ended engine states.",
+        "Assert deterministic state progression across fixed ticks."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/engine-state.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-005",
+      "title": "Write red tests for piece bag spawn and collision boundaries",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "test_fixture_missing"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-005"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Validate deterministic bag sequencing for seeded runs.",
+        "Assert spawn rejection and collision edge cases."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/piece-spawn-collision.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-006",
+      "title": "Write red tests for arrow and WASD input mappings",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "keyboard_event_mock_error"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-006"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Assert equivalent behavior across arrow keys and WASD.",
+        "Cover repeat and conflict handling cases."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/controls.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-007",
+      "title": "Write red tests for pause menu resume and reset semantics",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "ui_harness_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-007"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Assert pause overlay appears with Resume and Reset actions.",
+        "Assert reset clears timers and gameplay state."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/pause-reset.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-008",
+      "title": "Write red tests for board and HUD render synchronization",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-b",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "render_harness_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-008"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Assert board updates and HUD metrics stay in lockstep.",
+        "Check score, level, and lines values per state frame."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/render-hud.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-009",
+      "title": "Write red tests for line clear scoring and level progression",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-b",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "test_data_seed_error"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-009"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Assert scoring table for 1-4 line clears.",
+        "Assert level and gravity changes at defined thresholds."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/scoring-level.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-010",
+      "title": "Write red tests for game-over detection and lockout",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-b",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "simulation_harness_error"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-010"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Assert game over triggers when spawn is blocked.",
+        "Assert controls are ignored after game-over until new game."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/game-over.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-011",
+      "title": "Write red tests for name entry validation and submit flow",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-b",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "form_harness_missing"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-011"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Assert non-empty and bounded player name rules.",
+        "Assert submission stores name with score payload."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/name-capture.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-012",
+      "title": "Write red tests for leaderboard persistence and top-10 ordering",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-c",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "storage_adapter_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-012"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Assert leaderboard is persisted between sessions.",
+        "Assert descending sort and top-10 truncation."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/leaderboard-top10.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-013",
+      "title": "Write red tests for outside-top10 rank and New Game CTA",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-c",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "results_view_fixture_missing"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-013"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Assert player rank is shown when score is not in top 10.",
+        "Assert New Game action starts a fresh playable run."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/results-rank-new-game.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-014",
+      "title": "Write red Playwright scenarios for full gameplay-to-results flow",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-c",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "browser_runtime_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-014"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Cover play, pause, reset, game-over, submit score, and results.",
+        "Capture deterministic evidence artifacts for canary review."
+      ],
+      "verify_commands": [
+        "npm run test:e2e -- --project=chromium"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-015",
+      "title": "Write red checks for keyboard-only accessibility and long-run stability",
+      "phase_id": "phase-1",
+      "lane_id": "phase-1/lane-c",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "tdd_red",
+        "dev_expectation": "expect_fail",
+        "test_expectation": "expect_fail",
+        "review_expectation": "expect_fail",
+        "expected_failure_reason_codes": [
+          "feature_not_implemented"
+        ],
+        "infra_failure_reason_codes": [
+          "perf_probe_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-015"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Define keyboard-only acceptance checks.",
+        "Define lightweight runtime stability criteria for canary."
+      ],
+      "verify_commands": [
+        "npm run test:smoke"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-016",
+      "title": "Harden workspace scripts and local developer bootstrap docs",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "hardening",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "bootstrap_regression_detected"
+        ],
+        "infra_failure_reason_codes": [
+          "package_manager_failure"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-001"
+      ],
+      "depends_on": [
+        "TASK-001"
+      ],
+      "must_haves": [
+        "Confirm scripts are stable across clean checkout.",
+        "Document one-command local setup for workers."
+      ],
+      "verify_commands": [
+        "npm run lint"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-017",
+      "title": "Stabilize deterministic test harness and fixture utilities",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-b",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "hardening",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "determinism_gap_detected"
+        ],
+        "infra_failure_reason_codes": [
+          "test_runner_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-002"
+      ],
+      "depends_on": [
+        "TASK-002"
+      ],
+      "must_haves": [
+        "Eliminate flaky setup and timing dependencies.",
+        "Keep seeded test helpers reusable across lanes."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/bootstrap.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-018",
+      "title": "Implement canary artifact emission and summary wiring",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-c",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "artifact_contract_mismatch"
+        ],
+        "infra_failure_reason_codes": [
+          "artifact_write_error"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-003"
+      ],
+      "depends_on": [
+        "TASK-003",
+        "TASK-017"
+      ],
+      "must_haves": [
+        "Persist deterministic canary evidence files for each verification stage.",
+        "Include concise summary fields for triage tooling."
+      ],
+      "verify_commands": [
+        "npm run test:smoke"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-019",
+      "title": "Implement engine tick reducer and state machine transitions",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "logic_gap_detected"
+        ],
+        "infra_failure_reason_codes": [
+          "test_runner_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-004"
+      ],
+      "depends_on": [
+        "TASK-004",
+        "TASK-017"
+      ],
+      "must_haves": [
+        "Support deterministic tick progression from init to game-over.",
+        "Ensure pause/resume hooks do not mutate unrelated state."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/engine-state.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-020",
+      "title": "Implement piece bag, spawn queue, and collision checks",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "collision_edge_case_failure"
+        ],
+        "infra_failure_reason_codes": [
+          "fixture_seed_error"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-005"
+      ],
+      "depends_on": [
+        "TASK-005",
+        "TASK-019"
+      ],
+      "must_haves": [
+        "Implement seeded 7-bag generation with deterministic replay.",
+        "Reject invalid spawns and illegal board overlap."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/piece-spawn-collision.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-021",
+      "title": "Implement arrow and WASD control adapter with repeat safety",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "input_mapping_regression"
+        ],
+        "infra_failure_reason_codes": [
+          "keyboard_event_mock_error"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-006"
+      ],
+      "depends_on": [
+        "TASK-006",
+        "TASK-019"
+      ],
+      "must_haves": [
+        "Map arrows and WASD to equivalent movement and rotation commands.",
+        "Prevent stuck-key and duplicate-event drift."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/controls.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-022",
+      "title": "Implement pause overlay actions for resume and reset",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-a",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "pause_state_transition_error"
+        ],
+        "infra_failure_reason_codes": [
+          "ui_harness_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-007"
+      ],
+      "depends_on": [
+        "TASK-007",
+        "TASK-019",
+        "TASK-021"
+      ],
+      "must_haves": [
+        "Show menu on pause with Resume and Reset actions.",
+        "Reset must start new round with cleared timers and score."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/pause-reset.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-023",
+      "title": "Implement board renderer and HUD state bindings",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-b",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "render_sync_gap_detected"
+        ],
+        "infra_failure_reason_codes": [
+          "render_harness_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-008"
+      ],
+      "depends_on": [
+        "TASK-008",
+        "TASK-019"
+      ],
+      "must_haves": [
+        "Render board from canonical state without side effects.",
+        "Display score, level, lines, and queue values."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/render-hud.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-024",
+      "title": "Implement scoring table line clear handling and level speed updates",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-b",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "scoring_calculation_mismatch"
+        ],
+        "infra_failure_reason_codes": [
+          "test_data_seed_error"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-009"
+      ],
+      "depends_on": [
+        "TASK-009",
+        "TASK-019"
+      ],
+      "must_haves": [
+        "Apply expected score outcomes for line clear counts.",
+        "Increase level and gravity based on configured thresholds."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/scoring-level.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-025",
+      "title": "Implement game-over detection and control lock state",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-b",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "game_over_condition_missed"
+        ],
+        "infra_failure_reason_codes": [
+          "simulation_harness_error"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-010"
+      ],
+      "depends_on": [
+        "TASK-010",
+        "TASK-020",
+        "TASK-024"
+      ],
+      "must_haves": [
+        "Trigger game-over on blocked spawn and terminal conditions.",
+        "Prevent movement and rotation commands after game-over."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/game-over.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-026",
+      "title": "Implement game-over name entry validation and score submit action",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-b",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "name_validation_or_submit_gap"
+        ],
+        "infra_failure_reason_codes": [
+          "form_harness_missing"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-011"
+      ],
+      "depends_on": [
+        "TASK-011",
+        "TASK-025"
+      ],
+      "must_haves": [
+        "Collect player name on results flow with validation feedback.",
+        "Submit name and score payload to leaderboard service."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/name-capture.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-027",
+      "title": "Implement persistent leaderboard storage and top-10 rendering",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-c",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "ranking_or_persistence_gap"
+        ],
+        "infra_failure_reason_codes": [
+          "storage_adapter_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-012"
+      ],
+      "depends_on": [
+        "TASK-012",
+        "TASK-017"
+      ],
+      "must_haves": [
+        "Persist submitted scores and keep descending ordering.",
+        "Render top 10 results on results view."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/leaderboard-top10.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-028",
+      "title": "Implement full results screen with outside-top10 rank and New Game",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-c",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "implementation_green",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "results_view_ranking_gap"
+        ],
+        "infra_failure_reason_codes": [
+          "results_view_fixture_missing"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-013"
+      ],
+      "depends_on": [
+        "TASK-013",
+        "TASK-026",
+        "TASK-027"
+      ],
+      "must_haves": [
+        "Show player rank under top 10 if not present in top list.",
+        "Add New Game action that starts a clean run."
+      ],
+      "verify_commands": [
+        "npm run test:unit -- --run tests/unit/results-rank-new-game.spec.ts"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-029",
+      "title": "Implement Playwright UAT for play pause reset submit and ranking flows",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-c",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "hardening",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "e2e_assertion_gap"
+        ],
+        "infra_failure_reason_codes": [
+          "browser_runtime_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-014"
+      ],
+      "depends_on": [
+        "TASK-014",
+        "TASK-022",
+        "TASK-028"
+      ],
+      "must_haves": [
+        "Cover complete user path from gameplay to results and restart.",
+        "Assert top 10 behavior and outside-top10 rank visibility."
+      ],
+      "verify_commands": [
+        "npm run test:e2e -- --project=chromium"
+      ],
+      "gaps_that_need_patching": []
+    },
+    {
+      "task_id": "TASK-030",
+      "title": "Harden keyboard accessibility and runtime stability for canary signoff",
+      "phase_id": "phase-2",
+      "lane_id": "phase-2/lane-c",
+      "status": "pending",
+      "verification_contract": {
+        "mode": "hardening",
+        "dev_expectation": "expect_pass",
+        "test_expectation": "expect_pass",
+        "review_expectation": "expect_pass",
+        "expected_failure_reason_codes": [
+          "a11y_or_stability_gap_detected"
+        ],
+        "infra_failure_reason_codes": [
+          "perf_probe_unavailable"
+        ]
+      },
+      "requirement_ids": [
+        "REQ-015"
+      ],
+      "depends_on": [
+        "TASK-015",
+        "TASK-021",
+        "TASK-029"
+      ],
+      "must_haves": [
+        "Validate keyboard-only flow for all core interactions.",
+        "Run extended-play smoke checks to detect loop instability."
+      ],
+      "verify_commands": [
+        "npm run test:smoke"
+      ],
+      "gaps_that_need_patching": []
+    }
+  ]
+}

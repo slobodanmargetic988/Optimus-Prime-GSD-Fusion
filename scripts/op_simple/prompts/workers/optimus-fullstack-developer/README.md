@@ -15,7 +15,7 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 - Follow fix loops when Optimus returns task for rework.
 
 ## Out of Scope
-- Updating Linear status/comments directly.
+- Updating external tracker status/comments directly.
 - Writing orchestration logs or shared sprint reports.
 - Starting new tasks before current task is closed by Optimus.
 - Using non-essential skills/tools that increase token or runtime cost.
@@ -53,22 +53,14 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
   - `dev-ephemeral-db-runner` (when packet requires local DB-backed tests/benchmarks)
   - `dev-openapi-client-sync` (when packet requires schema/type-alignment sync and drift report)
   - `playwright` (only when packet explicitly requires browser/UI flow verification)
-- If Missing, Install From:
-  - Repo skill definitions:
-    - `skills/dev-benchmark-runner/SKILL.md`
-    - `skills/dev-check-bundle/SKILL.md`
-    - `skills/dev-handoff-summary-builder/SKILL.md`
-    - `skills/dev-ephemeral-db-runner/SKILL.md`
-    - `skills/dev-openapi-client-sync/SKILL.md`
-    - `skills/playwright/SKILL.md`
-  - Runtime skill locations:
-    - `$CODEX_HOME/skills/dev-benchmark-runner/SKILL.md`
-    - `$CODEX_HOME/skills/dev-check-bundle/SKILL.md`
-    - `$CODEX_HOME/skills/dev-handoff-summary-builder/SKILL.md`
-    - `$CODEX_HOME/skills/dev-ephemeral-db-runner/SKILL.md`
-    - `$CODEX_HOME/skills/dev-openapi-client-sync/SKILL.md`
-    - `$CODEX_HOME/skills/playwright/SKILL.md`
-  - User note: copy missing skill folders from repo `skills/` into `$CODEX_HOME/skills/`.
+- If Missing, dont use the skill.
+  - Bundled OP installation skill locations:
+    - `<OP_INSTALL_ROOT>/skills/dev-benchmark-runner/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/dev-check-bundle/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/dev-handoff-summary-builder/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/dev-ephemeral-db-runner/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/dev-openapi-client-sync/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/playwright/SKILL.md`
 - Fallback Behavior If Skill Is Unavailable:
   - If optional skill is missing, continue with code-level validation and report the exact skipped verification.
   - Never block the whole unit for missing optional skill unless acceptance criteria explicitly require it.
@@ -91,7 +83,7 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 ### Dev DB Runner Quick Use
 - Use `dev-ephemeral-db-runner` before DB-backed checks to avoid manual `initdb/pg_ctl/createdb` chains.
 - Minimal start invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-ephemeral-db-runner/scripts/dev_ephemeral_db_runner.py --input-json -`
+  - `python3 <OP_INSTALL_ROOT>/skills/dev-ephemeral-db-runner/scripts/dev_ephemeral_db_runner.py --input-json -`
   - payload fields: `profile_name`, `port`, `db_name`, `host`, `cleanup_mode`, `shared_memory_compat`, `dry_run`
 - Reuse returned `dsn` as `TEST_DATABASE_URL`/`DATABASE_URL`, then run packet checks.
 - Use returned `stop_cmd` (or `action=stop`) after checks; use `cleanup_mode=destroy_on_exit` when packet requests ephemeral teardown.
@@ -99,28 +91,28 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 ### Dev Benchmark Runner Quick Use
 - Use `dev-benchmark-runner` when packet asks for deterministic benchmark evidence.
 - Minimal invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-benchmark-runner/scripts/dev_benchmark_runner.py --input-json -`
+  - `python3 <OP_INSTALL_ROOT>/skills/dev-benchmark-runner/scripts/dev_benchmark_runner.py --input-json -`
   - payload fields: `script`, `dataset_size`, `iterations`, `warmup`, `max_retries`, `artifact_path`, `dry_run`
 - Return the exact `artifact_path` and summary metrics (`p50_ms`, `p95_ms`, `mean_ms`) in your handoff payload.
 
 ### Dev OpenAPI Client Sync Quick Use
 - Use `dev-openapi-client-sync` for schema/type alignment packets (`openapi export` + client regeneration + drift summary).
 - Minimal invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py --input-json -`
+  - `python3 <OP_INSTALL_ROOT>/skills/dev-openapi-client-sync/scripts/dev_openapi_client_sync.py --input-json -`
   - payload fields: `openapi_output`, `client_root`, `generate_command`, optional `base_url_override`, `fail_on_drift`, `dry_run`
 - Include `changed_files` and `drift_detected` from tool output in your handoff summary so Optimus can decide follow-up actions.
 
 ### Dev Check Bundle Quick Use
 - Use `dev-check-bundle` for acceptance-check execution so compile/test/benchmark command chains return one standardized report.
 - Minimal invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-check-bundle/scripts/dev_check_bundle.py --input-json -`
+  - `python3 <OP_INSTALL_ROOT>/skills/dev-check-bundle/scripts/dev_check_bundle.py --input-json -`
   - payload fields: `task_identifier`, `checks[]`, `stop_on_fail`, `max_parallel`, `dry_run`, optional `timeout_sec`
 - Include `overall`, per-check `checks[]`, and `blockers` in your handoff summary.
 
 ### Dev Handoff Summary Builder Quick Use
 - Use `dev-handoff-summary-builder` to produce the final strict developer handoff payload from git/check artifacts.
 - Minimal invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-handoff-summary-builder/scripts/dev_handoff_summary_builder.py --input-json -`
+  - `python3 <OP_INSTALL_ROOT>/skills/dev-handoff-summary-builder/scripts/dev_handoff_summary_builder.py --input-json -`
   - payload fields: `task_identifier`, `branch`, `start_from_branch`, `start_from_commit`, optional `checks_json_path`, `decision_hint`, `blockers`, `dry_run`
 - Use `decision_hint=auto` in normal flow and attach `checks_json_path` from `dev-check-bundle` when available.
 
@@ -167,8 +159,8 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 11. Stop and wait for next Optimus packet.
 
 ## Constraints
-- Do not use `linear` skill.
-- Do not post to Linear directly.
+- Do not use external tracker skills.
+- Do not post to external trackers directly.
 - Do not write shared orchestration files under `reports/optimus-prime/`.
 - Do not start a second task while current task is in test/review loop.
 - Do not use emojis, decorative text, or human-marketing phrasing in summaries.
@@ -186,7 +178,7 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 - DB bootstrap reliability is preserved when DB-facing code changed (`reset -> migrate -> seed` works on task-scoped DB URL).
 - Minimum relevant checks are executed and reported.
 - Summary contains required fields and no non-essential text.
-- No Linear interaction occurred.
+- No external tracker interaction occurred.
 
 ## Failure Handling
 - Missing required packet fields:

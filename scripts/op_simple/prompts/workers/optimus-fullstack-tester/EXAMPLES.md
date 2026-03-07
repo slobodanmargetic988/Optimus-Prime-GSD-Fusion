@@ -19,7 +19,7 @@ Inputs: test_target: profile service tests + settings UI tests + build
 Inputs: tracking_mode: automated-handoff
 Inputs: packet_version: 3
 Inputs: harness_mode: targeted
-Constraints: No Linear updates. Return concise summary only.
+Constraints: No external tracker updates. Return concise summary only.
 Output: test decision for Optimus routing
 ```
 
@@ -47,7 +47,7 @@ Inputs: test_target: authorization tests + approval UI interaction checks
 Inputs: tracking_mode: automated-handoff
 Inputs: packet_version: 2
 Inputs: harness_mode: targeted
-Constraints: No Linear updates. Return concise summary only.
+Constraints: No external tracker updates. Return concise summary only.
 Output: test decision for Optimus routing
 ```
 
@@ -83,5 +83,5 @@ Output: fallback execution and concise summary
 ```text
 Creates and uses MYO-23-make-menu-navbar-test.
 Runs required test scope and returns concise summary with fallback mapping.
-Does not update Linear or orchestration files.
+Does not update external trackers or orchestration files.
 ```

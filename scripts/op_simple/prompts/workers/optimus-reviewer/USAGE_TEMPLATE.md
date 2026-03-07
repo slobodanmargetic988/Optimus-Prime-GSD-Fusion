@@ -19,7 +19,7 @@ Inputs: review_focus:
 Inputs: risk_focus:
 Inputs: fallback_branch_suffix: -review
 Inputs: constraints:
-Constraints: No Linear updates. No orchestration file writes. Summary must be concise and emoji-free.
+Constraints: No external tracker updates. No orchestration file writes. Summary must be concise and emoji-free.
 Output: Final review decision summary for Optimus
 ```
 
@@ -42,6 +42,6 @@ Inputs: review_focus: diff quality and regression risk
 Inputs: risk_focus: navigation accessibility and mobile interaction consistency
 Inputs: fallback_branch_suffix: -review
 Inputs: constraints: Keep review scoped to task surfaces only.
-Constraints: No Linear updates. No orchestration file writes. Summary must be concise and emoji-free.
+Constraints: No external tracker updates. No orchestration file writes. Summary must be concise and emoji-free.
 Output: Final review decision summary for Optimus
 ```

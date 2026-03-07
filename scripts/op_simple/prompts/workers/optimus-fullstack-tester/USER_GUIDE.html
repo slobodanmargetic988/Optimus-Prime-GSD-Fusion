@@ -3,22 +3,22 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Optimus Reviewer Guide</title>
+  <title>Optimus Fullstack Tester Guide</title>
   <style>
     :root {
-      --bg-a: #171a21;
-      --bg-b: #2f3b52;
-      --bg-c: #f7f3ea;
-      --ink: #1c3148;
-      --ink-soft: #3a5870;
-      --light: #eef3ff;
-      --teal: #3dd6d0;
-      --amber: #f4a259;
-      --rose: #d96c6c;
+      --bg-a: #0c1821;
+      --bg-b: #1b2a41;
+      --bg-c: #f5f9ef;
+      --ink: #17324a;
+      --ink-soft: #35556d;
+      --light: #edf5ff;
+      --mint: #2ec4b6;
+      --orange: #ff9f1c;
+      --sand: #e8d8a8;
       --card: rgba(255, 255, 255, 0.93);
-      --border: rgba(18, 48, 72, 0.14);
+      --border: rgba(14, 41, 62, 0.14);
       --radius: 16px;
-      --shadow: 0 14px 38px rgba(7, 19, 30, 0.2);
+      --shadow: 0 14px 38px rgba(4, 20, 33, 0.2);
     }
 
     * { box-sizing: border-box; }
@@ -27,14 +27,14 @@
       font-family: "Manrope", "Space Grotesk", "Avenir Next", sans-serif;
       color: var(--ink);
       background:
-        radial-gradient(860px 320px at 86% -8%, rgba(61,214,208,0.2), transparent 70%),
-        radial-gradient(760px 300px at -12% 8%, rgba(244,162,89,0.22), transparent 70%),
-        linear-gradient(162deg, var(--bg-c), #fbfdff);
+        radial-gradient(900px 330px at 85% -5%, rgba(46,196,182,0.22), transparent 70%),
+        radial-gradient(700px 300px at -15% 10%, rgba(255,159,28,0.2), transparent 70%),
+        linear-gradient(160deg, var(--bg-c), #f9fcff);
       line-height: 1.55;
     }
 
     header {
-      background: linear-gradient(126deg, var(--bg-a), var(--bg-b));
+      background: linear-gradient(125deg, var(--bg-a), var(--bg-b));
       color: var(--light);
       padding: 2.8rem 1.2rem 2.2rem;
       position: relative;
@@ -44,15 +44,16 @@
     header::after {
       content: "";
       position: absolute;
-      right: -80px;
-      bottom: -80px;
-      width: 250px;
-      height: 250px;
+      right: -90px;
+      bottom: -90px;
+      width: 280px;
+      height: 280px;
       border-radius: 50%;
-      background: radial-gradient(circle, rgba(217,108,108,0.35), rgba(217,108,108,0));
+      background: radial-gradient(circle, rgba(232,216,168,0.4), rgba(232,216,168,0));
     }
 
     .wrap { max-width: 1020px; margin: 0 auto; }
+
     h1 {
       margin: 0;
       font-size: clamp(1.8rem, 4vw, 2.6rem);
@@ -63,7 +64,7 @@
     .sub {
       margin: 0.7rem 0 0;
       max-width: 760px;
-      color: rgba(238,243,255,0.92);
+      color: rgba(237,245,255,0.92);
     }
 
     .chips {
@@ -102,14 +103,14 @@
     .half { grid-column: span 6; }
     .third { grid-column: span 4; }
 
-    h2 { margin: 0.08rem 0 0.62rem; font-size: 1.04rem; color: #1f415b; }
+    h2 { margin: 0.08rem 0 0.62rem; font-size: 1.04rem; color: #1c3f59; }
     ul { margin: 0.2rem 0 0.4rem 1.1rem; padding: 0; }
     li { margin-bottom: 0.28rem; }
 
     .flow {
       font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
-      background: linear-gradient(90deg, #fff4ee, #f0fcfb);
-      border: 1px dashed rgba(20,63,92,0.24);
+      background: linear-gradient(90deg, #fff9ee, #edfcf8);
+      border: 1px dashed rgba(17,64,95,0.24);
       border-radius: 12px;
       padding: 0.74rem 0.8rem;
       overflow-x: auto;
@@ -119,8 +120,8 @@
 
     .payload {
       font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
-      background: #13293d;
-      color: #deefff;
+      background: #12293d;
+      color: #def1ff;
       border-radius: 12px;
       padding: 0.82rem;
       font-size: 0.86rem;
@@ -138,13 +139,13 @@
 <body>
   <header>
     <div class="wrap">
-      <h1>Optimus Reviewer</h1>
-      <p class="sub">Final quality gate worker for Optimus Prime. Reviews tested units, validates remaining risk, and returns strict concise decisions for orchestration routing.</p>
+      <h1>Optimus Fullstack Tester</h1>
+      <p class="sub">Testing worker profile for Optimus Prime. Runs focused checks, gives deterministic routing decision, and keeps all output compact and machine-oriented.</p>
       <div class="chips">
         <span class="chip">Mode: automated-handoff</span>
-        <span class="chip">Linear: forbidden</span>
+        <span class="chip">Local tasks only</span>
         <span class="chip">One active packet</span>
-        <span class="chip">Decision: pass/dev-fix/blocked</span>
+        <span class="chip">Decision: review/dev-fix/blocked</span>
       </div>
     </div>
   </header>
@@ -154,68 +155,68 @@
       <section class="card">
         <h2>Core Rules</h2>
         <ul>
-          <li>Review only assigned unit and provided dev/test evidence.</li>
-          <li>Validate packet start anchor before final review decision.</li>
-          <li>Focus on correctness, regressions, and unresolved risk.</li>
-          <li>Use minimal additional checks needed for confidence.</li>
-          <li>Do not update Linear or orchestration tracking files.</li>
+          <li>Test only the assigned packet scope and acceptance criteria.</li>
+          <li>Validate packet start anchor before certifying test outcome.</li>
+          <li>Use minimum checks needed to prove pass/fail.</li>
+          <li>Do not modify external trackers or orchestration files.</li>
+          <li>Do not start next task until reviewer outcome is known for current task.</li>
         </ul>
       </section>
 
       <section class="card half">
-        <h2>Review Decision Contract</h2>
+        <h2>Decision Contract</h2>
         <ul>
-          <li><strong>review_passed</strong>: acceptance met and no blocking risk.</li>
-          <li><strong>needs_dev_fix</strong>: unresolved defect, regression, or high-risk issue.</li>
-          <li><strong>blocked</strong>: external dependency prevents valid final decision.</li>
+          <li><strong>ready_for_review</strong>: acceptance criteria proven.</li>
+          <li><strong>needs_dev_fix</strong>: reproducible defect or regression exists.</li>
+          <li><strong>blocked</strong>: external dependency prevents valid testing.</li>
         </ul>
       </section>
 
       <section class="card half">
         <h2>Branch Conflict Rule</h2>
-        <div class="flow">assigned branch locked -> create &lt;branch&gt;-review -> continue -> report mapping</div>
-        <p class="note">Reviewer never creates a new worktree and never alters orchestration ownership.</p>
+        <div class="flow">assigned branch locked -> create &lt;branch&gt;-test -> continue -> report mapping</div>
+        <p class="note">No new worktree creation. Use the workstation prepared by Optimus.</p>
       </section>
 
       <section class="card third">
         <h2>Token Discipline</h2>
         <ul>
           <li>No emojis.</li>
-          <li>No decorative language.</li>
-          <li>No long explainers.</li>
-          <li>Short evidence-backed findings only.</li>
+          <li>No long prose.</li>
+          <li>No narrative timeline.</li>
+          <li>Facts only.</li>
         </ul>
       </section>
 
       <section class="card third">
         <h2>Optional Skill</h2>
         <ul>
-          <li>Playwright only when explicit browser-flow confirmation is required.</li>
-          <li>If missing, mark browser validation as pending.</li>
+          <li>Playwright only when packet explicitly requires browser evidence.</li>
+          <li>If missing, report skipped verification clearly.</li>
         </ul>
       </section>
 
       <section class="card third">
-        <h2>Reviewer Boundary</h2>
+        <h2>Tester Boundary</h2>
         <ul>
           <li>No queue management.</li>
-          <li>No reprioritization.</li>
-          <li>No direct task dispatch.</li>
+          <li>No orchestration logic.</li>
+          <li>No task reprioritization.</li>
         </ul>
       </section>
 
       <section class="card">
         <h2>Summary Payload</h2>
         <div class="payload">task_identifier: MYO-23
-branch: MYO-23-make-menu-navbar-test-review
-branch_fallback_from: MYO-23-make-menu-navbar-test
-start_from_branch: MYO-23-make-menu-navbar
-start_from_commit: a1b2c3d
+branch: MYO-23-make-menu-navbar-test
+branch_fallback_from: MYO-23-make-menu-navbar
+start_from_branch: MYO-22-menu-shell
+start_from_commit: 9f3a1c2
 head_commit: a1b2c3d
 checks:
 - npm run test -- navbar: pass
 - npm run build: pass
-decision: review_passed
+decision: ready_for_review
 findings:
 - none
 blockers: none</div>

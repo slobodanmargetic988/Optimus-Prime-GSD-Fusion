@@ -17,6 +17,7 @@ from typing import Any
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 RESET_KEYS = ("reset_at", "resets_at", "resetAt", "resetsAt", "reset_time", "resetTime")
 AUTH_SCAN_TAIL_LINES = 250
+STALE_REFRESH_HOURS = 5.0
 
 @dataclass
 class WindowSnapshot:
@@ -381,6 +382,16 @@ def window_soft_gated(window: WindowSnapshot, soft_gate_percent: float) -> bool:
     return window.remaining_percent <= soft_gate_percent
 
 
+def reset_window_to_full(window: WindowSnapshot) -> WindowSnapshot:
+    return WindowSnapshot(
+        used_percent=0.0,
+        remaining_percent=100.0,
+        reset_at=window.reset_at,
+        reset_in_hours=0.0,
+        gated=False,
+    )
+
+
 def maybe_read_auth_identity(codex_home: Path) -> tuple[str | None, str | None]:
     candidates = [codex_home / "auth.json", codex_home / "config" / "auth.json"]
     for path in candidates:
@@ -721,9 +732,45 @@ def build_profile_snapshot(
                 recommended_action = "wind_down"
         else:
             recommended_action = "wind_down"
-    if snapshot_age_minutes is not None and snapshot_age_minutes > max_snapshot_age_hours * 60.0:
+
+    if snapshot_age_minutes is not None and snapshot_age_minutes > STALE_REFRESH_HOURS * 60.0:
         errors.append("rate_limits_snapshot_stale")
-        recommended_action = "wind_down"
+        # Stale >5h policy: treat 5h window as refreshed.
+        five = reset_window_to_full(five)
+
+        # Weekly stale policy:
+        # - if stale weekly value is under gate and reset is in the future, preserve weekly gate;
+        # - if reset is in the past, treat weekly as refreshed to 100%.
+        weekly_remaining = weekly.remaining_percent
+        if weekly_remaining is not None and weekly_remaining <= gate_weekly:
+            weekly_reset_dt = parse_iso_datetime(weekly.reset_at)
+            now = now_utc()
+            if weekly_reset_dt is not None and weekly_reset_dt <= now:
+                weekly = reset_window_to_full(weekly)
+                errors.append("weekly_stale_reset_applied")
+            else:
+                errors.append("weekly_stale_gate_preserved")
+
+        any_gated = five.gated or weekly.gated
+        wait_candidate = False
+        wait_seconds = None
+        recommended_action = "continue"
+        if any_gated:
+            reset_candidates = []
+            if five.gated and five.reset_in_hours is not None and five.reset_in_hours >= 0:
+                reset_candidates.append(five.reset_in_hours)
+            if weekly.gated and weekly.reset_in_hours is not None and weekly.reset_in_hours >= 0:
+                reset_candidates.append(weekly.reset_in_hours)
+            if reset_candidates:
+                soonest_hours = min(reset_candidates)
+                if soonest_hours <= wait_max_hours:
+                    wait_candidate = True
+                    wait_seconds = max(0, int(soonest_hours * 3600))
+                    recommended_action = "wait_until_reset"
+                else:
+                    recommended_action = "wind_down"
+            else:
+                recommended_action = "wind_down"
 
     soft_concurrency_gated = window_soft_gated(five, soft_gate_5h) or window_soft_gated(weekly, soft_gate_weekly)
 

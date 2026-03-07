@@ -417,6 +417,7 @@ def test_command_normalization_accepts_new_commands():
             "$op-status": "op-status",
             "op-report": "op-report",
             "op-resume": "op-resume",
+            "op-simple-build": "op-simple-build",
         }
         for raw, expected in cases.items():
             req = MODULE.parse_request({"command": raw, "repo_root": str(root)})
@@ -635,6 +636,50 @@ def test_initialize_seeds_rate_registry_once_when_missing(monkeypatch: pytest.Mo
         assert any(item.get("code") == "rate_registry_seeded" for item in out.get("warnings", []))
 
 
+def test_initialize_seeds_rate_registry_before_plan(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        call_order: list[str] = []
+
+        def fake_seed(
+            repo_root: Path,
+            *,
+            stage: str = "build_loop",
+            force_refresh: bool = False,
+            emit_success_warning: bool = True,
+            profile_selection: dict | None = None,
+        ):
+            assert repo_root.resolve() == root.resolve()
+            assert stage == "initialize"
+            call_order.append("seed")
+            return []
+
+        def fake_plan(_req):
+            call_order.append("plan")
+            return {
+                "ok": True,
+                "status": "completed",
+                "warnings": [],
+                "artifacts": [],
+                "data": {"plan_ready": True},
+            }
+
+        monkeypatch.setattr(MODULE, "_seed_rate_registry_if_missing", fake_seed)
+        monkeypatch.setattr(MODULE, "command_plan", fake_plan)
+        out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is True
+        assert call_order == ["seed", "plan"]
+
+
 def test_seed_rate_registry_skips_when_registry_exists(monkeypatch: pytest.MonkeyPatch):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -652,6 +697,119 @@ def test_seed_rate_registry_skips_when_registry_exists(monkeypatch: pytest.Monke
         monkeypatch.setattr(MODULE, "_run", fail_run)
         warnings = MODULE._seed_rate_registry_if_missing(root, stage="initialize")
         assert warnings == []
+
+
+def test_select_planner_profile_from_rate_registry_uses_highest_weekly_not_5h_gated():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        planning_root = root / "reports" / "optimus-prime" / "planning"
+        planning_root.mkdir(parents=True, exist_ok=True)
+
+        selection_path = planning_root / "PROFILE_SELECTION.json"
+        selection_payload = {
+            "schema_version": "1.0",
+            "profiles": [
+                {"alias": "codex", "codex_home": "/tmp/codex", "auth_path": "/tmp/codex/auth.json"},
+                {"alias": "codex-second", "codex_home": "/tmp/codex-second", "auth_path": "/tmp/codex-second/auth.json"},
+                {"alias": "codex-third", "codex_home": "/tmp/codex-third", "auth_path": "/tmp/codex-third/auth.json"},
+            ],
+            "selected_aliases": ["codex", "codex-second", "codex-third"],
+            "selection_policy": "initialize_autodetect",
+        }
+        selection_path.write_text(json.dumps(selection_payload, indent=2) + "\n", encoding="utf-8")
+
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.parent.mkdir(parents=True, exist_ok=True)
+        rate_payload = {
+            "profiles": {
+                "codex": {
+                    "recommended_action": "continue",
+                    "five_hour": {"remaining_percent": 95},
+                    "weekly": {"remaining_percent": 99},
+                },
+                "codex-second": {
+                    "recommended_action": "continue",
+                    "five_hour": {"remaining_percent": 90},
+                    "weekly": {"remaining_percent": 70},
+                },
+                "codex-third": {
+                    "recommended_action": "continue",
+                    "five_hour": {"remaining_percent": 0.5},
+                    "weekly": {"remaining_percent": 95},
+                },
+            }
+        }
+        rate_path.write_text(json.dumps(rate_payload, indent=2) + "\n", encoding="utf-8")
+
+        alias, home = MODULE._select_planner_profile_from_rate_registry(root, stage="plan")
+
+        assert alias == "codex-second"
+        assert home == "/tmp/codex-second"
+
+
+def test_select_planner_profile_from_rate_registry_falls_back_on_invalid_data():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        planning_root = root / "reports" / "optimus-prime" / "planning"
+        planning_root.mkdir(parents=True, exist_ok=True)
+
+        selection_path = planning_root / "PROFILE_SELECTION.json"
+        selection_payload = {
+            "schema_version": "1.0",
+            "profiles": [
+                {"alias": "codex-second", "codex_home": "/tmp/codex-second", "auth_path": "/tmp/codex-second/auth.json"},
+            ],
+            "selected_aliases": ["codex-second"],
+            "selection_policy": "initialize_autodetect",
+        }
+        selection_path.write_text(json.dumps(selection_payload, indent=2) + "\n", encoding="utf-8")
+
+        rate_path = root / "reports" / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+        rate_path.parent.mkdir(parents=True, exist_ok=True)
+        rate_path.write_text(json.dumps({"profiles": "bad"}, indent=2) + "\n", encoding="utf-8")
+
+        alias, home = MODULE._select_planner_profile_from_rate_registry(root, stage="plan")
+        assert alias is None
+        assert home is None
+
+
+def test_planner_generation_passes_selected_profile_home_to_codex_exec(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        mission_source, scope_source = MODULE._resolve_mission_scope_sources(req, stage="plan", required=False)
+        monkeypatch.setattr(
+            MODULE,
+            "_select_planner_profile_from_rate_registry",
+            lambda *_args, **_kwargs: ("codex-second", "/tmp/codex-second"),
+        )
+        captured: dict[str, object] = {}
+
+        def fake_run_codex_exec(**kwargs: object) -> int:
+            captured["codex_home"] = kwargs.get("codex_home")
+            raise OSError("simulated launch failure")
+
+        monkeypatch.setattr(MODULE, "run_codex_exec", fake_run_codex_exec)
+
+        with pytest.raises(MODULE.OpError) as exc_info:
+            MODULE._run_llm_plan_generation(
+                req,
+                mission_source=mission_source,
+                scope_source=scope_source,
+            )
+
+        assert exc_info.value.code == "planner_execution_failed"
+        assert captured.get("codex_home") == "/tmp/codex-second"
 
 
 def test_new_project_creates_gitignore_when_missing():
@@ -998,6 +1156,64 @@ def test_op_build_request_accepts_enable_artifact_fan_in_override():
             }
         )
         assert req.enable_artifact_fan_in is True
+
+
+def test_op_simple_build_default_sleep_and_parallel_workers():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request({"command": "/op-simple-build", "repo_root": str(root)})
+        assert req.sleep_minutes == 5.0
+        assert req.max_parallel_workers == 8
+        assert req.boss_model == "gpt-5.3-codex"
+        assert req.boss_reasoning_effort == "xhigh"
+
+
+def test_op_simple_build_accepts_boss_model_and_reasoning_override():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-simple-build",
+                "repo_root": str(root),
+                "boss_model": "gpt-5.4-codex-experimental",
+                "boss_reasoning_effort": "medium",
+            }
+        )
+        assert req.boss_model == "gpt-5.4-codex-experimental"
+        assert req.boss_reasoning_effort == "medium"
+
+
+def test_op_simple_build_accepts_run_base_source_branch_override():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-simple-build",
+                "repo_root": str(root),
+                "run_base_source_branch": "op-simple-canary-prev",
+            }
+        )
+        assert req.run_base_source_branch == "op-simple-canary-prev"
+
+
+def test_op_simple_build_dry_run_runs_without_codex():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        out = run_payload(
+            {
+                "command": "/op-simple-build",
+                "repo_root": str(root),
+                "dry_run": True,
+                "max_build_cycles": 1,
+            }
+        )
+        assert out["ok"] is True
+        assert out["status"] == "completed"
+        assert (root / ".op-simple" / "current" / "cycle_summary.json").exists()
 
 
 def test_op_plan_emits_task_execution_state():

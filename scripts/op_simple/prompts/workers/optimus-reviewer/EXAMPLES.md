@@ -20,7 +20,7 @@ Inputs: test_summary: API tests, UI tests, and build pass.
 Inputs: tracking_mode: automated-handoff
 Inputs: packet_version: 4
 Inputs: review_focus: correctness and maintainability of patch
-Constraints: No Linear updates. Return concise summary only.
+Constraints: No external tracker updates. Return concise summary only.
 Output: review decision summary for Optimus
 ```
 
@@ -49,7 +49,7 @@ Inputs: test_summary: Main path tests pass.
 Inputs: tracking_mode: automated-handoff
 Inputs: packet_version: 3
 Inputs: review_focus: edge-case authorization paths
-Constraints: No Linear updates. Return concise summary only.
+Constraints: No external tracker updates. Return concise summary only.
 Output: review decision summary for Optimus
 ```
 
@@ -86,5 +86,5 @@ Output: fallback execution and concise summary
 ```text
 Creates and uses MYO-23-make-menu-navbar-test-review.
 Completes focused review and returns concise summary with fallback mapping.
-No Linear updates performed by reviewer.
+No external tracker updates performed by reviewer.
 ```

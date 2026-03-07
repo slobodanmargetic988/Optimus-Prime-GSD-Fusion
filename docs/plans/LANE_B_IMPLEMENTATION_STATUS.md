@@ -280,9 +280,8 @@ python3 -m pytest \
   /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py
 ```
 
-## Lane B Status (Active Redesign + Hardening)
+## Lane B Status (Done)
 
-- Lane B baseline vision is implemented for new-only autonomous planning/build and deterministic control contracts.
-- Workflow redesign and hardening are still active, driven by real canary findings.
-- Lane B is treated as fully converged only when repeated canary runs satisfy user vision and expectations.
-- Remaining roadmap work is Lane C packaging/installer and polished product command UX.
+- Lane B is complete for its intended scope: new-only autonomous planning/build and deterministic control contracts are implemented and validated through canary runs.
+- Lane B is now marked done as the app-building engine baseline.
+- Remaining roadmap work continues in other lanes (notably Lane C packaging/installer and additional extension lanes).

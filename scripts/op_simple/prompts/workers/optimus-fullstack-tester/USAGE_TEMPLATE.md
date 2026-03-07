@@ -19,7 +19,7 @@ Inputs: test_focus:
 Inputs: fallback_branch_suffix: -test
 Inputs: constraints:
 Inputs: tester_tooling_policy: tool-first
-Constraints: No Linear updates. No orchestration file writes. No new task before reviewer outcome for current task. Summary must be concise and emoji-free. Tester should prefer built-in tester tools when scope matches (`tester-preflight-resolver`, `tester-targeted-pytest-runner`, `tester-handoff-summary-builder`), using manual commands only when tool is unavailable or packet explicitly requires manual path (and then report skipped tool + reason). If DB-backed checks are required, tester must start from fresh task DB state (`reset -> migrate -> seed`) and not reuse previous task DB state. Tester runtime is expected unsandboxed by default unless user explicitly requests sandboxed mode.
+Constraints: No external tracker updates. No orchestration file writes. No new task before reviewer outcome for current task. Summary must be concise and emoji-free. Tester should prefer built-in tester tools when scope matches (`tester-preflight-resolver`, `tester-targeted-pytest-runner`, `tester-handoff-summary-builder`), using manual commands only when tool is unavailable or packet explicitly requires manual path (and then report skipped tool + reason). If DB-backed checks are required, tester must start from fresh task DB state (`reset -> migrate -> seed`) and not reuse previous task DB state. Tester runtime is expected unsandboxed by default unless user explicitly requests sandboxed mode.
 Output: Test evidence + strict concise summary for Optimus
 ```
 
@@ -42,6 +42,6 @@ Inputs: test_focus: responsive behavior and click-race scenarios
 Inputs: fallback_branch_suffix: -test
 Inputs: constraints: Keep test scope to navbar surfaces only.
 Inputs: tester_tooling_policy: tool-first
-Constraints: No Linear updates. No orchestration file writes. No new task before reviewer outcome for current task. Summary must be concise and emoji-free. Tester should prefer built-in tester tools when scope matches (`tester-preflight-resolver`, `tester-targeted-pytest-runner`, `tester-handoff-summary-builder`), using manual commands only when tool is unavailable or packet explicitly requires manual path (and then report skipped tool + reason). If DB-backed checks are required, tester must start from fresh task DB state (`reset -> migrate -> seed`) and not reuse previous task DB state. Tester runtime is expected unsandboxed by default unless user explicitly requests sandboxed mode.
+Constraints: No external tracker updates. No orchestration file writes. No new task before reviewer outcome for current task. Summary must be concise and emoji-free. Tester should prefer built-in tester tools when scope matches (`tester-preflight-resolver`, `tester-targeted-pytest-runner`, `tester-handoff-summary-builder`), using manual commands only when tool is unavailable or packet explicitly requires manual path (and then report skipped tool + reason). If DB-backed checks are required, tester must start from fresh task DB state (`reset -> migrate -> seed`) and not reuse previous task DB state. Tester runtime is expected unsandboxed by default unless user explicitly requests sandboxed mode.
 Output: Test evidence + strict concise summary for Optimus
 ```

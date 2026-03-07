@@ -24,6 +24,7 @@ from scripts.install.common import SCHEMA_VERSION, parse_git_commit, sha256_file
 PLATFORMS = ["darwin", "linux"]
 PAYLOAD_PATHS = [
     "scripts/op",
+    "scripts/op_simple",
     "scripts/install",
     "scripts/test-train",
     "scripts/runtime-heal.sh",
@@ -33,15 +34,8 @@ PAYLOAD_PATHS = [
     "scripts/deploy-test.sh",
     "scripts/db-impact-detector.sh",
     "scripts/db-reset-migrate-seed.sh",
-    "skills/codex-rate-snapshot",
-    "skills/create-codex-profile",
-    "skills/dispatch-worker-packet",
-    "skills/optimus-cycle-controller",
-    "skills/runtime-coordinator",
-    "skills/test-train-manager",
-    "skills/thread-dispatch",
-    "skills/workstation-preparation",
-    "agents/optimus-prime",
+    "skills",
+    "docs/plans/OP_SIMPLE_SCHEMA_CATALOG_V2.md",
     "README.md",
     "VERSION",
 ]
@@ -144,7 +138,7 @@ def _skills_manifest(managed_files: list[str]) -> list[str]:
 def _templates_manifest(managed_files: list[str]) -> list[str]:
     templates: set[str] = set()
     for rel in managed_files:
-        if rel.startswith("agents/optimus-prime/"):
+        if rel.startswith("agents/"):
             templates.add(rel)
     return sorted(templates)
 

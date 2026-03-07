@@ -1,0 +1,133 @@
+# OP Simple Session Lock - 2026-03-06
+
+This file locks decisions approved in chat so they are not lost across sessions.
+
+## Locked Decisions
+- Active branch: `codex/simple-op`; do not touch `main`.
+- New runtime command: `/op-simple-build`.
+- Keep `/op-initialize` mostly as-is; rewrite focuses on build-cycle runtime.
+- Replace old build behavior on this branch; no backward compatibility target here.
+- Keep rule for existing files during cleanup: keep only what supports initialize or new cycle managers.
+- Delete rule: remove legacy `/op-build` orchestration not referenced by initialize or `/op-simple-build`.
+- Uncertain files: keep and mark review-needed.
+- BOSS naming lock: production-line-manager is renamed to `BOSS`.
+- Cycle order lock (current runtime): `BOSS -> rate-gate -> work-dispatcher -> watchdog -> summary`.
+- Cycle pacing: fixed 5-minute sleep.
+- Stop priority: terminate file > project_done > insurmountable_blocker > watchdog.
+- DONE marker: `[DONE][lane:<id>][task:<id>]`.
+- BOSS owns done/liveness interpretation; dispatcher is fire-and-forget.
+- `cycle-manager` and `profile-manager` calls are skipped in runtime; BOSS absorbs preflight intent.
+- BOSS timeout marker exists and is timeout-only (`boss_evidence.json`).
+- No deterministic in-cycle schema/lint enforcement for LLM artifacts.
+- Schema contracts still exist and remain human-approved.
+- Prompt files location: `scripts/op_simple/prompts/` with manager/worker split.
+- Artifact root: `./.op-simple/` with `current/` canonical outputs.
+- History snapshots are enabled by default with unlimited retention.
+- First vertical target: real dispatch + DONE marker observed.
+- Canary target: 5 successful consecutive cycles with no manual intervention.
+- Check-in cadence for coding work: every 5 completed tasks.
+- Rate-gate stage runs after BOSS and before dispatcher.
+- Rate-gate wait is pure-code owned and refreshes snapshot via `codex-rate-snapshot`.
+- One canonical output file per manager under `.op-simple/current/`.
+- Dispatcher writes deterministic launch receipts to `dispatch_launch_log.jsonl`.
+- Dispatcher does not write deterministic failure artifacts for reassignment.
+- OP code does not write deterministic DONE evidence artifacts; BOSS gathers evidence directly.
+- Cycle summary minimum fields: `cycle_number`, `manager_statuses`, `task_counts`, `dispatch_counts`, `notes`.
+- Watchdog branch source: `.op-simple/current/initialize_state.json`.
+- Watchdog idle counter resets on any new commit on monitored branch.
+- Workstation prep artifact is written once by initialize code before cycle start.
+- Active foreground LLM timeout budget:
+  - `BOSS` 12m
+- Prior schema decisions can be auto-imported as locked unless contradicted.
+- Conflict resolution rule: newest explicit user statement wins.
+- Preferred schema documentation format: single catalog with fields+rationale+example JSON per artifact.
+- Manager packets include deterministic artifact path map each call.
+- Manager default read scope is `current/`; `history/` is opt-in only.
+- Canonical manager outputs are fixed under `.op-simple/current/`:
+  - `cycle_manager_decision.json`
+  - `profile_snapshot.json`
+  - `production_line_register.json`
+  - `worker_packets.json`
+  - `plan_packets.json`
+  - `worker_registry.json`
+  - `dispatch_registry.json`
+  - `cycle_summary.json`
+  - `watchdog_state.json`
+  - `watchdog_exit_signal.json`
+- profile snapshot refresh is code-owned in rate-gate stage.
+- `profile_assignment` artifact is removed.
+- `cycle_manager_decision` minimum fields are locked:
+  - `cycle_number`, `decision`, `reason_code`, `message`, `worker_registry_ready`
+- BOSS outputs atomically each cycle:
+  - `production_line_register.json`, `worker_packets.json`, `plan_packets.json`, `task_execution_state.json`, `cycle_summary.json`, `worker_registry.json` updates
+- every required BOSS-authored artifact must carry the current top-level `cycle_number`.
+- runtime converts the cycle to deterministic `skip_cycle` and suppresses dispatch when BOSS exits non-zero, the binary is missing, a required artifact is missing, or a required artifact has missing/stale `cycle_number`.
+- `worker_registry` includes `pid` and `thread_id` and is latest worker state.
+- `dispatch_registry` remains event/history log with status enum:
+  - `launched`, `launch_failed`, `unknown`
+- `worker_registry` pid/thread writer: BOSS (from dispatch receipts).
+- `plan_packets` status enum:
+  - `pending`, `in_progress`, `done`, `blocked`
+- `production_line_register` minimum row shape is locked:
+  - `worker_id`, `lane_id`, `task_id`, `packet_id`, `profile_alias`, `assignment_state`, `reason`
+- `worker_packet` minimum fields are locked:
+  - `packet_id`, `worker_id`, `lane_id`, `task_id`, `profile_alias`, `prompt`, `required_done_marker`
+- `watchdog_exit_signal` minimum fields are locked:
+  - `cycle_number`, `reason_code`, `message`, `monitored_branch`, `idle_cycles`
+- `cycle_summary.manager_statuses` shape is locked:
+  - map of manager name -> `{status, note}`
+- `plan_packets` keeps old OP topology shape:
+  - `phases[]`, `requirements[]`, `tasks[]`
+- phase dependency model remains acyclic DAG (`depends_on_phase_ids`).
+- lane ID format remains `<phase_id>/lane-[a-c]`.
+- `requirement_ids` is mandatory on each task but may be empty.
+- `verification_contract` remains mandatory and is adapted for lane-level test/review flow.
+- drop per-task `verify_commands` from `plan_packets`.
+- keep separate `task_execution_state.json` artifact.
+- `task_execution_state` is written by BOSS.
+- `task_execution_state` minimum sections:
+  - `tasks`, `blockers`, `attempts`, `last_handoff_outcome`
+- no schema-enforced lane task cap; parallelism is configurable.
+- OP Simple reuses existing config resolution stack (`scripts/install/config.py`).
+- parallelism config key:
+  - `workflow.max_parallel_workers`
+- per-run parallelism override flag:
+  - `--max-parallel-workers`
+- default max parallel workers remains 8.
+- BOSS reads parallelism limits from configured config/artifact path via prompt guidance.
+- multi-profile runtime policy: exclude default `.codex` when multiple profiles are available.
+- BOSS profile is code-selected from `profile_snapshot.json`: highest weekly budget that is not 5h hard-gated.
+- Planner profile is code-selected from `PROFILE_SELECTION.json` + `PROFILE_RATE_REGISTRY.json` with same rule.
+- Fallback for missing/malformed snapshot/registry remains default profile behavior.
+- `/op-initialize` ordering lock: seed rate snapshot before planner execution.
+- schema closure set remains all remaining artifacts (no scope reduction).
+- `plan_packets` and `task_execution_state` statuses are aligned:
+  - `pending`, `in_progress`, `done`, `blocked`
+- `profile_snapshot` row minimum fields are locked:
+  - `alias`, `codex_home`, `window_5h_remaining_pct`, `window_week_remaining_pct`, `hard_gated`, `soft_gated`, `reset_at`
+- `cycle_manager_decision` remains minimal (no `next_action`).
+- `watchdog_state` minimum fields are locked:
+  - `cycle_number`, `monitored_branch`, `last_commit_sha`, `last_commit_seen_cycle`, `idle_cycles`, `threshold_cycles`
+- `worker_registry.last_update` uses full UTC timestamp.
+- `dispatch_registry` minimum event fields are locked:
+  - `cycle_number`, `worker_id`, `packet_id`, `thread_id`, `pid`, `status`, `timestamp`, `message`
+- `production_line_register.assignment_state` enum is locked:
+  - `assigned`, `unassigned`, `deferred`
+- `worker_packet.required_done_marker` uses template:
+  - `[DONE][lane:<lane_id>][task:<task_id>]`
+- `cycle_summary.dispatch_counts` fields are locked:
+  - `attempted`, `launched`, `launch_failed`, `unknown`
+- `task_execution_state.attempts` uses stage-keyed counters:
+  - `dev`, `lane_test`, `test_fix`, `lane_review`, `review_fix`, `deep_review`, `deep_fix`
+- `last_handoff_outcome.status` enum is locked:
+  - `success`, `blocked`, `failed`, `unknown`
+- task blocker row minimum fields are locked:
+  - `blocker_code`, `message`, `first_seen_cycle`, `last_seen_cycle`, `active`
+- `workstation_prep` keeps full agreed row fields:
+  - `workstation_id`, `branch`, `worktree`, `prepared_at`, `status`, `preparation_notes`, `git_head_sha`
+- manager prompt minimum sections are locked:
+  - role, inputs(paths), required outputs(files+schema), failure handling, tool usage rules
+- worker prompt minimum sections are locked:
+  - task objective, constraints, required commit marker, expected artifact/evidence outputs, stop/escalation rules
+- validator/helper references should use absolute install-location paths.
+- implementation can start once planning questions are answered; schema/prompt review continues post-implementation.

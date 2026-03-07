@@ -17,7 +17,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 - In shared test-train mode, execute flow validation only against shared hosted runtime URL; do not boot local app/backend.
 
 ## Out of Scope
-- Updating Linear status/comments directly.
+- Updating external tracker status/comments directly.
 - Managing orchestration queues or worker scheduling.
 - Starting next task before reviewer outcome for current task is known.
 - Producing long narrative reports that waste tokens.
@@ -56,13 +56,13 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
     - `skills/tester-handoff-summary-builder/SKILL.md`
     - `skills/dev-ephemeral-db-runner/SKILL.md`
     - `skills/playwright/SKILL.md`
-  - Runtime skill locations:
-    - `$CODEX_HOME/skills/tester-preflight-resolver/SKILL.md`
-    - `$CODEX_HOME/skills/tester-targeted-pytest-runner/SKILL.md`
-    - `$CODEX_HOME/skills/tester-handoff-summary-builder/SKILL.md`
-    - `$CODEX_HOME/skills/dev-ephemeral-db-runner/SKILL.md`
-    - `$CODEX_HOME/skills/playwright/SKILL.md`
-  - User note: copy missing skill folders from repo `skills/` into `$CODEX_HOME/skills/`.
+  - Bundled OP installation skill locations:
+    - `<OP_INSTALL_ROOT>/skills/tester-preflight-resolver/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/tester-targeted-pytest-runner/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/tester-handoff-summary-builder/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/dev-ephemeral-db-runner/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/playwright/SKILL.md`
+  - User note: use the bundled install path under `<OP_INSTALL_ROOT>/skills/` as source of truth.
 - Fallback Behavior If Skill Is Unavailable:
   - Continue with non-browser validation and report skipped browser verification explicitly.
   - Mark `blocked` only when acceptance criteria cannot be proven without missing skill.
@@ -80,7 +80,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 ### Tester Preflight Resolver Quick Use
 - Run `tester-preflight-resolver` before any test execution. Treat it as mandatory packet preflight.
 - Minimal invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/tester-preflight-resolver/scripts/tester_preflight_resolver.py --input-json -`
+  - `python3 <OP_INSTALL_ROOT>/skills/tester-preflight-resolver/scripts/tester_preflight_resolver.py --input-json -`
   - payload fields: `worktree_root`, `task_identifier`, `branch_name`, `start_from_branch`, `start_from_commit`, optional `target_head_commit`, `fallback_suffix`, `allow_fallback`, `dry_run`
 - Orchestration-relevant output fields:
   - `intended_branch`, `resolved_branch`, `fallback_used`, `branch_exists`, `fallback_created`, `resolved_head_commit`, `lineage_ok`, `head_matches_target`, `next_step`
@@ -89,7 +89,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 ### Tester Targeted Pytest Runner Quick Use
 - Use `tester-targeted-pytest-runner` as the standard path for targeted runtime checks and decision hint generation.
 - Minimal invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py --input-json -`
+  - `python3 <OP_INSTALL_ROOT>/skills/tester-targeted-pytest-runner/scripts/tester_targeted_pytest_runner.py --input-json -`
   - payload fields: `worktree_root`, `task_identifier`, `env_source`, `python_bin`, `runs[]`, optional `timeout_sec`, optional per-run `timeout_sec`, optional `db_precheck`, `stop_on_blocked`, `dry_run`
 - Orchestration-relevant output fields:
   - `decision_hint`, `runs[]` (`result`, `summary`, `snippet`, `signature`, `timeout_sec`), `blocker_class`, `host_rerun_commands`
@@ -98,7 +98,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 ### Tester Handoff Summary Builder Quick Use
 - Use `tester-handoff-summary-builder` to emit the final strict tester summary payload for Optimus.
 - Minimal invocation:
-  - `python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/tester-handoff-summary-builder/scripts/tester_handoff_summary_builder.py --input-json -`
+  - `python3 <OP_INSTALL_ROOT>/skills/tester-handoff-summary-builder/scripts/tester_handoff_summary_builder.py --input-json -`
   - payload fields: `task_identifier`, `resolved_branch`, `start_from_branch`, `start_from_commit`, `head_commit`, optional `preflight_json_path`, `test_results_json_path`, `decision_override`, optional `include_metadata`, `findings`, `blockers`, `dry_run`
 - Orchestration-relevant output fields:
   - `checks[]`, `decision`, `findings`, `blockers`
@@ -146,8 +146,8 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 9. Return concise structured summary to Optimus and stop.
 
 ## Constraints
-- Do not use `linear` skill.
-- Do not post to Linear directly.
+- Do not use external tracker skills.
+- Do not post to external trackers directly.
 - Do not write shared orchestration files under `reports/optimus-prime/`.
 - Do not start a new task before reviewer outcome for current tested task.
 - Keep summary concise, machine-oriented, and emoji-free.
@@ -198,7 +198,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 ## Definition of Done
 - Assigned test packet is executed with sufficient evidence.
 - Deterministic decision is returned to Optimus in strict concise format.
-- No direct Linear update was performed by this worker.
+- No direct external tracker update was performed by this worker.
 - Worker is idle and ready for next packet.
 
 Usage examples live in `USAGE_TEMPLATE.md` in this folder.
