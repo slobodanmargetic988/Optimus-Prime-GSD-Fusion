@@ -71,11 +71,42 @@ Planning requirements:
 8. For each functionality tree with more than 2 tasks, include at least 2 terminal hardening/review tasks.
 9. PLAN_CHECK.passed must be true.
 10. Keep plan quality high enough for autonomous op-build execution.
+11. Plan quality bar (hard, internal self-check before finalizing):
+   - Do not finalize unless internal score >= 85/100.
+   - Score dimensions:
+     - mission coverage: 25
+     - task granularity (5-10 min agent-sized units): 20
+     - parallelization readiness: 20
+     - dependency hygiene (acyclic, minimal critical path): 15
+     - verification specificity: 10
+     - schema/contract correctness: 10
+   - If score < 85, regenerate the full plan.
 
+12. Minimum task volume and decomposition:
+   - tasks_count MUST be >= max(20, requirements_count * 4).
+   - For each requirement, produce at least:
+     - 1 phase-1 tdd_red task
+     - 2 phase-2 implementation_green tasks (split by concern, not bundled)
+     - 1 phase-3 hardening/review task
+   - If a task would require >2 verify_commands or >2 must_haves, split it.
+
+13. Parallelization contract:
+   - phase-2 MUST use exactly 3 lanes: phase-2/lane-a, phase-2/lane-b, phase-2/lane-c.
+   - Each phase-2 lane must have at least 2 tasks.
+   - At least 6 phase-2 tasks must be runnable in parallel after phase-1 exits.
+   - No task may depend on more than 2 predecessor tasks unless strictly unavoidable.
+
+14. Dependency shape constraints:
+   - Avoid long single-lane chains; target critical path <= 40% of total task count.
+   - Prefer lane-local dependencies; use cross-lane dependencies only for true integration points.
+
+15. Mission completeness guard:
+   - Every explicitly stated mission behavior must map to requirement(s) and task(s).
+   - For game missions with post-game UX, include explicit coverage for “start new game” from results/leaderboard state.
+   
 Strict output discipline:
 - Write only the required JSONL bundle file + required artifact content.
 - No markdown commentary in stdout is required.
-
 
 ## Workflow
 1. Infer product goal, user personas, and boundaries from the provided mission/scope context.
