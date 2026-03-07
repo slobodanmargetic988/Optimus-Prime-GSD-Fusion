@@ -107,6 +107,7 @@ Planning requirements:
 Strict output discipline:
 - Write only the required JSONL bundle file + required artifact content.
 - No markdown commentary in stdout is required.
+- Plan can be shorter than 20 tasks only if the mission is to build a single feature on an existing project rather than building a new project. For new projects come up with a plan that satisfies all the requirements described above.
 
 ## Workflow
 1. Infer product goal, user personas, and boundaries from the provided mission/scope context.
