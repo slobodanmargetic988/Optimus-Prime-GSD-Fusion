@@ -2,10 +2,6 @@
 
 Copied from /Users/slobodan/projects/Agents:
 
-- `agents/optimus-prime`
-- `agents/optimus-fullstack-developer`
-- `agents/optimus-fullstack-tester`
-- `agents/optimus-reviewer`
 - `agents/_shared`
 - `skills/orchestrator-status-snapshot`
 - `skills/cycle-tick`

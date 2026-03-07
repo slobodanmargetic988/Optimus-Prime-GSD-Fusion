@@ -78,15 +78,6 @@ def test_global_install_and_uninstall_flow():
         }
         for skill in required:
             assert (codex_skills / skill).is_dir()
-        codex_agents = Path(home) / ".codex" / "agents"
-        required_agents = {
-            "optimus-prime",
-            "optimus-fullstack-developer",
-            "optimus-fullstack-tester",
-            "optimus-reviewer",
-        }
-        for agent_name in required_agents:
-            assert (codex_agents / agent_name / "README.md").is_file()
         managed_paths = {
             str(Path(item).expanduser().resolve())
             for item in state.get("managed_paths", [])
@@ -94,8 +85,6 @@ def test_global_install_and_uninstall_flow():
         }
         for skill in required:
             assert str((codex_skills / skill).resolve()) in managed_paths
-        for agent_name in required_agents:
-            assert str((codex_agents / agent_name).resolve()) in managed_paths
 
         uninstalled = UNINSTALL.run_uninstall({"mode": "global", "home_override": home})
         assert uninstalled["ok"] is True

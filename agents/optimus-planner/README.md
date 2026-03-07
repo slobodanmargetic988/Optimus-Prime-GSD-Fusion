@@ -38,7 +38,7 @@ Run planning and specification for Optimus-led autonomous delivery. Produce dete
 - Core planning docs (Phase 1 + Phase 2).
 - TDD-aligned test specification per story.
 - Gate-ready handoff checklist for Optimus Prime orchestration.
-- Prompt-ready plan summary that can be passed directly to `agents/optimus-prime/README.md` flow.
+- Prompt-ready plan summary that can be consumed by OP runtime planning/build flows.
 
 ## Workflow
 1. Clarify product goal, user persona, and boundaries.

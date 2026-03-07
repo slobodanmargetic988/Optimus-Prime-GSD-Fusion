@@ -320,7 +320,6 @@ def copy_file_replace(src: Path, dst: Path) -> None:
 def copy_codex_assets(bundle_dir: Path, codex_home: Path) -> list[str]:
     managed: list[str] = []
     skills_src = bundle_dir / "payload" / "skills"
-    agents_src = bundle_dir / "payload" / "agents"
     if skills_src.exists():
         target_skills = codex_home / "skills"
         target_skills.mkdir(parents=True, exist_ok=True)
@@ -328,15 +327,6 @@ def copy_codex_assets(bundle_dir: Path, codex_home: Path) -> list[str]:
             if not child.is_dir():
                 continue
             dst = target_skills / child.name
-            copy_tree_replace(child, dst)
-            managed.append(str(dst))
-    if agents_src.exists():
-        target_agents_root = codex_home / "agents"
-        target_agents_root.mkdir(parents=True, exist_ok=True)
-        for child in sorted(agents_src.iterdir()):
-            if not child.is_dir():
-                continue
-            dst = target_agents_root / child.name
             copy_tree_replace(child, dst)
             managed.append(str(dst))
     return sorted(set(managed))
