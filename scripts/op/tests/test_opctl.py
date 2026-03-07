@@ -31,25 +31,6 @@ def _ok_result(command: str) -> dict[str, object]:
     }
 
 
-def test_build_prints_start_banner_on_tty(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setattr(
-        MODULE,
-        "run_from_payload",
-        lambda payload: _ok_result(str(payload.get("command") or "")),
-    )
-    monkeypatch.setattr(sys, "argv", ["opctl.py", "--command", "/op-build", "--repo-root", "/tmp/repo", "--json-pretty"])
-    monkeypatch.setattr(MODULE.sys.stdout, "isatty", lambda: True)
-
-    rc = MODULE.main()
-
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert "[opctl] /op-build started for /tmp/repo." in out
-    assert "opctl /op-report --repo-root /tmp/repo --json-pretty" in out
-    payload = json.loads(out[out.find("{") :].strip())
-    assert payload["command"] == "/op-build"
-
-
 def test_non_build_command_does_not_print_start_banner(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -65,7 +46,9 @@ def test_non_build_command_does_not_print_start_banner(
 
     out = capsys.readouterr().out
     assert rc == 0
-    assert "[opctl] /op-build started" not in out
+    assert "[opctl] /op-initialize started" not in out
+    assert "[opctl] /op-plan started" not in out
+    assert "[opctl] /op-simple-build started" not in out
     payload = json.loads(out.strip())
     assert payload["command"] == "/op-status"
 
@@ -139,63 +122,16 @@ def test_no_banners_on_non_tty(
         lambda payload: _ok_result(str(payload.get("command") or "")),
     )
     monkeypatch.setattr(MODULE.sys.stdout, "isatty", lambda: False)
-    for command in ("/op-build", "/op-initialize", "/op-plan"):
+    for command in ("/op-initialize", "/op-plan", "/op-simple-build"):
         monkeypatch.setattr(sys, "argv", ["opctl.py", "--command", command, "--repo-root", "/tmp/repo", "--json-pretty"])
         rc = MODULE.main()
         out = capsys.readouterr().out
         assert rc == 0
-        assert "[opctl] /op-build started" not in out
         assert "[opctl] /op-initialize started" not in out
         assert "[opctl] /op-plan started" not in out
+        assert "[opctl] /op-simple-build started" not in out
         payload = json.loads(out.strip())
         assert payload["command"] == command
-
-
-def test_merge_payload_applies_configured_sleep_for_build(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        MODULE,
-        "_resolve_configured_workflow",
-        lambda _repo_root: {"sleep_minutes": 0.5, "enable_artifact_fan_in": True},
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["opctl.py", "--command", "/op-build", "--repo-root", "/tmp/repo"],
-    )
-    parsed = MODULE.parse_args()
-    payload = MODULE.merge_payload(parsed)
-    assert payload.get("sleep_minutes") == 0.5
-    assert payload.get("enable_artifact_fan_in") is True
-
-
-def test_merge_payload_preserves_explicit_sleep_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        MODULE,
-        "_resolve_configured_workflow",
-        lambda _repo_root: {"sleep_minutes": 0.5, "enable_artifact_fan_in": True},
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["opctl.py", "--command", "/op-build", "--repo-root", "/tmp/repo", "--sleep-minutes", "2"],
-    )
-    parsed = MODULE.parse_args()
-    payload = MODULE.merge_payload(parsed)
-    assert payload.get("sleep_minutes") == 2.0
-    assert payload.get("enable_artifact_fan_in") is True
-
-
-def test_merge_payload_defaults_fan_in_false_for_build(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(MODULE, "_resolve_configured_workflow", lambda _repo_root: {})
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["opctl.py", "--command", "/op-build", "--repo-root", "/tmp/repo"],
-    )
-    parsed = MODULE.parse_args()
-    payload = MODULE.merge_payload(parsed)
-    assert payload.get("sleep_minutes") == 2.0
-    assert payload.get("enable_artifact_fan_in") is False
 
 
 def test_merge_payload_applies_configured_parallel_for_simple_build(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -320,21 +256,3 @@ def test_merge_payload_loads_global_boss_config_even_when_other_workflow_fields_
     assert payload.get("max_parallel_workers") == 4
     assert payload.get("boss_model") == "gpt-5.3-codex"
     assert payload.get("boss_reasoning_effort") == "xhigh"
-
-
-def test_merge_payload_includes_reset_exhausted_retries_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "opctl.py",
-            "--command",
-            "/op-resume",
-            "--repo-root",
-            "/tmp/repo",
-            "--reset-exhausted-retries",
-        ],
-    )
-    parsed = MODULE.parse_args()
-    payload = MODULE.merge_payload(parsed)
-    assert payload.get("reset_exhausted_retries") is True
