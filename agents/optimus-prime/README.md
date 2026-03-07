@@ -303,23 +303,23 @@ Run long-lived sprint orchestration in deterministic cycles using `tracking_mode
     - `skills/test-train-manager/SKILL.md`
     - `skills/thread-token-audit/SKILL.md`
     - `skills/optimus-cycle-controller/SKILL.md`
-  - Runtime skill locations:
-    - `$CODEX_HOME/skills/orchestrator-status-snapshot/SKILL.md`
-    - `$CODEX_HOME/skills/cycle-tick/SKILL.md`
-    - `$CODEX_HOME/skills/dispatch-worker-packet/SKILL.md`
-    - `$CODEX_HOME/skills/linear-handoff-sync/SKILL.md`
-    - `$CODEX_HOME/skills/blocker-escalate-to-agents/SKILL.md`
-    - `$CODEX_HOME/skills/codex-rate-snapshot/SKILL.md`
-    - `$CODEX_HOME/skills/thread-dispatch/SKILL.md`
-    - `$CODEX_HOME/skills/sleep/SKILL.md`
-    - `$CODEX_HOME/skills/workstation-preparation/SKILL.md`
-    - `$CODEX_HOME/skills/linear/SKILL.md`
-    - `$CODEX_HOME/skills/playwright/SKILL.md`
-    - `$CODEX_HOME/skills/runtime-coordinator/SKILL.md`
-    - `$CODEX_HOME/skills/test-train-manager/SKILL.md`
-    - `$CODEX_HOME/skills/thread-token-audit/SKILL.md`
-    - `$CODEX_HOME/skills/optimus-cycle-controller/SKILL.md`
-  - User note: copy missing skill folders from repo `skills/` into `$CODEX_HOME/skills/`.
+  - Bundled OP installation skill locations:
+    - `<OP_INSTALL_ROOT>/skills/orchestrator-status-snapshot/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/cycle-tick/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/dispatch-worker-packet/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/linear-handoff-sync/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/blocker-escalate-to-agents/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/codex-rate-snapshot/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/thread-dispatch/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/sleep/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/workstation-preparation/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/linear/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/playwright/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/runtime-coordinator/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/test-train-manager/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/thread-token-audit/SKILL.md`
+    - `<OP_INSTALL_ROOT>/skills/optimus-cycle-controller/SKILL.md`
+  - User note: use the bundled install path under `<OP_INSTALL_ROOT>/skills/` as source of truth.
 - Fallback Behavior If Skill Is Unavailable:
   - Missing `orchestrator-status-snapshot`, `cycle-tick`, `dispatch-worker-packet`, `linear-handoff-sync`, `blocker-escalate-to-agents`, `codex-rate-snapshot`, `thread-dispatch`, or `workstation-preparation`: stop orchestration and request fix.
   - Missing `runtime-coordinator` or `test-train-manager` while `test_train_mode != off`: stop orchestration and request fix.

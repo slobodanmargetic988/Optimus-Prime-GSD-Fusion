@@ -34,15 +34,11 @@ PAYLOAD_PATHS = [
     "scripts/deploy-test.sh",
     "scripts/db-impact-detector.sh",
     "scripts/db-reset-migrate-seed.sh",
-    "skills/codex-rate-snapshot",
-    "skills/create-codex-profile",
-    "skills/dispatch-worker-packet",
-    "skills/optimus-cycle-controller",
-    "skills/runtime-coordinator",
-    "skills/test-train-manager",
-    "skills/thread-dispatch",
-    "skills/workstation-preparation",
+    "skills",
     "agents/optimus-prime",
+    "agents/optimus-fullstack-developer",
+    "agents/optimus-fullstack-tester",
+    "agents/optimus-reviewer",
     "docs/plans/OP_SIMPLE_SCHEMA_CATALOG_V2.md",
     "README.md",
     "VERSION",
@@ -146,7 +142,7 @@ def _skills_manifest(managed_files: list[str]) -> list[str]:
 def _templates_manifest(managed_files: list[str]) -> list[str]:
     templates: set[str] = set()
     for rel in managed_files:
-        if rel.startswith("agents/optimus-prime/"):
+        if rel.startswith("agents/"):
             templates.add(rel)
     return sorted(templates)
 

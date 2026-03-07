@@ -46,9 +46,9 @@ Perform focused final review of Optimus-routed tested units in `automated-handof
 - If Missing, Install From:
   - Repo skill definitions:
     - `skills/playwright/SKILL.md`
-  - Runtime skill locations:
-    - `$CODEX_HOME/skills/playwright/SKILL.md`
-  - User note: copy missing skill folders from repo `skills/` into `$CODEX_HOME/skills/`.
+  - Bundled OP installation skill locations:
+    - `<OP_INSTALL_ROOT>/skills/playwright/SKILL.md`
+  - User note: use the bundled install path under `<OP_INSTALL_ROOT>/skills/` as source of truth.
 - Fallback Behavior If Skill Is Unavailable:
   - Continue review with available evidence and mark browser-specific verification as pending.
   - Mark `blocked` only when acceptance cannot be validated without missing capability.
