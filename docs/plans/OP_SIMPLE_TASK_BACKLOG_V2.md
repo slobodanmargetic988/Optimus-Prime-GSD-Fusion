@@ -49,3 +49,4 @@
 |---|---|---|---|---|---|---|
 | V2-T010 | Add prompt packs for additional worker types (`integration_tester`, `plan-reviewer`) | AI | V2-T009 | DONE | - | 2026-03-07 |
 | V2-T011 | Bootstrap new `tetris` GitHub repo task (deferred until after Checkpoint 1) | JOINT | V2-T005 | DONE | - | 2026-03-07 |
+| V2-T017 | Lane B final-touch hardening: introduce dedicated merge-manager ownership separate from BOSS so merge closure/proof is deterministic and not dependent on BOSS completing all merge duties | AI | V2-T009,V2-T016 | READY | - | 2026-03-08 |

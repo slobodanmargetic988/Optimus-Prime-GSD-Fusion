@@ -1,6 +1,6 @@
 # Lane B Canary Findings Log
 
-Updated: 2026-03-02
+Updated: 2026-03-08
 
 ## Purpose
 Track real canary-run findings with clear status:
@@ -8,6 +8,28 @@ Track real canary-run findings with clear status:
 2. Resolved findings archived to avoid re-triaging already-fixed issues.
 
 ## Active Findings (Needs Patch)
+
+### F-20260308-MERGE-CLOSURE-001
+Status: open
+
+Finding:
+1. A canary run can stop with `project_done` while the final runnable commits still exist only on a worker branch and are not present on the run-base branch.
+2. This leaves completion signaling and branch reality out of sync.
+
+Observed in:
+1. Tetris2 canary run (2026-03-08)
+
+Evidence:
+1. `op-simple-canary-20260308T012029Z-50fcfda1` (run-base) missing runnable app commits.
+2. `op-simple-canary-20260308T012029Z-50fcfda1-w02` contains late runnable commits (`TASK-021`, `TASK-029`, `TASK-030`) not merged back.
+3. `git branch --contains <late-commit>` includes worker branch only.
+
+Impact:
+1. False-complete outcome risk: runtime reports done while the base branch can be incomplete.
+2. Canary confidence drops because terminal state is not guaranteed to reflect merged delivery state.
+
+Next fix intent:
+1. Add/strengthen deterministic end-of-run merge closure check so `project_done` cannot pass when final review-done outputs are not merged into the run-base branch.
 
 ### F-20260302-RESUME-001
 Status: open
