@@ -33,6 +33,7 @@ DISPATCH_LAUNCH_LOG_FILE = CURRENT_DIR / "dispatch_launch_log.jsonl"
 INITIALIZE_STATE_FILE = CURRENT_DIR / "initialize_state.json"
 BOSS_EVIDENCE_FILE = CURRENT_DIR / "boss_evidence.json"
 BOSS_SESSION_STATE_FILE = CURRENT_DIR / "boss_session_state.json"
+APP_LIFECYCLE_FILE = Path("app_lifecycle.json")
 
 ARTIFACT_FILES = {
     "cycle_manager_decision": CURRENT_DIR / "cycle_manager_decision.json",
@@ -44,6 +45,7 @@ ARTIFACT_FILES = {
     "worker_registry": CURRENT_DIR / "worker_registry.json",
     "dispatch_registry": CURRENT_DIR / "dispatch_registry.json",
     "cycle_summary": CURRENT_DIR / "cycle_summary.json",
+    "wrapup_manager_report": CURRENT_DIR / "wrapup_manager_report.json",
     "watchdog_state": CURRENT_DIR / "watchdog_state.json",
     "watchdog_exit_signal": CURRENT_DIR / "watchdog_exit_signal.json",
     "workstation_prep": CURRENT_DIR / "workstation_prep.json",
@@ -51,14 +53,19 @@ ARTIFACT_FILES = {
 
 MANAGER_TIMEOUT_SECONDS = {
     "BOSS": 720,
+    "wrapup-manager": 720,
     "watchdog": 120,
     "summary": 120,
 }
 
-WATCHDOG_IDLE_THRESHOLD = 10
+WATCHDOG_IDLE_THRESHOLD = 20
 WAIT_HEARTBEAT_SECONDS = 300
 WAIT_RESCAN_SECONDS = 900
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
+NON_TERMINAL_STOP_REASONS = {
+    "skip_cycle",
+    "active_workers_in_progress_no_safe_new_dispatch",
+}
 
 PLANNER_PLAN_PACKETS_FILE = Path("reports/optimus-prime/planning/PLAN_PACKETS.json")
 BOSS_REQUIRED_ARTIFACTS = [
@@ -99,7 +106,7 @@ class RunConfig:
     dry_run: bool
     run_base_source_branch: str = "main"
     boss_model: str = "gpt-5.3-codex"
-    boss_reasoning_effort: str = "xhigh"
+    boss_reasoning_effort: str = "medium"
 
 
 class SimpleBuildError(Exception):
@@ -205,6 +212,24 @@ def _write_boss_session_state(
         "previous_profile_alias": str(previous_profile_alias or profile_alias or "").strip(),
     }
     _atomic_write_json(cfg.repo_root / BOSS_SESSION_STATE_FILE, payload)
+
+
+def _active_lifecycle_era_id(cfg: RunConfig) -> str | None:
+    payload = _read_json(cfg.repo_root / APP_LIFECYCLE_FILE, default={})
+    if not isinstance(payload, dict):
+        return None
+    rows = payload.get("app_lifecycle")
+    if not isinstance(rows, list):
+        return None
+    for row in reversed(rows):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").strip() != "in_progress":
+            continue
+        era_id = str(row.get("era_id") or "").strip()
+        if era_id:
+            return era_id
+    return None
 
 
 def _default_attempts() -> dict[str, int]:
@@ -622,6 +647,13 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "stop_reason": "",
             "notes": "",
         },
+        "wrapup_manager_report": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "cycle_number": 0,
+            "status": "not_started",
+            "summary": "",
+        },
         "watchdog_state": {
             "schema_version": SCHEMA_VERSION,
             "cycle_number": 0,
@@ -654,6 +686,7 @@ def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
         "worker_registry",
         "dispatch_registry",
         "cycle_summary",
+        "wrapup_manager_report",
         "watchdog_state",
         "watchdog_exit_signal",
         "workstation_prep",
@@ -706,6 +739,7 @@ def _artifact_path_map(cfg: RunConfig) -> dict[str, str]:
     out["manager_call_log"] = str((cfg.repo_root / MANAGER_CALL_LOG_FILE).resolve())
     out["boss_evidence"] = str((cfg.repo_root / BOSS_EVIDENCE_FILE).resolve())
     out["boss_session_state"] = str((cfg.repo_root / BOSS_SESSION_STATE_FILE).resolve())
+    out["app_lifecycle"] = str((cfg.repo_root / APP_LIFECYCLE_FILE).resolve())
     out["terminate_file"] = str((cfg.repo_root / TERMINATE_FILE_NAME).resolve())
     return out
 
@@ -984,6 +1018,20 @@ def _write_boss_stub(cfg: RunConfig, cycle_number: int) -> None:
         _atomic_write_json(cfg.repo_root / ARTIFACT_FILES[key], payload)
 
 
+def _write_wrapup_stub(cfg: RunConfig, cycle_number: int) -> None:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": cycle_number,
+        "status": "dry_run",
+        "stop_reason": "project_done",
+        "run_base_branch": str((_read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={}).get("run_context") or {}).get("run_base_branch") or ""),
+        "app_lifecycle_path": str((cfg.repo_root / APP_LIFECYCLE_FILE).resolve()),
+        "summary": "dry run wrapup manager report",
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["wrapup_manager_report"], payload)
+
+
 def _validate_manager_artifacts(
     cfg: RunConfig,
     manager_name: str,
@@ -1049,9 +1097,13 @@ def _invoke_manager(
     context: dict[str, Any],
     expected_artifacts: list[str],
 ) -> ManagerResult:
+    manager_uses_boss_profile = manager_name in {"BOSS", "wrapup-manager"}
+    manager_uses_boss_model = manager_name in {"BOSS", "wrapup-manager"}
     if cfg.dry_run:
         if manager_name == "BOSS":
             _write_boss_stub(cfg, cycle_number)
+        if manager_name == "wrapup-manager":
+            _write_wrapup_stub(cfg, cycle_number)
         started = utc_now_iso()
         finished = utc_now_iso()
         result = ManagerResult(
@@ -1072,7 +1124,7 @@ def _invoke_manager(
         resume_session_id: str | None = None
         prior_profile_alias: str | None = None
         prior_previous_profile_alias: str | None = None
-        if manager_name == "BOSS":
+        if manager_uses_boss_profile:
             boss_session_state = _read_boss_session_state(cfg)
             prior_session_id = str(boss_session_state.get("session_id") or "").strip() or None
             prior_profile_alias = str(boss_session_state.get("profile_alias") or "").strip() or None
@@ -1081,7 +1133,9 @@ def _invoke_manager(
                 cfg,
                 preferred_alias=prior_profile_alias,
             )
-            if prior_session_id and selected_manager_alias and prior_profile_alias:
+            if not selected_manager_home:
+                selected_manager_home = str(boss_session_state.get("codex_home") or "").strip() or None
+            if manager_name == "BOSS" and prior_session_id and selected_manager_alias and prior_profile_alias:
                 profile_matches = selected_manager_alias == prior_profile_alias
                 previous_profile_matches = (
                     prior_previous_profile_alias in {None, "", prior_profile_alias}
@@ -1117,8 +1171,8 @@ def _invoke_manager(
             prompt_text,
             codex_home=selected_manager_home,
             resume_session_id=resume_session_id,
-            model=cfg.boss_model if manager_name == "BOSS" else None,
-            reasoning_effort=cfg.boss_reasoning_effort if manager_name == "BOSS" else None,
+            model=cfg.boss_model if manager_uses_boss_model else None,
+            reasoning_effort=cfg.boss_reasoning_effort if manager_uses_boss_model else None,
         )
         if manager_name == "BOSS" and resume_session_id and result.status == "failed" and not result.timeout:
             retry = _codex_exec_prompt(
@@ -1957,6 +2011,42 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, A
     return should_stop, exit_signal
 
 
+def _run_wrapup_manager(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    stop_reason: str,
+    init_state: dict[str, Any],
+    warnings: list[dict[str, Any]],
+) -> None:
+    run_context = init_state.get("run_context") if isinstance(init_state, dict) else {}
+    if not isinstance(run_context, dict):
+        run_context = {}
+    context = {
+        "stop_reason": stop_reason,
+        "run_base_branch": str(run_context.get("run_base_branch") or ""),
+        "run_base_from_branch": str(run_context.get("run_base_from_branch") or ""),
+        "run_base_from_commit": str(run_context.get("run_base_from_commit") or ""),
+        "app_lifecycle_path": str((cfg.repo_root / APP_LIFECYCLE_FILE).resolve()),
+        "app_lifecycle_active_era_id": _active_lifecycle_era_id(cfg),
+    }
+    result = _invoke_manager(
+        cfg,
+        manager_name="wrapup-manager",
+        cycle_number=cycle_number,
+        context=context,
+        expected_artifacts=["wrapup_manager_report"],
+    )
+    if result.status != "ok":
+        warnings.append(
+            {
+                "code": result.reason_code or "wrapup_manager_failed",
+                "message": result.message or "wrapup-manager failed",
+                "stage": "op-simple-build",
+            }
+        )
+
+
 def _render_cycle_summary(
     cfg: RunConfig,
     cycle_number: int,
@@ -2000,6 +2090,7 @@ def _render_cycle_summary(
 
     print(
         "[op-simple-build] "
+        f"[{utc_now_iso()}] "
         f"cycle={cycle_number} pending={merged_counts['pending']} in_progress={merged_counts['in_progress']} "
         f"done={merged_counts['done']} blocked={merged_counts['blocked']} "
         f"dispatch={{attempted:{out['dispatch_counts']['attempted']},launched:{out['dispatch_counts']['launched']},failed:{out['dispatch_counts']['launch_failed']},unknown:{out['dispatch_counts']['unknown']}}}",
@@ -2017,10 +2108,14 @@ def _termination_from_summary(summary: dict[str, Any]) -> str | None:
     if isinstance(termination, dict):
         reason = termination.get("reason_code")
         if isinstance(reason, str) and reason.strip():
-            return reason.strip()
+            normalized_reason = reason.strip()
+            if normalized_reason not in NON_TERMINAL_STOP_REASONS:
+                return normalized_reason
     stop_reason = summary.get("stop_reason")
     if isinstance(stop_reason, str) and stop_reason.strip():
-        return stop_reason.strip()
+        normalized_stop_reason = stop_reason.strip()
+        if normalized_stop_reason not in NON_TERMINAL_STOP_REASONS:
+            return normalized_stop_reason
     return None
 
 
@@ -2115,7 +2210,7 @@ def _build_config(req: Any) -> RunConfig:
         max_parallel_workers = 8
     run_base_source_branch = str(getattr(req, "run_base_source_branch", "") or "").strip() or "main"
     boss_model = str(getattr(req, "boss_model", "") or "").strip() or "gpt-5.3-codex"
-    boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "xhigh"
+    boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "medium"
 
     return RunConfig(
         repo_root=repo_root,
@@ -2141,6 +2236,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             str((cfg.repo_root / CYCLE_COUNTER_FILE).resolve()),
             str((cfg.repo_root / RUN_LOCK_FILE).resolve()),
             str((cfg.repo_root / BOSS_SESSION_STATE_FILE).resolve()),
+            str((cfg.repo_root / APP_LIFECYCLE_FILE).resolve()),
         ]
     )
 
@@ -2203,6 +2299,12 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             manager_statuses: dict[str, dict[str, str]] = {}
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
             boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle={cycle_number} BOSS started",
+                flush=True,
+            )
             boss_result = _invoke_manager(
                 cfg,
                 manager_name="BOSS",
@@ -2212,6 +2314,14 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "boss_evidence_path": str((cfg.repo_root / BOSS_EVIDENCE_FILE).resolve()),
                 },
                 expected_artifacts=boss_expected,
+            )
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle={cycle_number} BOSS done "
+                f"status={boss_result.status} timeout={str(bool(boss_result.timeout)).lower()} "
+                f"duration_s={boss_result.duration_seconds:.3f}",
+                flush=True,
             )
             manager_statuses["BOSS"] = {"status": boss_result.status, "note": boss_result.message or ""}
 
@@ -2225,6 +2335,12 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                         "event": "timeout",
                         "timestamp": utc_now_iso(),
                     },
+                )
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} skipped due to BOSS timeout; sleeping 180s before next cycle",
+                    flush=True,
                 )
                 time.sleep(180)
                 if cfg.max_build_cycles is not None and cycles_this_run >= cfg.max_build_cycles:
@@ -2315,6 +2431,15 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
             if cfg.sleep_minutes > 0:
                 time.sleep(cfg.sleep_minutes * 60.0)
+
+        if stop_reason == "project_done":
+            _run_wrapup_manager(
+                cfg,
+                cycle_number=cycle_number,
+                stop_reason=stop_reason,
+                init_state=init_state,
+                warnings=warnings,
+            )
 
         data = {
             "cycle_number": cycle_number,

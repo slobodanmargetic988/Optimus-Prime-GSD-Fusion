@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 OP_SIMPLE_BUILD_PATH = Path(__file__).resolve().parents[1] / "op_simple_build.py"
 BOSS_PROMPT_PATH = Path(__file__).resolve().parents[2] / "op_simple" / "prompts" / "managers" / "boss.md"
+WRAPUP_PROMPT_PATH = Path(__file__).resolve().parents[2] / "op_simple" / "prompts" / "managers" / "wrapup-manager.md"
 SPEC = importlib.util.spec_from_file_location("op_simple_build", OP_SIMPLE_BUILD_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
@@ -44,7 +45,7 @@ def make_req(root: Path, **overrides: object) -> SimpleNamespace:
 def test_build_config_defaults_boss_model_and_reasoning(tmp_path: Path) -> None:
     cfg = MODULE._build_config(make_req(tmp_path))
     assert cfg.boss_model == "gpt-5.3-codex"
-    assert cfg.boss_reasoning_effort == "xhigh"
+    assert cfg.boss_reasoning_effort == "medium"
 
 
 def test_build_config_accepts_boss_model_and_reasoning_override(tmp_path: Path) -> None:
@@ -194,6 +195,17 @@ def test_summary_preserves_termination_markers(tmp_path: Path) -> None:
     assert summary["project_done"] is True
     assert summary["insurmountable_blocker"] is True
     assert MODULE._termination_from_summary(summary) == "project_done"
+
+
+def test_termination_from_summary_treats_skip_cycle_as_non_terminal() -> None:
+    summary = {
+        "project_done": False,
+        "insurmountable_blocker": False,
+        "termination": {"reason_code": "active_workers_in_progress_no_safe_new_dispatch"},
+        "stop_reason": "skip_cycle",
+    }
+
+    assert MODULE._termination_from_summary(summary) is None
 
 
 def test_boss_failure_skips_cycle_and_writes_conservative_summary(tmp_path: Path, monkeypatch) -> None:
@@ -490,7 +502,7 @@ def test_watchdog_emits_exit_signal_after_idle_threshold(tmp_path: Path) -> None
     MODULE._ensure_default_artifacts(cfg)
 
     stop = False
-    for cycle in range(1, 12):
+    for cycle in range(1, MODULE.WATCHDOG_IDLE_THRESHOLD + 2):
         stop, _signal = MODULE._watchdog_tick(cfg, cycle)
 
     assert stop is True
@@ -953,6 +965,167 @@ def test_run_prefers_project_done_over_watchdog_stop(tmp_path: Path, monkeypatch
     assert out["data"]["stop_reason"] == "project_done"
 
 
+def test_run_invokes_wrapup_manager_once_on_project_done(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    calls: list[str] = []
+
+    def fake_invoke_manager(*_args, **kwargs):
+        calls.append(str(kwargs.get("manager_name") or ""))
+        manager = str(kwargs.get("manager_name") or "")
+        return MODULE.ManagerResult(
+            manager=manager,
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+        )
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+    monkeypatch.setattr(
+        MODULE,
+        "_render_cycle_summary",
+        lambda *_args, **_kwargs: {
+            "schema_version": "1.0",
+            "cycle_number": 1,
+            "project_done": True,
+            "insurmountable_blocker": False,
+            "termination": {},
+            "stop_reason": "",
+            "task_counts": {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0},
+            "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+            "manager_statuses": {},
+            "notes": "",
+        },
+    )
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, max_build_cycles=1, dry_run=True, sleep_minutes=0))
+
+    assert out["ok"] is True
+    assert calls.count("BOSS") == 1
+    assert calls.count("wrapup-manager") == 1
+
+
+def test_run_does_not_invoke_wrapup_manager_for_non_project_done_terminal_reason(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    calls: list[str] = []
+
+    def fake_invoke_manager(*_args, **kwargs):
+        calls.append(str(kwargs.get("manager_name") or ""))
+        manager = str(kwargs.get("manager_name") or "")
+        return MODULE.ManagerResult(
+            manager=manager,
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+        )
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+    monkeypatch.setattr(
+        MODULE,
+        "_render_cycle_summary",
+        lambda *_args, **_kwargs: {
+            "schema_version": "1.0",
+            "cycle_number": 1,
+            "project_done": False,
+            "insurmountable_blocker": True,
+            "termination": {"reason_code": "insurmountable_blocker"},
+            "stop_reason": "insurmountable_blocker",
+            "task_counts": {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0},
+            "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+            "manager_statuses": {},
+            "notes": "",
+        },
+    )
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, max_build_cycles=1, dry_run=True, sleep_minutes=0))
+
+    assert out["ok"] is True
+    assert calls.count("BOSS") == 1
+    assert "wrapup-manager" not in calls
+
+
+def test_run_project_done_soft_gates_wrapup_failure(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+
+    def fake_invoke_manager(*_args, **kwargs):
+        manager = str(kwargs.get("manager_name") or "")
+        if manager == "wrapup-manager":
+            return MODULE.ManagerResult(
+                manager=manager,
+                status="failed",
+                timeout=False,
+                returncode=1,
+                started_at="2026-01-01T00:00:01Z",
+                finished_at="2026-01-01T00:00:02Z",
+                duration_seconds=1.0,
+                message="codex exec returned non-zero",
+                reason_code="manager_non_zero_exit",
+            )
+        return MODULE.ManagerResult(
+            manager=manager,
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+        )
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+    monkeypatch.setattr(
+        MODULE,
+        "_render_cycle_summary",
+        lambda *_args, **_kwargs: {
+            "schema_version": "1.0",
+            "cycle_number": 1,
+            "project_done": True,
+            "insurmountable_blocker": False,
+            "termination": {},
+            "stop_reason": "",
+            "task_counts": {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0},
+            "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+            "manager_statuses": {},
+            "notes": "",
+        },
+    )
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, max_build_cycles=1, dry_run=True, sleep_minutes=0))
+
+    assert out["ok"] is True
+    assert out["data"]["stop_reason"] == "project_done"
+    assert any(item.get("code") == "manager_non_zero_exit" for item in out.get("warnings", []))
+
+
+def test_invoke_manager_wrapup_dry_run_writes_report(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="wrapup-manager",
+        cycle_number=3,
+        context={},
+        expected_artifacts=["wrapup_manager_report"],
+    )
+
+    assert out.status == "ok"
+    report = MODULE._read_json(tmp_path / MODULE.ARTIFACT_FILES["wrapup_manager_report"], default={})
+    assert report.get("cycle_number") == 3
+    assert report.get("status") == "dry_run"
+
+
 def test_run_persists_summary_manager_status_entry(tmp_path: Path) -> None:
     build_repo(tmp_path)
 
@@ -1327,11 +1500,87 @@ def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypa
     assert captured["codex_home"] == "/tmp/codex-second"
     assert captured["resume_session_id"] is None
     assert captured["model"] == "gpt-5.3-codex"
-    assert captured["reasoning_effort"] == "xhigh"
+    assert captured["reasoning_effort"] == "medium"
     assert out.message == "manager_profile_alias=codex-second"
     session_state = MODULE._read_json(tmp_path / MODULE.BOSS_SESSION_STATE_FILE, default={})
     assert session_state["session_id"] == "123e4567-e89b-12d3-a456-426614174000"
     assert session_state["codex_home"] == "/tmp/codex-second"
+
+
+def test_invoke_manager_wrapup_uses_selected_profile_home_and_boss_model_reasoning(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-wrapup",
+                    "codex_home": "/tmp/codex-wrapup",
+                    "window_5h_remaining_pct": 88.0,
+                    "window_week_remaining_pct": 91.0,
+                }
+            ],
+        },
+    )
+
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+    captured: dict[str, str | None] = {
+        "codex_home": None,
+        "resume_session_id": None,
+        "model": None,
+        "reasoning_effort": None,
+    }
+
+    def fake_codex_exec_prompt(*_args, **kwargs):
+        captured["codex_home"] = kwargs.get("codex_home")
+        captured["resume_session_id"] = kwargs.get("resume_session_id")
+        captured["model"] = kwargs.get("model")
+        captured["reasoning_effort"] = kwargs.get("reasoning_effort")
+        MODULE._atomic_write_json(
+            tmp_path / MODULE.ARTIFACT_FILES["wrapup_manager_report"],
+            {
+                "schema_version": "1.0",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "cycle_number": 1,
+                "status": "completed",
+                "summary": "ok",
+            },
+        )
+        return MODULE.ManagerResult(
+            manager="wrapup-manager",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="wrapup-manager",
+        cycle_number=1,
+        context={},
+        expected_artifacts=["wrapup_manager_report"],
+    )
+
+    assert out.status == "ok"
+    assert captured["codex_home"] == "/tmp/codex-wrapup"
+    assert captured["resume_session_id"] is None
+    assert captured["model"] == "gpt-5.3-codex"
+    assert captured["reasoning_effort"] == "medium"
+    assert out.message == "manager_profile_alias=codex-wrapup"
 
 
 def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatch) -> None:
@@ -1408,7 +1657,7 @@ def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatc
     assert captured["codex_home"] == "/tmp/codex-third"
     assert captured["resume_session_id"] == "123e4567-e89b-12d3-a456-426614174001"
     assert captured["model"] == "gpt-5.3-codex"
-    assert captured["reasoning_effort"] == "xhigh"
+    assert captured["reasoning_effort"] == "medium"
     assert out.message == "manager_profile_alias=codex-third"
 
 
@@ -1580,3 +1829,10 @@ def test_boss_prompt_mentions_cycle_number_and_runtime_skip_correction() -> None
     assert "cycle_manager_decision.json" in prompt
     assert "current cycle's top-level `cycle_number`" in prompt
     assert "runtime will correct the cycle to a deterministic `skip_cycle` outcome" in prompt
+
+
+def test_wrapup_prompt_mentions_lifecycle_and_wrapup_report() -> None:
+    prompt = WRAPUP_PROMPT_PATH.read_text(encoding="utf-8")
+
+    assert "app_lifecycle.json" in prompt
+    assert "wrapup_manager_report.json" in prompt

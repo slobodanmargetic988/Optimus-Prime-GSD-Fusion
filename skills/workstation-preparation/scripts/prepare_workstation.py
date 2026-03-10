@@ -847,9 +847,11 @@ def main() -> int:
 
             if not args.dry_run:
                 try:
-                    run(["git", "-C", str(entry.path), "checkout", "-B", resolved_branch, base_ref], check=True)
+                    run(["git", "-C", str(entry.path), "reset", "--hard"], check=True)
+                    run(["git", "-C", str(entry.path), "clean", "-fdx"], check=True)
+                    run(["git", "-C", str(entry.path), "checkout", "-f", "-B", resolved_branch, base_ref], check=True)
                     run(["git", "-C", str(entry.path), "reset", "--hard", base_ref], check=True)
-                    run(["git", "-C", str(entry.path), "clean", "-fd"], check=True)
+                    run(["git", "-C", str(entry.path), "clean", "-fdx"], check=True)
                 except subprocess.CalledProcessError as exc:
                     return fail(
                         exc.stderr.strip() or str(exc),
@@ -1040,9 +1042,11 @@ def main() -> int:
             )
 
         try:
-            run(["git", "-C", str(target_path), "checkout", "-B", branch_name_resolved, base_ref], check=True)
+            run(["git", "-C", str(target_path), "reset", "--hard"], check=True)
+            run(["git", "-C", str(target_path), "clean", "-fdx"], check=True)
+            run(["git", "-C", str(target_path), "checkout", "-f", "-B", branch_name_resolved, base_ref], check=True)
             run(["git", "-C", str(target_path), "reset", "--hard", base_ref], check=True)
-            run(["git", "-C", str(target_path), "clean", "-fd"], check=True)
+            run(["git", "-C", str(target_path), "clean", "-fdx"], check=True)
         except subprocess.CalledProcessError as exc:
             return fail(exc.stderr.strip() or str(exc), args.output, context)
 

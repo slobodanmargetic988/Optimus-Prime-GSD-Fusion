@@ -114,13 +114,28 @@ Planner behavior:
 - Existing planning artifacts require explicit replacement with `--override-old-plan`.
 - The planner prompt points LLM to bundled reference templates at `scripts/op/llm/examples/op-plan/reports/optimus-prime/planning`.
 
-## 2) Autonomous Build
+## 2) One-Command Build (Initialize + Run)
 
 ```bash
 opctl /op-build --json-pretty
 ```
 
-This runs autonomous execution with strict gates until:
+`/op-build` now runs `/op-simple-build` and will run `/op-initialize` first when:
+- mission/scope input is provided (`--mission`, `--scope`, `--mission-file`, `--scope-file`),
+- `--override-old-plan` is set, or
+- required planning baseline artifacts are missing.
+
+Use file inputs directly on `/op-build`:
+
+```bash
+opctl /op-build \
+  --mission-file /abs/path/to/mission.md \
+  --scope-file /abs/path/to/scope.txt \
+  --override-old-plan \
+  --json-pretty
+```
+
+Execution continues with strict gates until:
 - done with full evidence, or
 - deterministic hard stop condition is reached.
 
