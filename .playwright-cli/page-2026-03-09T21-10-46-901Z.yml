@@ -1,0 +1,12 @@
+- main [ref=e3431]:
+  - generic [ref=e3432]:
+    - paragraph [ref=e3433]: "Hydrated highscores: yes"
+    - paragraph [ref=e3434]: "Stored entries: 1"
+  - region "Leaderboard screen" [ref=e3435]:
+    - heading "Leaderboard" [level=1] [ref=e3436]
+    - paragraph [ref=e3438]: "Input feedback: results-submit (pointer, latency 16ms)."
+    - paragraph [ref=e3439]: Showing top ranks with current-player context.
+    - paragraph [ref=e3440]: Slobo scored 0 and is rank 1 (Top 10).
+    - list "Leaderboard rows" [ref=e3441]:
+      - row "Current player. Rank 1. Player Slobo. Score 0." [ref=e3442]: "#1 Slobo: 0 (you)"
+    - button "Start New Game" [active] [ref=e3443]

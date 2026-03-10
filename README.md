@@ -289,6 +289,7 @@ Detailed guides:
 - [QUICKSTART](docs/install/QUICKSTART.md)
 - [UPGRADE](docs/install/UPGRADE.md)
 - [TROUBLESHOOTING](docs/install/TROUBLESHOOTING.md)
+- [TERMINAL DEBUG OUTPUT POLICY](docs/contracts/TERMINAL_DEBUG_OUTPUT_POLICY.md)
 
 ## Key Paths
 

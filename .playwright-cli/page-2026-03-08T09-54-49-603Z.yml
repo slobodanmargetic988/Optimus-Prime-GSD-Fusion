@@ -1,0 +1,16 @@
+- main [ref=e71]:
+  - generic [ref=e72]:
+    - paragraph [ref=e73]: "Hydrated highscores: yes"
+    - paragraph [ref=e74]: "Stored entries: 0"
+  - region "Results screen" [ref=e75]:
+    - heading "Results" [level=1] [ref=e76]
+    - paragraph [ref=e77]:
+      - text: "Final score:"
+      - strong [ref=e78]: "0"
+    - generic [ref=e79]:
+      - text: Name
+      - textbox "Player name" [ref=e80]:
+        - /placeholder: Player
+        - text: ab
+    - button "Submit Score" [ref=e81]
+    - alert [ref=e82]: Name must be 3-10 characters using letters, numbers, or spaces

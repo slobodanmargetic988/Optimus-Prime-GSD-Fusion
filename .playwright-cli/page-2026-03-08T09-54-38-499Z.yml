@@ -1,0 +1,15 @@
+- main [ref=e48]:
+  - generic [ref=e49]:
+    - paragraph [ref=e50]: "Hydrated highscores: yes"
+    - paragraph [ref=e51]: "Stored entries: 0"
+  - region "Results screen" [ref=e52]:
+    - heading "Results" [level=1] [ref=e53]
+    - paragraph [ref=e54]:
+      - text: "Final score:"
+      - strong [ref=e55]: "0"
+    - generic [ref=e56]:
+      - text: Name
+      - textbox "Player name" [ref=e57]:
+        - /placeholder: Player
+        - text: ab
+    - button "Submit Score" [ref=e58]
