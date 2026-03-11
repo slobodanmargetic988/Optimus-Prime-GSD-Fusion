@@ -747,7 +747,7 @@ def test_dispatch_ignores_dead_pid_for_parallel_capacity(tmp_path: Path, monkeyp
     assert counters == {"attempted": 1, "launched": 1, "launch_failed": 0, "unknown": 0}
 
 
-def test_normalize_dead_worker_leases_clears_registry_and_requeues_tasks(tmp_path: Path, monkeypatch) -> None:
+def test_normalize_dead_worker_leases_clears_pid_only_and_preserves_assignments(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
         repo_root=tmp_path,
@@ -800,25 +800,25 @@ def test_normalize_dead_worker_leases_clears_registry_and_requeues_tasks(tmp_pat
 
     out = MODULE._normalize_dead_worker_leases(cfg, cycle_number=5)
 
-    assert out == {"reclaimed_workers": 1, "requeued_tasks": 1}
+    assert out == {"reclaimed_workers": 1, "requeued_tasks": 0}
 
     worker_registry = json.loads((tmp_path / MODULE.ARTIFACT_FILES["worker_registry"]).read_text(encoding="utf-8"))
     worker_1 = next(row for row in worker_registry["workers"] if row["worker_id"] == "worker-1")
     worker_2 = next(row for row in worker_registry["workers"] if row["worker_id"] == "worker-2")
-    assert worker_1["status"] == "idle"
+    assert worker_1["status"] == "in_progress"
     assert worker_1["pid"] is None
-    assert worker_1["thread_id"] is None
-    assert worker_1["current_task_id"] is None
-    assert worker_1["current_packet_id"] is None
+    assert worker_1["thread_id"] == "thread-dead"
+    assert worker_1["current_task_id"] == "TASK-001"
+    assert worker_1["current_packet_id"] == "packet-1"
     assert worker_2["status"] == "in_progress"
     assert worker_2["pid"] == 2222
 
     task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
     task_1 = next(row for row in task_state["tasks"] if row["task_id"] == "TASK-001")
     task_2 = next(row for row in task_state["tasks"] if row["task_id"] == "TASK-002")
-    assert task_1["status"] == "pending"
-    assert task_1["assigned_worker"] is None
-    assert task_1["assigned_profile"] is None
+    assert task_1["status"] == "in_progress"
+    assert task_1["assigned_worker"] == "worker-1"
+    assert task_1["assigned_profile"] == "codex"
     assert task_2["status"] == "in_progress"
     assert task_2["assigned_worker"] == "worker-2"
 
@@ -1150,6 +1150,58 @@ def test_run_invokes_wrapup_manager_once_on_project_done(tmp_path: Path, monkeyp
     assert out["ok"] is True
     assert calls.count("BOSS") == 1
     assert calls.count("wrapup-manager") == 1
+    trace_rows = [
+        json.loads(line)
+        for line in (tmp_path / MODULE.TRACE_EVENT_LOG_FILE).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(trace_rows) == 1
+    trace_event = trace_rows[0]
+    assert trace_event["schema_version"] == "trace-event-envelope.v1"
+    assert trace_event["event_name"] == "merge.lifecycle.wrapup_manager"
+    assert trace_event["identity"]["project_id"].startswith("prj.")
+    assert trace_event["identity"]["run_id"].startswith("run.")
+    assert trace_event["identity"]["event_id"].startswith("event.")
+    assert trace_event["source"]["repo"] == tmp_path.name
+    validation_errors = MODULE._validate_trace_event_envelope_v1(trace_event)
+    assert validation_errors == []
+
+
+def test_emit_trace_event_envelope_rejects_invalid_payload(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    bad_payload = {
+        "schema_version": "trace-event-envelope.v1",
+        "event_name": "x",
+        "timestamp_utc": "bad-time",
+        "identity": {
+            "project_id": "project.bad",
+            "run_id": "run.bad",
+            "event_id": "event.bad",
+        },
+        "actor": {"type": "service", "id": "wrapup-manager"},
+        "decision": {"question": "short", "rationale": "short", "reason_codes": []},
+        "operation": {"name": "x", "intent": "x"},
+        "outcome": {"status": "unknown", "summary": "x"},
+        "risk": {"level": "none"},
+        "evidence": {"artifacts": []},
+        "source": {"repo": "repo"},
+    }
+
+    try:
+        MODULE._emit_trace_event_envelope(cfg, cycle_number=1, payload=bad_payload)
+    except MODULE.SimpleBuildError as exc:
+        assert exc.code == "trace_event_envelope_invalid"
+    else:  # pragma: no cover - defensive
+        raise AssertionError("expected trace_event_envelope_invalid error")
 
 
 def test_run_does_not_invoke_wrapup_manager_for_non_project_done_terminal_reason(tmp_path: Path, monkeypatch) -> None:

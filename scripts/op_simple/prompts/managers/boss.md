@@ -89,6 +89,7 @@ Write all required BOSS artifacts with the current cycle_number, or runtime will
 Ensure each dispatched packet has a matching worker row with a valid worktree path; dispatch uses worker_packets + worker_registry directly.
 To make dispatch send nothing to specific workers (for soft-gated profiles), YOU must remove those workers’ packet rows from .op-simple/current/worker_packets.json (packets[]).
 Also don’t leave empty prompt rows as a “skip” method; those still count as dispatch attempts and become launch_failed.
+If a worker remains `in_progress` but has `pid=null` while `task_id`/`thread_id` context is still present, treat this as a reconciliation candidate first. Inspect that worker's worktree and recent commits before reassigning or resetting task status; dead PID alone is not sufficient evidence of failure.
 Important note IF AT ALL POSSIBLE dont set the profile that is reserved for BOSS on any worker so you dont have to switch profiles and can remain in the same thread. You can figure out which profile is used for BOSS from <repo-root>/.op-simple/current/boss_session_state.json 
 
 ## Worker packets prompt structure

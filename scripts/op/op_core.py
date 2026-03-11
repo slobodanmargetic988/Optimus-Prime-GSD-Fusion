@@ -296,6 +296,7 @@ class OpRequest:
     enable_artifact_fan_in: bool
     dry_run: bool
     reset_exhausted_retries: bool
+    watchdog_idle_threshold_cycles: int | None = None
     run_base_source_branch: str | None = None
     boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "medium"
@@ -15066,6 +15067,26 @@ def _resume_reset_exhausted_retries(repo_root: Path) -> tuple[list[dict[str, Any
 
 
 def command_resume(req: OpRequest) -> dict[str, Any]:
+    simple_runtime_marker = req.repo_root / ".op-simple" / "current" / "initialize_state.json"
+    if simple_runtime_marker.exists():
+        from op_simple_build import run_op_simple_build
+
+        simple_req = replace(req, command="op-resume")
+        result = run_op_simple_build(simple_req)
+        simple_warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+        return _response(
+            req,
+            ok=bool(result.get("ok")),
+            status=_as_str(result.get("status")) or ("completed" if result.get("ok") else "failed"),
+            summary=_as_str(result.get("summary")) or "OP resume finished.",
+            warnings=simple_warnings,
+            errors=result.get("errors") if isinstance(result.get("errors"), list) else [],
+            artifacts=result.get("artifacts") if isinstance(result.get("artifacts"), list) else [],
+            next_action=_as_str(result.get("next_action")),
+            state_ref=_as_str(result.get("state_ref")),
+            data=result.get("data") if isinstance(result.get("data"), dict) else None,
+        )
+
     build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
     if not build_state_path.exists():
         return _response(
@@ -15273,6 +15294,14 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         raise OpError("input_error", "max_parallel_workers must be integer", stage="input") from exc
     if max_parallel_workers <= 0:
         max_parallel_workers = 8
+    watchdog_idle_threshold_cycles_raw = payload.get("watchdog_idle_threshold_cycles")
+    watchdog_idle_threshold_cycles: int | None = None
+    if watchdog_idle_threshold_cycles_raw is not None:
+        try:
+            parsed_watchdog = int(watchdog_idle_threshold_cycles_raw)
+        except (TypeError, ValueError) as exc:
+            raise OpError("input_error", "watchdog_idle_threshold_cycles must be integer", stage="input") from exc
+        watchdog_idle_threshold_cycles = parsed_watchdog if parsed_watchdog > 0 else None
     enable_artifact_fan_in = _as_bool(payload.get("enable_artifact_fan_in"), default=False)
     run_base_source_branch = _as_str(payload.get("run_base_source_branch"))
     boss_model = _as_str(payload.get("boss_model")) or "gpt-5.3-codex"
@@ -15292,6 +15321,7 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         max_build_cycles=max_cycles_out,
         max_parallel_workers=max_parallel_workers,
         sleep_minutes=max(0.0, sleep_val),
+        watchdog_idle_threshold_cycles=watchdog_idle_threshold_cycles,
         enable_artifact_fan_in=enable_artifact_fan_in,
         dry_run=_as_bool(payload.get("dry_run"), default=False),
         reset_exhausted_retries=_as_bool(payload.get("reset_exhausted_retries"), default=False),

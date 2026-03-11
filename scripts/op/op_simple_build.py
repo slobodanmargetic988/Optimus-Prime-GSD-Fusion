@@ -34,6 +34,7 @@ INITIALIZE_STATE_FILE = CURRENT_DIR / "initialize_state.json"
 BOSS_EVIDENCE_FILE = CURRENT_DIR / "boss_evidence.json"
 BOSS_SESSION_STATE_FILE = CURRENT_DIR / "boss_session_state.json"
 APP_LIFECYCLE_FILE = Path("app_lifecycle.json")
+TRACE_EVENT_LOG_FILE = CURRENT_DIR / "trace_event_envelope.jsonl"
 
 ARTIFACT_FILES = {
     "cycle_manager_decision": CURRENT_DIR / "cycle_manager_decision.json",
@@ -78,6 +79,24 @@ BOSS_REQUIRED_ARTIFACTS = [
 ]
 TASK_ATTEMPT_STAGES = ("dev", "lane_test", "test_fix", "lane_review", "review_fix", "deep_review", "deep_fix")
 SESSION_ID_REGEX = re.compile(r"(?:session id|session_id)\s*[:=]\s*([0-9a-fA-F-]{36})", re.IGNORECASE)
+CANONICAL_ID_PATTERNS: dict[str, re.Pattern[str]] = {
+    "project_id": re.compile(r"^prj\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "era_id": re.compile(r"^era\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "plan_id": re.compile(r"^plan\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "phase_id": re.compile(r"^phase\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "lane_id": re.compile(r"^lane\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "task_id": re.compile(r"^task\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "run_id": re.compile(r"^run\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "thread_id": re.compile(r"^thread\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "event_id": re.compile(r"^event\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "decision_id": re.compile(r"^decision\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "artifact_id": re.compile(r"^artifact\.[a-z0-9][a-z0-9-]{1,95}$"),
+}
+TRACE_EVENT_TIMESTAMP_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+TRACE_EVENT_SOURCE_SHA_REGEX = re.compile(r"^[a-f0-9]{7,40}$")
+TRACE_EVENT_OUTCOME_STATUS = {"success", "failure", "partial", "noop", "blocked"}
+TRACE_EVENT_RISK_LEVELS = {"low", "medium", "high", "critical"}
+TRACE_EVENT_ACTOR_TYPES = {"manager", "worker", "service", "operator", "system"}
 
 
 @dataclass
@@ -165,6 +184,296 @@ def _extract_session_id(*parts: str) -> str | None:
         if match:
             return match.group(1)
     return None
+
+
+def _slugify_identifier(raw: Any) -> str:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return "unknown0"
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = re.sub(r"-{2,}", "-", text).strip("-")
+    if not text:
+        text = "unknown0"
+    if len(text) < 2:
+        text = f"{text}0"
+    return text[:96]
+
+
+def _canonical_id(prefix: str, raw: Any) -> str:
+    return f"{prefix}.{_slugify_identifier(raw)}"
+
+
+def _canonical_identity_for_cycle(cfg: RunConfig, cycle_number: int) -> dict[str, str]:
+    lock_payload = _read_json(cfg.repo_root / RUN_LOCK_FILE, default={})
+    lock_id = ""
+    if isinstance(lock_payload, dict):
+        lock_id = str(lock_payload.get("lock_id") or "").strip()
+
+    if not lock_id:
+        init_state = _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
+        run_context = init_state.get("run_context") if isinstance(init_state, dict) else {}
+        run_base_branch = str((run_context or {}).get("run_base_branch") or "").strip()
+        lock_id = run_base_branch or f"cycle-{cycle_number}"
+
+    event_seed = f"{datetime.now(timezone.utc).strftime('%Y%m%dt%H%M%Sz').lower()}-{cycle_number}-wrapup"
+    out = {
+        "project_id": _canonical_id("prj", cfg.repo_root.name),
+        "run_id": _canonical_id("run", lock_id),
+        "event_id": _canonical_id("event", event_seed),
+    }
+    era_id = _active_lifecycle_era_id(cfg)
+    if era_id:
+        out["era_id"] = _canonical_id("era", era_id)
+    return out
+
+
+def _validate_cross_project_ids_v1(identity: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(identity, dict):
+        return ["identity must be an object"]
+    for key in ("project_id", "run_id", "event_id"):
+        value = identity.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"identity.{key} is required")
+            continue
+        pattern = CANONICAL_ID_PATTERNS[key]
+        if not pattern.fullmatch(value.strip()):
+            errors.append(f"identity.{key} fails canonical pattern")
+    for key, pattern in CANONICAL_ID_PATTERNS.items():
+        if key not in identity:
+            continue
+        value = identity.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not pattern.fullmatch(value.strip()):
+            errors.append(f"identity.{key} fails canonical pattern")
+    return errors
+
+
+def _validate_trace_event_envelope_v1(payload: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, dict):
+        return ["trace event payload must be an object"]
+
+    if payload.get("schema_version") != "trace-event-envelope.v1":
+        errors.append("schema_version must be trace-event-envelope.v1")
+
+    event_name = payload.get("event_name")
+    if not isinstance(event_name, str) or len(event_name.strip()) < 3:
+        errors.append("event_name must be a non-empty string")
+
+    timestamp_utc = payload.get("timestamp_utc")
+    if not isinstance(timestamp_utc, str) or not TRACE_EVENT_TIMESTAMP_REGEX.fullmatch(timestamp_utc):
+        errors.append("timestamp_utc must match YYYY-MM-DDTHH:MM:SSZ")
+
+    errors.extend(_validate_cross_project_ids_v1(payload.get("identity")))
+
+    actor = payload.get("actor")
+    if not isinstance(actor, dict):
+        errors.append("actor must be an object")
+    else:
+        actor_type = actor.get("type")
+        actor_id = actor.get("id")
+        if actor_type not in TRACE_EVENT_ACTOR_TYPES:
+            errors.append("actor.type is invalid")
+        if not isinstance(actor_id, str) or not actor_id.strip():
+            errors.append("actor.id is required")
+
+    decision = payload.get("decision")
+    if not isinstance(decision, dict):
+        errors.append("decision must be an object")
+    else:
+        question = decision.get("question")
+        rationale = decision.get("rationale")
+        reason_codes = decision.get("reason_codes")
+        if not isinstance(question, str) or len(question.strip()) < 10:
+            errors.append("decision.question must be at least 10 characters")
+        if not isinstance(rationale, str) or len(rationale.strip()) < 10:
+            errors.append("decision.rationale must be at least 10 characters")
+        if not isinstance(reason_codes, list) or not reason_codes:
+            errors.append("decision.reason_codes must be a non-empty list")
+        elif any(not isinstance(item, str) or not item.strip() for item in reason_codes):
+            errors.append("decision.reason_codes must contain non-empty strings")
+
+    operation = payload.get("operation")
+    if not isinstance(operation, dict):
+        errors.append("operation must be an object")
+    else:
+        if not isinstance(operation.get("name"), str) or len(str(operation.get("name")).strip()) < 3:
+            errors.append("operation.name must be a non-empty string")
+        if not isinstance(operation.get("intent"), str) or len(str(operation.get("intent")).strip()) < 3:
+            errors.append("operation.intent must be a non-empty string")
+
+    outcome = payload.get("outcome")
+    if not isinstance(outcome, dict):
+        errors.append("outcome must be an object")
+    else:
+        status = outcome.get("status")
+        summary = outcome.get("summary")
+        if status not in TRACE_EVENT_OUTCOME_STATUS:
+            errors.append("outcome.status is invalid")
+        if not isinstance(summary, str) or len(summary.strip()) < 3:
+            errors.append("outcome.summary must be a non-empty string")
+
+    risk = payload.get("risk")
+    if not isinstance(risk, dict):
+        errors.append("risk must be an object")
+    else:
+        if risk.get("level") not in TRACE_EVENT_RISK_LEVELS:
+            errors.append("risk.level is invalid")
+
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, dict):
+        errors.append("evidence must be an object")
+    else:
+        artifacts = evidence.get("artifacts")
+        if not isinstance(artifacts, list) or not artifacts:
+            errors.append("evidence.artifacts must be a non-empty list")
+        else:
+            for idx, artifact in enumerate(artifacts):
+                if not isinstance(artifact, dict):
+                    errors.append(f"evidence.artifacts[{idx}] must be an object")
+                    continue
+                artifact_id = artifact.get("artifact_id")
+                if not isinstance(artifact_id, str) or not CANONICAL_ID_PATTERNS["artifact_id"].fullmatch(artifact_id):
+                    errors.append(f"evidence.artifacts[{idx}].artifact_id is invalid")
+                if not isinstance(artifact.get("kind"), str) or not str(artifact.get("kind")).strip():
+                    errors.append(f"evidence.artifacts[{idx}].kind is required")
+                if not isinstance(artifact.get("uri"), str) or not str(artifact.get("uri")).strip():
+                    errors.append(f"evidence.artifacts[{idx}].uri is required")
+
+    source = payload.get("source")
+    if not isinstance(source, dict):
+        errors.append("source must be an object")
+    else:
+        repo = source.get("repo")
+        commit_sha = source.get("commit_sha")
+        if not isinstance(repo, str) or not repo.strip():
+            errors.append("source.repo is required")
+        if commit_sha is not None:
+            if not isinstance(commit_sha, str) or not TRACE_EVENT_SOURCE_SHA_REGEX.fullmatch(commit_sha.strip()):
+                errors.append("source.commit_sha is invalid")
+
+    return errors
+
+
+def _build_wrapup_trace_event(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    stop_reason: str,
+    run_context: dict[str, Any],
+    result: ManagerResult,
+) -> dict[str, Any]:
+    event_ts = utc_now_iso()
+    identity = _canonical_identity_for_cycle(cfg, cycle_number)
+    decision_id_seed = f"wrapup-{cycle_number}-{stop_reason}-{result.status}"
+    identity["decision_id"] = _canonical_id("decision", decision_id_seed)
+
+    reason_code = str(result.reason_code or f"wrapup_manager_{result.status}" or "wrapup_manager_unknown").strip()
+    outcome_status = "success" if result.status == "ok" else "failure"
+    risk_level = "low" if result.status == "ok" else "medium"
+    report_uri = str(ARTIFACT_FILES["wrapup_manager_report"])
+    manager_log_uri = str(MANAGER_CALL_LOG_FILE)
+
+    source_branch = str(run_context.get("run_base_branch") or "").strip() or (_git_text(cfg.repo_root, "branch", "--show-current") or "")
+    source_commit_sha = _git_text(cfg.repo_root, "rev-parse", "HEAD") or ""
+
+    event = {
+        "schema_version": "trace-event-envelope.v1",
+        "event_name": "merge.lifecycle.wrapup_manager",
+        "timestamp_utc": event_ts,
+        "identity": identity,
+        "actor": {
+            "type": "service",
+            "id": "wrapup-manager",
+        },
+        "decision": {
+            "question": f"Should wrapup manager run for stop reason '{stop_reason}' at cycle {cycle_number}?",
+            "rationale": (
+                "Wrapup manager execution is required on project completion to finalize merge lifecycle context and "
+                "produce deterministic end-of-run evidence."
+            ),
+            "reason_codes": [reason_code],
+        },
+        "operation": {
+            "name": "invoke_wrapup_manager",
+            "intent": "Finalize run and capture merge lifecycle outcome.",
+            "target_ref": source_branch,
+            "inputs": {
+                "stop_reason": stop_reason,
+                "cycle_number": cycle_number,
+                "manager_status": result.status,
+            },
+        },
+        "outcome": {
+            "status": outcome_status,
+            "summary": (
+                "wrapup-manager completed and produced post-run summary artifacts"
+                if result.status == "ok"
+                else f"wrapup-manager failed with status={result.status}"
+            ),
+            "error_code": reason_code if result.status != "ok" else None,
+            "retryable": bool(result.timeout),
+            "metrics": {
+                "duration_seconds": result.duration_seconds,
+            },
+        },
+        "risk": {
+            "level": risk_level,
+            "notes": (
+                "Wrapup failure can delay merge/finalization transparency and should be triaged."
+                if result.status != "ok"
+                else "Low risk finalization event."
+            ),
+        },
+        "evidence": {
+            "artifacts": [
+                {
+                    "artifact_id": _canonical_id("artifact", f"wrapup-report-c{cycle_number}"),
+                    "kind": "wrapup_manager_report",
+                    "uri": report_uri,
+                    "generated_at_utc": event_ts,
+                },
+                {
+                    "artifact_id": _canonical_id("artifact", f"manager-call-log-c{cycle_number}"),
+                    "kind": "manager_call_log",
+                    "uri": manager_log_uri,
+                    "generated_at_utc": event_ts,
+                },
+            ]
+        },
+        "source": {
+            "repo": cfg.repo_root.name,
+            "branch": source_branch,
+        },
+    }
+    if source_commit_sha and TRACE_EVENT_SOURCE_SHA_REGEX.fullmatch(source_commit_sha):
+        event["source"]["commit_sha"] = source_commit_sha
+    return event
+
+
+def _emit_trace_event_envelope(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    payload: dict[str, Any],
+) -> None:
+    errors = _validate_trace_event_envelope_v1(payload)
+    if errors:
+        message = "; ".join(errors[:8])
+        raise SimpleBuildError(
+            "trace_event_envelope_invalid",
+            f"trace event envelope validation failed at cycle {cycle_number}: {message}",
+        )
+
+    _append_jsonl(cfg.repo_root / TRACE_EVENT_LOG_FILE, payload)
+    print(
+        "[op-simple-build] "
+        f"[{utc_now_iso()}] "
+        f"cycle={cycle_number} trace_event={payload.get('event_name')} schema_validation=passed",
+        flush=True,
+    )
 
 
 def _effective_codex_home(codex_home: str | None) -> str:
@@ -1884,7 +2193,6 @@ def _normalize_dead_worker_leases(cfg: RunConfig, cycle_number: int) -> dict[str
         return {"reclaimed_workers": 0, "requeued_tasks": 0}
 
     now_iso = utc_now_iso()
-    reclaimed_worker_ids: list[str] = []
     reclaimed_workers = 0
 
     for row in workers:
@@ -1894,20 +2202,11 @@ def _normalize_dead_worker_leases(cfg: RunConfig, cycle_number: int) -> dict[str
         if pid_int is None or _is_pid_alive(pid_int):
             continue
 
-        worker_id = str(row.get("worker_id") or "").strip()
-        if worker_id:
-            reclaimed_worker_ids.append(worker_id)
         reclaimed_workers += 1
 
-        row["status"] = "idle"
+        # Dead PID only indicates runtime marker expiry; preserve assignment context for BOSS reconciliation.
         row["pid"] = None
-        row["thread_id"] = None
-        row["current_packet_id"] = None
-        row["current_task_id"] = None
-        row["current_task_profile"] = None
         row["last_update"] = now_iso
-        if "last_heartbeat_at" in row:
-            row["last_heartbeat_at"] = None
 
     if reclaimed_workers:
         registry_payload["schema_version"] = SCHEMA_VERSION
@@ -1921,37 +2220,6 @@ def _normalize_dead_worker_leases(cfg: RunConfig, cycle_number: int) -> dict[str
         _atomic_write_json(registry_path, registry_payload)
 
     requeued_tasks = 0
-    if reclaimed_worker_ids:
-        task_state_path = cfg.repo_root / ARTIFACT_FILES["task_execution_state"]
-        task_state_payload = _read_json(task_state_path, default={})
-        if isinstance(task_state_payload, dict):
-            tasks = task_state_payload.get("tasks")
-            if isinstance(tasks, list):
-                reclaimed_set = set(reclaimed_worker_ids)
-                for task in tasks:
-                    if not isinstance(task, dict):
-                        continue
-                    if str(task.get("status") or "").strip() != "in_progress":
-                        continue
-                    assigned_worker = str(task.get("assigned_worker") or "").strip()
-                    if assigned_worker not in reclaimed_set:
-                        continue
-                    task["status"] = "pending"
-                    task["assigned_worker"] = None
-                    task["assigned_profile"] = None
-                    task["last_updated_at"] = now_iso
-                    requeued_tasks += 1
-
-                if requeued_tasks:
-                    task_state_payload["schema_version"] = SCHEMA_VERSION
-                    task_state_payload["updated_at"] = now_iso
-                    try:
-                        previous_cycle = int(task_state_payload.get("cycle_number") or 0)
-                    except (TypeError, ValueError):
-                        previous_cycle = 0
-                    task_state_payload["cycle_number"] = max(previous_cycle, int(cycle_number))
-                    task_state_payload["tasks"] = tasks
-                    _atomic_write_json(task_state_path, task_state_payload)
 
     if reclaimed_workers or requeued_tasks:
         print(
@@ -2211,6 +2479,18 @@ def _run_wrapup_manager(
                 "stage": "op-simple-build",
             }
         )
+    trace_event = _build_wrapup_trace_event(
+        cfg,
+        cycle_number=cycle_number,
+        stop_reason=stop_reason,
+        run_context=run_context,
+        result=result,
+    )
+    _emit_trace_event_envelope(
+        cfg,
+        cycle_number=cycle_number,
+        payload=trace_event,
+    )
 
 
 def _render_cycle_summary(
@@ -2287,7 +2567,7 @@ def _termination_from_summary(summary: dict[str, Any]) -> str | None:
 
 def _snapshot_cycle(cfg: RunConfig, cycle_number: int) -> None:
     cycle_dir = _ensure_history_cycle_dir(cfg, cycle_number)
-    for rel in [*ARTIFACT_FILES.values(), MANAGER_CALL_LOG_FILE, DISPATCH_LAUNCH_LOG_FILE, CYCLE_COUNTER_FILE]:
+    for rel in [*ARTIFACT_FILES.values(), MANAGER_CALL_LOG_FILE, DISPATCH_LAUNCH_LOG_FILE, TRACE_EVENT_LOG_FILE, CYCLE_COUNTER_FILE]:
         src = cfg.repo_root / rel
         if not src.exists() or not src.is_file():
             continue
@@ -2410,6 +2690,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         [
             str((cfg.repo_root / MANAGER_CALL_LOG_FILE).resolve()),
             str((cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE).resolve()),
+            str((cfg.repo_root / TRACE_EVENT_LOG_FILE).resolve()),
             str((cfg.repo_root / CYCLE_COUNTER_FILE).resolve()),
             str((cfg.repo_root / RUN_LOCK_FILE).resolve()),
             str((cfg.repo_root / BOSS_SESSION_STATE_FILE).resolve()),
@@ -2479,8 +2760,8 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     {
                         "code": "stale_worker_leases_recovered",
                         "message": (
-                            "Recovered dead worker leases and re-queued affected in-progress tasks for deterministic "
-                            "dispatch continuity."
+                            "Cleared dead worker PID markers while preserving task/thread context so BOSS can "
+                            "reconcile worker completion safely."
                         ),
                         "stage": "op-simple-build",
                         "details": {
