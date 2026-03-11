@@ -161,6 +161,26 @@ opctl /op-health --json-pretty
 opctl /op-resume --json-pretty
 ```
 
+### Operator Controls (Stop / Recovery Files)
+
+Use these file-based controls when a run is active:
+
+| Runtime | File path (relative to repo root) | Purpose | Consumed by |
+|---|---|---|---|
+| `/op-simple-build` | `terminate_run.json` | Immediate loop stop signal (presence-only; content ignored for stop check) | runtime code |
+| `/op-simple-build` | `recovery_instructions.md` | Operator recovery nudge for next BOSS cycle; BOSS should apply or explain and rename to `recovery_instructions_CONSUMED.md` | BOSS manager prompt |
+| `/op-build` | `reports/optimus-prime/control/OPERATOR_STOP.json` | Stop active autonomous `/op-build` workers and exit loop safely | runtime code |
+
+Related runtime state files:
+- `/op-build`: `reports/optimus-prime/control/OPERATOR_STOP_STATE.json` (written by runtime after operator stop; reconciled by `/op-resume`).
+- `/op-simple-build`: `.op-simple/current/watchdog_exit_signal.json` (written when watchdog stop condition triggers).
+
+Resume after stop:
+
+```bash
+opctl /op-resume --repo-root /absolute/path/to/project --json-pretty
+```
+
 ### Multi-Profile Codex Setup
 
 If you run OP with multiple Codex accounts/profiles, use the bundled `create-codex-profile` skill to create profile homes like `~/.codex-second` while preserving separate usage/account files.
@@ -205,8 +225,8 @@ Runtime reliability notes:
 - If `WORKER_REGISTRY.json` is unreadable, OP attempts auto-recovery; if recovery fails, it emits `worker_registry_recovery_failed_dispatch_allowed` and continues dispatch by policy.
 
 Operator stop behavior:
-- Create `reports/optimus-prime/control/OPERATOR_STOP.json` to stop current `/op-build`.
-- `/op-build` now applies stop to active worker PIDs (`SIGTERM` then `SIGKILL` fallback), writes `OPERATOR_STOP_STATE.json`, archives the marker, and exits with `stopped_operator`.
+- See `Operator Controls (Stop / Recovery Files)` above.
+- `/op-build` applies stop to active worker PIDs (`SIGTERM` then `SIGKILL` fallback), writes `OPERATOR_STOP_STATE.json`, archives the marker, and exits with `stopped_operator`.
 - `/op-resume` auto-reconciles stop-affected in-progress tasks (continue when worker/evidence is valid, requeue otherwise).
 
 ## Command Reference
