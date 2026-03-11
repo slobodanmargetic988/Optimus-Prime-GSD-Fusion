@@ -671,16 +671,123 @@ def test_watchdog_emits_exit_signal_for_stale_commit_age(tmp_path: Path, monkeyp
 
     stale_epoch = int((datetime.now(timezone.utc) - timedelta(minutes=MODULE.WATCHDOG_STALE_COMMIT_MINUTES + 5)).timestamp())
     monkeypatch.setattr(MODULE, "_git_commit_epoch_seconds", lambda _repo_root, _ref: stale_epoch)
+    current_sha = git(tmp_path, "rev-parse", "main")
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 0,
+            "monitored_branch": "main",
+            "last_commit_sha": current_sha,
+            "commit_ref": "main",
+            "last_commit_at_utc": "",
+            "last_commit_age_minutes": None,
+            "watchdog_age_offset_minutes": 0.0,
+            "watchdog_age_minutes": None,
+            "watchdog_target_reset_at_utc": "2026-01-01T00:00:00Z",
+            "stale_after_minutes": MODULE.WATCHDOG_STALE_COMMIT_MINUTES,
+            "stale": False,
+        },
+    )
 
     stop, signal = MODULE._watchdog_tick(cfg, cycle_number=1)
     assert stop is True
     assert signal["reason_code"] == "stale_base_branch_commit"
+    assert float(signal["watchdog_age_minutes"]) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
     assert float(signal["commit_age_minutes"]) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
 
     state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"]).read_text(encoding="utf-8"))
     assert state["stale"] is True
+    assert float(state["watchdog_age_minutes"]) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
     assert state["stale_after_minutes"] == MODULE.WATCHDOG_STALE_COMMIT_MINUTES
     assert (tmp_path / MODULE.ARTIFACT_FILES["watchdog_exit_signal"]).exists()
+
+
+def test_watchdog_force_reset_target_avoids_immediate_stale_stop(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        resume_mode=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_initialize_state(cfg)
+    MODULE._ensure_default_artifacts(cfg)
+
+    stale_epoch = int((datetime.now(timezone.utc) - timedelta(minutes=MODULE.WATCHDOG_STALE_COMMIT_MINUTES + 5)).timestamp())
+    monkeypatch.setattr(MODULE, "_git_commit_epoch_seconds", lambda _repo_root, _ref: stale_epoch)
+    current_sha = git(tmp_path, "rev-parse", "main")
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 12,
+            "monitored_branch": "main",
+            "last_commit_sha": current_sha,
+            "commit_ref": "main",
+            "last_commit_at_utc": "",
+            "last_commit_age_minutes": None,
+            "watchdog_age_offset_minutes": 0.0,
+            "watchdog_age_minutes": None,
+            "watchdog_target_reset_at_utc": "2026-01-01T00:00:00Z",
+            "stale_after_minutes": MODULE.WATCHDOG_STALE_COMMIT_MINUTES,
+            "stale": True,
+        },
+    )
+
+    stop, _signal = MODULE._watchdog_tick(cfg, cycle_number=13, force_reset_target=True)
+
+    assert stop is False
+    state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"]).read_text(encoding="utf-8"))
+    assert state["stale"] is False
+    assert float(state["watchdog_age_minutes"] or 0.0) <= 0.001
+    assert float(state["watchdog_age_offset_minutes"]) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
+
+
+def test_run_resume_passes_watchdog_target_reset_once(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.INITIALIZE_STATE_FILE,
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "monitored_branch": "main",
+            "workflow": {"max_parallel_workers": 8},
+            "run_context": {
+                "run_base_branch": "main",
+                "run_base_from_branch": "main",
+                "run_base_from_commit": git(tmp_path, "rev-parse", "main"),
+                "run_base_created_at": "2026-01-01T00:00:00Z",
+                "created_new": False,
+                "dry_run": True,
+            },
+        },
+    )
+
+    force_flags: list[bool] = []
+
+    def fake_watchdog_tick(_cfg, _cycle_number, *, force_reset_target=False):
+        force_flags.append(bool(force_reset_target))
+        return False, {"message": "watchdog healthy"}
+
+    monkeypatch.setattr(MODULE, "_watchdog_tick", fake_watchdog_tick)
+
+    out = MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            command="op-resume",
+            dry_run=True,
+            max_build_cycles=1,
+            sleep_minutes=0,
+        )
+    )
+
+    assert out["ok"] is True
+    assert force_flags == [True]
 
 
 def test_rate_gate_wait_logs_heartbeat_and_rescan(tmp_path: Path, monkeypatch) -> None:
@@ -1260,7 +1367,11 @@ def test_create_run_base_branch_dry_run_uses_current_branch(tmp_path: Path) -> N
 def test_run_prefers_project_done_over_watchdog_stop(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
 
-    monkeypatch.setattr(MODULE, "_watchdog_tick", lambda _cfg, _cycle: (True, {"message": "idle"}))
+    monkeypatch.setattr(
+        MODULE,
+        "_watchdog_tick",
+        lambda _cfg, _cycle, *, force_reset_target=False: (True, {"message": "idle"}),
+    )
     monkeypatch.setattr(
         MODULE,
         "_render_cycle_summary",

@@ -1027,6 +1027,9 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "commit_ref": "main",
             "last_commit_at_utc": "",
             "last_commit_age_minutes": None,
+            "watchdog_age_offset_minutes": None,
+            "watchdog_age_minutes": None,
+            "watchdog_target_reset_at_utc": "",
             "stale_after_minutes": WATCHDOG_STALE_COMMIT_MINUTES,
             "stale": False,
         },
@@ -2347,9 +2350,12 @@ def _watchdog_near_idle_threshold(cfg: RunConfig) -> bool:
     if not isinstance(payload, dict):
         return False
     try:
-        age_minutes = float(payload.get("last_commit_age_minutes"))
+        age_minutes = float(payload.get("watchdog_age_minutes"))
     except (TypeError, ValueError):
-        return False
+        try:
+            age_minutes = float(payload.get("last_commit_age_minutes"))
+        except (TypeError, ValueError):
+            return False
     try:
         stale_after_minutes = int(payload.get("stale_after_minutes") or WATCHDOG_STALE_COMMIT_MINUTES)
     except (TypeError, ValueError):
@@ -2485,7 +2491,7 @@ def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
     return counters
 
 
-def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, Any]]:
+def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: bool = False) -> tuple[bool, dict[str, Any]]:
     init_state = _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
     monitored_branch = "main"
     if isinstance(init_state, dict):
@@ -2513,10 +2519,26 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, A
         state = {}
 
     stale_after_minutes = WATCHDOG_STALE_COMMIT_MINUTES
+    previous_sha = str(state.get("last_commit_sha") or "").strip()
+    offset_minutes_raw = state.get("watchdog_age_offset_minutes")
+    try:
+        offset_minutes = float(offset_minutes_raw) if offset_minutes_raw is not None else None
+    except (TypeError, ValueError):
+        offset_minutes = None
+    if offset_minutes is not None and offset_minutes < 0:
+        offset_minutes = 0.0
+
+    reset_target = force_reset_target or not previous_sha or previous_sha != current_sha or offset_minutes is None
+    reset_at_utc = str(state.get("watchdog_target_reset_at_utc") or "").strip()
+    watchdog_age_minutes: float | None = None
     if commit_age_minutes is None:
         is_stale = False
     else:
-        is_stale = commit_age_minutes > float(stale_after_minutes)
+        if reset_target:
+            offset_minutes = commit_age_minutes
+            reset_at_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        watchdog_age_minutes = max(0.0, commit_age_minutes - float(offset_minutes or 0.0))
+        is_stale = watchdog_age_minutes > float(stale_after_minutes)
 
     next_state = {
         "schema_version": SCHEMA_VERSION,
@@ -2526,6 +2548,9 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, A
         "last_commit_sha": current_sha,
         "last_commit_at_utc": last_commit_at_utc,
         "last_commit_age_minutes": round(commit_age_minutes, 3) if commit_age_minutes is not None else None,
+        "watchdog_age_offset_minutes": round(offset_minutes, 3) if offset_minutes is not None else None,
+        "watchdog_age_minutes": round(watchdog_age_minutes, 3) if watchdog_age_minutes is not None else None,
+        "watchdog_target_reset_at_utc": reset_at_utc,
         "stale_after_minutes": stale_after_minutes,
         "stale": is_stale,
     }
@@ -2540,6 +2565,7 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, A
             "monitored_branch": monitored_branch,
             "commit_ref": commit_ref,
             "stale_after_minutes": stale_after_minutes,
+            "watchdog_age_minutes": None,
             "commit_age_minutes": None,
         }
     else:
@@ -2548,13 +2574,15 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, A
             "cycle_number": cycle_number,
             "reason_code": "stale_base_branch_commit",
             "message": (
-                f"latest commit on '{monitored_branch}' is {commit_age_minutes:.1f} minutes old; "
+                f"no new commit observed on '{monitored_branch}' for {float(watchdog_age_minutes or 0.0):.1f} minutes; "
                 f"watchdog limit is {stale_after_minutes} minutes"
             ),
             "monitored_branch": monitored_branch,
             "commit_ref": commit_ref,
             "last_commit_sha": current_sha,
             "last_commit_at_utc": last_commit_at_utc,
+            "watchdog_age_minutes": round(watchdog_age_minutes, 3) if watchdog_age_minutes is not None else None,
+            "watchdog_target_reset_at_utc": reset_at_utc,
             "stale_after_minutes": stale_after_minutes,
             "commit_age_minutes": round(commit_age_minutes, 3),
         }
@@ -2864,6 +2892,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         cycles_this_run = 0
         previous_state_signature: str | None = None
         quiet_cycle_streak = 0
+        watchdog_reset_pending = bool(cfg.resume_mode)
 
         while True:
             cycle_number += 1
@@ -3031,7 +3060,12 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 dispatch_counts = _dispatch_packets(cfg, cycle_number)
                 manager_statuses["work-dispatcher"] = {"status": "ok", "note": "dispatch cycle completed"}
 
-            watchdog_stop, watchdog_signal = _watchdog_tick(cfg, cycle_number)
+            watchdog_stop, watchdog_signal = _watchdog_tick(
+                cfg,
+                cycle_number,
+                force_reset_target=watchdog_reset_pending,
+            )
+            watchdog_reset_pending = False
             manager_statuses["watchdog"] = {
                 "status": "stop" if watchdog_stop else "ok",
                 "note": watchdog_signal.get("message") if watchdog_stop else "watchdog healthy",
