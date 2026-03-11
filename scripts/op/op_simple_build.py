@@ -2926,6 +2926,8 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             manager_statuses: dict[str, dict[str, str]] = {}
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
             state_signature, in_progress_workers = _worker_task_state_signature(cfg)
+            task_counts_snapshot = _task_counts_from_execution_state(cfg)
+            task_in_progress_count = int(task_counts_snapshot.get("in_progress") or 0)
             state_changed = previous_state_signature is None or state_signature != previous_state_signature
             force_full_cycle = quiet_cycle_streak >= (QUIET_CYCLE_FORCE_FULL_EVERY - 1)
             has_recovery_nudge = (cfg.repo_root / "recovery_instructions.md").exists()
@@ -2940,6 +2942,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 and not near_watchdog_idle
                 and not state_changed
                 and in_progress_workers > 0
+                and task_in_progress_count > 0
                 and not force_full_cycle
             )
             boss_result: ManagerResult | None = None
@@ -3078,7 +3081,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "schema_version": SCHEMA_VERSION,
                     "cycle_number": cycle_number,
                     "manager_statuses": {},
-                    "task_counts": _task_counts_from_execution_state(cfg),
+                    "task_counts": task_counts_snapshot,
                     "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
                     "project_done": False,
                     "insurmountable_blocker": False,
