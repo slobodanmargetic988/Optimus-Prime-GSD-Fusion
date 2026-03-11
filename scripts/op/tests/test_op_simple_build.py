@@ -2,6 +2,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -68,6 +69,11 @@ def test_build_config_accepts_run_base_source_branch_override(tmp_path: Path) ->
         )
     )
     assert cfg.run_base_source_branch == "op-simple-canary-prev"
+
+
+def test_build_config_preserves_explicit_zero_sleep_minutes(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(make_req(tmp_path, sleep_minutes=0))
+    assert cfg.sleep_minutes == 0
 
 
 def write_boss_artifacts(root: Path, cycle_number: int, *, overrides: dict[str, dict[str, object]] | None = None) -> None:
@@ -248,6 +254,168 @@ def test_boss_failure_skips_cycle_and_writes_conservative_summary(tmp_path: Path
     assert summary["manager_statuses"]["work-dispatcher"]["status"] == "skipped"
     assert summary["manager_statuses"]["summary"]["status"] == "ok"
     assert (tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"]).exists()
+
+
+def test_quiet_cycle_gate_skips_boss_when_state_unchanged(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    boss_calls: list[int] = []
+    rate_gate_calls: list[int] = []
+    dispatch_calls: list[int] = []
+
+    def fake_invoke_manager(*_args, **kwargs):
+        manager = kwargs["manager_name"]
+        cycle_number = int(kwargs["cycle_number"])
+        if manager != "BOSS":
+            raise AssertionError(f"unexpected manager call: {manager}")
+        boss_calls.append(cycle_number)
+        write_boss_artifacts(
+            tmp_path,
+            cycle_number,
+            overrides={
+                "worker_registry": {
+                    "workers": [
+                        {
+                            "worker_id": "worker-1",
+                            "status": "in_progress",
+                            "pid": None,
+                            "thread_id": "thread-1",
+                            "current_task_id": "TASK-001",
+                            "current_packet_id": "packet-1",
+                            "current_task_profile": "codex",
+                        }
+                    ]
+                },
+                "task_execution_state": {
+                    "tasks": [
+                        {
+                            "task_id": "TASK-001",
+                            "status": "in_progress",
+                            "assigned_worker": "worker-1",
+                            "assigned_profile": "codex",
+                        }
+                    ]
+                },
+                "cycle_summary": {
+                    "task_counts": {"pending": 0, "in_progress": 1, "done": 0, "blocked": 0},
+                },
+            },
+        )
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            message="ok",
+        )
+
+    def fake_rate_gate(_cfg, cycle_number: int, _warnings):
+        rate_gate_calls.append(int(cycle_number))
+
+    def fake_dispatch(_cfg, cycle_number: int):
+        dispatch_calls.append(int(cycle_number))
+        return {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+    monkeypatch.setattr(MODULE, "_run_rate_gate_wait", fake_rate_gate)
+    monkeypatch.setattr(MODULE, "_dispatch_packets", fake_dispatch)
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, max_build_cycles=2, dry_run=True, sleep_minutes=0))
+
+    assert out["ok"] is True
+    assert boss_calls == [1]
+    assert rate_gate_calls == [1]
+    assert dispatch_calls == [1]
+
+    summary = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_summary"]).read_text(encoding="utf-8"))
+    assert summary["cycle_number"] == 2
+    assert summary["manager_statuses"]["BOSS"]["status"] == "skipped"
+    assert summary["termination"]["reason_code"] == "active_workers_in_progress_no_safe_new_dispatch"
+    assert summary["stop_reason"] == "skip_cycle"
+
+    decision = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_manager_decision"]).read_text(encoding="utf-8"))
+    assert decision["cycle_number"] == 2
+    assert decision["decision"] == "skip_cycle"
+    assert decision["reason_code"] == "active_workers_in_progress_no_safe_new_dispatch"
+
+
+def test_quiet_cycle_gate_forces_periodic_full_boss_cycle(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    boss_calls: list[int] = []
+    rate_gate_calls: list[int] = []
+    dispatch_calls: list[int] = []
+
+    def fake_invoke_manager(*_args, **kwargs):
+        manager = kwargs["manager_name"]
+        cycle_number = int(kwargs["cycle_number"])
+        if manager != "BOSS":
+            raise AssertionError(f"unexpected manager call: {manager}")
+        boss_calls.append(cycle_number)
+        write_boss_artifacts(
+            tmp_path,
+            cycle_number,
+            overrides={
+                "worker_registry": {
+                    "workers": [
+                        {
+                            "worker_id": "worker-1",
+                            "status": "in_progress",
+                            "pid": None,
+                            "thread_id": "thread-1",
+                            "current_task_id": "TASK-001",
+                            "current_packet_id": "packet-1",
+                            "current_task_profile": "codex",
+                        }
+                    ]
+                },
+                "task_execution_state": {
+                    "tasks": [
+                        {
+                            "task_id": "TASK-001",
+                            "status": "in_progress",
+                            "assigned_worker": "worker-1",
+                            "assigned_profile": "codex",
+                        }
+                    ]
+                },
+                "cycle_summary": {
+                    "task_counts": {"pending": 0, "in_progress": 1, "done": 0, "blocked": 0},
+                },
+            },
+        )
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            message="ok",
+        )
+
+    def fake_rate_gate(_cfg, cycle_number: int, _warnings):
+        rate_gate_calls.append(int(cycle_number))
+
+    def fake_dispatch(_cfg, cycle_number: int):
+        dispatch_calls.append(int(cycle_number))
+        return {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+    monkeypatch.setattr(MODULE, "_run_rate_gate_wait", fake_rate_gate)
+    monkeypatch.setattr(MODULE, "_dispatch_packets", fake_dispatch)
+    monkeypatch.setattr(MODULE, "QUIET_CYCLE_FORCE_FULL_EVERY", 2)
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, max_build_cycles=3, dry_run=True, sleep_minutes=0))
+
+    assert out["ok"] is True
+    assert boss_calls == [1, 3]
+    assert rate_gate_calls == [1, 3]
+    assert dispatch_calls == [1, 3]
 
 
 def test_invoke_manager_boss_fails_when_required_artifact_missing(tmp_path: Path, monkeypatch) -> None:
@@ -488,7 +656,7 @@ def test_dispatch_packets_writes_launch_and_registry(tmp_path: Path, monkeypatch
     assert worker_registry["workers"][0]["pid"] == 4321
 
 
-def test_watchdog_emits_exit_signal_after_idle_threshold(tmp_path: Path) -> None:
+def test_watchdog_emits_exit_signal_for_stale_commit_age(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
         repo_root=tmp_path,
@@ -501,11 +669,17 @@ def test_watchdog_emits_exit_signal_after_idle_threshold(tmp_path: Path) -> None
     MODULE._ensure_initialize_state(cfg)
     MODULE._ensure_default_artifacts(cfg)
 
-    stop = False
-    for cycle in range(1, MODULE.WATCHDOG_IDLE_THRESHOLD + 2):
-        stop, _signal = MODULE._watchdog_tick(cfg, cycle)
+    stale_epoch = int((datetime.now(timezone.utc) - timedelta(minutes=MODULE.WATCHDOG_STALE_COMMIT_MINUTES + 5)).timestamp())
+    monkeypatch.setattr(MODULE, "_git_commit_epoch_seconds", lambda _repo_root, _ref: stale_epoch)
 
+    stop, signal = MODULE._watchdog_tick(cfg, cycle_number=1)
     assert stop is True
+    assert signal["reason_code"] == "stale_base_branch_commit"
+    assert float(signal["commit_age_minutes"]) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
+
+    state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"]).read_text(encoding="utf-8"))
+    assert state["stale"] is True
+    assert state["stale_after_minutes"] == MODULE.WATCHDOG_STALE_COMMIT_MINUTES
     assert (tmp_path / MODULE.ARTIFACT_FILES["watchdog_exit_signal"]).exists()
 
 

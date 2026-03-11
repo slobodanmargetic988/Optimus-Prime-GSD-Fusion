@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -59,7 +60,9 @@ MANAGER_TIMEOUT_SECONDS = {
     "summary": 120,
 }
 
-WATCHDOG_IDLE_THRESHOLD = 20
+QUIET_CYCLE_FORCE_FULL_EVERY = 5
+WATCHDOG_STALE_COMMIT_MINUTES = 150
+WATCHDOG_NEAR_STALE_MARGIN_MINUTES = 10
 WAIT_HEARTBEAT_SECONDS = 300
 WAIT_RESCAN_SECONDS = 900
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
@@ -127,7 +130,6 @@ class RunConfig:
     run_base_source_branch: str = "main"
     boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "medium"
-    watchdog_idle_threshold_cycles: int | None = None
 
 
 class SimpleBuildError(Exception):
@@ -584,6 +586,19 @@ def _git_text(repo_root: Path, *args: str) -> str:
     return (proc.stdout or "").strip()
 
 
+def _git_commit_epoch_seconds(repo_root: Path, ref: str) -> int | None:
+    raw = _git_text(repo_root, "show", "-s", "--format=%ct", ref)
+    if not raw:
+        return None
+    try:
+        epoch = int(raw.strip())
+    except (TypeError, ValueError):
+        return None
+    if epoch <= 0:
+        return None
+    return epoch
+
+
 def _git_run(repo_root: Path, *args: str) -> tuple[int, str, str]:
     proc = subprocess.run(["git", *args], cwd=str(repo_root), capture_output=True, text=True, check=False)
     return int(proc.returncode), (proc.stdout or "").strip(), (proc.stderr or "").strip()
@@ -938,7 +953,6 @@ def _ensure_workstation_prep(
 
 
 def _ensure_default_artifacts(cfg: RunConfig) -> None:
-    watchdog_threshold = cfg.watchdog_idle_threshold_cycles if isinstance(cfg.watchdog_idle_threshold_cycles, int) and cfg.watchdog_idle_threshold_cycles > 0 else WATCHDOG_IDLE_THRESHOLD
     defaults: dict[str, Any] = {
         "cycle_manager_decision": {
             "schema_version": SCHEMA_VERSION,
@@ -1010,9 +1024,11 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "cycle_number": 0,
             "monitored_branch": "main",
             "last_commit_sha": "",
-            "last_commit_seen_cycle": 0,
-            "idle_cycles": 0,
-            "threshold_cycles": watchdog_threshold,
+            "commit_ref": "main",
+            "last_commit_at_utc": "",
+            "last_commit_age_minutes": None,
+            "stale_after_minutes": WATCHDOG_STALE_COMMIT_MINUTES,
+            "stale": False,
         },
     }
 
@@ -2261,6 +2277,91 @@ def _active_worker_count(cfg: RunConfig) -> int:
     return active_count
 
 
+def _task_counts_from_execution_state(cfg: RunConfig) -> dict[str, int]:
+    counts = {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0}
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["task_execution_state"], default={})
+    tasks = payload.get("tasks") if isinstance(payload, dict) else None
+    if not isinstance(tasks, list):
+        return counts
+    for row in tasks:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").strip()
+        if status in counts:
+            counts[status] += 1
+    return counts
+
+
+def _worker_task_state_signature(cfg: RunConfig) -> tuple[str, int]:
+    worker_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
+    worker_rows = worker_payload.get("workers") if isinstance(worker_payload, dict) else None
+    normalized_workers: list[dict[str, Any]] = []
+    in_progress_workers = 0
+    if isinstance(worker_rows, list):
+        for row in worker_rows:
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("status") or "").strip()
+            if status == "in_progress":
+                in_progress_workers += 1
+            normalized_workers.append(
+                {
+                    "worker_id": str(row.get("worker_id") or "").strip(),
+                    "status": status,
+                    "pid": _coerce_pid(row.get("pid")),
+                    "thread_id": str(row.get("thread_id") or "").strip(),
+                    "current_task_id": str(row.get("current_task_id") or "").strip(),
+                    "current_packet_id": str(row.get("current_packet_id") or "").strip(),
+                    "current_task_profile": str(row.get("current_task_profile") or "").strip(),
+                    "next_task_profile": str(row.get("next_task_profile") or "").strip(),
+                }
+            )
+    normalized_workers.sort(key=lambda item: item.get("worker_id") or "")
+
+    task_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["task_execution_state"], default={})
+    task_rows = task_payload.get("tasks") if isinstance(task_payload, dict) else None
+    normalized_tasks: list[dict[str, str]] = []
+    if isinstance(task_rows, list):
+        for row in task_rows:
+            if not isinstance(row, dict):
+                continue
+            normalized_tasks.append(
+                {
+                    "task_id": str(row.get("task_id") or "").strip(),
+                    "status": str(row.get("status") or "").strip(),
+                    "assigned_worker": str(row.get("assigned_worker") or "").strip(),
+                    "assigned_profile": str(row.get("assigned_profile") or "").strip(),
+                }
+            )
+    normalized_tasks.sort(key=lambda item: item.get("task_id") or "")
+
+    digest_payload = {"workers": normalized_workers, "tasks": normalized_tasks}
+    digest = hashlib.sha256(
+        json.dumps(digest_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return digest, in_progress_workers
+
+
+def _watchdog_near_idle_threshold(cfg: RunConfig) -> bool:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["watchdog_state"], default={})
+    if not isinstance(payload, dict):
+        return False
+    try:
+        age_minutes = float(payload.get("last_commit_age_minutes"))
+    except (TypeError, ValueError):
+        return False
+    try:
+        stale_after_minutes = int(payload.get("stale_after_minutes") or WATCHDOG_STALE_COMMIT_MINUTES)
+    except (TypeError, ValueError):
+        stale_after_minutes = WATCHDOG_STALE_COMMIT_MINUTES
+    if stale_after_minutes <= 0:
+        stale_after_minutes = WATCHDOG_STALE_COMMIT_MINUTES
+    near_threshold = stale_after_minutes - WATCHDOG_NEAR_STALE_MARGIN_MINUTES
+    if near_threshold < 0:
+        near_threshold = 0
+    return age_minutes >= float(near_threshold)
+
+
 def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
     counters = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
     packets = _load_worker_packets(cfg)
@@ -2392,50 +2493,73 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, A
         if isinstance(branch_raw, str) and branch_raw.strip():
             monitored_branch = branch_raw.strip()
 
-    current_sha = _git_text(cfg.repo_root, "rev-parse", monitored_branch)
+    commit_ref = monitored_branch
+    current_sha = _git_text(cfg.repo_root, "rev-parse", commit_ref)
     if not current_sha:
-        current_sha = _git_text(cfg.repo_root, "rev-parse", "HEAD")
+        commit_ref = "HEAD"
+        current_sha = _git_text(cfg.repo_root, "rev-parse", commit_ref)
+    commit_epoch = _git_commit_epoch_seconds(cfg.repo_root, commit_ref)
+    now_utc = datetime.now(timezone.utc)
+    commit_age_minutes: float | None = None
+    last_commit_at_utc = ""
+    if commit_epoch is not None:
+        last_commit_at = datetime.fromtimestamp(commit_epoch, timezone.utc)
+        last_commit_at_utc = last_commit_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        commit_age_minutes = max(0.0, (now_utc.timestamp() - float(commit_epoch)) / 60.0)
 
     state_path = cfg.repo_root / ARTIFACT_FILES["watchdog_state"]
     state = _read_json(state_path, default={})
     if not isinstance(state, dict):
         state = {}
 
-    last_sha = state.get("last_commit_sha") if isinstance(state.get("last_commit_sha"), str) else ""
-    idle_cycles = int(state.get("idle_cycles") or 0)
-    threshold_override = cfg.watchdog_idle_threshold_cycles if isinstance(cfg.watchdog_idle_threshold_cycles, int) and cfg.watchdog_idle_threshold_cycles > 0 else None
-    threshold_cycles = int(threshold_override or state.get("threshold_cycles") or WATCHDOG_IDLE_THRESHOLD)
-    if threshold_cycles <= 0:
-        threshold_cycles = WATCHDOG_IDLE_THRESHOLD
-
-    if current_sha and current_sha != last_sha:
-        idle_cycles = 0
-        last_seen_cycle = cycle_number
+    stale_after_minutes = WATCHDOG_STALE_COMMIT_MINUTES
+    if commit_age_minutes is None:
+        is_stale = False
     else:
-        idle_cycles += 1
-        last_seen_cycle = int(state.get("last_commit_seen_cycle") or 0)
+        is_stale = commit_age_minutes > float(stale_after_minutes)
 
     next_state = {
         "schema_version": SCHEMA_VERSION,
         "cycle_number": cycle_number,
         "monitored_branch": monitored_branch,
+        "commit_ref": commit_ref,
         "last_commit_sha": current_sha,
-        "last_commit_seen_cycle": last_seen_cycle,
-        "idle_cycles": idle_cycles,
-        "threshold_cycles": threshold_cycles,
+        "last_commit_at_utc": last_commit_at_utc,
+        "last_commit_age_minutes": round(commit_age_minutes, 3) if commit_age_minutes is not None else None,
+        "stale_after_minutes": stale_after_minutes,
+        "stale": is_stale,
     }
     _atomic_write_json(state_path, next_state)
 
-    exit_signal = {
-        "schema_version": SCHEMA_VERSION,
-        "cycle_number": cycle_number,
-        "reason_code": "no_new_commits",
-        "message": f"no new commits detected for {idle_cycles} cycles",
-        "monitored_branch": monitored_branch,
-        "idle_cycles": idle_cycles,
-    }
+    if commit_age_minutes is None:
+        exit_signal = {
+            "schema_version": SCHEMA_VERSION,
+            "cycle_number": cycle_number,
+            "reason_code": "watchdog_commit_age_unknown",
+            "message": f"unable to resolve commit age for monitored branch '{monitored_branch}'",
+            "monitored_branch": monitored_branch,
+            "commit_ref": commit_ref,
+            "stale_after_minutes": stale_after_minutes,
+            "commit_age_minutes": None,
+        }
+    else:
+        exit_signal = {
+            "schema_version": SCHEMA_VERSION,
+            "cycle_number": cycle_number,
+            "reason_code": "stale_base_branch_commit",
+            "message": (
+                f"latest commit on '{monitored_branch}' is {commit_age_minutes:.1f} minutes old; "
+                f"watchdog limit is {stale_after_minutes} minutes"
+            ),
+            "monitored_branch": monitored_branch,
+            "commit_ref": commit_ref,
+            "last_commit_sha": current_sha,
+            "last_commit_at_utc": last_commit_at_utc,
+            "stale_after_minutes": stale_after_minutes,
+            "commit_age_minutes": round(commit_age_minutes, 3),
+        }
 
-    should_stop = idle_cycles >= threshold_cycles
+    should_stop = is_stale
     exit_path = cfg.repo_root / ARTIFACT_FILES["watchdog_exit_signal"]
     if should_stop:
         _atomic_write_json(exit_path, exit_signal)
@@ -2636,7 +2760,11 @@ def _release_run_lock(cfg: RunConfig, lock_id: str | None) -> None:
 
 def _build_config(req: Any) -> RunConfig:
     repo_root = Path(req.repo_root).resolve()
-    sleep_minutes = float(getattr(req, "sleep_minutes", 5.0) or 5.0)
+    sleep_minutes_raw = getattr(req, "sleep_minutes", None)
+    if sleep_minutes_raw is None:
+        sleep_minutes = 5.0
+    else:
+        sleep_minutes = float(sleep_minutes_raw)
     if sleep_minutes < 0:
         sleep_minutes = 0.0
     max_cycles = getattr(req, "max_build_cycles", None)
@@ -2659,13 +2787,6 @@ def _build_config(req: Any) -> RunConfig:
     run_base_source_branch = str(getattr(req, "run_base_source_branch", "") or "").strip() or "main"
     boss_model = str(getattr(req, "boss_model", "") or "").strip() or "gpt-5.3-codex"
     boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "medium"
-    watchdog_idle_threshold_cycles = getattr(req, "watchdog_idle_threshold_cycles", None)
-    try:
-        watchdog_idle_threshold_cycles = int(watchdog_idle_threshold_cycles) if watchdog_idle_threshold_cycles is not None else None
-    except (TypeError, ValueError):
-        watchdog_idle_threshold_cycles = None
-    if isinstance(watchdog_idle_threshold_cycles, int) and watchdog_idle_threshold_cycles <= 0:
-        watchdog_idle_threshold_cycles = None
 
     return RunConfig(
         repo_root=repo_root,
@@ -2677,7 +2798,6 @@ def _build_config(req: Any) -> RunConfig:
         run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,
         boss_reasoning_effort=boss_reasoning_effort,
-        watchdog_idle_threshold_cycles=watchdog_idle_threshold_cycles,
     )
 
 
@@ -2742,6 +2862,8 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
         cycle_number = _load_cycle_counter(cfg)
         cycles_this_run = 0
+        previous_state_signature: str | None = None
+        quiet_cycle_streak = 0
 
         while True:
             cycle_number += 1
@@ -2774,34 +2896,83 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
             manager_statuses: dict[str, dict[str, str]] = {}
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
-            boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
-            print(
-                "[op-simple-build] "
-                f"[{utc_now_iso()}] "
-                f"cycle={cycle_number} BOSS started",
-                flush=True,
-            )
-            boss_result = _invoke_manager(
-                cfg,
-                manager_name="BOSS",
-                cycle_number=cycle_number,
-                context={
-                    "max_parallel_workers": init_state.get("workflow", {}).get("max_parallel_workers"),
-                    "boss_evidence_path": str((cfg.repo_root / BOSS_EVIDENCE_FILE).resolve()),
-                },
-                expected_artifacts=boss_expected,
-            )
-            print(
-                "[op-simple-build] "
-                f"[{utc_now_iso()}] "
-                f"cycle={cycle_number} BOSS done "
-                f"status={boss_result.status} timeout={str(bool(boss_result.timeout)).lower()} "
-                f"duration_s={boss_result.duration_seconds:.3f}",
-                flush=True,
-            )
-            manager_statuses["BOSS"] = {"status": boss_result.status, "note": boss_result.message or ""}
+            state_signature, in_progress_workers = _worker_task_state_signature(cfg)
+            state_changed = previous_state_signature is None or state_signature != previous_state_signature
+            force_full_cycle = quiet_cycle_streak >= (QUIET_CYCLE_FORCE_FULL_EVERY - 1)
+            has_recovery_nudge = (cfg.repo_root / "recovery_instructions.md").exists()
+            has_boss_timeout_marker = (cfg.repo_root / BOSS_EVIDENCE_FILE).exists()
+            near_watchdog_idle = _watchdog_near_idle_threshold(cfg)
+            has_lease_recovery = bool(lease_recovery["reclaimed_workers"] or lease_recovery["requeued_tasks"])
 
-            if boss_result.timeout:
+            skip_boss_for_quiet_cycle = (
+                not has_lease_recovery
+                and not has_recovery_nudge
+                and not has_boss_timeout_marker
+                and not near_watchdog_idle
+                and not state_changed
+                and in_progress_workers > 0
+                and not force_full_cycle
+            )
+            boss_result: ManagerResult | None = None
+            quiet_skip_reason = ""
+
+            if skip_boss_for_quiet_cycle:
+                quiet_cycle_streak += 1
+                quiet_skip_reason = "active_workers_in_progress_no_safe_new_dispatch"
+                manager_statuses["BOSS"] = {
+                    "status": "skipped",
+                    "note": (
+                        f"quiet-cycle gate: no worker/task state change with {in_progress_workers} "
+                        f"in-progress workers (quiet_streak={quiet_cycle_streak})"
+                    ),
+                }
+                manager_statuses["rate-gate"] = {"status": "skipped", "note": "quiet-cycle gate skipped BOSS"}
+                manager_statuses["work-dispatcher"] = {"status": "skipped", "note": "quiet-cycle gate skipped BOSS"}
+                _write_cycle_manager_decision(
+                    cfg,
+                    cycle_number,
+                    decision="skip_cycle",
+                    reason_code=quiet_skip_reason,
+                    message=manager_statuses["BOSS"]["note"],
+                    worker_registry_ready=True,
+                )
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} quiet-cycle gate skipped BOSS "
+                    f"in_progress_workers={in_progress_workers} quiet_streak={quiet_cycle_streak}",
+                    flush=True,
+                )
+            else:
+                quiet_cycle_streak = 0
+                boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} BOSS started",
+                    flush=True,
+                )
+                boss_result = _invoke_manager(
+                    cfg,
+                    manager_name="BOSS",
+                    cycle_number=cycle_number,
+                    context={
+                        "max_parallel_workers": init_state.get("workflow", {}).get("max_parallel_workers"),
+                        "boss_evidence_path": str((cfg.repo_root / BOSS_EVIDENCE_FILE).resolve()),
+                    },
+                    expected_artifacts=boss_expected,
+                )
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} BOSS done "
+                    f"status={boss_result.status} timeout={str(bool(boss_result.timeout)).lower()} "
+                    f"duration_s={boss_result.duration_seconds:.3f}",
+                    flush=True,
+                )
+                manager_statuses["BOSS"] = {"status": boss_result.status, "note": boss_result.message or ""}
+
+            if boss_result is not None and boss_result.timeout:
                 _atomic_write_json(
                     cfg.repo_root / BOSS_EVIDENCE_FILE,
                     {
@@ -2818,14 +2989,16 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     f"cycle={cycle_number} skipped due to BOSS timeout; sleeping 180s before next cycle",
                     flush=True,
                 )
+                previous_state_signature = state_signature
                 time.sleep(180)
                 if cfg.max_build_cycles is not None and cycles_this_run >= cfg.max_build_cycles:
                     final_summary = f"Reached max_build_cycles={cfg.max_build_cycles} after BOSS timeout."
                     break
                 continue
-            _safe_unlink(cfg.repo_root / BOSS_EVIDENCE_FILE)
+            if boss_result is not None:
+                _safe_unlink(cfg.repo_root / BOSS_EVIDENCE_FILE)
 
-            if boss_result.status != "ok":
+            if boss_result is not None and boss_result.status != "ok":
                 warnings.append(
                     {
                         "code": boss_result.reason_code or "boss_failed",
@@ -2852,7 +3025,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "status": "skipped",
                     "note": "cycle skipped after BOSS failure",
                 }
-            else:
+            elif boss_result is not None:
                 _run_rate_gate_wait(cfg, cycle_number, warnings)
                 manager_statuses["rate-gate"] = {"status": "ok", "note": "rate gate completed"}
                 dispatch_counts = _dispatch_packets(cfg, cycle_number)
@@ -2866,7 +3039,20 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
             manager_statuses["summary"] = {"status": "ok", "note": "summary written"}
             base_summary: dict[str, Any] | None = None
-            if boss_result.status != "ok":
+            if skip_boss_for_quiet_cycle:
+                base_summary = {
+                    "schema_version": SCHEMA_VERSION,
+                    "cycle_number": cycle_number,
+                    "manager_statuses": {},
+                    "task_counts": _task_counts_from_execution_state(cfg),
+                    "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+                    "project_done": False,
+                    "insurmountable_blocker": False,
+                    "termination": {"reason_code": quiet_skip_reason},
+                    "stop_reason": "skip_cycle",
+                    "notes": manager_statuses["BOSS"]["note"],
+                }
+            elif boss_result is not None and boss_result.status != "ok":
                 base_summary = {
                     "schema_version": SCHEMA_VERSION,
                     "cycle_number": cycle_number,
@@ -2896,6 +3082,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     stop_reason = "watchdog_idle_stop"
 
             _snapshot_cycle(cfg, cycle_number)
+            previous_state_signature, _ = _worker_task_state_signature(cfg)
 
             if stop_reason:
                 final_summary = f"OP Simple build stopped: {stop_reason}."
