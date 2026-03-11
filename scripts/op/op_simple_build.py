@@ -2280,6 +2280,25 @@ def _active_worker_count(cfg: RunConfig) -> int:
     return active_count
 
 
+def _live_pid_in_progress_worker_count(cfg: RunConfig) -> int:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
+    if not isinstance(payload, dict):
+        return 0
+    workers = payload.get("workers")
+    if not isinstance(workers, list):
+        return 0
+    live_count = 0
+    for row in workers:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").strip() != "in_progress":
+            continue
+        pid = _coerce_pid(row.get("pid"))
+        if pid is not None and _is_pid_alive(pid):
+            live_count += 1
+    return live_count
+
+
 def _task_counts_from_execution_state(cfg: RunConfig) -> dict[str, int]:
     counts = {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0}
     payload = _read_json(cfg.repo_root / ARTIFACT_FILES["task_execution_state"], default={})
@@ -2926,6 +2945,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             manager_statuses: dict[str, dict[str, str]] = {}
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
             state_signature, in_progress_workers = _worker_task_state_signature(cfg)
+            live_pid_in_progress_workers = _live_pid_in_progress_worker_count(cfg)
             task_counts_snapshot = _task_counts_from_execution_state(cfg)
             task_in_progress_count = int(task_counts_snapshot.get("in_progress") or 0)
             state_changed = previous_state_signature is None or state_signature != previous_state_signature
@@ -2942,6 +2962,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 and not near_watchdog_idle
                 and not state_changed
                 and in_progress_workers > 0
+                and live_pid_in_progress_workers > 0
                 and task_in_progress_count > 0
                 and not force_full_cycle
             )

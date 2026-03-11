@@ -261,6 +261,7 @@ def test_quiet_cycle_gate_skips_boss_when_state_unchanged(tmp_path: Path, monkey
     boss_calls: list[int] = []
     rate_gate_calls: list[int] = []
     dispatch_calls: list[int] = []
+    live_worker_pid = 424242
 
     def fake_invoke_manager(*_args, **kwargs):
         manager = kwargs["manager_name"]
@@ -277,7 +278,7 @@ def test_quiet_cycle_gate_skips_boss_when_state_unchanged(tmp_path: Path, monkey
                         {
                             "worker_id": "worker-1",
                             "status": "in_progress",
-                            "pid": None,
+                            "pid": live_worker_pid,
                             "thread_id": "thread-1",
                             "current_task_id": "TASK-001",
                             "current_packet_id": "packet-1",
@@ -321,6 +322,11 @@ def test_quiet_cycle_gate_skips_boss_when_state_unchanged(tmp_path: Path, monkey
     monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
     monkeypatch.setattr(MODULE, "_run_rate_gate_wait", fake_rate_gate)
     monkeypatch.setattr(MODULE, "_dispatch_packets", fake_dispatch)
+    monkeypatch.setattr(
+        MODULE,
+        "_is_pid_alive",
+        lambda pid: int(pid) == live_worker_pid,
+    )
     monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
 
     out = MODULE.run_op_simple_build(make_req(tmp_path, max_build_cycles=2, dry_run=True, sleep_minutes=0))
@@ -426,6 +432,7 @@ def test_quiet_cycle_gate_forces_periodic_full_boss_cycle(tmp_path: Path, monkey
     boss_calls: list[int] = []
     rate_gate_calls: list[int] = []
     dispatch_calls: list[int] = []
+    live_worker_pid = 434343
 
     def fake_invoke_manager(*_args, **kwargs):
         manager = kwargs["manager_name"]
@@ -442,7 +449,7 @@ def test_quiet_cycle_gate_forces_periodic_full_boss_cycle(tmp_path: Path, monkey
                         {
                             "worker_id": "worker-1",
                             "status": "in_progress",
-                            "pid": None,
+                            "pid": live_worker_pid,
                             "thread_id": "thread-1",
                             "current_task_id": "TASK-001",
                             "current_packet_id": "packet-1",
@@ -487,6 +494,11 @@ def test_quiet_cycle_gate_forces_periodic_full_boss_cycle(tmp_path: Path, monkey
     monkeypatch.setattr(MODULE, "_run_rate_gate_wait", fake_rate_gate)
     monkeypatch.setattr(MODULE, "_dispatch_packets", fake_dispatch)
     monkeypatch.setattr(MODULE, "QUIET_CYCLE_FORCE_FULL_EVERY", 2)
+    monkeypatch.setattr(
+        MODULE,
+        "_is_pid_alive",
+        lambda pid: int(pid) == live_worker_pid,
+    )
     monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
 
     out = MODULE.run_op_simple_build(make_req(tmp_path, max_build_cycles=3, dry_run=True, sleep_minutes=0))
