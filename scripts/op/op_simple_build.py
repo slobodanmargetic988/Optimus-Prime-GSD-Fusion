@@ -104,9 +104,11 @@ class RunConfig:
     max_build_cycles: int | None
     max_parallel_workers: int
     dry_run: bool
+    resume_mode: bool = False
     run_base_source_branch: str = "main"
     boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "medium"
+    watchdog_idle_threshold_cycles: int | None = None
 
 
 class SimpleBuildError(Exception):
@@ -324,6 +326,45 @@ def _create_run_base_branch(cfg: RunConfig) -> dict[str, Any]:
         "op_simple_base_branch_exhausted",
         "Cannot create unique run base branch after multiple attempts.",
     )
+
+
+def _load_resume_run_base_meta(cfg: RunConfig) -> dict[str, Any]:
+    state = _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
+    if not isinstance(state, dict):
+        state = {}
+    run_context = state.get("run_context") if isinstance(state.get("run_context"), dict) else {}
+
+    run_base_branch = str(run_context.get("run_base_branch") or state.get("monitored_branch") or "").strip()
+    if not run_base_branch:
+        raise SimpleBuildError(
+            "op_simple_resume_unavailable",
+            "Cannot resume /op-simple-build: missing run_base_branch in initialize_state.json.",
+        )
+
+    ref = f"refs/heads/{run_base_branch}"
+    branch_commit = _git_text(cfg.repo_root, "rev-parse", "--verify", ref)
+    if not branch_commit:
+        raise SimpleBuildError(
+            "op_simple_resume_missing_branch",
+            f"Cannot resume /op-simple-build: run base branch '{run_base_branch}' does not exist.",
+        )
+
+    if not cfg.dry_run:
+        code, _out, err = _git_run(cfg.repo_root, "checkout", run_base_branch)
+        if code != 0:
+            raise SimpleBuildError(
+                "op_simple_resume_checkout_failed",
+                f"Cannot checkout run base branch '{run_base_branch}' for resume: {err or 'unknown git error'}",
+            )
+
+    return {
+        "run_base_branch": run_base_branch,
+        "run_base_from_branch": str(run_context.get("run_base_from_branch") or cfg.run_base_source_branch or "main"),
+        "run_base_from_commit": str(run_context.get("run_base_from_commit") or branch_commit),
+        "run_base_created_at": str(run_context.get("run_base_created_at") or utc_now_iso()),
+        "created_new": False,
+        "dry_run": bool(cfg.dry_run),
+    }
 
 
 def _default_initialize_state(repo_root: Path, max_parallel_workers: int, run_meta: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -588,6 +629,7 @@ def _ensure_workstation_prep(
 
 
 def _ensure_default_artifacts(cfg: RunConfig) -> None:
+    watchdog_threshold = cfg.watchdog_idle_threshold_cycles if isinstance(cfg.watchdog_idle_threshold_cycles, int) and cfg.watchdog_idle_threshold_cycles > 0 else WATCHDOG_IDLE_THRESHOLD
     defaults: dict[str, Any] = {
         "cycle_manager_decision": {
             "schema_version": SCHEMA_VERSION,
@@ -661,7 +703,7 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "last_commit_sha": "",
             "last_commit_seen_cycle": 0,
             "idle_cycles": 0,
-            "threshold_cycles": WATCHDOG_IDLE_THRESHOLD,
+            "threshold_cycles": watchdog_threshold,
         },
     }
 
@@ -1807,6 +1849,125 @@ def _update_worker_registry_dispatch_state(cfg: RunConfig, event_rows: list[dict
     _atomic_write_json(path, payload)
 
 
+def _coerce_pid(pid_value: Any) -> int | None:
+    try:
+        pid_int = int(pid_value)
+    except (TypeError, ValueError):
+        return None
+    if pid_int <= 0:
+        return None
+    return pid_int
+
+
+def _is_pid_alive(pid_value: Any) -> bool:
+    pid_int = _coerce_pid(pid_value)
+    if pid_int is None:
+        return False
+    try:
+        os.kill(pid_int, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _normalize_dead_worker_leases(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
+    registry_path = cfg.repo_root / ARTIFACT_FILES["worker_registry"]
+    registry_payload = _read_json(registry_path, default={})
+    if not isinstance(registry_payload, dict):
+        return {"reclaimed_workers": 0, "requeued_tasks": 0}
+    workers = registry_payload.get("workers")
+    if not isinstance(workers, list):
+        return {"reclaimed_workers": 0, "requeued_tasks": 0}
+
+    now_iso = utc_now_iso()
+    reclaimed_worker_ids: list[str] = []
+    reclaimed_workers = 0
+
+    for row in workers:
+        if not isinstance(row, dict):
+            continue
+        pid_int = _coerce_pid(row.get("pid"))
+        if pid_int is None or _is_pid_alive(pid_int):
+            continue
+
+        worker_id = str(row.get("worker_id") or "").strip()
+        if worker_id:
+            reclaimed_worker_ids.append(worker_id)
+        reclaimed_workers += 1
+
+        row["status"] = "idle"
+        row["pid"] = None
+        row["thread_id"] = None
+        row["current_packet_id"] = None
+        row["current_task_id"] = None
+        row["current_task_profile"] = None
+        row["last_update"] = now_iso
+        if "last_heartbeat_at" in row:
+            row["last_heartbeat_at"] = None
+
+    if reclaimed_workers:
+        registry_payload["schema_version"] = SCHEMA_VERSION
+        registry_payload["updated_at"] = now_iso
+        try:
+            previous_cycle = int(registry_payload.get("cycle_number") or 0)
+        except (TypeError, ValueError):
+            previous_cycle = 0
+        registry_payload["cycle_number"] = max(previous_cycle, int(cycle_number))
+        registry_payload["workers"] = workers
+        _atomic_write_json(registry_path, registry_payload)
+
+    requeued_tasks = 0
+    if reclaimed_worker_ids:
+        task_state_path = cfg.repo_root / ARTIFACT_FILES["task_execution_state"]
+        task_state_payload = _read_json(task_state_path, default={})
+        if isinstance(task_state_payload, dict):
+            tasks = task_state_payload.get("tasks")
+            if isinstance(tasks, list):
+                reclaimed_set = set(reclaimed_worker_ids)
+                for task in tasks:
+                    if not isinstance(task, dict):
+                        continue
+                    if str(task.get("status") or "").strip() != "in_progress":
+                        continue
+                    assigned_worker = str(task.get("assigned_worker") or "").strip()
+                    if assigned_worker not in reclaimed_set:
+                        continue
+                    task["status"] = "pending"
+                    task["assigned_worker"] = None
+                    task["assigned_profile"] = None
+                    task["last_updated_at"] = now_iso
+                    requeued_tasks += 1
+
+                if requeued_tasks:
+                    task_state_payload["schema_version"] = SCHEMA_VERSION
+                    task_state_payload["updated_at"] = now_iso
+                    try:
+                        previous_cycle = int(task_state_payload.get("cycle_number") or 0)
+                    except (TypeError, ValueError):
+                        previous_cycle = 0
+                    task_state_payload["cycle_number"] = max(previous_cycle, int(cycle_number))
+                    task_state_payload["tasks"] = tasks
+                    _atomic_write_json(task_state_path, task_state_payload)
+
+    if reclaimed_workers or requeued_tasks:
+        print(
+            "[op-simple-build] "
+            f"[{utc_now_iso()}] "
+            f"cycle={cycle_number} reclaimed_dead_workers={reclaimed_workers} "
+            f"requeued_in_progress_tasks={requeued_tasks}",
+            flush=True,
+        )
+
+    return {
+        "reclaimed_workers": reclaimed_workers,
+        "requeued_tasks": requeued_tasks,
+    }
+
+
 def _active_worker_count(cfg: RunConfig) -> int:
     payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
     if not isinstance(payload, dict):
@@ -1818,9 +1979,13 @@ def _active_worker_count(cfg: RunConfig) -> int:
     for row in workers:
         if not isinstance(row, dict):
             continue
-        pid = row.get("pid")
+        pid = _coerce_pid(row.get("pid"))
         thread_id = row.get("thread_id")
-        has_live_marker = pid not in {None, ""} or (isinstance(thread_id, str) and bool(thread_id.strip()))
+        has_live_marker = False
+        if pid is not None:
+            has_live_marker = _is_pid_alive(pid)
+        elif isinstance(thread_id, str) and bool(thread_id.strip()):
+            has_live_marker = True
         # Count only workers with concrete runtime liveness markers so
         # pre-dispatch "in_progress" placeholders do not consume capacity.
         if has_live_marker:
@@ -1970,7 +2135,8 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, A
 
     last_sha = state.get("last_commit_sha") if isinstance(state.get("last_commit_sha"), str) else ""
     idle_cycles = int(state.get("idle_cycles") or 0)
-    threshold_cycles = int(state.get("threshold_cycles") or WATCHDOG_IDLE_THRESHOLD)
+    threshold_override = cfg.watchdog_idle_threshold_cycles if isinstance(cfg.watchdog_idle_threshold_cycles, int) and cfg.watchdog_idle_threshold_cycles > 0 else None
+    threshold_cycles = int(threshold_override or state.get("threshold_cycles") or WATCHDOG_IDLE_THRESHOLD)
     if threshold_cycles <= 0:
         threshold_cycles = WATCHDOG_IDLE_THRESHOLD
 
@@ -2208,9 +2374,18 @@ def _build_config(req: Any) -> RunConfig:
         max_parallel_workers = 8
     if max_parallel_workers <= 0:
         max_parallel_workers = 8
+    command = str(getattr(req, "command", "") or "").strip().lower()
+    resume_mode = command == "op-resume"
     run_base_source_branch = str(getattr(req, "run_base_source_branch", "") or "").strip() or "main"
     boss_model = str(getattr(req, "boss_model", "") or "").strip() or "gpt-5.3-codex"
     boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "medium"
+    watchdog_idle_threshold_cycles = getattr(req, "watchdog_idle_threshold_cycles", None)
+    try:
+        watchdog_idle_threshold_cycles = int(watchdog_idle_threshold_cycles) if watchdog_idle_threshold_cycles is not None else None
+    except (TypeError, ValueError):
+        watchdog_idle_threshold_cycles = None
+    if isinstance(watchdog_idle_threshold_cycles, int) and watchdog_idle_threshold_cycles <= 0:
+        watchdog_idle_threshold_cycles = None
 
     return RunConfig(
         repo_root=repo_root,
@@ -2218,9 +2393,11 @@ def _build_config(req: Any) -> RunConfig:
         max_build_cycles=max_cycles,
         max_parallel_workers=max_parallel_workers,
         dry_run=bool(getattr(req, "dry_run", False)),
+        resume_mode=resume_mode,
         run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,
         boss_reasoning_effort=boss_reasoning_effort,
+        watchdog_idle_threshold_cycles=watchdog_idle_threshold_cycles,
     )
 
 
@@ -2270,7 +2447,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         (cfg.repo_root / CURRENT_DIR).mkdir(parents=True, exist_ok=True)
         (cfg.repo_root / HISTORY_DIR).mkdir(parents=True, exist_ok=True)
 
-        run_meta = _create_run_base_branch(cfg)
+        run_meta = _load_resume_run_base_meta(cfg) if cfg.resume_mode else _create_run_base_branch(cfg)
         init_state = _ensure_initialize_state(cfg, run_meta=run_meta)
         if bool((init_state.get("run_context") or {}).get("created_new")):
             _reset_runtime_state_for_new_run(cfg)
@@ -2295,6 +2472,24 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 stop_reason = "operator_terminate_file"
                 final_summary = "OP Simple build stopped by terminate_run.json signal."
                 break
+
+            lease_recovery = _normalize_dead_worker_leases(cfg, cycle_number)
+            if lease_recovery["reclaimed_workers"] or lease_recovery["requeued_tasks"]:
+                warnings.append(
+                    {
+                        "code": "stale_worker_leases_recovered",
+                        "message": (
+                            "Recovered dead worker leases and re-queued affected in-progress tasks for deterministic "
+                            "dispatch continuity."
+                        ),
+                        "stage": "op-simple-build",
+                        "details": {
+                            "cycle_number": cycle_number,
+                            "reclaimed_workers": int(lease_recovery["reclaimed_workers"]),
+                            "requeued_tasks": int(lease_recovery["requeued_tasks"]),
+                        },
+                    }
+                )
 
             manager_statuses: dict[str, dict[str, str]] = {}
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}

@@ -6,6 +6,11 @@ You get this same prompt every cycle so you dont forget who you are. Figure out 
 In fact reload any op-simple build artefact you are using in every cycle as they will be stale.
 
 
+## Live Recovery Nudge File
+At the start of every cycle, check whether `<repo-root>/recovery_instructions.md` exists.
+If it exists, read it and evaluate whether its recovery steps should be applied in the current cycle. Implement the most appropriate steps that are safe, in-scope, and coherent with current cycle state. then rename this file to `<repo-root>/recovery_instructions_CONSUMED.md` so it is clearly not to be taken into account in the next cycle.
+If you decide not to apply a requested step, record a clear rationale in cycle notes so operator intent is visible.
+
 ## Inputs (Paths)
 Read the runtime packet JSON and referenced absolute artifact paths under `.op-simple/current/`. You should treat these artifacts as the operating memory of the build loop and use them to understand prior intent, current execution state, and unresolved blockers.
 

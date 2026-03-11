@@ -666,6 +666,7 @@ def test_dispatch_respects_parallel_worker_cap(tmp_path: Path, monkeypatch) -> N
     )
 
     monkeypatch.setattr(MODULE, "_resolve_dispatch_script", lambda _cfg: Path("/tmp/fake-dispatch.py"))
+    monkeypatch.setattr(MODULE, "_is_pid_alive", lambda _pid: True)
 
     def fail_run(*_args, **_kwargs):  # pragma: no cover - should not execute when cap reached
         raise AssertionError("dispatch subprocess should not be called when parallel cap is exhausted")
@@ -676,6 +677,150 @@ def test_dispatch_respects_parallel_worker_cap(tmp_path: Path, monkeypatch) -> N
 
     assert counters == {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
     assert not (tmp_path / MODULE.DISPATCH_LAUNCH_LOG_FILE).exists()
+
+
+def test_dispatch_ignores_dead_pid_for_parallel_capacity(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=1,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_packets"],
+        {
+            "schema_version": "1.0",
+            "packets": [
+                {
+                    "worker_id": "worker-2",
+                    "packet_id": "packet-2",
+                    "profile_alias": "codex",
+                    "prompt": "next task",
+                }
+            ],
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "workers": [
+                {
+                    "worker_id": "worker-1",
+                    "status": "in_progress",
+                    "pid": 9999,
+                    "thread_id": "thread-existing",
+                },
+                {
+                    "worker_id": "worker-2",
+                    "worktree": str(tmp_path / "workstation-2"),
+                    "status": "idle",
+                    "pid": None,
+                    "thread_id": None,
+                },
+            ],
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [{"alias": "codex", "codex_home": "/tmp/.codex"}],
+        },
+    )
+    (tmp_path / "workstation-2").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(MODULE, "_resolve_dispatch_script", lambda _cfg: Path("/tmp/fake-dispatch.py"))
+    monkeypatch.setattr(MODULE, "_is_pid_alive", lambda _pid: False)
+
+    def fake_run(*_args, **_kwargs):
+        payload = {"status": "started", "session_id": "thread-new", "pid": 4321}
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
+    counters = MODULE._dispatch_packets(cfg, cycle_number=3)
+
+    assert counters == {"attempted": 1, "launched": 1, "launch_failed": 0, "unknown": 0}
+
+
+def test_normalize_dead_worker_leases_clears_registry_and_requeues_tasks(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=2,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 4,
+            "workers": [
+                {
+                    "worker_id": "worker-1",
+                    "status": "in_progress",
+                    "pid": 1111,
+                    "thread_id": "thread-dead",
+                    "current_task_id": "TASK-001",
+                    "current_packet_id": "packet-1",
+                    "current_task_profile": "codex",
+                },
+                {
+                    "worker_id": "worker-2",
+                    "status": "in_progress",
+                    "pid": 2222,
+                    "thread_id": "thread-live",
+                    "current_task_id": "TASK-002",
+                    "current_packet_id": "packet-2",
+                    "current_task_profile": "codex",
+                },
+            ],
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 4,
+            "tasks": [
+                {"task_id": "TASK-001", "status": "in_progress", "assigned_worker": "worker-1", "assigned_profile": "codex"},
+                {"task_id": "TASK-002", "status": "in_progress", "assigned_worker": "worker-2", "assigned_profile": "codex"},
+            ],
+        },
+    )
+
+    monkeypatch.setattr(MODULE, "_is_pid_alive", lambda pid: int(pid) == 2222)
+
+    out = MODULE._normalize_dead_worker_leases(cfg, cycle_number=5)
+
+    assert out == {"reclaimed_workers": 1, "requeued_tasks": 1}
+
+    worker_registry = json.loads((tmp_path / MODULE.ARTIFACT_FILES["worker_registry"]).read_text(encoding="utf-8"))
+    worker_1 = next(row for row in worker_registry["workers"] if row["worker_id"] == "worker-1")
+    worker_2 = next(row for row in worker_registry["workers"] if row["worker_id"] == "worker-2")
+    assert worker_1["status"] == "idle"
+    assert worker_1["pid"] is None
+    assert worker_1["thread_id"] is None
+    assert worker_1["current_task_id"] is None
+    assert worker_1["current_packet_id"] is None
+    assert worker_2["status"] == "in_progress"
+    assert worker_2["pid"] == 2222
+
+    task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
+    task_1 = next(row for row in task_state["tasks"] if row["task_id"] == "TASK-001")
+    task_2 = next(row for row in task_state["tasks"] if row["task_id"] == "TASK-002")
+    assert task_1["status"] == "pending"
+    assert task_1["assigned_worker"] is None
+    assert task_1["assigned_profile"] is None
+    assert task_2["status"] == "in_progress"
+    assert task_2["assigned_worker"] == "worker-2"
 
 
 def test_ensure_workstation_prep_prepares_slots_and_seeds_worker_registry(tmp_path: Path, monkeypatch) -> None:
@@ -1829,6 +1974,7 @@ def test_boss_prompt_mentions_cycle_number_and_runtime_skip_correction() -> None
     assert "cycle_manager_decision.json" in prompt
     assert "current cycle's top-level `cycle_number`" in prompt
     assert "runtime will correct the cycle to a deterministic `skip_cycle` outcome" in prompt
+    assert "recovery_instructions.md" in prompt
 
 
 def test_wrapup_prompt_mentions_lifecycle_and_wrapup_report() -> None:
