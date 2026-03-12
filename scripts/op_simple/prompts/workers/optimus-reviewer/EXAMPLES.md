@@ -20,16 +20,26 @@ Inputs: test_summary: API tests, UI tests, and build pass.
 Inputs: tracking_mode: automated-handoff
 Inputs: packet_version: 4
 Inputs: review_focus: correctness and maintainability of patch
-Constraints: No external tracker updates. Return concise summary only.
-Output: review decision summary for Optimus
+Constraints: No external tracker updates. Return JSON-only payload, no extra prose.
+Output: JSON-only decision payload + canonical handoff file write
 ```
 
 ### Expected Output
-```text
-Validates developer and tester evidence with focused diff review.
-Returns concise summary with decision review_passed.
-Includes required fields only.
+```json
+{
+  "task_identifier": "MYO-81",
+  "decision": "review_passed",
+  "checks": [
+    {
+      "name": "targeted_tests",
+      "result": "pass"
+    }
+  ],
+  "findings": []
+}
 ```
+And write the same payload to:
+`../workstation-8/reports/handoffs/MYO-81.handoff.json`
 
 ## Example 2: Needs Developer Fix
 
@@ -49,16 +59,28 @@ Inputs: test_summary: Main path tests pass.
 Inputs: tracking_mode: automated-handoff
 Inputs: packet_version: 3
 Inputs: review_focus: edge-case authorization paths
-Constraints: No external tracker updates. Return concise summary only.
-Output: review decision summary for Optimus
+Constraints: No external tracker updates. Return JSON-only payload, no extra prose.
+Output: JSON-only decision payload + canonical handoff file write
 ```
 
 ### Expected Output
-```text
-Finds unresolved edge case or regression risk requiring code change.
-Returns concise summary with decision needs_dev_fix and short findings.
-Does not produce long narrative output.
+```json
+{
+  "task_identifier": "BILL-55",
+  "decision": "needs_dev_fix",
+  "checks": [
+    {
+      "name": "authorization_edge_case_review",
+      "result": "fail"
+    }
+  ],
+  "findings": [
+    "Role downgrade path can still access approval endpoint under stale session token."
+  ]
+}
 ```
+And write the same payload to:
+`../workstation-9/reports/handoffs/BILL-55.handoff.json`
 
 ## Example 3: Branch Conflict Fallback
 
@@ -79,12 +101,26 @@ Inputs: tracking_mode: automated-handoff
 Inputs: packet_version: 10
 Inputs: fallback_branch_suffix: -review
 Constraints: Branch checkout denied due active usage in another worktree.
-Output: fallback execution and concise summary
+Output: JSON-only decision payload + canonical handoff file write
 ```
 
 ### Expected Output
-```text
-Creates and uses MYO-23-make-menu-navbar-test-review.
-Completes focused review and returns concise summary with fallback mapping.
-No external tracker updates performed by reviewer.
+```json
+{
+  "task_identifier": "MYO-23",
+  "decision": "review_passed",
+  "checks": [
+    {
+      "name": "fallback_branch_lineage",
+      "result": "pass"
+    },
+    {
+      "name": "targeted_navbar_tests",
+      "result": "pass"
+    }
+  ],
+  "findings": []
+}
 ```
+And write the same payload to:
+`../workstation-10/reports/handoffs/MYO-23.handoff.json`

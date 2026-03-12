@@ -10,6 +10,9 @@ from types import SimpleNamespace
 OP_SIMPLE_BUILD_PATH = Path(__file__).resolve().parents[1] / "op_simple_build.py"
 BOSS_PROMPT_PATH = Path(__file__).resolve().parents[2] / "op_simple" / "prompts" / "managers" / "boss.md"
 WRAPUP_PROMPT_PATH = Path(__file__).resolve().parents[2] / "op_simple" / "prompts" / "managers" / "wrapup-manager.md"
+REVIEWER_PROMPT_PATH = (
+    Path(__file__).resolve().parents[2] / "op_simple" / "prompts" / "workers" / "optimus-reviewer" / "README.md"
+)
 SPEC = importlib.util.spec_from_file_location("op_simple_build", OP_SIMPLE_BUILD_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
@@ -47,6 +50,7 @@ def test_build_config_defaults_boss_model_and_reasoning(tmp_path: Path) -> None:
     cfg = MODULE._build_config(make_req(tmp_path))
     assert cfg.boss_model == "gpt-5.3-codex"
     assert cfg.boss_reasoning_effort == "medium"
+    assert cfg.codex_profile is None
 
 
 def test_build_config_accepts_boss_model_and_reasoning_override(tmp_path: Path) -> None:
@@ -69,6 +73,57 @@ def test_build_config_accepts_run_base_source_branch_override(tmp_path: Path) ->
         )
     )
     assert cfg.run_base_source_branch == "op-simple-canary-prev"
+
+
+def test_build_config_accepts_codex_profile_override(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(make_req(tmp_path, profile="openrouter_free"))
+    assert cfg.codex_profile == "openrouter_free"
+
+
+def test_refresh_profile_snapshot_llm_mode_uses_local_counter(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        codex_profile="openrouter_free",
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    ok, message = MODULE._refresh_profile_snapshot_via_skill(cfg, cycle_number=3)
+
+    assert ok is True
+    assert "local LLM profile counter" in message
+    snapshot = json.loads((tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"]).read_text(encoding="utf-8"))
+    assert snapshot["source"] == "llm-profile-mode-local-counter"
+    assert snapshot["profiles"][0]["alias"] == "codex"
+    mode_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["llm_profile_mode"]).read_text(encoding="utf-8"))
+    assert mode_payload["enabled"] is True
+    assert mode_payload["llm_profile"] == "openrouter_free"
+
+
+def test_llm_profile_budget_blocks_after_per_minute_limit(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        codex_profile="openrouter_free",
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+
+    for idx in range(MODULE.LLM_PROFILE_PER_MINUTE_LIMIT):
+        ok, reset_at = MODULE._llm_profile_consume_request_budget(cfg, source=f"test-{idx}")
+        assert ok is True
+        assert reset_at is None
+    blocked, reset_at = MODULE._llm_profile_consume_request_budget(cfg, source="overflow")
+    assert blocked is False
+    assert isinstance(reset_at, str) and reset_at
 
 
 def test_build_config_preserves_explicit_zero_sleep_minutes(tmp_path: Path) -> None:
@@ -632,6 +687,7 @@ def test_codex_exec_prompt_resume_uses_model_and_reasoning_flags(tmp_path: Path,
         resume_session_id="123e4567-e89b-12d3-a456-426614174001",
         model="gpt-5.3-codex",
         reasoning_effort="xhigh",
+        codex_profile="openrouter_free",
     )
 
     assert out.status == "ok"
@@ -640,6 +696,9 @@ def test_codex_exec_prompt_resume_uses_model_and_reasoning_flags(tmp_path: Path,
     assert isinstance(cmd, list)
     assert cmd[:3] == ["codex", "exec", "resume"]
     assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+    assert "-p" in cmd
+    profile_idx = cmd.index("-p")
+    assert cmd[profile_idx + 1] == "openrouter_free"
     assert "--model" in cmd
     model_idx = cmd.index("--model")
     assert cmd[model_idx + 1] == "gpt-5.3-codex"
@@ -657,6 +716,7 @@ def test_dispatch_packets_writes_launch_and_registry(tmp_path: Path, monkeypatch
         max_build_cycles=1,
         max_parallel_workers=8,
         dry_run=False,
+        codex_profile="openrouter_free",
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
     MODULE._atomic_write_json(
@@ -729,6 +789,8 @@ def test_dispatch_packets_writes_launch_and_registry(tmp_path: Path, monkeypatch
     assert captured_cmds[0][cwd_idx + 1] == str((tmp_path / "workstation-1").resolve())
     assert "--no-full-auto" in captured_cmds[0]
     assert any("--dangerously-bypass-approvals-and-sandbox" in token for token in captured_cmds[0])
+    assert "--extra-arg=-p" in captured_cmds[0]
+    assert "--extra-arg=openrouter_free" in captured_cmds[0]
 
     launch_rows = [json.loads(line) for line in (tmp_path / MODULE.DISPATCH_LAUNCH_LOG_FILE).read_text(encoding="utf-8").splitlines()]
     assert len(launch_rows) == 1
@@ -792,6 +854,59 @@ def test_watchdog_emits_exit_signal_for_stale_commit_age(tmp_path: Path, monkeyp
     assert float(state["watchdog_age_minutes"]) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
     assert state["stale_after_minutes"] == MODULE.WATCHDOG_STALE_COMMIT_MINUTES
     assert (tmp_path / MODULE.ARTIFACT_FILES["watchdog_exit_signal"]).exists()
+    nudge_path = tmp_path / MODULE.RECOVERY_INSTRUCTIONS_FILE
+    assert nudge_path.exists()
+    nudge_text = nudge_path.read_text(encoding="utf-8")
+    assert "Broad diagnostics checklist" in nudge_text
+    assert "reviewer_decision" in nudge_text
+
+
+def test_watchdog_emits_recovery_nudge_after_30_minutes_without_stale_stop(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_initialize_state(cfg)
+    MODULE._ensure_default_artifacts(cfg)
+
+    stale_epoch = int((datetime.now(timezone.utc) - timedelta(minutes=MODULE.WATCHDOG_RECOVERY_NUDGE_MINUTES + 5)).timestamp())
+    monkeypatch.setattr(MODULE, "_git_commit_epoch_seconds", lambda _repo_root, _ref: stale_epoch)
+    current_sha = git(tmp_path, "rev-parse", "main")
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 0,
+            "monitored_branch": "main",
+            "last_commit_sha": current_sha,
+            "commit_ref": "main",
+            "last_commit_at_utc": "",
+            "last_commit_age_minutes": None,
+            "watchdog_age_offset_minutes": 0.0,
+            "watchdog_age_minutes": None,
+            "watchdog_target_reset_at_utc": "2026-01-01T00:00:00Z",
+            "stale_after_minutes": MODULE.WATCHDOG_STALE_COMMIT_MINUTES,
+            "stale": False,
+        },
+    )
+
+    stop, signal = MODULE._watchdog_tick(cfg, cycle_number=9)
+
+    assert stop is False
+    assert signal["reason_code"] == "stale_base_branch_commit"
+    assert float(signal["watchdog_age_minutes"]) >= float(MODULE.WATCHDOG_RECOVERY_NUDGE_MINUTES)
+    assert not (tmp_path / MODULE.ARTIFACT_FILES["watchdog_exit_signal"]).exists()
+    nudge_path = tmp_path / MODULE.RECOVERY_INSTRUCTIONS_FILE
+    assert nudge_path.exists()
+    nudge_text = nudge_path.read_text(encoding="utf-8")
+    assert "Generated at:" in nudge_text
+    assert "no repository movement" in nudge_text
+    assert "Broad diagnostics checklist" in nudge_text
 
 
 def test_watchdog_force_reset_target_avoids_immediate_stale_stop(tmp_path: Path, monkeypatch) -> None:
@@ -2403,6 +2518,18 @@ def test_boss_prompt_mentions_cycle_number_and_runtime_skip_correction() -> None
     assert "current cycle's top-level `cycle_number`" in prompt
     assert "runtime will correct the cycle to a deterministic `skip_cycle` outcome" in prompt
     assert "recovery_instructions.md" in prompt
+    assert "3 Consecutive Missing-Ingestion Cycles" in prompt
+    assert "reviewer_decision" in prompt
+    assert "pid=null" in prompt
+
+
+def test_reviewer_prompt_enforces_strict_machine_schema_and_canonical_handoff() -> None:
+    prompt = REVIEWER_PROMPT_PATH.read_text(encoding="utf-8")
+
+    assert "Return exactly one machine-readable JSON object" in prompt
+    assert "Top-level keys are exactly: `task_identifier`, `decision`, `checks`, `findings`" in prompt
+    assert "reviewer_decision" in prompt
+    assert "<worktree_root>/reports/handoffs/<task_identifier>.handoff.json" in prompt
 
 
 def test_wrapup_prompt_mentions_lifecycle_and_wrapup_report() -> None:

@@ -13,7 +13,7 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +51,8 @@ ARTIFACT_FILES = {
     "watchdog_state": CURRENT_DIR / "watchdog_state.json",
     "watchdog_exit_signal": CURRENT_DIR / "watchdog_exit_signal.json",
     "workstation_prep": CURRENT_DIR / "workstation_prep.json",
+    "llm_profile_mode": CURRENT_DIR / "llm_profile_mode.json",
+    "llm_profile_rate_registry": CURRENT_DIR / "llm_profile_rate_registry.json",
 }
 
 MANAGER_TIMEOUT_SECONDS = {
@@ -63,9 +65,13 @@ MANAGER_TIMEOUT_SECONDS = {
 QUIET_CYCLE_FORCE_FULL_EVERY = 5
 WATCHDOG_STALE_COMMIT_MINUTES = 150
 WATCHDOG_NEAR_STALE_MARGIN_MINUTES = 10
+WATCHDOG_RECOVERY_NUDGE_MINUTES = 30
 WAIT_HEARTBEAT_SECONDS = 300
 WAIT_RESCAN_SECONDS = 900
+LLM_PROFILE_PER_MINUTE_LIMIT = 20
+LLM_PROFILE_PER_DAY_LIMIT = 1000
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
+RECOVERY_INSTRUCTIONS_FILE = Path("recovery_instructions.md")
 NON_TERMINAL_STOP_REASONS = {
     "skip_cycle",
     "active_workers_in_progress_no_safe_new_dispatch",
@@ -130,6 +136,7 @@ class RunConfig:
     run_base_source_branch: str = "main"
     boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "medium"
+    codex_profile: str | None = None
 
 
 class SimpleBuildError(Exception):
@@ -1033,6 +1040,31 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "stale_after_minutes": WATCHDOG_STALE_COMMIT_MINUTES,
             "stale": False,
         },
+        "llm_profile_mode": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "enabled": False,
+            "llm_profile": None,
+            "profile_policy": "force_default_codex",
+            "rate_policy": None,
+        },
+        "llm_profile_rate_registry": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "enabled": False,
+            "llm_profile": None,
+            "limits": {
+                "per_minute": int(LLM_PROFILE_PER_MINUTE_LIMIT),
+                "per_day": int(LLM_PROFILE_PER_DAY_LIMIT),
+            },
+            "windows": {
+                "minute": {"started_at": utc_now_iso(), "window_seconds": 60, "count": 0},
+                "day": {"started_at": utc_now_iso(), "window_seconds": 86400, "count": 0},
+            },
+            "total_count": 0,
+            "last_request_at": None,
+            "last_request_source": None,
+        },
     }
 
     for key, rel in ARTIFACT_FILES.items():
@@ -1060,6 +1092,8 @@ def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
         "watchdog_state",
         "watchdog_exit_signal",
         "workstation_prep",
+        "llm_profile_mode",
+        "llm_profile_rate_registry",
     ]
     for key in reset_keys:
         path = cfg.repo_root / ARTIFACT_FILES[key]
@@ -1181,6 +1215,7 @@ def _codex_exec_prompt(
     resume_session_id: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    codex_profile: str | None = None,
 ) -> ManagerResult:
     started_at = utc_now_iso()
     start_time = time.monotonic()
@@ -1192,6 +1227,7 @@ def _codex_exec_prompt(
 
     reasoning_effort_text = str(reasoning_effort or "").strip()
     model_text = str(model or "").strip()
+    codex_profile_text = str(codex_profile or "").strip()
     if resume_session_id:
         cmd = [
             "codex",
@@ -1199,6 +1235,8 @@ def _codex_exec_prompt(
             "resume",
             "--dangerously-bypass-approvals-and-sandbox",
         ]
+        if codex_profile_text:
+            cmd.extend(["-p", codex_profile_text])
         if model_text:
             cmd.extend(["--model", model_text])
         if reasoning_effort_text:
@@ -1217,6 +1255,8 @@ def _codex_exec_prompt(
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
         ]
+        if codex_profile_text:
+            cmd.extend(["-p", codex_profile_text])
         if model_text:
             cmd.extend(["--model", model_text])
         if reasoning_effort_text:
@@ -1236,6 +1276,31 @@ def _codex_exec_prompt(
     if codex_home_text:
         env = os.environ.copy()
         env["CODEX_HOME"] = codex_home_text
+
+    if _llm_profile_mode_enabled(cfg):
+        allowed, reset_at = _llm_profile_consume_request_budget(
+            cfg,
+            source=f"manager:{manager_name.lower().replace(' ', '-')}",
+        )
+        if not allowed:
+            finished_at = utc_now_iso()
+            return ManagerResult(
+                manager=manager_name,
+                status="failed",
+                timeout=False,
+                returncode=None,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_seconds=round(time.monotonic() - start_time, 3),
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+                message=(
+                    f"llm profile rate limit active; retry after {reset_at}"
+                    if reset_at
+                    else "llm profile rate limit active"
+                ),
+                reason_code="llm_profile_rate_limited",
+            )
 
     try:
         completed = subprocess.run(
@@ -1527,6 +1592,14 @@ def _invoke_manager(
             "required_outputs": [path_map[item] for item in expected_artifacts],
         }
         prompt_text = template.strip()
+        if manager_name == "BOSS" and _llm_profile_mode_enabled(cfg):
+            profile_name = str(cfg.codex_profile or "").strip()
+            note = (
+                "Operator note: LLM profile mode is active. "
+                f"Use llm_profile='{profile_name}' rate registry artifacts from the runtime packet. "
+                "Do not run codex-rate-snapshot in this mode."
+            )
+            prompt_text = f"{note}\n\n{prompt_text}" if prompt_text else note
         if prompt_text:
             prompt_text += "\n\n"
         prompt_text += "Runtime packet (JSON):\n```json\n"
@@ -1543,6 +1616,7 @@ def _invoke_manager(
             resume_session_id=resume_session_id,
             model=cfg.boss_model if manager_uses_boss_model else None,
             reasoning_effort=cfg.boss_reasoning_effort if manager_uses_boss_model else None,
+            codex_profile=cfg.codex_profile,
         )
         if manager_name == "BOSS" and resume_session_id and result.status == "failed" and not result.timeout:
             retry = _codex_exec_prompt(
@@ -1555,6 +1629,7 @@ def _invoke_manager(
                 resume_session_id=None,
                 model=cfg.boss_model,
                 reasoning_effort=cfg.boss_reasoning_effort,
+                codex_profile=cfg.codex_profile,
             )
             if retry.status == "ok":
                 result = retry
@@ -1655,6 +1730,261 @@ def _extract_remaining_percent(window: Any) -> float | None:
         except (TypeError, ValueError):
             return None
     return None
+
+
+def _llm_profile_mode_enabled(cfg: RunConfig) -> bool:
+    return bool(str(cfg.codex_profile or "").strip())
+
+
+def _utc_iso_from_datetime(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _default_llm_profile_rate_registry(cfg: RunConfig) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": _utc_iso_from_datetime(now),
+        "enabled": _llm_profile_mode_enabled(cfg),
+        "llm_profile": str(cfg.codex_profile or "").strip() or None,
+        "limits": {
+            "per_minute": int(LLM_PROFILE_PER_MINUTE_LIMIT),
+            "per_day": int(LLM_PROFILE_PER_DAY_LIMIT),
+        },
+        "windows": {
+            "minute": {
+                "started_at": _utc_iso_from_datetime(now),
+                "window_seconds": 60,
+                "count": 0,
+            },
+            "day": {
+                "started_at": _utc_iso_from_datetime(day_start),
+                "window_seconds": 86400,
+                "count": 0,
+            },
+        },
+        "total_count": 0,
+        "last_request_at": None,
+        "last_request_source": None,
+    }
+
+
+def _normalize_llm_profile_rate_registry(cfg: RunConfig, payload: Any) -> dict[str, Any]:
+    out = payload if isinstance(payload, dict) else _default_llm_profile_rate_registry(cfg)
+    now = datetime.now(timezone.utc)
+    profile_text = str(cfg.codex_profile or "").strip() or None
+    if out.get("llm_profile") != profile_text:
+        out = _default_llm_profile_rate_registry(cfg)
+    out["schema_version"] = SCHEMA_VERSION
+    out["enabled"] = _llm_profile_mode_enabled(cfg)
+    out["llm_profile"] = profile_text
+    limits = out.get("limits") if isinstance(out.get("limits"), dict) else {}
+    minute_limit = limits.get("per_minute")
+    day_limit = limits.get("per_day")
+    try:
+        minute_limit = int(minute_limit)
+    except (TypeError, ValueError):
+        minute_limit = LLM_PROFILE_PER_MINUTE_LIMIT
+    try:
+        day_limit = int(day_limit)
+    except (TypeError, ValueError):
+        day_limit = LLM_PROFILE_PER_DAY_LIMIT
+    out["limits"] = {"per_minute": max(1, minute_limit), "per_day": max(1, day_limit)}
+
+    windows = out.get("windows") if isinstance(out.get("windows"), dict) else {}
+    minute = windows.get("minute") if isinstance(windows.get("minute"), dict) else {}
+    day = windows.get("day") if isinstance(windows.get("day"), dict) else {}
+
+    minute_started = _parse_iso_datetime(str(minute.get("started_at") or ""))
+    if minute_started is None:
+        minute_started = now
+    minute_window_seconds = 60
+    try:
+        minute_count = int(minute.get("count") or 0)
+    except (TypeError, ValueError):
+        minute_count = 0
+    if minute_started + timedelta(seconds=minute_window_seconds) <= now:
+        minute_started = now
+        minute_count = 0
+    if minute_count < 0:
+        minute_count = 0
+
+    day_started = _parse_iso_datetime(str(day.get("started_at") or ""))
+    if day_started is None:
+        day_started = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_window_seconds = 86400
+    try:
+        day_count = int(day.get("count") or 0)
+    except (TypeError, ValueError):
+        day_count = 0
+    if day_started + timedelta(seconds=day_window_seconds) <= now:
+        day_started = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_count = 0
+    if day_count < 0:
+        day_count = 0
+
+    out["windows"] = {
+        "minute": {
+            "started_at": _utc_iso_from_datetime(minute_started),
+            "window_seconds": minute_window_seconds,
+            "count": minute_count,
+        },
+        "day": {
+            "started_at": _utc_iso_from_datetime(day_started),
+            "window_seconds": day_window_seconds,
+            "count": day_count,
+        },
+    }
+    try:
+        total_count = int(out.get("total_count") or 0)
+    except (TypeError, ValueError):
+        total_count = 0
+    out["total_count"] = max(0, total_count)
+    out["updated_at"] = _utc_iso_from_datetime(now)
+    return out
+
+
+def _load_llm_profile_rate_registry(cfg: RunConfig) -> dict[str, Any]:
+    path = cfg.repo_root / ARTIFACT_FILES["llm_profile_rate_registry"]
+    payload = _read_json(path, default={})
+    normalized = _normalize_llm_profile_rate_registry(cfg, payload)
+    _atomic_write_json(path, normalized)
+    return normalized
+
+
+def _llm_profile_gate_state(payload: dict[str, Any]) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
+    windows = payload.get("windows") if isinstance(payload.get("windows"), dict) else {}
+    minute = windows.get("minute") if isinstance(windows.get("minute"), dict) else {}
+    day = windows.get("day") if isinstance(windows.get("day"), dict) else {}
+
+    try:
+        minute_limit = int(limits.get("per_minute") or LLM_PROFILE_PER_MINUTE_LIMIT)
+    except (TypeError, ValueError):
+        minute_limit = LLM_PROFILE_PER_MINUTE_LIMIT
+    try:
+        day_limit = int(limits.get("per_day") or LLM_PROFILE_PER_DAY_LIMIT)
+    except (TypeError, ValueError):
+        day_limit = LLM_PROFILE_PER_DAY_LIMIT
+    try:
+        minute_count = int(minute.get("count") or 0)
+    except (TypeError, ValueError):
+        minute_count = 0
+    try:
+        day_count = int(day.get("count") or 0)
+    except (TypeError, ValueError):
+        day_count = 0
+
+    minute_started = _parse_iso_datetime(str(minute.get("started_at") or ""))
+    if minute_started is None:
+        minute_started = now
+    day_started = _parse_iso_datetime(str(day.get("started_at") or ""))
+    if day_started is None:
+        day_started = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    minute_blocked = minute_count >= max(1, minute_limit)
+    day_blocked = day_count >= max(1, day_limit)
+
+    minute_reset_at = minute_started + timedelta(seconds=60)
+    day_reset_at = day_started + timedelta(seconds=86400)
+    reset_candidates: list[datetime] = []
+    if minute_blocked and minute_reset_at > now:
+        reset_candidates.append(minute_reset_at)
+    if day_blocked and day_reset_at > now:
+        reset_candidates.append(day_reset_at)
+    min_reset = min(reset_candidates) if reset_candidates else None
+
+    minute_remaining = max(0, minute_limit - minute_count)
+    day_remaining = max(0, day_limit - day_count)
+    return {
+        "hard_gated": bool(minute_blocked or day_blocked),
+        "minute_blocked": minute_blocked,
+        "day_blocked": day_blocked,
+        "minute_remaining": minute_remaining,
+        "day_remaining": day_remaining,
+        "minute_limit": minute_limit,
+        "day_limit": day_limit,
+        "reset_at": _utc_iso_from_datetime(min_reset) if min_reset else None,
+    }
+
+
+def _refresh_profile_snapshot_via_llm_profile_registry(cfg: RunConfig, cycle_number: int) -> tuple[bool, str]:
+    mode_path = cfg.repo_root / ARTIFACT_FILES["llm_profile_mode"]
+    mode_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "enabled": True,
+        "llm_profile": str(cfg.codex_profile or "").strip(),
+        "profile_policy": "force_default_codex",
+        "rate_policy": {
+            "source": "local-counter-timer",
+            "per_minute_limit": int(LLM_PROFILE_PER_MINUTE_LIMIT),
+            "per_day_limit": int(LLM_PROFILE_PER_DAY_LIMIT),
+            "skip_codex_rate_snapshot_skill": True,
+        },
+    }
+    _atomic_write_json(mode_path, mode_payload)
+
+    registry = _load_llm_profile_rate_registry(cfg)
+    gate = _llm_profile_gate_state(registry)
+    codex_home = _effective_codex_home(None)
+    minute_pct = round(100.0 * float(gate["minute_remaining"]) / max(1, int(gate["minute_limit"])), 3)
+    day_pct = round(100.0 * float(gate["day_remaining"]) / max(1, int(gate["day_limit"])), 3)
+    snapshot_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": cycle_number,
+        "source": "llm-profile-mode-local-counter",
+        "profiles": [
+            {
+                "alias": "codex",
+                "codex_home": codex_home,
+                "window_5h_remaining_pct": minute_pct,
+                "window_week_remaining_pct": day_pct,
+                "hard_gated": bool(gate["hard_gated"]),
+                "soft_gated": False,
+                "reset_at": gate.get("reset_at"),
+                "recommended_action": "wait_until_reset" if gate["hard_gated"] else "continue",
+                "llm_profile": str(cfg.codex_profile or "").strip(),
+                "llm_limits": {
+                    "per_minute": int(gate["minute_limit"]),
+                    "per_day": int(gate["day_limit"]),
+                    "minute_remaining": int(gate["minute_remaining"]),
+                    "day_remaining": int(gate["day_remaining"]),
+                },
+            }
+        ],
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], snapshot_payload)
+    return True, "profile snapshot refreshed via local LLM profile counter"
+
+
+def _llm_profile_consume_request_budget(cfg: RunConfig, *, source: str) -> tuple[bool, str | None]:
+    if not _llm_profile_mode_enabled(cfg):
+        return True, None
+    registry_path = cfg.repo_root / ARTIFACT_FILES["llm_profile_rate_registry"]
+    payload = _load_llm_profile_rate_registry(cfg)
+    gate = _llm_profile_gate_state(payload)
+    if gate["hard_gated"]:
+        _atomic_write_json(registry_path, payload)
+        _refresh_profile_snapshot_via_llm_profile_registry(cfg, _load_cycle_counter(cfg))
+        return False, str(gate.get("reset_at") or "") or None
+
+    windows = payload.get("windows") if isinstance(payload.get("windows"), dict) else {}
+    minute = windows.get("minute") if isinstance(windows.get("minute"), dict) else {}
+    day = windows.get("day") if isinstance(windows.get("day"), dict) else {}
+    minute["count"] = int(minute.get("count") or 0) + 1
+    day["count"] = int(day.get("count") or 0) + 1
+    payload["windows"] = {"minute": minute, "day": day}
+    payload["total_count"] = int(payload.get("total_count") or 0) + 1
+    payload["last_request_at"] = utc_now_iso()
+    payload["last_request_source"] = source
+    payload["updated_at"] = utc_now_iso()
+    _atomic_write_json(registry_path, payload)
+    _refresh_profile_snapshot_via_llm_profile_registry(cfg, _load_cycle_counter(cfg))
+    return True, None
 
 
 def _select_boss_profile_from_snapshot(cfg: RunConfig, *, preferred_alias: str | None = None) -> tuple[str | None, str | None]:
@@ -1824,6 +2154,9 @@ def _profile_rows_from_rate_snapshot_payload(payload: dict[str, Any]) -> list[di
 
 
 def _refresh_profile_snapshot_via_skill(cfg: RunConfig, cycle_number: int) -> tuple[bool, str]:
+    if _llm_profile_mode_enabled(cfg):
+        return _refresh_profile_snapshot_via_llm_profile_registry(cfg, cycle_number)
+
     script = _resolve_rate_snapshot_script(cfg)
     if script is None:
         return False, "codex-rate-snapshot script not found"
@@ -2387,6 +2720,66 @@ def _watchdog_near_idle_threshold(cfg: RunConfig) -> bool:
     return age_minutes >= float(near_threshold)
 
 
+def _write_watchdog_recovery_nudge(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    monitored_branch: str,
+    commit_ref: str,
+    last_commit_sha: str,
+    last_commit_at_utc: str,
+    watchdog_age_minutes: float,
+    stale_after_minutes: int,
+) -> None:
+    nudge_path = cfg.repo_root / RECOVERY_INSTRUCTIONS_FILE
+    if nudge_path.exists():
+        return
+
+    generated_at = utc_now_iso()
+    age_minutes = round(float(watchdog_age_minutes), 3)
+    body = f"""# Recovery Nudge: Broad Runtime Sweep
+
+Generated at: {generated_at}
+Cycle: {cycle_number}
+Reason: Watchdog observed no repository movement for {age_minutes} minutes.
+Branch: {monitored_branch}
+Commit ref: {commit_ref}
+Last observed commit sha: {last_commit_sha}
+Last observed commit timestamp: {last_commit_at_utc}
+Watchdog stop threshold: {stale_after_minutes} minutes
+
+This nudge is broad by design. Run a full diagnostics sweep before deciding to skip repeatedly.
+
+## Broad diagnostics checklist (not limited to one failure mode)
+1. Inspect repeated cycle-gate skip reasons in `.op-simple/current/cycle_manager_decision.json` and recent `.op-simple/history/cycle-*/cycle_manager_decision.json`.
+2. Reconcile all in-progress workers with `pid=null` by scanning canonical and non-obvious evidence locations.
+3. Ingest reviewer outcomes from:
+   - `<worker_worktree>/reports/handoffs/<task_identifier>.handoff.json`
+   - `<worker_worktree>/.codex-dispatch/dispatch-*.log`
+4. Normalize decision aliases during ingestion when needed (`reviewer_decision` -> `decision`) and update canonical artifacts.
+5. Verify `task_execution_state.json`, `worker_registry.json`, and `production_line_register.json` are aligned after reconciliation.
+6. Validate worker packet/worktree integrity (`worker_packets.json` entries map to valid worker rows and existing worktrees).
+7. Validate profile gating posture (`profile_snapshot.json`) so dispatch is not starved by hard/soft gate mistakes.
+8. Check for dispatch launch failures/timeouts in `.op-simple/current/dispatch_launch_log.jsonl`.
+9. If evidence is still missing, create explicit remediation tasks instead of repeating passive skips.
+
+After applying this nudge, rename this file to `recovery_instructions_CONSUMED.md`.
+"""
+
+    try:
+        nudge_path.write_text(body, encoding="utf-8")
+    except OSError:
+        return
+
+    print(
+        "[op-simple-build] "
+        f"[{utc_now_iso()}] "
+        f"cycle={cycle_number} watchdog emitted recovery nudge "
+        f"path={RECOVERY_INSTRUCTIONS_FILE} age_minutes={age_minutes}",
+        flush=True,
+    )
+
+
 def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
     counters = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
     packets = _load_worker_packets(cfg)
@@ -2458,9 +2851,33 @@ def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
             "--no-full-auto",
             "--extra-arg=--dangerously-bypass-approvals-and-sandbox",
         ]
+        if cfg.codex_profile:
+            cmd.extend(
+                [
+                    "--extra-arg=-p",
+                    f"--extra-arg={cfg.codex_profile}",
+                ]
+            )
         profile_home = alias_to_home.get(profile_alias)
         if profile_home:
             cmd.extend(["--codex-home", profile_home])
+
+        if _llm_profile_mode_enabled(cfg):
+            allowed, reset_at = _llm_profile_consume_request_budget(
+                cfg,
+                source=f"dispatch:{worker_id or packet_id or 'unknown'}",
+            )
+            if not allowed:
+                event["status"] = "launch_failed"
+                event["message"] = (
+                    f"llm profile rate limit active; retry after {reset_at}"
+                    if reset_at
+                    else "llm profile rate limit active"
+                )
+                counters["launch_failed"] += 1
+                event_rows.append(event)
+                _append_jsonl(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE, event)
+                continue
 
         try:
             proc = subprocess.run(cmd, cwd=str(cfg.repo_root), capture_output=True, text=True, timeout=30, check=False)
@@ -2574,6 +2991,18 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
         "stale": is_stale,
     }
     _atomic_write_json(state_path, next_state)
+
+    if watchdog_age_minutes is not None and float(watchdog_age_minutes) >= float(WATCHDOG_RECOVERY_NUDGE_MINUTES):
+        _write_watchdog_recovery_nudge(
+            cfg,
+            cycle_number=cycle_number,
+            monitored_branch=monitored_branch,
+            commit_ref=commit_ref,
+            last_commit_sha=str(current_sha or ""),
+            last_commit_at_utc=last_commit_at_utc,
+            watchdog_age_minutes=float(watchdog_age_minutes),
+            stale_after_minutes=int(stale_after_minutes),
+        )
 
     if commit_age_minutes is None:
         exit_signal = {
@@ -2834,6 +3263,7 @@ def _build_config(req: Any) -> RunConfig:
     run_base_source_branch = str(getattr(req, "run_base_source_branch", "") or "").strip() or "main"
     boss_model = str(getattr(req, "boss_model", "") or "").strip() or "gpt-5.3-codex"
     boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "medium"
+    codex_profile = str(getattr(req, "codex_profile", getattr(req, "profile", "")) or "").strip() or None
 
     return RunConfig(
         repo_root=repo_root,
@@ -2845,6 +3275,7 @@ def _build_config(req: Any) -> RunConfig:
         run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,
         boss_reasoning_effort=boss_reasoning_effort,
+        codex_profile=codex_profile,
     )
 
 
@@ -2905,6 +3336,20 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             force_refresh=bool((init_state.get("run_context") or {}).get("created_new")),
         )
         _ensure_default_artifacts(cfg)
+        if _llm_profile_mode_enabled(cfg):
+            _refresh_profile_snapshot_via_llm_profile_registry(cfg, cycle_number=0)
+        else:
+            _atomic_write_json(
+                cfg.repo_root / ARTIFACT_FILES["llm_profile_mode"],
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "updated_at": utc_now_iso(),
+                    "enabled": False,
+                    "llm_profile": None,
+                    "profile_policy": "force_default_codex",
+                    "rate_policy": None,
+                },
+            )
         _seed_plan_artifacts_from_planner(cfg)
 
         cycle_number = _load_cycle_counter(cfg)
@@ -2950,7 +3395,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             task_in_progress_count = int(task_counts_snapshot.get("in_progress") or 0)
             state_changed = previous_state_signature is None or state_signature != previous_state_signature
             force_full_cycle = quiet_cycle_streak >= (QUIET_CYCLE_FORCE_FULL_EVERY - 1)
-            has_recovery_nudge = (cfg.repo_root / "recovery_instructions.md").exists()
+            has_recovery_nudge = (cfg.repo_root / RECOVERY_INSTRUCTIONS_FILE).exists()
             has_boss_timeout_marker = (cfg.repo_root / BOSS_EVIDENCE_FILE).exists()
             near_watchdog_idle = _watchdog_near_idle_threshold(cfg)
             has_lease_recovery = bool(lease_recovery["reclaimed_workers"] or lease_recovery["requeued_tasks"])
@@ -3012,6 +3457,17 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     context={
                         "max_parallel_workers": init_state.get("workflow", {}).get("max_parallel_workers"),
                         "boss_evidence_path": str((cfg.repo_root / BOSS_EVIDENCE_FILE).resolve()),
+                        "llm_profile_mode_enabled": _llm_profile_mode_enabled(cfg),
+                        "llm_profile": str(cfg.codex_profile or "").strip() or None,
+                        "llm_profile_mode_ref": str((cfg.repo_root / ARTIFACT_FILES["llm_profile_mode"]).resolve()),
+                        "llm_profile_rate_registry_ref": str(
+                            (cfg.repo_root / ARTIFACT_FILES["llm_profile_rate_registry"]).resolve()
+                        ),
+                        "rate_snapshot_policy": (
+                            "use_local_counter_registry_skip_skill"
+                            if _llm_profile_mode_enabled(cfg)
+                            else "default_codex_rate_snapshot_skill"
+                        ),
                     },
                     expected_artifacts=boss_expected,
                 )
