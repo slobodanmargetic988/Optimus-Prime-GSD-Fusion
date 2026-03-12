@@ -1,0 +1,19 @@
+- main [ref=e20]:
+  - generic [ref=e21]:
+    - paragraph [ref=e22]: "Hydrated highscores: yes"
+    - paragraph [ref=e23]: "Stored entries: 0"
+  - region "Gameplay screen" [ref=e24]:
+    - heading "Tetris2" [level=1] [ref=e25]
+    - paragraph [ref=e26]: "Screen: Gameplay"
+    - paragraph [ref=e27]:
+      - text: "Score:"
+      - strong [ref=e28]: "0"
+    - paragraph [ref=e29]:
+      - text: "Phase:"
+      - strong [ref=e30]: paused
+    - generic [ref=e31]:
+      - button "Tick" [ref=e32]
+      - button "Hard Drop" [ref=e33]
+      - button "Pause" [ref=e34]
+      - button "Resume" [ref=e35]
+      - button "Finish Run" [ref=e36]

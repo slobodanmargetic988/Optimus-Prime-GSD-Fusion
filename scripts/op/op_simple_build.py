@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -12,7 +13,7 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,8 @@ DISPATCH_LAUNCH_LOG_FILE = CURRENT_DIR / "dispatch_launch_log.jsonl"
 INITIALIZE_STATE_FILE = CURRENT_DIR / "initialize_state.json"
 BOSS_EVIDENCE_FILE = CURRENT_DIR / "boss_evidence.json"
 BOSS_SESSION_STATE_FILE = CURRENT_DIR / "boss_session_state.json"
+APP_LIFECYCLE_FILE = Path("app_lifecycle.json")
+TRACE_EVENT_LOG_FILE = CURRENT_DIR / "trace_event_envelope.jsonl"
 
 ARTIFACT_FILES = {
     "cycle_manager_decision": CURRENT_DIR / "cycle_manager_decision.json",
@@ -44,21 +47,35 @@ ARTIFACT_FILES = {
     "worker_registry": CURRENT_DIR / "worker_registry.json",
     "dispatch_registry": CURRENT_DIR / "dispatch_registry.json",
     "cycle_summary": CURRENT_DIR / "cycle_summary.json",
+    "wrapup_manager_report": CURRENT_DIR / "wrapup_manager_report.json",
     "watchdog_state": CURRENT_DIR / "watchdog_state.json",
     "watchdog_exit_signal": CURRENT_DIR / "watchdog_exit_signal.json",
     "workstation_prep": CURRENT_DIR / "workstation_prep.json",
+    "llm_profile_mode": CURRENT_DIR / "llm_profile_mode.json",
+    "llm_profile_rate_registry": CURRENT_DIR / "llm_profile_rate_registry.json",
 }
 
 MANAGER_TIMEOUT_SECONDS = {
     "BOSS": 720,
+    "wrapup-manager": 720,
     "watchdog": 120,
     "summary": 120,
 }
 
-WATCHDOG_IDLE_THRESHOLD = 10
+QUIET_CYCLE_FORCE_FULL_EVERY = 5
+WATCHDOG_STALE_COMMIT_MINUTES = 150
+WATCHDOG_NEAR_STALE_MARGIN_MINUTES = 10
+WATCHDOG_RECOVERY_NUDGE_MINUTES = 30
 WAIT_HEARTBEAT_SECONDS = 300
 WAIT_RESCAN_SECONDS = 900
+LLM_PROFILE_PER_MINUTE_LIMIT = 20
+LLM_PROFILE_PER_DAY_LIMIT = 1000
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
+RECOVERY_INSTRUCTIONS_FILE = Path("recovery_instructions.md")
+NON_TERMINAL_STOP_REASONS = {
+    "skip_cycle",
+    "active_workers_in_progress_no_safe_new_dispatch",
+}
 
 PLANNER_PLAN_PACKETS_FILE = Path("reports/optimus-prime/planning/PLAN_PACKETS.json")
 BOSS_REQUIRED_ARTIFACTS = [
@@ -108,6 +125,7 @@ class RunConfig:
     max_build_cycles: int | None
     max_parallel_workers: int
     dry_run: bool
+    resume_mode: bool = False
     run_base_source_branch: str = "main"
     boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "xhigh"
@@ -327,6 +345,296 @@ def _extract_session_id(*parts: str) -> str | None:
     return None
 
 
+def _slugify_identifier(raw: Any) -> str:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return "unknown0"
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = re.sub(r"-{2,}", "-", text).strip("-")
+    if not text:
+        text = "unknown0"
+    if len(text) < 2:
+        text = f"{text}0"
+    return text[:96]
+
+
+def _canonical_id(prefix: str, raw: Any) -> str:
+    return f"{prefix}.{_slugify_identifier(raw)}"
+
+
+def _canonical_identity_for_cycle(cfg: RunConfig, cycle_number: int) -> dict[str, str]:
+    lock_payload = _read_json(cfg.repo_root / RUN_LOCK_FILE, default={})
+    lock_id = ""
+    if isinstance(lock_payload, dict):
+        lock_id = str(lock_payload.get("lock_id") or "").strip()
+
+    if not lock_id:
+        init_state = _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
+        run_context = init_state.get("run_context") if isinstance(init_state, dict) else {}
+        run_base_branch = str((run_context or {}).get("run_base_branch") or "").strip()
+        lock_id = run_base_branch or f"cycle-{cycle_number}"
+
+    event_seed = f"{datetime.now(timezone.utc).strftime('%Y%m%dt%H%M%Sz').lower()}-{cycle_number}-wrapup"
+    out = {
+        "project_id": _canonical_id("prj", cfg.repo_root.name),
+        "run_id": _canonical_id("run", lock_id),
+        "event_id": _canonical_id("event", event_seed),
+    }
+    era_id = _active_lifecycle_era_id(cfg)
+    if era_id:
+        out["era_id"] = _canonical_id("era", era_id)
+    return out
+
+
+def _validate_cross_project_ids_v1(identity: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(identity, dict):
+        return ["identity must be an object"]
+    for key in ("project_id", "run_id", "event_id"):
+        value = identity.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"identity.{key} is required")
+            continue
+        pattern = CANONICAL_ID_PATTERNS[key]
+        if not pattern.fullmatch(value.strip()):
+            errors.append(f"identity.{key} fails canonical pattern")
+    for key, pattern in CANONICAL_ID_PATTERNS.items():
+        if key not in identity:
+            continue
+        value = identity.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not pattern.fullmatch(value.strip()):
+            errors.append(f"identity.{key} fails canonical pattern")
+    return errors
+
+
+def _validate_trace_event_envelope_v1(payload: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, dict):
+        return ["trace event payload must be an object"]
+
+    if payload.get("schema_version") != "trace-event-envelope.v1":
+        errors.append("schema_version must be trace-event-envelope.v1")
+
+    event_name = payload.get("event_name")
+    if not isinstance(event_name, str) or len(event_name.strip()) < 3:
+        errors.append("event_name must be a non-empty string")
+
+    timestamp_utc = payload.get("timestamp_utc")
+    if not isinstance(timestamp_utc, str) or not TRACE_EVENT_TIMESTAMP_REGEX.fullmatch(timestamp_utc):
+        errors.append("timestamp_utc must match YYYY-MM-DDTHH:MM:SSZ")
+
+    errors.extend(_validate_cross_project_ids_v1(payload.get("identity")))
+
+    actor = payload.get("actor")
+    if not isinstance(actor, dict):
+        errors.append("actor must be an object")
+    else:
+        actor_type = actor.get("type")
+        actor_id = actor.get("id")
+        if actor_type not in TRACE_EVENT_ACTOR_TYPES:
+            errors.append("actor.type is invalid")
+        if not isinstance(actor_id, str) or not actor_id.strip():
+            errors.append("actor.id is required")
+
+    decision = payload.get("decision")
+    if not isinstance(decision, dict):
+        errors.append("decision must be an object")
+    else:
+        question = decision.get("question")
+        rationale = decision.get("rationale")
+        reason_codes = decision.get("reason_codes")
+        if not isinstance(question, str) or len(question.strip()) < 10:
+            errors.append("decision.question must be at least 10 characters")
+        if not isinstance(rationale, str) or len(rationale.strip()) < 10:
+            errors.append("decision.rationale must be at least 10 characters")
+        if not isinstance(reason_codes, list) or not reason_codes:
+            errors.append("decision.reason_codes must be a non-empty list")
+        elif any(not isinstance(item, str) or not item.strip() for item in reason_codes):
+            errors.append("decision.reason_codes must contain non-empty strings")
+
+    operation = payload.get("operation")
+    if not isinstance(operation, dict):
+        errors.append("operation must be an object")
+    else:
+        if not isinstance(operation.get("name"), str) or len(str(operation.get("name")).strip()) < 3:
+            errors.append("operation.name must be a non-empty string")
+        if not isinstance(operation.get("intent"), str) or len(str(operation.get("intent")).strip()) < 3:
+            errors.append("operation.intent must be a non-empty string")
+
+    outcome = payload.get("outcome")
+    if not isinstance(outcome, dict):
+        errors.append("outcome must be an object")
+    else:
+        status = outcome.get("status")
+        summary = outcome.get("summary")
+        if status not in TRACE_EVENT_OUTCOME_STATUS:
+            errors.append("outcome.status is invalid")
+        if not isinstance(summary, str) or len(summary.strip()) < 3:
+            errors.append("outcome.summary must be a non-empty string")
+
+    risk = payload.get("risk")
+    if not isinstance(risk, dict):
+        errors.append("risk must be an object")
+    else:
+        if risk.get("level") not in TRACE_EVENT_RISK_LEVELS:
+            errors.append("risk.level is invalid")
+
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, dict):
+        errors.append("evidence must be an object")
+    else:
+        artifacts = evidence.get("artifacts")
+        if not isinstance(artifacts, list) or not artifacts:
+            errors.append("evidence.artifacts must be a non-empty list")
+        else:
+            for idx, artifact in enumerate(artifacts):
+                if not isinstance(artifact, dict):
+                    errors.append(f"evidence.artifacts[{idx}] must be an object")
+                    continue
+                artifact_id = artifact.get("artifact_id")
+                if not isinstance(artifact_id, str) or not CANONICAL_ID_PATTERNS["artifact_id"].fullmatch(artifact_id):
+                    errors.append(f"evidence.artifacts[{idx}].artifact_id is invalid")
+                if not isinstance(artifact.get("kind"), str) or not str(artifact.get("kind")).strip():
+                    errors.append(f"evidence.artifacts[{idx}].kind is required")
+                if not isinstance(artifact.get("uri"), str) or not str(artifact.get("uri")).strip():
+                    errors.append(f"evidence.artifacts[{idx}].uri is required")
+
+    source = payload.get("source")
+    if not isinstance(source, dict):
+        errors.append("source must be an object")
+    else:
+        repo = source.get("repo")
+        commit_sha = source.get("commit_sha")
+        if not isinstance(repo, str) or not repo.strip():
+            errors.append("source.repo is required")
+        if commit_sha is not None:
+            if not isinstance(commit_sha, str) or not TRACE_EVENT_SOURCE_SHA_REGEX.fullmatch(commit_sha.strip()):
+                errors.append("source.commit_sha is invalid")
+
+    return errors
+
+
+def _build_wrapup_trace_event(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    stop_reason: str,
+    run_context: dict[str, Any],
+    result: ManagerResult,
+) -> dict[str, Any]:
+    event_ts = utc_now_iso()
+    identity = _canonical_identity_for_cycle(cfg, cycle_number)
+    decision_id_seed = f"wrapup-{cycle_number}-{stop_reason}-{result.status}"
+    identity["decision_id"] = _canonical_id("decision", decision_id_seed)
+
+    reason_code = str(result.reason_code or f"wrapup_manager_{result.status}" or "wrapup_manager_unknown").strip()
+    outcome_status = "success" if result.status == "ok" else "failure"
+    risk_level = "low" if result.status == "ok" else "medium"
+    report_uri = str(ARTIFACT_FILES["wrapup_manager_report"])
+    manager_log_uri = str(MANAGER_CALL_LOG_FILE)
+
+    source_branch = str(run_context.get("run_base_branch") or "").strip() or (_git_text(cfg.repo_root, "branch", "--show-current") or "")
+    source_commit_sha = _git_text(cfg.repo_root, "rev-parse", "HEAD") or ""
+
+    event = {
+        "schema_version": "trace-event-envelope.v1",
+        "event_name": "merge.lifecycle.wrapup_manager",
+        "timestamp_utc": event_ts,
+        "identity": identity,
+        "actor": {
+            "type": "service",
+            "id": "wrapup-manager",
+        },
+        "decision": {
+            "question": f"Should wrapup manager run for stop reason '{stop_reason}' at cycle {cycle_number}?",
+            "rationale": (
+                "Wrapup manager execution is required on project completion to finalize merge lifecycle context and "
+                "produce deterministic end-of-run evidence."
+            ),
+            "reason_codes": [reason_code],
+        },
+        "operation": {
+            "name": "invoke_wrapup_manager",
+            "intent": "Finalize run and capture merge lifecycle outcome.",
+            "target_ref": source_branch,
+            "inputs": {
+                "stop_reason": stop_reason,
+                "cycle_number": cycle_number,
+                "manager_status": result.status,
+            },
+        },
+        "outcome": {
+            "status": outcome_status,
+            "summary": (
+                "wrapup-manager completed and produced post-run summary artifacts"
+                if result.status == "ok"
+                else f"wrapup-manager failed with status={result.status}"
+            ),
+            "error_code": reason_code if result.status != "ok" else None,
+            "retryable": bool(result.timeout),
+            "metrics": {
+                "duration_seconds": result.duration_seconds,
+            },
+        },
+        "risk": {
+            "level": risk_level,
+            "notes": (
+                "Wrapup failure can delay merge/finalization transparency and should be triaged."
+                if result.status != "ok"
+                else "Low risk finalization event."
+            ),
+        },
+        "evidence": {
+            "artifacts": [
+                {
+                    "artifact_id": _canonical_id("artifact", f"wrapup-report-c{cycle_number}"),
+                    "kind": "wrapup_manager_report",
+                    "uri": report_uri,
+                    "generated_at_utc": event_ts,
+                },
+                {
+                    "artifact_id": _canonical_id("artifact", f"manager-call-log-c{cycle_number}"),
+                    "kind": "manager_call_log",
+                    "uri": manager_log_uri,
+                    "generated_at_utc": event_ts,
+                },
+            ]
+        },
+        "source": {
+            "repo": cfg.repo_root.name,
+            "branch": source_branch,
+        },
+    }
+    if source_commit_sha and TRACE_EVENT_SOURCE_SHA_REGEX.fullmatch(source_commit_sha):
+        event["source"]["commit_sha"] = source_commit_sha
+    return event
+
+
+def _emit_trace_event_envelope(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    payload: dict[str, Any],
+) -> None:
+    errors = _validate_trace_event_envelope_v1(payload)
+    if errors:
+        message = "; ".join(errors[:8])
+        raise SimpleBuildError(
+            "trace_event_envelope_invalid",
+            f"trace event envelope validation failed at cycle {cycle_number}: {message}",
+        )
+
+    _append_jsonl(cfg.repo_root / TRACE_EVENT_LOG_FILE, payload)
+    print(
+        "[op-simple-build] "
+        f"[{utc_now_iso()}] "
+        f"cycle={cycle_number} trace_event={payload.get('event_name')} schema_validation=passed",
+        flush=True,
+    )
+
+
 def _effective_codex_home(codex_home: str | None) -> str:
     codex_home_text = (codex_home or "").strip()
     if codex_home_text:
@@ -376,6 +684,24 @@ def _write_boss_session_state(
     _atomic_write_json(cfg.repo_root / BOSS_SESSION_STATE_FILE, payload)
 
 
+def _active_lifecycle_era_id(cfg: RunConfig) -> str | None:
+    payload = _read_json(cfg.repo_root / APP_LIFECYCLE_FILE, default={})
+    if not isinstance(payload, dict):
+        return None
+    rows = payload.get("app_lifecycle")
+    if not isinstance(rows, list):
+        return None
+    for row in reversed(rows):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").strip() != "in_progress":
+            continue
+        era_id = str(row.get("era_id") or "").strip()
+        if era_id:
+            return era_id
+    return None
+
+
 def _default_attempts() -> dict[str, int]:
     return {stage: 0 for stage in TASK_ATTEMPT_STAGES}
 
@@ -415,6 +741,19 @@ def _git_text(repo_root: Path, *args: str) -> str:
     if proc.returncode != 0:
         return ""
     return (proc.stdout or "").strip()
+
+
+def _git_commit_epoch_seconds(repo_root: Path, ref: str) -> int | None:
+    raw = _git_text(repo_root, "show", "-s", "--format=%ct", ref)
+    if not raw:
+        return None
+    try:
+        epoch = int(raw.strip())
+    except (TypeError, ValueError):
+        return None
+    if epoch <= 0:
+        return None
+    return epoch
 
 
 def _git_run(repo_root: Path, *args: str) -> tuple[int, str, str]:
@@ -468,6 +807,45 @@ def _create_run_base_branch(cfg: RunConfig) -> dict[str, Any]:
         "op_simple_base_branch_exhausted",
         "Cannot create unique run base branch after multiple attempts.",
     )
+
+
+def _load_resume_run_base_meta(cfg: RunConfig) -> dict[str, Any]:
+    state = _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
+    if not isinstance(state, dict):
+        state = {}
+    run_context = state.get("run_context") if isinstance(state.get("run_context"), dict) else {}
+
+    run_base_branch = str(run_context.get("run_base_branch") or state.get("monitored_branch") or "").strip()
+    if not run_base_branch:
+        raise SimpleBuildError(
+            "op_simple_resume_unavailable",
+            "Cannot resume /op-simple-build: missing run_base_branch in initialize_state.json.",
+        )
+
+    ref = f"refs/heads/{run_base_branch}"
+    branch_commit = _git_text(cfg.repo_root, "rev-parse", "--verify", ref)
+    if not branch_commit:
+        raise SimpleBuildError(
+            "op_simple_resume_missing_branch",
+            f"Cannot resume /op-simple-build: run base branch '{run_base_branch}' does not exist.",
+        )
+
+    if not cfg.dry_run:
+        code, _out, err = _git_run(cfg.repo_root, "checkout", run_base_branch)
+        if code != 0:
+            raise SimpleBuildError(
+                "op_simple_resume_checkout_failed",
+                f"Cannot checkout run base branch '{run_base_branch}' for resume: {err or 'unknown git error'}",
+            )
+
+    return {
+        "run_base_branch": run_base_branch,
+        "run_base_from_branch": str(run_context.get("run_base_from_branch") or cfg.run_base_source_branch or "main"),
+        "run_base_from_commit": str(run_context.get("run_base_from_commit") or branch_commit),
+        "run_base_created_at": str(run_context.get("run_base_created_at") or utc_now_iso()),
+        "created_new": False,
+        "dry_run": bool(cfg.dry_run),
+    }
 
 
 def _default_initialize_state(repo_root: Path, max_parallel_workers: int, run_meta: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -795,14 +1173,51 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "stop_reason": "",
             "notes": "",
         },
+        "wrapup_manager_report": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "cycle_number": 0,
+            "status": "not_started",
+            "summary": "",
+        },
         "watchdog_state": {
             "schema_version": SCHEMA_VERSION,
             "cycle_number": 0,
             "monitored_branch": "main",
             "last_commit_sha": "",
-            "last_commit_seen_cycle": 0,
-            "idle_cycles": 0,
-            "threshold_cycles": WATCHDOG_IDLE_THRESHOLD,
+            "commit_ref": "main",
+            "last_commit_at_utc": "",
+            "last_commit_age_minutes": None,
+            "watchdog_age_offset_minutes": None,
+            "watchdog_age_minutes": None,
+            "watchdog_target_reset_at_utc": "",
+            "stale_after_minutes": WATCHDOG_STALE_COMMIT_MINUTES,
+            "stale": False,
+        },
+        "llm_profile_mode": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "enabled": False,
+            "llm_profile": None,
+            "profile_policy": "force_default_codex",
+            "rate_policy": None,
+        },
+        "llm_profile_rate_registry": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "enabled": False,
+            "llm_profile": None,
+            "limits": {
+                "per_minute": int(LLM_PROFILE_PER_MINUTE_LIMIT),
+                "per_day": int(LLM_PROFILE_PER_DAY_LIMIT),
+            },
+            "windows": {
+                "minute": {"started_at": utc_now_iso(), "window_seconds": 60, "count": 0},
+                "day": {"started_at": utc_now_iso(), "window_seconds": 86400, "count": 0},
+            },
+            "total_count": 0,
+            "last_request_at": None,
+            "last_request_source": None,
         },
     }
 
@@ -827,9 +1242,12 @@ def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
         "worker_registry",
         "dispatch_registry",
         "cycle_summary",
+        "wrapup_manager_report",
         "watchdog_state",
         "watchdog_exit_signal",
         "workstation_prep",
+        "llm_profile_mode",
+        "llm_profile_rate_registry",
     ]
     for key in reset_keys:
         path = cfg.repo_root / ARTIFACT_FILES[key]
@@ -879,6 +1297,7 @@ def _artifact_path_map(cfg: RunConfig) -> dict[str, str]:
     out["manager_call_log"] = str((cfg.repo_root / MANAGER_CALL_LOG_FILE).resolve())
     out["boss_evidence"] = str((cfg.repo_root / BOSS_EVIDENCE_FILE).resolve())
     out["boss_session_state"] = str((cfg.repo_root / BOSS_SESSION_STATE_FILE).resolve())
+    out["app_lifecycle"] = str((cfg.repo_root / APP_LIFECYCLE_FILE).resolve())
     out["terminate_file"] = str((cfg.repo_root / TERMINATE_FILE_NAME).resolve())
     return out
 
@@ -1012,6 +1431,31 @@ def _codex_exec_prompt(
     if codex_home_text:
         env = os.environ.copy()
         env["CODEX_HOME"] = codex_home_text
+
+    if _llm_profile_mode_enabled(cfg):
+        allowed, reset_at = _llm_profile_consume_request_budget(
+            cfg,
+            source=f"manager:{manager_name.lower().replace(' ', '-')}",
+        )
+        if not allowed:
+            finished_at = utc_now_iso()
+            return ManagerResult(
+                manager=manager_name,
+                status="failed",
+                timeout=False,
+                returncode=None,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_seconds=round(time.monotonic() - start_time, 3),
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+                message=(
+                    f"llm profile rate limit active; retry after {reset_at}"
+                    if reset_at
+                    else "llm profile rate limit active"
+                ),
+                reason_code="llm_profile_rate_limited",
+            )
 
     try:
         completed = subprocess.run(
@@ -1277,6 +1721,20 @@ def _write_boss_stub(cfg: RunConfig, cycle_number: int) -> None:
         _atomic_write_json(cfg.repo_root / ARTIFACT_FILES[key], payload)
 
 
+def _write_wrapup_stub(cfg: RunConfig, cycle_number: int) -> None:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": cycle_number,
+        "status": "dry_run",
+        "stop_reason": "project_done",
+        "run_base_branch": str((_read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={}).get("run_context") or {}).get("run_base_branch") or ""),
+        "app_lifecycle_path": str((cfg.repo_root / APP_LIFECYCLE_FILE).resolve()),
+        "summary": "dry run wrapup manager report",
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["wrapup_manager_report"], payload)
+
+
 def _validate_manager_artifacts(
     cfg: RunConfig,
     manager_name: str,
@@ -1342,9 +1800,13 @@ def _invoke_manager(
     context: dict[str, Any],
     expected_artifacts: list[str],
 ) -> ManagerResult:
+    manager_uses_boss_profile = manager_name in {"BOSS", "wrapup-manager"}
+    manager_uses_boss_model = manager_name in {"BOSS", "wrapup-manager"}
     if cfg.dry_run:
         if manager_name == "BOSS":
             _write_boss_stub(cfg, cycle_number)
+        if manager_name == "wrapup-manager":
+            _write_wrapup_stub(cfg, cycle_number)
         started = utc_now_iso()
         finished = utc_now_iso()
         result = ManagerResult(
@@ -1376,7 +1838,9 @@ def _invoke_manager(
                 cfg,
                 preferred_alias=prior_profile_alias,
             )
-            if prior_session_id and selected_manager_alias and prior_profile_alias:
+            if not selected_manager_home:
+                selected_manager_home = str(boss_session_state.get("codex_home") or "").strip() or None
+            if manager_name == "BOSS" and prior_session_id and selected_manager_alias and prior_profile_alias:
                 profile_matches = selected_manager_alias == prior_profile_alias
                 previous_profile_matches = (
                     prior_previous_profile_alias in {None, "", prior_profile_alias}
@@ -1407,6 +1871,14 @@ def _invoke_manager(
             },
         }
         prompt_text = template.strip()
+        if manager_name == "BOSS" and _llm_profile_mode_enabled(cfg):
+            profile_name = str(cfg.codex_profile or "").strip()
+            note = (
+                "Operator note: LLM profile mode is active. "
+                f"Use llm_profile='{profile_name}' rate registry artifacts from the runtime packet. "
+                "Do not run codex-rate-snapshot in this mode."
+            )
+            prompt_text = f"{note}\n\n{prompt_text}" if prompt_text else note
         if prompt_text:
             prompt_text += "\n\n"
         prompt_text += "Runtime packet (JSON):\n```json\n"
@@ -1553,6 +2025,261 @@ def _extract_remaining_percent(window: Any) -> float | None:
         except (TypeError, ValueError):
             return None
     return None
+
+
+def _llm_profile_mode_enabled(cfg: RunConfig) -> bool:
+    return bool(str(cfg.codex_profile or "").strip())
+
+
+def _utc_iso_from_datetime(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _default_llm_profile_rate_registry(cfg: RunConfig) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": _utc_iso_from_datetime(now),
+        "enabled": _llm_profile_mode_enabled(cfg),
+        "llm_profile": str(cfg.codex_profile or "").strip() or None,
+        "limits": {
+            "per_minute": int(LLM_PROFILE_PER_MINUTE_LIMIT),
+            "per_day": int(LLM_PROFILE_PER_DAY_LIMIT),
+        },
+        "windows": {
+            "minute": {
+                "started_at": _utc_iso_from_datetime(now),
+                "window_seconds": 60,
+                "count": 0,
+            },
+            "day": {
+                "started_at": _utc_iso_from_datetime(day_start),
+                "window_seconds": 86400,
+                "count": 0,
+            },
+        },
+        "total_count": 0,
+        "last_request_at": None,
+        "last_request_source": None,
+    }
+
+
+def _normalize_llm_profile_rate_registry(cfg: RunConfig, payload: Any) -> dict[str, Any]:
+    out = payload if isinstance(payload, dict) else _default_llm_profile_rate_registry(cfg)
+    now = datetime.now(timezone.utc)
+    profile_text = str(cfg.codex_profile or "").strip() or None
+    if out.get("llm_profile") != profile_text:
+        out = _default_llm_profile_rate_registry(cfg)
+    out["schema_version"] = SCHEMA_VERSION
+    out["enabled"] = _llm_profile_mode_enabled(cfg)
+    out["llm_profile"] = profile_text
+    limits = out.get("limits") if isinstance(out.get("limits"), dict) else {}
+    minute_limit = limits.get("per_minute")
+    day_limit = limits.get("per_day")
+    try:
+        minute_limit = int(minute_limit)
+    except (TypeError, ValueError):
+        minute_limit = LLM_PROFILE_PER_MINUTE_LIMIT
+    try:
+        day_limit = int(day_limit)
+    except (TypeError, ValueError):
+        day_limit = LLM_PROFILE_PER_DAY_LIMIT
+    out["limits"] = {"per_minute": max(1, minute_limit), "per_day": max(1, day_limit)}
+
+    windows = out.get("windows") if isinstance(out.get("windows"), dict) else {}
+    minute = windows.get("minute") if isinstance(windows.get("minute"), dict) else {}
+    day = windows.get("day") if isinstance(windows.get("day"), dict) else {}
+
+    minute_started = _parse_iso_datetime(str(minute.get("started_at") or ""))
+    if minute_started is None:
+        minute_started = now
+    minute_window_seconds = 60
+    try:
+        minute_count = int(minute.get("count") or 0)
+    except (TypeError, ValueError):
+        minute_count = 0
+    if minute_started + timedelta(seconds=minute_window_seconds) <= now:
+        minute_started = now
+        minute_count = 0
+    if minute_count < 0:
+        minute_count = 0
+
+    day_started = _parse_iso_datetime(str(day.get("started_at") or ""))
+    if day_started is None:
+        day_started = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_window_seconds = 86400
+    try:
+        day_count = int(day.get("count") or 0)
+    except (TypeError, ValueError):
+        day_count = 0
+    if day_started + timedelta(seconds=day_window_seconds) <= now:
+        day_started = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_count = 0
+    if day_count < 0:
+        day_count = 0
+
+    out["windows"] = {
+        "minute": {
+            "started_at": _utc_iso_from_datetime(minute_started),
+            "window_seconds": minute_window_seconds,
+            "count": minute_count,
+        },
+        "day": {
+            "started_at": _utc_iso_from_datetime(day_started),
+            "window_seconds": day_window_seconds,
+            "count": day_count,
+        },
+    }
+    try:
+        total_count = int(out.get("total_count") or 0)
+    except (TypeError, ValueError):
+        total_count = 0
+    out["total_count"] = max(0, total_count)
+    out["updated_at"] = _utc_iso_from_datetime(now)
+    return out
+
+
+def _load_llm_profile_rate_registry(cfg: RunConfig) -> dict[str, Any]:
+    path = cfg.repo_root / ARTIFACT_FILES["llm_profile_rate_registry"]
+    payload = _read_json(path, default={})
+    normalized = _normalize_llm_profile_rate_registry(cfg, payload)
+    _atomic_write_json(path, normalized)
+    return normalized
+
+
+def _llm_profile_gate_state(payload: dict[str, Any]) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
+    windows = payload.get("windows") if isinstance(payload.get("windows"), dict) else {}
+    minute = windows.get("minute") if isinstance(windows.get("minute"), dict) else {}
+    day = windows.get("day") if isinstance(windows.get("day"), dict) else {}
+
+    try:
+        minute_limit = int(limits.get("per_minute") or LLM_PROFILE_PER_MINUTE_LIMIT)
+    except (TypeError, ValueError):
+        minute_limit = LLM_PROFILE_PER_MINUTE_LIMIT
+    try:
+        day_limit = int(limits.get("per_day") or LLM_PROFILE_PER_DAY_LIMIT)
+    except (TypeError, ValueError):
+        day_limit = LLM_PROFILE_PER_DAY_LIMIT
+    try:
+        minute_count = int(minute.get("count") or 0)
+    except (TypeError, ValueError):
+        minute_count = 0
+    try:
+        day_count = int(day.get("count") or 0)
+    except (TypeError, ValueError):
+        day_count = 0
+
+    minute_started = _parse_iso_datetime(str(minute.get("started_at") or ""))
+    if minute_started is None:
+        minute_started = now
+    day_started = _parse_iso_datetime(str(day.get("started_at") or ""))
+    if day_started is None:
+        day_started = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    minute_blocked = minute_count >= max(1, minute_limit)
+    day_blocked = day_count >= max(1, day_limit)
+
+    minute_reset_at = minute_started + timedelta(seconds=60)
+    day_reset_at = day_started + timedelta(seconds=86400)
+    reset_candidates: list[datetime] = []
+    if minute_blocked and minute_reset_at > now:
+        reset_candidates.append(minute_reset_at)
+    if day_blocked and day_reset_at > now:
+        reset_candidates.append(day_reset_at)
+    min_reset = min(reset_candidates) if reset_candidates else None
+
+    minute_remaining = max(0, minute_limit - minute_count)
+    day_remaining = max(0, day_limit - day_count)
+    return {
+        "hard_gated": bool(minute_blocked or day_blocked),
+        "minute_blocked": minute_blocked,
+        "day_blocked": day_blocked,
+        "minute_remaining": minute_remaining,
+        "day_remaining": day_remaining,
+        "minute_limit": minute_limit,
+        "day_limit": day_limit,
+        "reset_at": _utc_iso_from_datetime(min_reset) if min_reset else None,
+    }
+
+
+def _refresh_profile_snapshot_via_llm_profile_registry(cfg: RunConfig, cycle_number: int) -> tuple[bool, str]:
+    mode_path = cfg.repo_root / ARTIFACT_FILES["llm_profile_mode"]
+    mode_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "enabled": True,
+        "llm_profile": str(cfg.codex_profile or "").strip(),
+        "profile_policy": "force_default_codex",
+        "rate_policy": {
+            "source": "local-counter-timer",
+            "per_minute_limit": int(LLM_PROFILE_PER_MINUTE_LIMIT),
+            "per_day_limit": int(LLM_PROFILE_PER_DAY_LIMIT),
+            "skip_codex_rate_snapshot_skill": True,
+        },
+    }
+    _atomic_write_json(mode_path, mode_payload)
+
+    registry = _load_llm_profile_rate_registry(cfg)
+    gate = _llm_profile_gate_state(registry)
+    codex_home = _effective_codex_home(None)
+    minute_pct = round(100.0 * float(gate["minute_remaining"]) / max(1, int(gate["minute_limit"])), 3)
+    day_pct = round(100.0 * float(gate["day_remaining"]) / max(1, int(gate["day_limit"])), 3)
+    snapshot_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": cycle_number,
+        "source": "llm-profile-mode-local-counter",
+        "profiles": [
+            {
+                "alias": "codex",
+                "codex_home": codex_home,
+                "window_5h_remaining_pct": minute_pct,
+                "window_week_remaining_pct": day_pct,
+                "hard_gated": bool(gate["hard_gated"]),
+                "soft_gated": False,
+                "reset_at": gate.get("reset_at"),
+                "recommended_action": "wait_until_reset" if gate["hard_gated"] else "continue",
+                "llm_profile": str(cfg.codex_profile or "").strip(),
+                "llm_limits": {
+                    "per_minute": int(gate["minute_limit"]),
+                    "per_day": int(gate["day_limit"]),
+                    "minute_remaining": int(gate["minute_remaining"]),
+                    "day_remaining": int(gate["day_remaining"]),
+                },
+            }
+        ],
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], snapshot_payload)
+    return True, "profile snapshot refreshed via local LLM profile counter"
+
+
+def _llm_profile_consume_request_budget(cfg: RunConfig, *, source: str) -> tuple[bool, str | None]:
+    if not _llm_profile_mode_enabled(cfg):
+        return True, None
+    registry_path = cfg.repo_root / ARTIFACT_FILES["llm_profile_rate_registry"]
+    payload = _load_llm_profile_rate_registry(cfg)
+    gate = _llm_profile_gate_state(payload)
+    if gate["hard_gated"]:
+        _atomic_write_json(registry_path, payload)
+        _refresh_profile_snapshot_via_llm_profile_registry(cfg, _load_cycle_counter(cfg))
+        return False, str(gate.get("reset_at") or "") or None
+
+    windows = payload.get("windows") if isinstance(payload.get("windows"), dict) else {}
+    minute = windows.get("minute") if isinstance(windows.get("minute"), dict) else {}
+    day = windows.get("day") if isinstance(windows.get("day"), dict) else {}
+    minute["count"] = int(minute.get("count") or 0) + 1
+    day["count"] = int(day.get("count") or 0) + 1
+    payload["windows"] = {"minute": minute, "day": day}
+    payload["total_count"] = int(payload.get("total_count") or 0) + 1
+    payload["last_request_at"] = utc_now_iso()
+    payload["last_request_source"] = source
+    payload["updated_at"] = utc_now_iso()
+    _atomic_write_json(registry_path, payload)
+    _refresh_profile_snapshot_via_llm_profile_registry(cfg, _load_cycle_counter(cfg))
+    return True, None
 
 
 def _select_boss_profile_from_snapshot(cfg: RunConfig, *, preferred_alias: str | None = None) -> tuple[str | None, str | None]:
@@ -1722,6 +2449,9 @@ def _profile_rows_from_rate_snapshot_payload(payload: dict[str, Any]) -> list[di
 
 
 def _refresh_profile_snapshot_via_skill(cfg: RunConfig, cycle_number: int) -> tuple[bool, str]:
+    if _llm_profile_mode_enabled(cfg):
+        return _refresh_profile_snapshot_via_llm_profile_registry(cfg, cycle_number)
+
     script = _resolve_rate_snapshot_script(cfg)
     if script is None:
         return False, "codex-rate-snapshot script not found"
@@ -2090,6 +2820,84 @@ def _update_worker_registry_dispatch_state(cfg: RunConfig, event_rows: list[dict
     _atomic_write_json(path, payload)
 
 
+def _coerce_pid(pid_value: Any) -> int | None:
+    try:
+        pid_int = int(pid_value)
+    except (TypeError, ValueError):
+        return None
+    if pid_int <= 0:
+        return None
+    return pid_int
+
+
+def _is_pid_alive(pid_value: Any) -> bool:
+    pid_int = _coerce_pid(pid_value)
+    if pid_int is None:
+        return False
+    try:
+        os.kill(pid_int, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _normalize_dead_worker_leases(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
+    registry_path = cfg.repo_root / ARTIFACT_FILES["worker_registry"]
+    registry_payload = _read_json(registry_path, default={})
+    if not isinstance(registry_payload, dict):
+        return {"reclaimed_workers": 0, "requeued_tasks": 0}
+    workers = registry_payload.get("workers")
+    if not isinstance(workers, list):
+        return {"reclaimed_workers": 0, "requeued_tasks": 0}
+
+    now_iso = utc_now_iso()
+    reclaimed_workers = 0
+
+    for row in workers:
+        if not isinstance(row, dict):
+            continue
+        pid_int = _coerce_pid(row.get("pid"))
+        if pid_int is None or _is_pid_alive(pid_int):
+            continue
+
+        reclaimed_workers += 1
+
+        # Dead PID only indicates runtime marker expiry; preserve assignment context for BOSS reconciliation.
+        row["pid"] = None
+        row["last_update"] = now_iso
+
+    if reclaimed_workers:
+        registry_payload["schema_version"] = SCHEMA_VERSION
+        registry_payload["updated_at"] = now_iso
+        try:
+            previous_cycle = int(registry_payload.get("cycle_number") or 0)
+        except (TypeError, ValueError):
+            previous_cycle = 0
+        registry_payload["cycle_number"] = max(previous_cycle, int(cycle_number))
+        registry_payload["workers"] = workers
+        _atomic_write_json(registry_path, registry_payload)
+
+    requeued_tasks = 0
+
+    if reclaimed_workers or requeued_tasks:
+        print(
+            "[op-simple-build] "
+            f"[{utc_now_iso()}] "
+            f"cycle={cycle_number} reclaimed_dead_workers={reclaimed_workers} "
+            f"requeued_in_progress_tasks={requeued_tasks}",
+            flush=True,
+        )
+
+    return {
+        "reclaimed_workers": reclaimed_workers,
+        "requeued_tasks": requeued_tasks,
+    }
+
+
 def _active_worker_count(cfg: RunConfig) -> int:
     payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
     if not isinstance(payload, dict):
@@ -2101,9 +2909,13 @@ def _active_worker_count(cfg: RunConfig) -> int:
     for row in workers:
         if not isinstance(row, dict):
             continue
-        pid = row.get("pid")
+        pid = _coerce_pid(row.get("pid"))
         thread_id = row.get("thread_id")
-        has_live_marker = pid not in {None, ""} or (isinstance(thread_id, str) and bool(thread_id.strip()))
+        has_live_marker = False
+        if pid is not None:
+            has_live_marker = _is_pid_alive(pid)
+        elif isinstance(thread_id, str) and bool(thread_id.strip()):
+            has_live_marker = True
         # Count only workers with concrete runtime liveness markers so
         # pre-dispatch "in_progress" placeholders do not consume capacity.
         if has_live_marker:
@@ -2349,7 +3161,7 @@ def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
     return counters
 
 
-def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, Any]]:
+def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: bool = False) -> tuple[bool, dict[str, Any]]:
     init_state = _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
     monitored_branch = "main"
     if isinstance(init_state, dict):
@@ -2357,49 +3169,107 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, A
         if isinstance(branch_raw, str) and branch_raw.strip():
             monitored_branch = branch_raw.strip()
 
-    current_sha = _git_text(cfg.repo_root, "rev-parse", monitored_branch)
+    commit_ref = monitored_branch
+    current_sha = _git_text(cfg.repo_root, "rev-parse", commit_ref)
     if not current_sha:
-        current_sha = _git_text(cfg.repo_root, "rev-parse", "HEAD")
+        commit_ref = "HEAD"
+        current_sha = _git_text(cfg.repo_root, "rev-parse", commit_ref)
+    commit_epoch = _git_commit_epoch_seconds(cfg.repo_root, commit_ref)
+    now_utc = datetime.now(timezone.utc)
+    commit_age_minutes: float | None = None
+    last_commit_at_utc = ""
+    if commit_epoch is not None:
+        last_commit_at = datetime.fromtimestamp(commit_epoch, timezone.utc)
+        last_commit_at_utc = last_commit_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        commit_age_minutes = max(0.0, (now_utc.timestamp() - float(commit_epoch)) / 60.0)
 
     state_path = cfg.repo_root / ARTIFACT_FILES["watchdog_state"]
     state = _read_json(state_path, default={})
     if not isinstance(state, dict):
         state = {}
 
-    last_sha = state.get("last_commit_sha") if isinstance(state.get("last_commit_sha"), str) else ""
-    idle_cycles = int(state.get("idle_cycles") or 0)
-    threshold_cycles = int(state.get("threshold_cycles") or WATCHDOG_IDLE_THRESHOLD)
-    if threshold_cycles <= 0:
-        threshold_cycles = WATCHDOG_IDLE_THRESHOLD
+    stale_after_minutes = WATCHDOG_STALE_COMMIT_MINUTES
+    previous_sha = str(state.get("last_commit_sha") or "").strip()
+    offset_minutes_raw = state.get("watchdog_age_offset_minutes")
+    try:
+        offset_minutes = float(offset_minutes_raw) if offset_minutes_raw is not None else None
+    except (TypeError, ValueError):
+        offset_minutes = None
+    if offset_minutes is not None and offset_minutes < 0:
+        offset_minutes = 0.0
 
-    if current_sha and current_sha != last_sha:
-        idle_cycles = 0
-        last_seen_cycle = cycle_number
+    reset_target = force_reset_target or not previous_sha or previous_sha != current_sha or offset_minutes is None
+    reset_at_utc = str(state.get("watchdog_target_reset_at_utc") or "").strip()
+    watchdog_age_minutes: float | None = None
+    if commit_age_minutes is None:
+        is_stale = False
     else:
-        idle_cycles += 1
-        last_seen_cycle = int(state.get("last_commit_seen_cycle") or 0)
+        if reset_target:
+            offset_minutes = commit_age_minutes
+            reset_at_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        watchdog_age_minutes = max(0.0, commit_age_minutes - float(offset_minutes or 0.0))
+        is_stale = watchdog_age_minutes > float(stale_after_minutes)
 
     next_state = {
         "schema_version": SCHEMA_VERSION,
         "cycle_number": cycle_number,
         "monitored_branch": monitored_branch,
+        "commit_ref": commit_ref,
         "last_commit_sha": current_sha,
-        "last_commit_seen_cycle": last_seen_cycle,
-        "idle_cycles": idle_cycles,
-        "threshold_cycles": threshold_cycles,
+        "last_commit_at_utc": last_commit_at_utc,
+        "last_commit_age_minutes": round(commit_age_minutes, 3) if commit_age_minutes is not None else None,
+        "watchdog_age_offset_minutes": round(offset_minutes, 3) if offset_minutes is not None else None,
+        "watchdog_age_minutes": round(watchdog_age_minutes, 3) if watchdog_age_minutes is not None else None,
+        "watchdog_target_reset_at_utc": reset_at_utc,
+        "stale_after_minutes": stale_after_minutes,
+        "stale": is_stale,
     }
     _atomic_write_json(state_path, next_state)
 
-    exit_signal = {
-        "schema_version": SCHEMA_VERSION,
-        "cycle_number": cycle_number,
-        "reason_code": "no_new_commits",
-        "message": f"no new commits detected for {idle_cycles} cycles",
-        "monitored_branch": monitored_branch,
-        "idle_cycles": idle_cycles,
-    }
+    if watchdog_age_minutes is not None and float(watchdog_age_minutes) >= float(WATCHDOG_RECOVERY_NUDGE_MINUTES):
+        _write_watchdog_recovery_nudge(
+            cfg,
+            cycle_number=cycle_number,
+            monitored_branch=monitored_branch,
+            commit_ref=commit_ref,
+            last_commit_sha=str(current_sha or ""),
+            last_commit_at_utc=last_commit_at_utc,
+            watchdog_age_minutes=float(watchdog_age_minutes),
+            stale_after_minutes=int(stale_after_minutes),
+        )
 
-    should_stop = idle_cycles >= threshold_cycles
+    if commit_age_minutes is None:
+        exit_signal = {
+            "schema_version": SCHEMA_VERSION,
+            "cycle_number": cycle_number,
+            "reason_code": "watchdog_commit_age_unknown",
+            "message": f"unable to resolve commit age for monitored branch '{monitored_branch}'",
+            "monitored_branch": monitored_branch,
+            "commit_ref": commit_ref,
+            "stale_after_minutes": stale_after_minutes,
+            "watchdog_age_minutes": None,
+            "commit_age_minutes": None,
+        }
+    else:
+        exit_signal = {
+            "schema_version": SCHEMA_VERSION,
+            "cycle_number": cycle_number,
+            "reason_code": "stale_base_branch_commit",
+            "message": (
+                f"no new commit observed on '{monitored_branch}' for {float(watchdog_age_minutes or 0.0):.1f} minutes; "
+                f"watchdog limit is {stale_after_minutes} minutes"
+            ),
+            "monitored_branch": monitored_branch,
+            "commit_ref": commit_ref,
+            "last_commit_sha": current_sha,
+            "last_commit_at_utc": last_commit_at_utc,
+            "watchdog_age_minutes": round(watchdog_age_minutes, 3) if watchdog_age_minutes is not None else None,
+            "watchdog_target_reset_at_utc": reset_at_utc,
+            "stale_after_minutes": stale_after_minutes,
+            "commit_age_minutes": round(commit_age_minutes, 3),
+        }
+
+    should_stop = is_stale
     exit_path = cfg.repo_root / ARTIFACT_FILES["watchdog_exit_signal"]
     if should_stop:
         _atomic_write_json(exit_path, exit_signal)
@@ -2407,6 +3277,54 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int) -> tuple[bool, dict[str, A
         _safe_unlink(exit_path)
 
     return should_stop, exit_signal
+
+
+def _run_wrapup_manager(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    stop_reason: str,
+    init_state: dict[str, Any],
+    warnings: list[dict[str, Any]],
+) -> None:
+    run_context = init_state.get("run_context") if isinstance(init_state, dict) else {}
+    if not isinstance(run_context, dict):
+        run_context = {}
+    context = {
+        "stop_reason": stop_reason,
+        "run_base_branch": str(run_context.get("run_base_branch") or ""),
+        "run_base_from_branch": str(run_context.get("run_base_from_branch") or ""),
+        "run_base_from_commit": str(run_context.get("run_base_from_commit") or ""),
+        "app_lifecycle_path": str((cfg.repo_root / APP_LIFECYCLE_FILE).resolve()),
+        "app_lifecycle_active_era_id": _active_lifecycle_era_id(cfg),
+    }
+    result = _invoke_manager(
+        cfg,
+        manager_name="wrapup-manager",
+        cycle_number=cycle_number,
+        context=context,
+        expected_artifacts=["wrapup_manager_report"],
+    )
+    if result.status != "ok":
+        warnings.append(
+            {
+                "code": result.reason_code or "wrapup_manager_failed",
+                "message": result.message or "wrapup-manager failed",
+                "stage": "op-simple-build",
+            }
+        )
+    trace_event = _build_wrapup_trace_event(
+        cfg,
+        cycle_number=cycle_number,
+        stop_reason=stop_reason,
+        run_context=run_context,
+        result=result,
+    )
+    _emit_trace_event_envelope(
+        cfg,
+        cycle_number=cycle_number,
+        payload=trace_event,
+    )
 
 
 def _render_cycle_summary(
@@ -2452,6 +3370,7 @@ def _render_cycle_summary(
 
     print(
         "[op-simple-build] "
+        f"[{utc_now_iso()}] "
         f"cycle={cycle_number} pending={merged_counts['pending']} in_progress={merged_counts['in_progress']} "
         f"done={merged_counts['done']} blocked={merged_counts['blocked']} "
         f"dispatch={{attempted:{out['dispatch_counts']['attempted']},launched:{out['dispatch_counts']['launched']},failed:{out['dispatch_counts']['launch_failed']},unknown:{out['dispatch_counts']['unknown']}}}",
@@ -2469,16 +3388,20 @@ def _termination_from_summary(summary: dict[str, Any]) -> str | None:
     if isinstance(termination, dict):
         reason = termination.get("reason_code")
         if isinstance(reason, str) and reason.strip():
-            return reason.strip()
+            normalized_reason = reason.strip()
+            if normalized_reason not in NON_TERMINAL_STOP_REASONS:
+                return normalized_reason
     stop_reason = summary.get("stop_reason")
     if isinstance(stop_reason, str) and stop_reason.strip():
-        return stop_reason.strip()
+        normalized_stop_reason = stop_reason.strip()
+        if normalized_stop_reason not in NON_TERMINAL_STOP_REASONS:
+            return normalized_stop_reason
     return None
 
 
 def _snapshot_cycle(cfg: RunConfig, cycle_number: int) -> None:
     cycle_dir = _ensure_history_cycle_dir(cfg, cycle_number)
-    for rel in [*ARTIFACT_FILES.values(), MANAGER_CALL_LOG_FILE, DISPATCH_LAUNCH_LOG_FILE, CYCLE_COUNTER_FILE]:
+    for rel in [*ARTIFACT_FILES.values(), MANAGER_CALL_LOG_FILE, DISPATCH_LAUNCH_LOG_FILE, TRACE_EVENT_LOG_FILE, CYCLE_COUNTER_FILE]:
         src = cfg.repo_root / rel
         if not src.exists() or not src.is_file():
             continue
@@ -2547,7 +3470,11 @@ def _release_run_lock(cfg: RunConfig, lock_id: str | None) -> None:
 
 def _build_config(req: Any) -> RunConfig:
     repo_root = Path(req.repo_root).resolve()
-    sleep_minutes = float(getattr(req, "sleep_minutes", 5.0) or 5.0)
+    sleep_minutes_raw = getattr(req, "sleep_minutes", None)
+    if sleep_minutes_raw is None:
+        sleep_minutes = 5.0
+    else:
+        sleep_minutes = float(sleep_minutes_raw)
     if sleep_minutes < 0:
         sleep_minutes = 0.0
     max_cycles = getattr(req, "max_build_cycles", None)
@@ -2565,6 +3492,8 @@ def _build_config(req: Any) -> RunConfig:
         max_parallel_workers = 8
     if max_parallel_workers <= 0:
         max_parallel_workers = 8
+    command = str(getattr(req, "command", "") or "").strip().lower()
+    resume_mode = command == "op-resume"
     run_base_source_branch = str(getattr(req, "run_base_source_branch", "") or "").strip() or "main"
     boss_model = str(getattr(req, "boss_model", "") or "").strip() or "gpt-5.3-codex"
     boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "xhigh"
@@ -2580,6 +3509,7 @@ def _build_config(req: Any) -> RunConfig:
         max_build_cycles=max_cycles,
         max_parallel_workers=max_parallel_workers,
         dry_run=bool(getattr(req, "dry_run", False)),
+        resume_mode=resume_mode,
         run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,
         boss_reasoning_effort=boss_reasoning_effort,
@@ -2600,9 +3530,11 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         [
             str((cfg.repo_root / MANAGER_CALL_LOG_FILE).resolve()),
             str((cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE).resolve()),
+            str((cfg.repo_root / TRACE_EVENT_LOG_FILE).resolve()),
             str((cfg.repo_root / CYCLE_COUNTER_FILE).resolve()),
             str((cfg.repo_root / RUN_LOCK_FILE).resolve()),
             str((cfg.repo_root / BOSS_SESSION_STATE_FILE).resolve()),
+            str((cfg.repo_root / APP_LIFECYCLE_FILE).resolve()),
         ]
     )
 
@@ -2636,7 +3568,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         (cfg.repo_root / CURRENT_DIR).mkdir(parents=True, exist_ok=True)
         (cfg.repo_root / HISTORY_DIR).mkdir(parents=True, exist_ok=True)
 
-        run_meta = _create_run_base_branch(cfg)
+        run_meta = _load_resume_run_base_meta(cfg) if cfg.resume_mode else _create_run_base_branch(cfg)
         init_state = _ensure_initialize_state(cfg, run_meta=run_meta)
         if bool((init_state.get("run_context") or {}).get("created_new")):
             _reset_runtime_state_for_new_run(cfg)
@@ -2646,10 +3578,27 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             force_refresh=bool((init_state.get("run_context") or {}).get("created_new")),
         )
         _ensure_default_artifacts(cfg)
+        if _llm_profile_mode_enabled(cfg):
+            _refresh_profile_snapshot_via_llm_profile_registry(cfg, cycle_number=0)
+        else:
+            _atomic_write_json(
+                cfg.repo_root / ARTIFACT_FILES["llm_profile_mode"],
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "updated_at": utc_now_iso(),
+                    "enabled": False,
+                    "llm_profile": None,
+                    "profile_policy": "force_default_codex",
+                    "rate_policy": None,
+                },
+            )
         _seed_plan_artifacts_from_planner(cfg)
 
         cycle_number = _load_cycle_counter(cfg)
         cycles_this_run = 0
+        previous_state_signature: str | None = None
+        quiet_cycle_streak = 0
+        watchdog_reset_pending = bool(cfg.resume_mode)
 
         while True:
             cycle_number += 1
@@ -2662,22 +3611,119 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 final_summary = "OP Simple build stopped by terminate_run.json signal."
                 break
 
+            lease_recovery = _normalize_dead_worker_leases(cfg, cycle_number)
+            if lease_recovery["reclaimed_workers"] or lease_recovery["requeued_tasks"]:
+                warnings.append(
+                    {
+                        "code": "stale_worker_leases_recovered",
+                        "message": (
+                            "Cleared dead worker PID markers while preserving task/thread context so BOSS can "
+                            "reconcile worker completion safely."
+                        ),
+                        "stage": "op-simple-build",
+                        "details": {
+                            "cycle_number": cycle_number,
+                            "reclaimed_workers": int(lease_recovery["reclaimed_workers"]),
+                            "requeued_tasks": int(lease_recovery["requeued_tasks"]),
+                        },
+                    }
+                )
+
             manager_statuses: dict[str, dict[str, str]] = {}
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
-            boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
-            boss_result = _invoke_manager(
-                cfg,
-                manager_name="BOSS",
-                cycle_number=cycle_number,
-                context={
-                    "max_parallel_workers": init_state.get("workflow", {}).get("max_parallel_workers"),
-                    "boss_evidence_path": str((cfg.repo_root / BOSS_EVIDENCE_FILE).resolve()),
-                },
-                expected_artifacts=boss_expected,
-            )
-            manager_statuses["BOSS"] = {"status": boss_result.status, "note": boss_result.message or ""}
+            state_signature, in_progress_workers = _worker_task_state_signature(cfg)
+            live_pid_in_progress_workers = _live_pid_in_progress_worker_count(cfg)
+            task_counts_snapshot = _task_counts_from_execution_state(cfg)
+            task_in_progress_count = int(task_counts_snapshot.get("in_progress") or 0)
+            state_changed = previous_state_signature is None or state_signature != previous_state_signature
+            force_full_cycle = quiet_cycle_streak >= (QUIET_CYCLE_FORCE_FULL_EVERY - 1)
+            has_recovery_nudge = (cfg.repo_root / RECOVERY_INSTRUCTIONS_FILE).exists()
+            has_boss_timeout_marker = (cfg.repo_root / BOSS_EVIDENCE_FILE).exists()
+            near_watchdog_idle = _watchdog_near_idle_threshold(cfg)
+            has_lease_recovery = bool(lease_recovery["reclaimed_workers"] or lease_recovery["requeued_tasks"])
 
-            if boss_result.timeout:
+            skip_boss_for_quiet_cycle = (
+                not has_lease_recovery
+                and not has_recovery_nudge
+                and not has_boss_timeout_marker
+                and not near_watchdog_idle
+                and not state_changed
+                and in_progress_workers > 0
+                and live_pid_in_progress_workers > 0
+                and task_in_progress_count > 0
+                and not force_full_cycle
+            )
+            boss_result: ManagerResult | None = None
+            quiet_skip_reason = ""
+
+            if skip_boss_for_quiet_cycle:
+                quiet_cycle_streak += 1
+                quiet_skip_reason = "active_workers_in_progress_no_safe_new_dispatch"
+                manager_statuses["BOSS"] = {
+                    "status": "skipped",
+                    "note": (
+                        f"quiet-cycle gate: no worker/task state change with {in_progress_workers} "
+                        f"in-progress workers (quiet_streak={quiet_cycle_streak})"
+                    ),
+                }
+                manager_statuses["rate-gate"] = {"status": "skipped", "note": "quiet-cycle gate skipped BOSS"}
+                manager_statuses["work-dispatcher"] = {"status": "skipped", "note": "quiet-cycle gate skipped BOSS"}
+                _write_cycle_manager_decision(
+                    cfg,
+                    cycle_number,
+                    decision="skip_cycle",
+                    reason_code=quiet_skip_reason,
+                    message=manager_statuses["BOSS"]["note"],
+                    worker_registry_ready=True,
+                )
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} quiet-cycle gate skipped BOSS "
+                    f"in_progress_workers={in_progress_workers} quiet_streak={quiet_cycle_streak}",
+                    flush=True,
+                )
+            else:
+                quiet_cycle_streak = 0
+                boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} BOSS started",
+                    flush=True,
+                )
+                boss_result = _invoke_manager(
+                    cfg,
+                    manager_name="BOSS",
+                    cycle_number=cycle_number,
+                    context={
+                        "max_parallel_workers": init_state.get("workflow", {}).get("max_parallel_workers"),
+                        "boss_evidence_path": str((cfg.repo_root / BOSS_EVIDENCE_FILE).resolve()),
+                        "llm_profile_mode_enabled": _llm_profile_mode_enabled(cfg),
+                        "llm_profile": str(cfg.codex_profile or "").strip() or None,
+                        "llm_profile_mode_ref": str((cfg.repo_root / ARTIFACT_FILES["llm_profile_mode"]).resolve()),
+                        "llm_profile_rate_registry_ref": str(
+                            (cfg.repo_root / ARTIFACT_FILES["llm_profile_rate_registry"]).resolve()
+                        ),
+                        "rate_snapshot_policy": (
+                            "use_local_counter_registry_skip_skill"
+                            if _llm_profile_mode_enabled(cfg)
+                            else "default_codex_rate_snapshot_skill"
+                        ),
+                    },
+                    expected_artifacts=boss_expected,
+                )
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} BOSS done "
+                    f"status={boss_result.status} timeout={str(bool(boss_result.timeout)).lower()} "
+                    f"duration_s={boss_result.duration_seconds:.3f}",
+                    flush=True,
+                )
+                manager_statuses["BOSS"] = {"status": boss_result.status, "note": boss_result.message or ""}
+
+            if boss_result is not None and boss_result.timeout:
                 _atomic_write_json(
                     cfg.repo_root / BOSS_EVIDENCE_FILE,
                     {
@@ -2688,14 +3734,22 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                         "timestamp": utc_now_iso(),
                     },
                 )
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} skipped due to BOSS timeout; sleeping 180s before next cycle",
+                    flush=True,
+                )
+                previous_state_signature = state_signature
                 time.sleep(180)
                 if cfg.max_build_cycles is not None and cycles_this_run >= cfg.max_build_cycles:
                     final_summary = f"Reached max_build_cycles={cfg.max_build_cycles} after BOSS timeout."
                     break
                 continue
-            _safe_unlink(cfg.repo_root / BOSS_EVIDENCE_FILE)
+            if boss_result is not None:
+                _safe_unlink(cfg.repo_root / BOSS_EVIDENCE_FILE)
 
-            if boss_result.status != "ok":
+            if boss_result is not None and boss_result.status != "ok":
                 warnings.append(
                     {
                         "code": boss_result.reason_code or "boss_failed",
@@ -2722,13 +3776,18 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "status": "skipped",
                     "note": "cycle skipped after BOSS failure",
                 }
-            else:
+            elif boss_result is not None:
                 _run_rate_gate_wait(cfg, cycle_number, warnings)
                 manager_statuses["rate-gate"] = {"status": "ok", "note": "rate gate completed"}
                 dispatch_counts = _dispatch_packets(cfg, cycle_number)
                 manager_statuses["work-dispatcher"] = {"status": "ok", "note": "dispatch cycle completed"}
 
-            watchdog_stop, watchdog_signal = _watchdog_tick(cfg, cycle_number)
+            watchdog_stop, watchdog_signal = _watchdog_tick(
+                cfg,
+                cycle_number,
+                force_reset_target=watchdog_reset_pending,
+            )
+            watchdog_reset_pending = False
             manager_statuses["watchdog"] = {
                 "status": "stop" if watchdog_stop else "ok",
                 "note": watchdog_signal.get("message") if watchdog_stop else "watchdog healthy",
@@ -2736,7 +3795,20 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
             manager_statuses["summary"] = {"status": "ok", "note": "summary written"}
             base_summary: dict[str, Any] | None = None
-            if boss_result.status != "ok":
+            if skip_boss_for_quiet_cycle:
+                base_summary = {
+                    "schema_version": SCHEMA_VERSION,
+                    "cycle_number": cycle_number,
+                    "manager_statuses": {},
+                    "task_counts": task_counts_snapshot,
+                    "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+                    "project_done": False,
+                    "insurmountable_blocker": False,
+                    "termination": {"reason_code": quiet_skip_reason},
+                    "stop_reason": "skip_cycle",
+                    "notes": manager_statuses["BOSS"]["note"],
+                }
+            elif boss_result is not None and boss_result.status != "ok":
                 base_summary = {
                     "schema_version": SCHEMA_VERSION,
                     "cycle_number": cycle_number,
@@ -2766,6 +3838,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     stop_reason = "watchdog_idle_stop"
 
             _snapshot_cycle(cfg, cycle_number)
+            previous_state_signature, _ = _worker_task_state_signature(cfg)
 
             if stop_reason:
                 final_summary = f"OP Simple build stopped: {stop_reason}."
@@ -2777,6 +3850,15 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
             if cfg.sleep_minutes > 0:
                 time.sleep(cfg.sleep_minutes * 60.0)
+
+        if stop_reason == "project_done":
+            _run_wrapup_manager(
+                cfg,
+                cycle_number=cycle_number,
+                stop_reason=stop_reason,
+                init_state=init_state,
+                warnings=warnings,
+            )
 
         data = {
             "cycle_number": cycle_number,

@@ -1,0 +1,26 @@
+# BEGIN OPTIMUS-PRIME MANAGED REPORT IGNORES
+/reports/optimus-prime/**
+/reports/optimus-prime/runtime/**
+/reports/optimus-prime/controller/**
+/reports/optimus-prime/control/**
+/reports/optimus-prime/prompts/**
+/reports/optimus-prime/planning/evidence/**
+/reports/optimus-prime/planning/TASK_EXECUTION_STATE.json
+/reports/optimus-prime/planning/BUILD_STATE.json
+/reports/optimus-prime/planning/BUILD_LOOP.lock
+/reports/optimus-prime/planning/GAPS.json
+/reports/optimus-prime/planning/GAP_CLOSURE_PLAN_PACKETS.json
+/reports/optimus-prime/BLOCKERS.jsonl
+/reports/optimus-prime/BLOCKER_INDEX.json
+/reports/optimus-prime/BLOCKER_ADAPTATION_CANDIDATES.md
+/reports/optimus-prime/RUNTIME_REGISTRY.json
+/reports/optimus-prime/TEST_RUNTIME_LEASES.json
+/reports/optimus-prime/THREAD_HISTORY.log
+/reports/optimus-prime/THREAD_TOKEN_USAGE_SUMMARY.json
+/reports/optimus-prime/THREAD_TOKEN_USAGE_SUMMARY.md
+/reports/optimus-prime/WORKER_REGISTRY.json
+/reports/optimus-prime/planning/WORKSTATION_REGISTRY.json
+/reports/optimus-prime/TEST_TRAIN_STATE.json
+/reports/optimus-prime/TEST_TASK_ATTEMPTS.json
+/reports/optimus-prime/TEST_WAVE_LOG.jsonl
+# END OPTIMUS-PRIME MANAGED REPORT IGNORES

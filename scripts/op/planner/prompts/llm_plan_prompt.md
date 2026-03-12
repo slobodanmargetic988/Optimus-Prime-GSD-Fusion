@@ -21,6 +21,14 @@ Context:
 - map_artifact: {{MAP_PATH}}
 - architecture_notes: {{ARCH_PATH}}
 
+Mission/Scope source ingestion contract (hard requirement):
+- `mission_source` and `scope_source` may be inline text or file-path tokens (for example `@file:<path>`).
+- If either source is a file path/token, you MUST open and ingest the entire file content before planning.
+- Treat the fully ingested mission file content as the authoritative mission, and the fully ingested scope file content as the authoritative scope, for this run.
+- Do not treat path tokens alone as sufficient context; planning without opening those files is invalid.
+- While ingesting mission/scope files, resolve and ingest all referenced files/links they point to (local paths, repo-relative links, and directly referenced artifacts) and use them as supporting references for planning decisions.
+- If a referenced file cannot be read, continue with best effort and explicitly record the missing reference and assumption in narrative artifacts.
+
 Required artifacts in bundle:
 - PLAN_PACKETS.json
 - PLAN_CHECK.json
@@ -151,12 +159,13 @@ Strict output discipline:
 - Plan can be shorter than 20 tasks only if the mission is to build a single feature on an existing project rather than building a new project. For new projects come up with a plan that satisfies all the requirements described above.
 
 ## Workflow
-1. Infer product goal, user personas, and boundaries from the provided mission/scope context.
-2. Resolve planning mode first (greenfield vs existing-project integration) by inspecting provided artifacts and repository reality.
-3. Build a strong internal Phase 1 view (project summary, feature descriptions, use cases/user flows) and immediately fold it into execution-ready planning artifacts.
-4. Build Phase 2 execution detail (user stories, actors, acceptance criteria, test cases) in the same run.
-5. Resolve ambiguity autonomously using best-practice assumptions and best guess; do not ask questions and do not wait for approvals.
-6. Publish one deterministic final bundle that passes validation.
+1. Ingest mission/scope sources first; if either is file-backed, read full contents and linked references before any planning decisions.
+2. Infer product goal, user personas, and boundaries from the fully ingested mission/scope context.
+3. Resolve planning mode first (greenfield vs existing-project integration) by inspecting provided artifacts and repository reality.
+4. Build a strong internal Phase 1 view (project summary, feature descriptions, use cases/user flows) and immediately fold it into execution-ready planning artifacts.
+5. Build Phase 2 execution detail (user stories, actors, acceptance criteria, test cases) in the same run.
+6. Resolve ambiguity autonomously using best-practice assumptions and best guess; do not ask questions and do not wait for approvals.
+7. Publish one deterministic final bundle that passes validation.
 
 ## Constraints
 - Keep planning incremental in reasoning, but output one complete machine-valid bundle.

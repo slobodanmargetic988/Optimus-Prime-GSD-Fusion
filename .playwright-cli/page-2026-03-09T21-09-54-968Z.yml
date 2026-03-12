@@ -1,0 +1,17 @@
+- main [ref=e3106]:
+  - generic [ref=e3107]:
+    - paragraph [ref=e3108]: "Hydrated highscores: yes"
+    - paragraph [ref=e3109]: "Stored entries: 0"
+  - region "Results screen" [ref=e3110]:
+    - heading "Results" [level=1] [ref=e3111]
+    - paragraph [ref=e3113]: "Input feedback: gameplay-finish (pointer, latency 18ms)."
+    - paragraph [ref=e3114]:
+      - text: "Final score:"
+      - strong [ref=e3115]: "0"
+    - generic [ref=e3116]:
+      - text: Name
+      - textbox "Player name" [ref=e3117]:
+        - /placeholder: Player
+    - generic [ref=e3118]:
+      - button "Submit Score" [active] [ref=e3119]
+      - button "Start New Game" [ref=e3120]

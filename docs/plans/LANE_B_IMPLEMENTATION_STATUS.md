@@ -1,6 +1,6 @@
 # Lane B Implementation Status
 
-Updated: 2026-03-02
+Updated: 2026-03-08
 
 Diagram reference:
 1. [Lane B diagrams](/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/diagrams/LANE_B_FLOW_DIAGRAMS.md)
@@ -280,8 +280,9 @@ python3 -m pytest \
   /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/optimus-cycle-controller/tests/test_optimus_cycle_controller.py
 ```
 
-## Lane B Status (Done)
+## Lane B Status (Final Touches)
 
-- Lane B is complete for its intended scope: new-only autonomous planning/build and deterministic control contracts are implemented and validated through canary runs.
-- Lane B is now marked done as the app-building engine baseline.
+- Lane B remains the app-building engine baseline, but it is not fully closed yet.
+- Final-touch hardening item (open): terminal completion must guarantee final worker-branch outputs are merged into run-base before `project_done` is accepted.
+- Final-touch hardening item (open): separate merge ownership from BOSS by introducing a dedicated merge-manager stage so merge closure/proof/retry semantics stay deterministic even when BOSS is overloaded.
 - Remaining roadmap work continues in other lanes (notably Lane C packaging/installer and additional extension lanes).

@@ -38,6 +38,7 @@
 - `worker_registry.json`
 - `dispatch_registry.json`
 - `cycle_summary.json`
+- `wrapup_manager_report.json`
 - `watchdog_state.json`
 - `watchdog_exit_signal.json`
 
@@ -50,6 +51,16 @@
 6. Run `watchdog` (pure code).
 7. Print summary.
 8. Fixed sleep: 5 minutes.
+
+## Post-Loop Finalization
+- When terminal reason is `project_done`, runtime executes one terminal foreground LLM manager call:
+  - `wrapup-manager`
+- `wrapup-manager` responsibilities:
+  - merge/finalize intended completed work into run-base
+  - finalize app lifecycle ledger (`app_lifecycle.json`)
+  - write `.op-simple/current/wrapup_manager_report.json`
+- Gate policy:
+  - soft gate (warnings on failure), terminal reason remains `project_done`
 
 ## Stop Priority
 1. Manual terminate file.
@@ -120,6 +131,10 @@
     - `worker_registry.json` updates
   - every required BOSS-authored artifact must carry top-level `cycle_number` equal to the current runtime cycle
   - if BOSS returns non-zero, the binary is missing, a required artifact is missing, or a required artifact has missing/stale `cycle_number`, runtime converts the cycle into deterministic `skip_cycle` and does not dispatch that cycle
+- `wrapup-manager`:
+  - invoked only after loop exit with `project_done`
+  - must write `wrapup_manager_report.json` with current-cycle `cycle_number`
+  - runtime treats wrapup failures as warnings (soft gate), not terminal-state rollback
 - `work-dispatcher`:
   - writes deterministic launch receipts to `dispatch_launch_log.jsonl`
   - no deterministic reassignment/failure artifact for BOSS recovery
@@ -218,6 +233,24 @@
   - `idle_cycles`
 - `watchdog_state.json` minimum fields:
   - `cycle_number`, `monitored_branch`, `last_commit_sha`, `last_commit_seen_cycle`, `idle_cycles`, `threshold_cycles`
+
+## App Lifecycle Ledger Contract
+- Location:
+  - `<repo-root>/app_lifecycle.json` (git-tracked in built app repo)
+- Top-level:
+  - `schema_version`, `updated_at`, `app_lifecycle[]`
+- Era row minimum:
+  - `era_id`, `status`, `started_at`, `completed_at`
+  - `mission` (`text`, `source`)
+  - `scope` (`text`, `source`)
+  - `run_context`
+  - `completion`
+- Initialize behavior:
+  - append new era with `status=in_progress`
+  - persist mission/scope as full text plus source metadata
+- Project-done behavior:
+  - wrapup finalizes active era to `status=completed`
+  - records final run-base branch + final commit sha
 
 ## Initialize Workstation Artifact
 - `workstation_prep` is written by initialize code once per run before cycle start.

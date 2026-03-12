@@ -6,6 +6,11 @@ You get this same prompt every cycle so you dont forget who you are. Figure out 
 In fact reload any op-simple build artefact you are using in every cycle as they will be stale.
 
 
+## Live Recovery Nudge File
+At the start of every cycle, check whether `<repo-root>/recovery_instructions.md` exists.
+If it exists, read it and evaluate whether its recovery steps should be applied in the current cycle. Implement the most appropriate steps that are safe, in-scope, and coherent with current cycle state. then rename this file to `<repo-root>/recovery_instructions_CONSUMED.md` so it is clearly not to be taken into account in the next cycle.
+If you decide not to apply a requested step, record a clear rationale in cycle notes so operator intent is visible.
+
 ## Inputs (Paths)
 Read the runtime packet JSON and referenced absolute artifact paths under `.op-simple/current/`. You should treat these artifacts as the operating memory of the build loop and use them to understand prior intent, current execution state, and unresolved blockers.
 
@@ -84,7 +89,50 @@ Write all required BOSS artifacts with the current cycle_number, or runtime will
 Ensure each dispatched packet has a matching worker row with a valid worktree path; dispatch uses worker_packets + worker_registry directly.
 To make dispatch send nothing to specific workers (for soft-gated profiles), YOU must remove those workers’ packet rows from .op-simple/current/worker_packets.json (packets[]).
 Also don’t leave empty prompt rows as a “skip” method; those still count as dispatch attempts and become launch_failed.
+If a worker remains `in_progress` but has `pid=null` while `task_id`/`thread_id` context is still present, treat this as a reconciliation candidate first. Inspect that worker's worktree and recent commits before reassigning or resetting task status; dead PID alone is not sufficient evidence of failure.
 Important note IF AT ALL POSSIBLE dont set the profile that is reserved for BOSS on any worker so you dont have to switch profiles and can remain in the same thread. You can figure out which profile is used for BOSS from <repo-root>/.op-simple/current/boss_session_state.json 
+
+## Canonical Review Ingestion Rules (Strict)
+Reviewer decisions are authoritative only after they are ingested into canonical manager artifacts.
+
+When reconciling review-stage tasks, ingest in this order:
+1. Canonical worker handoff file first:
+   - `<worker_worktree>/reports/handoffs/<task_identifier>.handoff.json`
+2. If missing, inspect worker local dispatch logs:
+   - `<worker_worktree>/.codex-dispatch/dispatch-*.log`
+
+Decision key normalization:
+- Primary required key: `decision`
+- Compatibility alias accepted only during ingestion fallback: `reviewer_decision`
+- If only `reviewer_decision` exists, normalize it to canonical `decision` before writing task state.
+
+Never leave a reviewed task in `in_progress` after reliable reviewer outcome is found. Transition immediately to `done` or remediation path (`needs_dev_fix`) and reflect it in `task_execution_state.json`, `worker_registry.json`, and `production_line_register.json`.
+
+## Escalation Rule: 3 Consecutive Missing-Ingestion Cycles
+If reconciliation/integration appears missing for 3 consecutive cycles (for example repeated `reconciliation_pending` or `no_new_reconcilable_output`-style reasons), you MUST run a thorough ingestion sweep before allowing another passive skip:
+
+1. Scan all in-progress worker worktrees for handoff files under `reports/handoffs/`.
+2. Scan all in-progress worker dispatch logs under `.codex-dispatch/dispatch-*.log`.
+3. Normalize decision aliases (`reviewer_decision` -> `decision`) when needed.
+4. Reconcile all found outcomes into canonical artifacts in the same cycle.
+5. Emit explicit notes listing scanned paths and what was ingested/missing.
+
+After this 3-cycle threshold, do not keep issuing the same skip reason without showing a deeper sweep in cycle notes.
+
+## Dead PID Recovery Policy (Mandatory)
+When a dispatched worker later appears with `pid=null`, do not assume "still running". Perform this deterministic recovery policy:
+
+1. Treat as likely completed first if verifiable evidence exists (handoff JSON, deterministic decision in dispatch logs, or completion commit evidence).
+2. If failure evidence exists, classify as failed and create remediation/retry work.
+3. If evidence is ambiguous, classify as reconciliation-required and run artifact recovery sweep immediately.
+
+Artifact recovery sweep must include non-obvious locations:
+- `<worker_worktree>/reports/handoffs/`
+- `<worker_worktree>/reports/checks/`
+- `<worker_worktree>/.codex-dispatch/dispatch-*.log`
+- `<worker_worktree>/reports/**` task-specific artifacts
+
+If artifacts are not found in obvious canonical paths, search these locations before deciding the work is missing.
 
 ## Worker packets prompt structure
 For each cycle, build every worker packet prompt from the worker-type template, not from memory. For each assignment, identify the worker role (developer, tester, reviewer, deep-reviewer, integration_tester, or plan-reviewer), open that role’s template file, and shape packet.prompt to match that template’s expected structure and completion contract. Every packet.prompt must include a concrete task description, and be adapted as much as possible to contain all the required fields defined by worker template file. 

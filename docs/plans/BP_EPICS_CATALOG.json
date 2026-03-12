@@ -1,0 +1,98 @@
+{
+  "schema_version": "1.0",
+  "program": "BoroPython (BP)",
+  "updated_at": "2026-03-10T00:00:00Z",
+  "epics": [
+    {
+      "epic_id": "BP-001",
+      "title": "Rename and Reframe OP to BP",
+      "vision": "Rename OP artifacts, command surface, docs, and narrative identity to BoroPython (BP) with backward-compatible migration.",
+      "target_outcomes": [
+        "Stable rename map for commands, folders, and docs",
+        "Compatibility layer for old OP command aliases",
+        "Single-source BP terminology in prompts/specs"
+      ],
+      "deliverables": [
+        "Rename spec and migration plan",
+        "Automated codemod script",
+        "Deprecation warning policy"
+      ]
+    },
+    {
+      "epic_id": "BP-002",
+      "title": "Self-Building Runtime Core",
+      "vision": "Build BP as a reliable autonomous build/runtime loop that can iteratively improve itself without unsafe regressions.",
+      "target_outcomes": [
+        "Deterministic cycle orchestration with safe skip/recovery semantics",
+        "Lifecycle tracking across eras/runs per target app",
+        "Reliable merge/fan-in completion at run end"
+      ],
+      "deliverables": [
+        "Manager contracts and schema enforcement",
+        "Terminal wrapup/merge guarantees",
+        "Runbook for canary promotion gates"
+      ]
+    },
+    {
+      "epic_id": "BP-003",
+      "title": "Personality and Alignment Studio",
+      "vision": "Define configurable personality, goals, and operating constraints for BP with explicit governance and safety controls.",
+      "target_outcomes": [
+        "Versioned personality packs",
+        "Policy and boundary definitions per domain",
+        "Simulation-based regression checks for behavior drift"
+      ],
+      "deliverables": [
+        "Persona schema and pack format",
+        "Behavior regression test suite",
+        "Community contribution workflow"
+      ]
+    },
+    {
+      "epic_id": "BP-004",
+      "title": "Mobile-First Product Platform",
+      "vision": "Standardize BP-generated products to be mobile-first by default with production-ready app architecture.",
+      "target_outcomes": [
+        "Shared mobile app blueprint and QA gates",
+        "Reusable auth, data, telemetry, and release modules",
+        "Fast path from mission/scope to shipped mobile app"
+      ],
+      "deliverables": [
+        "Mobile reference architecture",
+        "Template repos and scaffolding commands",
+        "Device matrix testing profile"
+      ]
+    },
+    {
+      "epic_id": "BP-005",
+      "title": "Autonomous Finance Agent (Wallet Maintenance)",
+      "vision": "Develop a finance-agent platform that can execute user-approved strategies and portfolio maintenance workflows under strict risk controls.",
+      "target_outcomes": [
+        "Explicit human approval boundaries for capital movement",
+        "Risk envelopes, stop-losses, and drawdown guards",
+        "Auditable execution logs and explainable decisions"
+      ],
+      "deliverables": [
+        "Strategy execution service",
+        "Broker/exchange adapter layer",
+        "Compliance, risk, and incident controls"
+      ],
+      "notes": "High-stakes domain: requires legal/compliance review, regional regulatory analysis, and formal risk controls before production use."
+    },
+    {
+      "epic_id": "BP-006",
+      "title": "Open Source Ecosystem and Contributor Loop",
+      "vision": "Open-source BP with a contribution model that scales architecture evolution, documentation, and benchmark quality.",
+      "target_outcomes": [
+        "Clear contribution standards and quality gates",
+        "Issue taxonomy aligned with epics and lanes",
+        "Public roadmap with milestone telemetry"
+      ],
+      "deliverables": [
+        "Contribution handbook",
+        "Public benchmark and release dashboards",
+        "Maintainer review and merge workflow"
+      ]
+    }
+  ]
+}

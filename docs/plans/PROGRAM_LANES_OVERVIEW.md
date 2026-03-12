@@ -20,13 +20,13 @@ Deterministic cycle controller core and stop-prevention rules.
 - Spec: `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_PHASE1_PLAN.md`
 - Status: `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_A_IMPLEMENTATION_STATUS.md`
 
-## Lane B (done)
+## Lane B (final touches)
 Full GSD fusion capabilities: planning lifecycle, plan gates, test-first contracts, UAT/gap closure, reliability layer.
 
 - Implemented now: Batch 1 runtime pipeline + hard gate remediation (`bootstrap/start/health/deploy/stop/repair`, single-flight locking, stale lease sweep, runtime repair routing, test-train hard gates).
 - Implemented now: OP command surface and planning/build flow (`/op-map-codebase`, `/op-new-project`, `/op-plan`, `/op-initialize`, `/op-build`, `/op-health`, `/op-status`, `/op-resume`) with strict build preflight, canonical task execution state, multi-phase DAG planning, strict phase barriers, artifact-first task evidence gating, deterministic UAT gap tracking/closure packets, single-flight loop lock, strict-first dispatch gating, state-derived test-train adapter mode, truncation-safe handoff offset recovery, remediation-then-continue behavior, strict-done completion gate, and hard rate-gate policy (`<=2h` wait/resume, `>2h` manual rerun stop).
 - Implemented now: initialize bootstrap semantics are explicit: check git state, LLM-assisted git bootstrap when missing, deterministic git verification, then map -> new-project -> profile detection/state update -> rate snapshot seed -> strict LLM plan generation.
-- Current posture: done for intended scope, validated as a usable autonomous app-building engine.
+- Current posture: final touches, with merge-closure hardening still open before full closure.
 - Next lane focus: Lane C packaging/installer UX and private prerelease validation.
 
 - Spec: `/Users/slobodan/projects/Optimus-Prime-GSD-Fusion/docs/plans/LANE_B_FULL_GSD_FUSION_PLAN.md`

@@ -1,0 +1,10 @@
+- main [ref=e94]:
+  - generic [ref=e95]:
+    - paragraph [ref=e96]: "Hydrated highscores: yes"
+    - paragraph [ref=e97]: "Stored entries: 1"
+  - region "Leaderboard screen" [ref=e98]:
+    - heading "Leaderboard" [level=1] [ref=e99]
+    - paragraph [ref=e100]: Showing top ranks with current-player context.
+    - list "Leaderboard rows" [ref=e101]:
+      - row "Current player. Rank 1. Player PLAYER1. Score 0." [ref=e102]: "#1 PLAYER1: 0 (you)"
+    - button "Start New Game" [ref=e103]

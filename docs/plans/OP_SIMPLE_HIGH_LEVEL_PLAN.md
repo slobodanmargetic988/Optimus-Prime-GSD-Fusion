@@ -47,7 +47,7 @@ Rule for this document:
 - Keep watchdog but simplify (replacing current #12 behavior):
   - Monitor a specific branch.
   - Emit exit signal if no new commits appear for N cycles.
-  - Initial N = 10 cycles (tunable).
+  - Initial N = 20 cycles (tunable).
 
 - Remove current #13 terminal-reason evaluation path.
 

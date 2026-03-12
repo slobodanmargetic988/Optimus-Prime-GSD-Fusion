@@ -1,5 +1,5 @@
 # Optimus Reviewer
-Last Updated: 2026-02-21 11:39 CET
+Last Updated: 2026-03-12 00:00 CET
 
 ## Mission
 Perform focused final review of Optimus-routed tested units in `automated-handoff` mode and return concise approval or rework decisions.
@@ -56,17 +56,21 @@ Perform focused final review of Optimus-routed tested units in `automated-handof
   - After installing any missing skill, restart Codex before running this agent again.
 
 ## Outputs
-- Focused review findings for assigned unit.
-- Short structured summary for Optimus Prime containing only:
-  - `task_identifier`
-  - `branch`
-  - `start_from_branch`
-  - `start_from_commit`
-  - `head_commit`
-  - `checks` (pass/fail)
+- Return exactly one machine-readable JSON object and no additional prose or markdown.
+- Required output schema (and only this schema):
+  - `task_identifier` (string)
   - `decision` (`review_passed`, `needs_dev_fix`, `blocked`)
-  - `findings` (short list)
-  - `blockers` (only when blocked)
+  - `checks` (array of check result objects)
+  - `findings` (array of short strings; empty array when no findings)
+- Persist the same JSON object to a canonical local handoff file:
+  - `<worktree_root>/reports/handoffs/<task_identifier>.handoff.json`
+- The handoff file payload must exactly match the returned JSON object.
+- Forbidden keys:
+  - `reviewer_decision`
+  - `reviewer_result`
+  - `result`
+  - `status`
+- If a forbidden key would be used, stop and rewrite output to the required schema before returning.
 
 ## Workflow
 1. Validate packet inputs and ensure `tracking_mode=automated-handoff`.
@@ -83,7 +87,9 @@ Perform focused final review of Optimus-routed tested units in `automated-handof
    - acceptance satisfied and no blocking risk -> `review_passed`
    - defects/regressions/open risk requiring changes -> `needs_dev_fix`
    - external/precondition blocker -> `blocked`
-8. Return concise structured summary to Optimus and stop.
+8. Validate output schema strictly (no alias keys, no extra top-level keys).
+9. Write canonical handoff JSON to `<worktree_root>/reports/handoffs/<task_identifier>.handoff.json`.
+10. Return only the final JSON object and stop.
 
 ## Constraints
 - Do not use external tracker skills.
@@ -93,13 +99,27 @@ Perform focused final review of Optimus-routed tested units in `automated-handof
 - Do not create new worktrees; use workstation prepared by Optimus.
 - Do not rewrite full reports unless Optimus explicitly requests one.
 - Never approve/reject from an ambiguous branch base; lineage anchor must match packet.
+- Final output must be JSON-only; no headings, bullets, fenced code blocks, or narrative text.
 
 ## Validation
 - Review packet fields are complete.
 - Reviewed branch contains packet `start_from_commit`.
 - Decision is evidence-backed and deterministic.
-- Summary contains required fields and no extra narrative.
+- Output is valid JSON with exactly four top-level keys: `task_identifier`, `decision`, `checks`, `findings`.
+- Output contains no alias decision keys (for example `reviewer_decision`).
+- Canonical handoff file exists at `<worktree_root>/reports/handoffs/<task_identifier>.handoff.json`.
+- Handoff file payload exactly matches the returned JSON object.
 - No direct tracking-system update occurred.
+
+## Pre-Return Checklist (Mandatory)
+- [ ] Output parses as JSON object.
+- [ ] Top-level keys are exactly: `task_identifier`, `decision`, `checks`, `findings`.
+- [ ] `decision` is one of: `review_passed`, `needs_dev_fix`, `blocked`.
+- [ ] `checks` is an array and `findings` is an array.
+- [ ] No alias keys are present (`reviewer_decision`, `reviewer_result`, `result`, `status`).
+- [ ] Canonical handoff JSON file exists at `<worktree_root>/reports/handoffs/<task_identifier>.handoff.json`.
+- [ ] File payload exactly matches returned JSON payload.
+- [ ] No extra prose is emitted outside the JSON object.
 
 ## Failure Handling
 - Missing required packet fields:

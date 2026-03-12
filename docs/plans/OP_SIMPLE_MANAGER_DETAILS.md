@@ -75,7 +75,7 @@ Define the new OP Simple managers based on current decisions, map them to old OP
   - Monitor configured branch for commit activity.
   - Emit exit signal if no new commits appear for N cycles.
 - Must ensure:
-  - Default threshold starts at 10 cycles (tunable).
+  - Default threshold starts at 20 cycles (tunable).
   - Single watchdog location/authority in runtime.
   - Clear machine-readable exit signal artifact.
 

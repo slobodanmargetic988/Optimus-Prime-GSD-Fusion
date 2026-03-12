@@ -114,13 +114,28 @@ Planner behavior:
 - Existing planning artifacts require explicit replacement with `--override-old-plan`.
 - The planner prompt points LLM to bundled reference templates at `scripts/op/llm/examples/op-plan/reports/optimus-prime/planning`.
 
-## 2) Autonomous Build
+## 2) One-Command Build (Initialize + Run)
 
 ```bash
 opctl /op-build --json-pretty
 ```
 
-This runs autonomous execution with strict gates until:
+`/op-build` now runs `/op-simple-build` and will run `/op-initialize` first when:
+- mission/scope input is provided (`--mission`, `--scope`, `--mission-file`, `--scope-file`),
+- `--override-old-plan` is set, or
+- required planning baseline artifacts are missing.
+
+Use file inputs directly on `/op-build`:
+
+```bash
+opctl /op-build \
+  --mission-file /abs/path/to/mission.md \
+  --scope-file /abs/path/to/scope.txt \
+  --override-old-plan \
+  --json-pretty
+```
+
+Execution continues with strict gates until:
 - done with full evidence, or
 - deterministic hard stop condition is reached.
 
@@ -155,6 +170,26 @@ Canonical runtime task statuses:
 opctl /op-status --json-pretty
 opctl /op-health --json-pretty
 opctl /op-resume --json-pretty
+```
+
+### Operator Controls (Stop / Recovery Files)
+
+Use these file-based controls when a run is active:
+
+| Runtime | File path (relative to repo root) | Purpose | Consumed by |
+|---|---|---|---|
+| `/op-simple-build` | `terminate_run.json` | Immediate loop stop signal (presence-only; content ignored for stop check) | runtime code |
+| `/op-simple-build` | `recovery_instructions.md` | Operator recovery nudge for next BOSS cycle; BOSS should apply or explain and rename to `recovery_instructions_CONSUMED.md` | BOSS manager prompt |
+| `/op-build` | `reports/optimus-prime/control/OPERATOR_STOP.json` | Stop active autonomous `/op-build` workers and exit loop safely | runtime code |
+
+Related runtime state files:
+- `/op-build`: `reports/optimus-prime/control/OPERATOR_STOP_STATE.json` (written by runtime after operator stop; reconciled by `/op-resume`).
+- `/op-simple-build`: `.op-simple/current/watchdog_exit_signal.json` (written when watchdog stop condition triggers).
+
+Resume after stop:
+
+```bash
+opctl /op-resume --repo-root /absolute/path/to/project --json-pretty
 ```
 
 ### Multi-Profile Codex Setup
@@ -201,8 +236,8 @@ Runtime reliability notes:
 - If `WORKER_REGISTRY.json` is unreadable, OP attempts auto-recovery; if recovery fails, it emits `worker_registry_recovery_failed_dispatch_allowed` and continues dispatch by policy.
 
 Operator stop behavior:
-- Create `reports/optimus-prime/control/OPERATOR_STOP.json` to stop current `/op-build`.
-- `/op-build` now applies stop to active worker PIDs (`SIGTERM` then `SIGKILL` fallback), writes `OPERATOR_STOP_STATE.json`, archives the marker, and exits with `stopped_operator`.
+- See `Operator Controls (Stop / Recovery Files)` above.
+- `/op-build` applies stop to active worker PIDs (`SIGTERM` then `SIGKILL` fallback), writes `OPERATOR_STOP_STATE.json`, archives the marker, and exits with `stopped_operator`.
 - `/op-resume` auto-reconciles stop-affected in-progress tasks (continue when worker/evidence is valid, requeue otherwise).
 
 ## Command Reference
@@ -285,6 +320,7 @@ Detailed guides:
 - [QUICKSTART](docs/install/QUICKSTART.md)
 - [UPGRADE](docs/install/UPGRADE.md)
 - [TROUBLESHOOTING](docs/install/TROUBLESHOOTING.md)
+- [TERMINAL DEBUG OUTPUT POLICY](docs/contracts/TERMINAL_DEBUG_OUTPUT_POLICY.md)
 
 ## Key Paths
 

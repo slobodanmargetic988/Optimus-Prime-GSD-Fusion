@@ -85,6 +85,7 @@ CONTROL_REL = Path("reports") / "optimus-prime" / "control"
 OPERATOR_STOP_JSON = CONTROL_REL / "OPERATOR_STOP.json"
 OPERATOR_STOP_STATE_JSON = CONTROL_REL / "OPERATOR_STOP_STATE.json"
 PROFILE_RATE_REGISTRY_JSON = Path("reports") / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
+APP_LIFECYCLE_JSON = Path("app_lifecycle.json")
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
 PLANNER_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "llm_plan_prompt.md"
 PLANNER_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_plan_bundle.py"
@@ -6703,6 +6704,135 @@ def _resolve_mission_scope_sources(req: OpRequest, *, stage: str, required: bool
     return mission_source, scope_source
 
 
+def _source_meta(source: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": _as_str(source.get("mode")),
+        "path": _as_str(source.get("path")),
+        "display": _as_str(source.get("display")),
+        "value": _as_str(source.get("value")),
+    }
+
+
+def _resolved_source_text(source: dict[str, Any]) -> str:
+    mode = _as_str(source.get("mode")) or ""
+    if mode == "inline":
+        return _as_str(source.get("value")) or _as_str(source.get("display")) or ""
+    if mode == "file":
+        raw_path = _as_str(source.get("path"))
+        if raw_path:
+            path = Path(raw_path)
+            try:
+                return path.read_text(encoding="utf-8")
+            except OSError:
+                return _as_str(source.get("display")) or ""
+    return _as_str(source.get("display")) or ""
+
+
+def _load_app_lifecycle_payload(repo_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    path = _repo_path(repo_root, APP_LIFECYCLE_JSON)
+    warnings: list[dict[str, Any]] = []
+    payload: Any
+    if path.exists():
+        try:
+            payload = _read_json(path)
+        except OpError:
+            payload = {}
+            warnings.append(
+                {
+                    "code": "app_lifecycle_invalid_recovered",
+                    "message": "app_lifecycle.json was invalid and has been reinitialized.",
+                    "stage": "initialize",
+                }
+            )
+    else:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+        warnings.append(
+            {
+                "code": "app_lifecycle_invalid_recovered",
+                "message": "app_lifecycle.json was invalid and has been reinitialized.",
+                "stage": "initialize",
+            }
+        )
+    rows = payload.get("app_lifecycle")
+    if not isinstance(rows, list):
+        rows = []
+    payload["schema_version"] = SCHEMA_VERSION
+    payload["updated_at"] = utc_now_iso()
+    payload["app_lifecycle"] = rows
+    return payload, warnings
+
+
+def _append_app_lifecycle_era(
+    repo_root: Path,
+    *,
+    mission_source: dict[str, Any],
+    scope_source: dict[str, Any],
+    run_base_source_branch: str | None,
+) -> tuple[str, Path, list[dict[str, Any]]]:
+    payload, warnings = _load_app_lifecycle_payload(repo_root)
+    rows = payload.get("app_lifecycle")
+    assert isinstance(rows, list)
+    started_at = utc_now_iso()
+    era_id = f"era-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+    rows.append(
+        {
+            "era_id": era_id,
+            "status": "in_progress",
+            "started_at": started_at,
+            "completed_at": None,
+            "mission": {
+                "text": _resolved_source_text(mission_source),
+                "source": _source_meta(mission_source),
+            },
+            "scope": {
+                "text": _resolved_source_text(scope_source),
+                "source": _source_meta(scope_source),
+            },
+            "run_context": {
+                "initialized_at": started_at,
+                "run_base_source_branch": _as_str(run_base_source_branch),
+                "plan_id": None,
+            },
+            "completion": {},
+        }
+    )
+    payload["updated_at"] = utc_now_iso()
+    path = _repo_path(repo_root, APP_LIFECYCLE_JSON)
+    _atomic_write_json(path, payload)
+    return era_id, path, warnings
+
+
+def _update_app_lifecycle_era_plan_id(repo_root: Path, *, era_id: str, plan_id: str | None) -> None:
+    path = _repo_path(repo_root, APP_LIFECYCLE_JSON)
+    try:
+        payload = _read_json(path)
+    except OpError:
+        return
+    if not isinstance(payload, dict):
+        return
+    rows = payload.get("app_lifecycle")
+    if not isinstance(rows, list):
+        return
+    era_id_text = _as_str(era_id)
+    if not era_id_text:
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if _as_str(row.get("era_id")) != era_id_text:
+            continue
+        run_context = row.get("run_context")
+        if not isinstance(run_context, dict):
+            run_context = {}
+            row["run_context"] = run_context
+        run_context["plan_id"] = _as_str(plan_id)
+        payload["updated_at"] = utc_now_iso()
+        _atomic_write_json(path, payload)
+        return
+
+
 def _planning_artifacts_exist(repo_root: Path) -> bool:
     for rel in PLANNING_OVERRIDE_SENTINELS:
         if _repo_path(repo_root, rel).exists():
@@ -8015,11 +8145,17 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
 
 def command_initialize(req: OpRequest) -> dict[str, Any]:
     _require_override_if_existing_plan(req, stage="initialize")
-    _resolve_mission_scope_sources(req, stage="initialize", required=True)
+    mission_source, scope_source = _resolve_mission_scope_sources(req, stage="initialize", required=True)
     git_bootstrap_warnings, git_bootstrap_artifacts = _ensure_git_initialized_for_initialize(req)
     _ensure_managed_gitignore_block(req.repo_root)
     map_result = command_map_codebase(req)
     new_result = command_new_project(req)
+    lifecycle_era_id, lifecycle_path, lifecycle_warnings = _append_app_lifecycle_era(
+        req.repo_root,
+        mission_source=mission_source,
+        scope_source=scope_source,
+        run_base_source_branch=req.run_base_source_branch,
+    )
 
     profile_selection = _detect_profile_selection_payload()
     profile_selection_path = _repo_path(req.repo_root, PROFILE_SELECTION_JSON)
@@ -8041,6 +8177,11 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
     )
 
     plan_result = command_plan(req)
+    _update_app_lifecycle_era_plan_id(
+        req.repo_root,
+        era_id=lifecycle_era_id,
+        plan_id=_as_str((plan_result.get("data") or {}).get("plan_id")),
+    )
     state_payload = _read_json(state_path)
     if not isinstance(state_payload, dict):
         raise OpError("state_payload_invalid", "STATE.json must be a JSON object", stage="initialize")
@@ -8056,6 +8197,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
     artifacts.extend(plan_result.get("artifacts", []))
     artifacts.append(str(profile_selection_path))
     artifacts.append(str(state_path))
+    artifacts.append(str(lifecycle_path))
 
     warnings = []
     warnings.extend(git_bootstrap_warnings)
@@ -8063,6 +8205,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
     warnings.extend(rate_seed_warnings)
     warnings.extend(new_result.get("warnings", []))
     warnings.extend(plan_result.get("warnings", []))
+    warnings.extend(lifecycle_warnings)
 
     plan_ready = bool(plan_result.get("data", {}).get("plan_ready", False))
     summary = (
@@ -12995,6 +13138,55 @@ def _preflight_build(
 
 
 def command_build(req: OpRequest) -> dict[str, Any]:
+    from op_simple_build import run_op_simple_build
+
+    # /op-build is the one-command entrypoint: optional initialize refresh + OP Simple runtime.
+    mission_scope_supplied = bool(req.mission or req.mission_file or req.scope or req.scope_file)
+    baseline_missing = any(
+        not _repo_path(req.repo_root, rel).exists()
+        for rel in MANDATORY_BUILD_BASELINE
+    )
+    should_initialize = mission_scope_supplied or bool(req.override_old_plan) or baseline_missing
+
+    combined_warnings: list[dict[str, Any]] = []
+    if should_initialize:
+        _emit_build_progress(req, "running /op-initialize before /op-simple-build")
+        init_req = replace(req, command="op-initialize")
+        init_result = command_initialize(init_req)
+        init_warnings = init_result.get("warnings")
+        if isinstance(init_warnings, list):
+            combined_warnings.extend(init_warnings)
+        if not bool(init_result.get("ok")):
+            return _response(
+                req,
+                ok=False,
+                status=_as_str(init_result.get("status")) or "failed",
+                summary=_as_str(init_result.get("summary")) or "Build failed during /op-initialize pre-step.",
+                warnings=combined_warnings,
+                errors=init_result.get("errors") if isinstance(init_result.get("errors"), list) else [],
+                artifacts=init_result.get("artifacts") if isinstance(init_result.get("artifacts"), list) else [],
+                next_action=_as_str(init_result.get("next_action")),
+                state_ref=_as_str(init_result.get("state_ref")),
+                data=init_result.get("data") if isinstance(init_result.get("data"), dict) else None,
+            )
+        _emit_build_progress(req, "initialize pre-step completed")
+
+    simple_req = replace(req, command="op-simple-build")
+    result = run_op_simple_build(simple_req)
+    simple_warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+    return _response(
+        req,
+        ok=bool(result.get("ok")),
+        status=_as_str(result.get("status")) or ("completed" if result.get("ok") else "failed"),
+        summary=_as_str(result.get("summary")) or "OP build finished.",
+        warnings=[*combined_warnings, *simple_warnings],
+        errors=result.get("errors") if isinstance(result.get("errors"), list) else [],
+        artifacts=result.get("artifacts") if isinstance(result.get("artifacts"), list) else [],
+        next_action=_as_str(result.get("next_action")),
+        state_ref=_as_str(result.get("state_ref")),
+        data=result.get("data") if isinstance(result.get("data"), dict) else None,
+    )
+
     _ensure_managed_gitignore_block(req.repo_root)
     _emit_build_progress(req, f"starting build runtime for {req.repo_root}")
     auto_init_warnings: list[dict[str, Any]] = []
@@ -14915,6 +15107,26 @@ def _resume_reset_exhausted_retries(repo_root: Path) -> tuple[list[dict[str, Any
 
 
 def command_resume(req: OpRequest) -> dict[str, Any]:
+    simple_runtime_marker = req.repo_root / ".op-simple" / "current" / "initialize_state.json"
+    if simple_runtime_marker.exists():
+        from op_simple_build import run_op_simple_build
+
+        simple_req = replace(req, command="op-resume")
+        result = run_op_simple_build(simple_req)
+        simple_warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+        return _response(
+            req,
+            ok=bool(result.get("ok")),
+            status=_as_str(result.get("status")) or ("completed" if result.get("ok") else "failed"),
+            summary=_as_str(result.get("summary")) or "OP resume finished.",
+            warnings=simple_warnings,
+            errors=result.get("errors") if isinstance(result.get("errors"), list) else [],
+            artifacts=result.get("artifacts") if isinstance(result.get("artifacts"), list) else [],
+            next_action=_as_str(result.get("next_action")),
+            state_ref=_as_str(result.get("state_ref")),
+            data=result.get("data") if isinstance(result.get("data"), dict) else None,
+        )
+
     build_state_path = _repo_path(req.repo_root, BUILD_STATE_JSON)
     if not build_state_path.exists():
         return _response(

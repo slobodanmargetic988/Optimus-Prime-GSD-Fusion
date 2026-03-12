@@ -375,7 +375,7 @@ Runtime freshness rule: every required BOSS-authored artifact must include top-l
   "schema_version": "1.0",
   "cycle_number": 16,
   "reason_code": "no_new_commits",
-  "message": "no new commits detected for 10 cycles",
+  "message": "no new commits detected for 20 cycles",
   "monitored_branch": "main",
   "idle_cycles": 10
 }

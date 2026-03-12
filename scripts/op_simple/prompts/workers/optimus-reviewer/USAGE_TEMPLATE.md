@@ -19,8 +19,16 @@ Inputs: review_focus:
 Inputs: risk_focus:
 Inputs: fallback_branch_suffix: -review
 Inputs: constraints:
-Constraints: No external tracker updates. No orchestration file writes. Summary must be concise and emoji-free.
-Output: Final review decision summary for Optimus
+Constraints: No external tracker updates. No orchestration file writes. Final output must be JSON-only.
+Output Contract:
+- Return exactly one JSON object with top-level keys:
+  - task_identifier
+  - decision
+  - checks
+  - findings
+- Forbidden keys: reviewer_decision, reviewer_result, result, status
+- Write same JSON payload to:
+  <worktree_root>/reports/handoffs/<task_identifier>.handoff.json
 ```
 
 ## Filled Example
@@ -42,6 +50,14 @@ Inputs: review_focus: diff quality and regression risk
 Inputs: risk_focus: navigation accessibility and mobile interaction consistency
 Inputs: fallback_branch_suffix: -review
 Inputs: constraints: Keep review scoped to task surfaces only.
-Constraints: No external tracker updates. No orchestration file writes. Summary must be concise and emoji-free.
-Output: Final review decision summary for Optimus
+Constraints: No external tracker updates. No orchestration file writes. Final output must be JSON-only.
+Output Contract:
+- Return exactly one JSON object with top-level keys:
+  - task_identifier
+  - decision
+  - checks
+  - findings
+- Forbidden keys: reviewer_decision, reviewer_result, result, status
+- Write same JSON payload to:
+  ../workstation-7/reports/handoffs/MYO-23.handoff.json
 ```
