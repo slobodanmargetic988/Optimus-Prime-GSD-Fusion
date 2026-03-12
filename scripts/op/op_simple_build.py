@@ -80,6 +80,10 @@ NON_TERMINAL_STOP_REASONS = {
     "skip_cycle",
     "active_workers_in_progress_no_safe_new_dispatch",
 }
+TERMINAL_STOP_REASONS = {
+    "project_done",
+    "insurmountable_blocker",
+}
 
 PLANNER_PLAN_PACKETS_FILE = Path("reports/optimus-prime/planning/PLAN_PACKETS.json")
 BOSS_REQUIRED_ARTIFACTS = [
@@ -574,6 +578,15 @@ def _build_wrapup_trace_event(
     risk_level = "low" if result.status == "ok" else "medium"
     report_uri = str(ARTIFACT_FILES["wrapup_manager_report"])
     manager_log_uri = str(MANAGER_CALL_LOG_FILE)
+    wrapup_log_row = _latest_manager_event_for_cycle(cfg, cycle_number=cycle_number, manager_name="wrapup-manager")
+    wrapup_llm = _manager_llm_metadata(cfg, manager_name="wrapup-manager", log_row=wrapup_log_row)
+    wrapup_inputs: dict[str, Any] = {
+        "stop_reason": stop_reason,
+        "cycle_number": cycle_number,
+        "manager_status": result.status,
+    }
+    if wrapup_llm:
+        wrapup_inputs["llm"] = wrapup_llm
 
     source_branch = str(run_context.get("run_base_branch") or "").strip() or (_git_text(cfg.repo_root, "branch", "--show-current") or "")
     source_commit_sha = _git_text(cfg.repo_root, "rev-parse", "HEAD") or ""
@@ -599,11 +612,7 @@ def _build_wrapup_trace_event(
             "name": "invoke_wrapup_manager",
             "intent": "Finalize run and capture merge lifecycle outcome.",
             "target_ref": source_branch,
-            "inputs": {
-                "stop_reason": stop_reason,
-                "cycle_number": cycle_number,
-                "manager_status": result.status,
-            },
+            "inputs": wrapup_inputs,
         },
         "outcome": {
             "status": outcome_status,
@@ -835,8 +844,38 @@ def _trace_identity_context(cfg: RunConfig, cycle_number: int) -> dict[str, str]
     return out
 
 
-def _latest_dispatch_event_for_cycle(cfg: RunConfig, cycle_number: int) -> dict[str, Any]:
+def _dispatch_events_for_cycle(cfg: RunConfig, cycle_number: int) -> list[dict[str, Any]]:
     path = cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE
+    if not path.exists():
+        return []
+    try:
+        rows = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out: list[dict[str, Any]] = []
+    for raw in rows:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        try:
+            row_cycle = int(payload.get("cycle_number") or 0)
+        except (TypeError, ValueError):
+            row_cycle = 0
+        if row_cycle == cycle_number:
+            out.append(payload)
+    return out
+
+
+def _latest_dispatch_event_for_cycle(cfg: RunConfig, cycle_number: int) -> dict[str, Any]:
+    rows = _dispatch_events_for_cycle(cfg, cycle_number)
+    return rows[-1] if rows else {}
+
+
+def _latest_manager_event_for_cycle(cfg: RunConfig, *, cycle_number: int, manager_name: str) -> dict[str, Any]:
+    path = cfg.repo_root / MANAGER_CALL_LOG_FILE
     if not path.exists():
         return {}
     try:
@@ -854,9 +893,96 @@ def _latest_dispatch_event_for_cycle(cfg: RunConfig, cycle_number: int) -> dict[
             row_cycle = int(payload.get("cycle_number") or 0)
         except (TypeError, ValueError):
             row_cycle = 0
-        if row_cycle == cycle_number:
-            return payload
+        if row_cycle != cycle_number:
+            continue
+        if str(payload.get("manager") or "").strip() != manager_name:
+            continue
+        return payload
     return {}
+
+
+def _manager_profile_alias_from_log_row(row: dict[str, Any]) -> str | None:
+    alias = str(row.get("profile_alias") or "").strip()
+    if alias:
+        return alias
+    message = str(row.get("message") or "").strip()
+    if not message:
+        return None
+    match = MANAGER_PROFILE_ALIAS_REGEX.search(message)
+    if not match:
+        return None
+    parsed = str(match.group(1) or "").strip()
+    return parsed or None
+
+
+def _manager_llm_metadata(cfg: RunConfig, *, manager_name: str, log_row: dict[str, Any] | None) -> dict[str, Any]:
+    row = log_row if isinstance(log_row, dict) else {}
+    provider = _normalize_executor_provider(row.get("executor_provider") or cfg.executor_provider)
+    model_from_row = str(row.get("executor_model") or "").strip() or None
+    model = model_from_row or _resolve_executor_model(
+        cfg,
+        provider=provider,
+        model_override=cfg.executor_model or (cfg.boss_model if manager_name == "BOSS" else None),
+    )
+    profile_alias = _manager_profile_alias_from_log_row(row)
+    reasoning_effort = str(row.get("reasoning_effort") or "").strip() or (
+        str(cfg.boss_reasoning_effort).strip() if manager_name == "BOSS" else ""
+    )
+    tooling_effort = str(row.get("tooling_effort") or "").strip() or (
+        "medium_tooling" if manager_name in {"BOSS", "wrapup-manager"} else ""
+    )
+
+    out = {
+        "role": "manager",
+        "manager_name": manager_name,
+        "provider": provider,
+        "model": model or None,
+        "profile_alias": profile_alias,
+        "reasoning_effort": reasoning_effort or None,
+        "tooling_effort": tooling_effort or None,
+    }
+    return {key: value for key, value in out.items() if value is not None and str(value).strip() != ""}
+
+
+def _dispatch_routing_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    provider_stats: dict[str, dict[str, int]] = {}
+    model_stats: dict[str, dict[str, int]] = {}
+    profile_stats: dict[str, dict[str, int]] = {}
+
+    def _ensure_bucket(container: dict[str, dict[str, int]], key: str) -> dict[str, int]:
+        bucket = container.get(key)
+        if bucket is None:
+            bucket = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
+            container[key] = bucket
+        return bucket
+
+    def _apply_status(bucket: dict[str, int], status: str) -> None:
+        bucket["attempted"] += 1
+        if status == "launched":
+            bucket["launched"] += 1
+        elif status == "launch_failed":
+            bucket["launch_failed"] += 1
+        else:
+            bucket["unknown"] += 1
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").strip().lower() or "unknown"
+        provider_raw = str(row.get("executor_provider") or "").strip().lower()
+        provider = provider_raw if provider_raw in EXECUTOR_PROVIDERS else "unknown"
+        model = str(row.get("executor_model") or "").strip() or "unknown"
+        profile = str(row.get("profile_alias") or "").strip() or "none"
+        _apply_status(_ensure_bucket(provider_stats, provider), status)
+        _apply_status(_ensure_bucket(model_stats, model), status)
+        _apply_status(_ensure_bucket(profile_stats, profile), status)
+
+    return {
+        "rows_observed": len(rows),
+        "provider_stats": provider_stats,
+        "model_stats": model_stats,
+        "profile_stats": profile_stats,
+    }
 
 
 def _emit_cycle_trace_events(
@@ -883,6 +1009,27 @@ def _emit_cycle_trace_events(
         if text and TRACE_EVENT_TIMESTAMP_REGEX.fullmatch(text):
             return text
         return utc_now_iso()
+
+    manager_log_row = _latest_manager_event_for_cycle(cfg, cycle_number=cycle_number, manager_name="BOSS")
+    manager_llm = _manager_llm_metadata(cfg, manager_name="BOSS", log_row=manager_log_row)
+    manager_inputs = {
+        "decision": str(decision_payload.get("decision") or "").strip() or None,
+        "reason_code": str(decision_payload.get("reason_code") or "").strip() or None,
+        "worker_registry_ready": bool(decision_payload.get("worker_registry_ready")),
+    }
+    if manager_llm:
+        manager_inputs["llm"] = manager_llm
+    manager_inputs = {k: v for k, v in manager_inputs.items() if v is not None}
+
+    manager_metrics: dict[str, Any] = {}
+    try:
+        manager_duration = float(manager_log_row.get("duration_seconds"))
+    except (TypeError, ValueError):
+        manager_duration = None
+    if manager_duration is not None and manager_duration >= 0:
+        manager_metrics["duration_seconds"] = manager_duration
+    if "timeout" in manager_log_row:
+        manager_metrics["timeout"] = bool(manager_log_row.get("timeout"))
 
     manager_reason_code = _reason_code(decision_payload.get("reason_code"), fallback="CYCLE_DECISION_RECORDED")
     manager_event_id = _canonical_id("event", f"{identity['repo_slug']}-c{cycle_number:06d}-manager")
@@ -922,10 +1069,12 @@ def _emit_cycle_trace_events(
         "operation": {
             "name": "write_cycle_manager_decision",
             "intent": "Persist deterministic cycle manager decision for the current OP simple cycle.",
+            "inputs": manager_inputs,
         },
         "outcome": {
             "status": manager_outcome_status,
             "summary": f"Cycle {cycle_number} decision={decision_payload.get('decision')}.",
+            "metrics": manager_metrics,
         },
         "risk": {"level": "low"},
         "evidence": {
@@ -951,8 +1100,25 @@ def _emit_cycle_trace_events(
     dispatch_launched = int(dispatch_counts.get("launched") or 0)
     dispatch_failed = int(dispatch_counts.get("launch_failed") or 0)
     dispatch_unknown = int(dispatch_counts.get("unknown") or 0)
-    dispatch_row = _latest_dispatch_event_for_cycle(cfg, cycle_number)
+    dispatch_rows = _dispatch_events_for_cycle(cfg, cycle_number)
+    dispatch_row = dispatch_rows[-1] if dispatch_rows else {}
     dispatch_timestamp = _normalize_event_ts(dispatch_row.get("timestamp"))
+    dispatch_routing = _dispatch_routing_summary(dispatch_rows)
+    dispatch_inputs = {
+        "dispatch_counts": {
+            "attempted": dispatch_attempted,
+            "launched": dispatch_launched,
+            "launch_failed": dispatch_failed,
+            "unknown": dispatch_unknown,
+        },
+        "routing": dispatch_routing,
+    }
+    dispatch_metrics = {
+        "rows_observed": int(dispatch_routing.get("rows_observed") or 0),
+        "providers_observed": len(dispatch_routing.get("provider_stats") or {}),
+        "models_observed": len(dispatch_routing.get("model_stats") or {}),
+        "profiles_observed": len(dispatch_routing.get("profile_stats") or {}),
+    }
     dispatch_event_id = _canonical_id("event", f"{identity['repo_slug']}-c{cycle_number:06d}-dispatch")
     dispatch_decision_id = _canonical_id("decision", f"{identity['repo_slug']}-c{cycle_number:06d}-dispatch")
     dispatch_status = "noop"
@@ -990,6 +1156,7 @@ def _emit_cycle_trace_events(
         "operation": {
             "name": "dispatch_packets",
             "intent": "Launch available worker packets according to runtime policies and capacity limits.",
+            "inputs": dispatch_inputs,
         },
         "outcome": {
             "status": dispatch_status,
@@ -997,6 +1164,7 @@ def _emit_cycle_trace_events(
                 f"Cycle {cycle_number} dispatch attempted={dispatch_attempted}, launched={dispatch_launched}, "
                 f"failed={dispatch_failed}, unknown={dispatch_unknown}."
             ),
+            "metrics": dispatch_metrics,
         },
         "risk": {"level": "medium" if dispatch_attempted > 0 else "low"},
         "evidence": {
@@ -1099,6 +1267,7 @@ def _run_ground_sync(
 
     output_graph = earth_root / "ground-control-hub" / "artifacts" / "ground_portfolio_graph.v1.json"
     output_normalized = earth_root / "ground-control-hub" / "artifacts" / "ground_normalized_events.v1.jsonl"
+    checkpoint_state = earth_root / "ground-control-hub" / "artifacts" / "ground_ingestion_checkpoint.v1.json"
     cmd: list[str] = ["python3", str(script_path)]
     for path in inputs:
         cmd.extend(["--trace-jsonl", str(path)])
@@ -1108,6 +1277,10 @@ def _run_ground_sync(
             str(output_graph),
             "--normalized-events-output",
             str(output_normalized),
+            "--checkpoint-state",
+            str(checkpoint_state),
+            "--lock-timeout-seconds",
+            str(max(30, int(cfg.ground_sync_timeout_seconds))),
         ]
     )
     try:
@@ -2205,6 +2378,17 @@ def _invoke_manager(
 ) -> ManagerResult:
     manager_uses_boss_profile = manager_name in {"BOSS", "wrapup-manager"}
     manager_uses_boss_model = manager_name in {"BOSS", "wrapup-manager"}
+    log_executor_provider = _normalize_executor_provider(cfg.executor_provider)
+    log_executor_model = _resolve_executor_model(
+        cfg,
+        provider=log_executor_provider,
+        model_override=cfg.executor_model or (cfg.boss_model if manager_uses_boss_model else None),
+    )
+    log_profile_alias = str(cfg.codex_profile or "").strip() or None
+    if not _executor_uses_codex_backend(log_executor_provider):
+        log_profile_alias = None
+    log_reasoning_effort = str(cfg.boss_reasoning_effort).strip() if manager_name == "BOSS" else None
+    log_tooling_effort = "medium_tooling" if manager_name in {"BOSS", "wrapup-manager"} else None
     if cfg.dry_run:
         if manager_name == "BOSS":
             _write_boss_stub(cfg, cycle_number)
@@ -2226,6 +2410,9 @@ def _invoke_manager(
         template = _load_prompt_template(cfg, manager_name)
         path_map = _artifact_path_map(cfg)
         executor_provider = _normalize_executor_provider(cfg.executor_provider)
+        log_executor_provider = executor_provider
+        if not _executor_uses_codex_backend(log_executor_provider):
+            log_profile_alias = None
         uses_codex_backend = _executor_uses_codex_backend(executor_provider)
         selected_manager_alias: str | None = None
         selected_manager_home: str | None = None
@@ -2297,6 +2484,7 @@ def _invoke_manager(
             provider=executor_provider,
             model_override=cfg.executor_model or (cfg.boss_model if manager_name == "BOSS" else None),
         )
+        log_executor_model = manager_model
         if uses_codex_backend:
             result = _codex_exec_prompt(
                 cfg,
@@ -2368,6 +2556,7 @@ def _invoke_manager(
                 if result.message
                 else f"manager_profile_alias={selected_manager_alias}"
             )
+            log_profile_alias = selected_manager_alias
 
     if result.status == "ok":
         reason_code, message, details = _validate_manager_artifacts(cfg, manager_name, expected_artifacts, cycle_number)
@@ -2393,6 +2582,11 @@ def _invoke_manager(
             "stderr_path": result.stderr_path,
             "session_id": result.session_id,
             "message": result.message,
+            "executor_provider": log_executor_provider,
+            "executor_model": log_executor_model,
+            "profile_alias": log_profile_alias,
+            "reasoning_effort": log_reasoning_effort,
+            "tooling_effort": log_tooling_effort,
         },
     )
     return result
@@ -3969,12 +4163,12 @@ def _termination_from_summary(summary: dict[str, Any]) -> str | None:
         reason = termination.get("reason_code")
         if isinstance(reason, str) and reason.strip():
             normalized_reason = reason.strip()
-            if normalized_reason not in NON_TERMINAL_STOP_REASONS:
+            if normalized_reason in TERMINAL_STOP_REASONS:
                 return normalized_reason
     stop_reason = summary.get("stop_reason")
     if isinstance(stop_reason, str) and stop_reason.strip():
         normalized_stop_reason = stop_reason.strip()
-        if normalized_stop_reason not in NON_TERMINAL_STOP_REASONS:
+        if normalized_stop_reason in TERMINAL_STOP_REASONS:
             return normalized_stop_reason
     return None
 

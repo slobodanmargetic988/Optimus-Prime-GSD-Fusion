@@ -261,6 +261,17 @@ def test_termination_from_summary_treats_skip_cycle_as_non_terminal() -> None:
     assert MODULE._termination_from_summary(summary) is None
 
 
+def test_termination_from_summary_ignores_unrecognized_stop_reason_text() -> None:
+    summary = {
+        "project_done": False,
+        "insurmountable_blocker": False,
+        "termination": {"reason_code": "proceed_with_partial_reconciliation_and_single_safe_dispatch"},
+        "stop_reason": "proceed_with_partial_reconciliation_and_single_safe_dispatch",
+    }
+
+    assert MODULE._termination_from_summary(summary) is None
+
+
 def test_boss_failure_skips_cycle_and_writes_conservative_summary(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
 
@@ -1872,6 +1883,38 @@ def test_run_prefers_project_done_over_watchdog_stop(tmp_path: Path, monkeypatch
     assert out["data"]["stop_reason"] == "project_done"
 
 
+def test_run_ignores_unrecognized_summary_stop_reason(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+
+    monkeypatch.setattr(
+        MODULE,
+        "_watchdog_tick",
+        lambda _cfg, _cycle, *, force_reset_target=False: (False, {"message": ""}),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_render_cycle_summary",
+        lambda *_args, **_kwargs: {
+            "schema_version": "1.0",
+            "cycle_number": 1,
+            "project_done": False,
+            "insurmountable_blocker": False,
+            "termination": {"reason_code": "proceed_with_partial_reconciliation_and_single_safe_dispatch"},
+            "stop_reason": "proceed_with_partial_reconciliation_and_single_safe_dispatch",
+            "task_counts": {"pending": 1, "in_progress": 1, "done": 0, "blocked": 0},
+            "dispatch_counts": {"attempted": 1, "launched": 1, "launch_failed": 0, "unknown": 0},
+            "manager_statuses": {},
+            "notes": "",
+        },
+    )
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, max_build_cycles=1, dry_run=True))
+
+    assert out["ok"] is True
+    assert out["data"]["stop_reason"] is None
+    assert out["summary"] == "Reached max_build_cycles=1."
+
+
 def test_run_invokes_wrapup_manager_once_on_project_done(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     calls: list[str] = []
@@ -1988,6 +2031,16 @@ def test_run_emits_cycle_trace_events_for_manager_and_dispatch(tmp_path: Path) -
     event_names = {str(row.get("event_name") or "") for row in trace_rows}
     assert "runtime.manager.cycle_decision" in event_names
     assert "runtime.dispatch.launch_cycle" in event_names
+    manager_event = next(row for row in trace_rows if row.get("event_name") == "runtime.manager.cycle_decision")
+    dispatch_event = next(row for row in trace_rows if row.get("event_name") == "runtime.dispatch.launch_cycle")
+    manager_llm = (((manager_event.get("operation") or {}).get("inputs") or {}).get("llm") or {})
+    assert manager_llm.get("role") == "manager"
+    assert manager_llm.get("provider") in {"codex", "openrouter", "blackbox"}
+    dispatch_inputs = ((dispatch_event.get("operation") or {}).get("inputs") or {})
+    dispatch_routing = dispatch_inputs.get("routing") or {}
+    assert isinstance(dispatch_routing.get("provider_stats"), dict)
+    assert isinstance(dispatch_routing.get("model_stats"), dict)
+    assert isinstance(dispatch_routing.get("profile_stats"), dict)
     for row in trace_rows:
         assert MODULE._validate_trace_event_envelope_v1(row) == []
 
@@ -2015,6 +2068,61 @@ def test_run_ground_sync_triggers_cadence_and_terminal(tmp_path: Path, monkeypat
     assert out["ok"] is True
     assert (2, "cadence") in sync_calls
     assert sync_calls[-1] == (3, "terminal")
+
+
+def test_run_ground_sync_passes_checkpoint_and_lock_timeout(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE._build_config(
+        make_req(
+            tmp_path,
+            dry_run=False,
+            ground_sync_timeout_seconds=47,
+        )
+    )
+
+    trace_path = tmp_path / MODULE.TRACE_EVENT_LOG_FILE
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_path.write_text("{\"ok\":true}\n", encoding="utf-8")
+
+    earth_root = tmp_path / "Earth"
+    script_path = earth_root / "ground-control-hub" / "scripts" / "ground_ingestion_normalize.py"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+    snapshot_path = earth_root / "reports" / "ground-ingest-inputs" / "prj.tetris" / "trace_event_envelope.jsonl"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path.write_text("{\"ok\":true}\n", encoding="utf-8")
+
+    monkeypatch.setattr(MODULE, "_discover_earth_root", lambda _repo_root: earth_root)
+    monkeypatch.setattr(MODULE, "_trace_identity_context", lambda _cfg, _cycle: {"project_id": "prj.tetris"})
+    monkeypatch.setattr(
+        MODULE,
+        "_sync_trace_snapshot_to_ground_inbox",
+        lambda _cfg, *, earth_root, project_id: snapshot_path,
+    )
+    monkeypatch.setattr(MODULE, "_collect_ground_ingest_inputs", lambda _earth_root: [snapshot_path])
+
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
+    status, message = MODULE._run_ground_sync(cfg, cycle_number=9, trigger="cadence")
+
+    assert status == "ok"
+    assert "ground sync completed" in message
+    cmd = list(captured["cmd"])
+    assert "--checkpoint-state" in cmd
+    assert "--lock-timeout-seconds" in cmd
+
+    checkpoint_idx = cmd.index("--checkpoint-state")
+    lock_timeout_idx = cmd.index("--lock-timeout-seconds")
+    assert cmd[checkpoint_idx + 1].endswith("ground-control-hub/artifacts/ground_ingestion_checkpoint.v1.json")
+    assert cmd[lock_timeout_idx + 1] == "47"
 
 
 def test_run_does_not_invoke_wrapup_manager_for_non_project_done_terminal_reason(tmp_path: Path, monkeypatch) -> None:
@@ -2134,6 +2242,39 @@ def test_invoke_manager_wrapup_dry_run_writes_report(tmp_path: Path) -> None:
     report = MODULE._read_json(tmp_path / MODULE.ARTIFACT_FILES["wrapup_manager_report"], default={})
     assert report.get("cycle_number") == 3
     assert report.get("status") == "dry_run"
+
+
+def test_invoke_manager_dry_run_logs_executor_metadata(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=1,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "ok"
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / MODULE.MANAGER_CALL_LOG_FILE).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert rows
+    latest = rows[-1]
+    assert latest["executor_provider"] == "codex"
+    assert latest["executor_model"] == "gpt-5.3-codex"
+    assert latest["reasoning_effort"] == "xhigh"
+    assert latest["tooling_effort"] == "medium_tooling"
 
 
 def test_run_persists_summary_manager_status_entry(tmp_path: Path) -> None:
