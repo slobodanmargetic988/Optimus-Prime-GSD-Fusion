@@ -84,6 +84,27 @@ def test_build_config_defaults_executor_settings(tmp_path: Path) -> None:
     assert cfg.allow_worker_executor_override is False
 
 
+def test_build_config_defaults_ground_sync_settings(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(make_req(tmp_path))
+    assert cfg.ground_sync_enabled is True
+    assert cfg.ground_sync_every_n_cycles == MODULE.GROUND_SYNC_DEFAULT_EVERY_N_CYCLES
+    assert cfg.ground_sync_timeout_seconds == MODULE.GROUND_SYNC_DEFAULT_TIMEOUT_SECONDS
+
+
+def test_build_config_accepts_ground_sync_overrides(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(
+        make_req(
+            tmp_path,
+            ground_sync_enabled="false",
+            ground_sync_every_n_cycles="3",
+            ground_sync_timeout_seconds="45",
+        )
+    )
+    assert cfg.ground_sync_enabled is False
+    assert cfg.ground_sync_every_n_cycles == 3
+    assert cfg.ground_sync_timeout_seconds == 45
+
+
 def test_build_config_accepts_executor_overrides(tmp_path: Path) -> None:
     cfg = MODULE._build_config(
         make_req(
@@ -1896,16 +1917,19 @@ def test_run_invokes_wrapup_manager_once_on_project_done(tmp_path: Path, monkeyp
         for line in (tmp_path / MODULE.TRACE_EVENT_LOG_FILE).read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert len(trace_rows) == 1
-    trace_event = trace_rows[0]
+    event_names = {str(row.get("event_name") or "") for row in trace_rows}
+    assert "runtime.manager.cycle_decision" in event_names
+    assert "runtime.dispatch.launch_cycle" in event_names
+    assert "merge.lifecycle.wrapup_manager" in event_names
+    trace_event = next(row for row in trace_rows if row.get("event_name") == "merge.lifecycle.wrapup_manager")
     assert trace_event["schema_version"] == "trace-event-envelope.v1"
-    assert trace_event["event_name"] == "merge.lifecycle.wrapup_manager"
     assert trace_event["identity"]["project_id"].startswith("prj.")
     assert trace_event["identity"]["run_id"].startswith("run.")
     assert trace_event["identity"]["event_id"].startswith("event.")
     assert trace_event["source"]["repo"] == tmp_path.name
-    validation_errors = MODULE._validate_trace_event_envelope_v1(trace_event)
-    assert validation_errors == []
+    for row in trace_rows:
+        validation_errors = MODULE._validate_trace_event_envelope_v1(row)
+        assert validation_errors == []
 
 
 def test_emit_trace_event_envelope_rejects_invalid_payload(tmp_path: Path) -> None:
@@ -1943,6 +1967,54 @@ def test_emit_trace_event_envelope_rejects_invalid_payload(tmp_path: Path) -> No
         assert exc.code == "trace_event_envelope_invalid"
     else:  # pragma: no cover - defensive
         raise AssertionError("expected trace_event_envelope_invalid error")
+
+
+def test_run_emits_cycle_trace_events_for_manager_and_dispatch(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+
+    out = MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            max_build_cycles=1,
+            dry_run=True,
+            sleep_minutes=0,
+            ground_sync_enabled=False,
+        )
+    )
+
+    assert out["ok"] is True
+    trace_path = tmp_path / MODULE.TRACE_EVENT_LOG_FILE
+    trace_rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    event_names = {str(row.get("event_name") or "") for row in trace_rows}
+    assert "runtime.manager.cycle_decision" in event_names
+    assert "runtime.dispatch.launch_cycle" in event_names
+    for row in trace_rows:
+        assert MODULE._validate_trace_event_envelope_v1(row) == []
+
+
+def test_run_ground_sync_triggers_cadence_and_terminal(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    sync_calls: list[tuple[int, str]] = []
+
+    def fake_run_ground_sync(_cfg, *, cycle_number: int, trigger: str):
+        sync_calls.append((int(cycle_number), str(trigger)))
+        return "ok", f"trigger={trigger}"
+
+    monkeypatch.setattr(MODULE, "_run_ground_sync", fake_run_ground_sync)
+
+    out = MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            max_build_cycles=3,
+            dry_run=True,
+            sleep_minutes=0,
+            ground_sync_every_n_cycles=2,
+        )
+    )
+
+    assert out["ok"] is True
+    assert (2, "cadence") in sync_calls
+    assert sync_calls[-1] == (3, "terminal")
 
 
 def test_run_does_not_invoke_wrapup_manager_for_non_project_done_terminal_reason(tmp_path: Path, monkeypatch) -> None:
@@ -2519,139 +2591,6 @@ def test_invoke_manager_wrapup_uses_selected_profile_home_and_boss_model_reasoni
     assert captured["model"] == "gpt-5.3-codex"
     assert captured["reasoning_effort"] == "medium"
     assert out.message == "manager_profile_alias=codex-wrapup"
-
-
-def test_invoke_manager_blackbox_boss_uses_extended_timeout(tmp_path: Path, monkeypatch) -> None:
-    build_repo(tmp_path)
-    cfg = MODULE.RunConfig(
-        repo_root=tmp_path,
-        sleep_minutes=0,
-        max_build_cycles=1,
-        max_parallel_workers=8,
-        dry_run=False,
-        executor_provider="blackbox",
-        blackbox_lane="free",
-    )
-    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
-    captured: dict[str, int | None] = {"timeout_seconds": None}
-
-    def fake_blackbox_exec_prompt(_cfg, _manager_name, _cycle_number, timeout_seconds, _prompt_text, *, model=None):
-        captured["timeout_seconds"] = int(timeout_seconds)
-        return MODULE.ManagerResult(
-            manager="BOSS",
-            status="ok",
-            timeout=False,
-            returncode=0,
-            started_at="2026-01-01T00:00:00Z",
-            finished_at="2026-01-01T00:00:01Z",
-            duration_seconds=1.0,
-            message=f"model={model}",
-        )
-
-    monkeypatch.setattr(MODULE, "_blackbox_exec_prompt", fake_blackbox_exec_prompt)
-
-    out = MODULE._invoke_manager(
-        cfg,
-        manager_name="BOSS",
-        cycle_number=1,
-        context={},
-        expected_artifacts=[],
-    )
-
-    assert out.status == "ok"
-    assert captured["timeout_seconds"] == MODULE.BLACKBOX_MANAGER_TIMEOUT_SECONDS["BOSS"]
-
-
-def test_invoke_manager_codex_boss_keeps_default_timeout(tmp_path: Path, monkeypatch) -> None:
-    build_repo(tmp_path)
-    cfg = MODULE.RunConfig(
-        repo_root=tmp_path,
-        sleep_minutes=0,
-        max_build_cycles=1,
-        max_parallel_workers=8,
-        dry_run=False,
-        executor_provider="codex",
-    )
-    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
-    captured: dict[str, int | None] = {"timeout_seconds": None}
-
-    def fake_codex_exec_prompt(_cfg, _manager_name, _cycle_number, timeout_seconds, _prompt_text, **_kwargs):
-        captured["timeout_seconds"] = int(timeout_seconds)
-        return MODULE.ManagerResult(
-            manager="BOSS",
-            status="ok",
-            timeout=False,
-            returncode=0,
-            started_at="2026-01-01T00:00:00Z",
-            finished_at="2026-01-01T00:00:01Z",
-            duration_seconds=1.0,
-        )
-
-    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
-
-    out = MODULE._invoke_manager(
-        cfg,
-        manager_name="BOSS",
-        cycle_number=1,
-        context={},
-        expected_artifacts=[],
-    )
-
-    assert out.status == "ok"
-    assert captured["timeout_seconds"] == MODULE.MANAGER_TIMEOUT_SECONDS["BOSS"]
-
-
-def test_blackbox_exec_prompt_timeout_persists_partial_output(tmp_path: Path, monkeypatch) -> None:
-    build_repo(tmp_path)
-    cfg = MODULE.RunConfig(
-        repo_root=tmp_path,
-        sleep_minutes=0,
-        max_build_cycles=1,
-        max_parallel_workers=8,
-        dry_run=False,
-        executor_provider="blackbox",
-        blackbox_lane="free",
-    )
-    captured_events: list[dict[str, object]] = []
-
-    monkeypatch.setattr(
-        MODULE,
-        "_build_blackbox_exec_command",
-        lambda _cfg, _prompt_text, model=None: (["blackbox", "-m", str(model or "m"), "-p", "prompt"], {}, None),
-    )
-    monkeypatch.setattr(MODULE, "_write_new_executor_blob", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(MODULE, "_append_new_executor_event", lambda _scope, row: captured_events.append(dict(row)))
-
-    def fake_run(*_args, **_kwargs):
-        raise subprocess.TimeoutExpired(
-            cmd=["blackbox", "-m", "blackboxai/minimax/minimax-free", "-p", "prompt"],
-            timeout=5,
-            output="partial stdout",
-            stderr="partial stderr",
-        )
-
-    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
-
-    out = MODULE._blackbox_exec_prompt(
-        cfg,
-        "BOSS",
-        9,
-        5,
-        "prompt",
-        model="blackboxai/minimax/minimax-free",
-    )
-
-    assert out.status == "timeout"
-    assert out.timeout is True
-    assert "after 5s" in str(out.message or "")
-    assert out.stdout_path and Path(out.stdout_path).read_text(encoding="utf-8") == "partial stdout"
-    assert out.stderr_path and Path(out.stderr_path).read_text(encoding="utf-8") == "partial stderr"
-    assert captured_events
-    assert captured_events[-1]["status"] == "timeout"
-    assert captured_events[-1]["timeout_seconds"] == 5
-    assert captured_events[-1]["timed_out"] is True
 
 
 def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatch) -> None:

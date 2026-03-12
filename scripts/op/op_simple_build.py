@@ -34,8 +34,8 @@ DISPATCH_LAUNCH_LOG_FILE = CURRENT_DIR / "dispatch_launch_log.jsonl"
 INITIALIZE_STATE_FILE = CURRENT_DIR / "initialize_state.json"
 BOSS_EVIDENCE_FILE = CURRENT_DIR / "boss_evidence.json"
 BOSS_SESSION_STATE_FILE = CURRENT_DIR / "boss_session_state.json"
-TRACE_EVENT_LOG_FILE = CURRENT_DIR / "trace_event_envelope.jsonl"
 APP_LIFECYCLE_FILE = Path("app_lifecycle.json")
+TRACE_EVENT_LOG_FILE = CURRENT_DIR / "trace_event_envelope.jsonl"
 
 ARTIFACT_FILES = {
     "cycle_manager_decision": CURRENT_DIR / "cycle_manager_decision.json",
@@ -92,6 +92,7 @@ BOSS_REQUIRED_ARTIFACTS = [
 ]
 TASK_ATTEMPT_STAGES = ("dev", "lane_test", "test_fix", "lane_review", "review_fix", "deep_review", "deep_fix")
 SESSION_ID_REGEX = re.compile(r"(?:session id|session_id)\s*[:=]\s*([0-9a-fA-F-]{36})", re.IGNORECASE)
+MANAGER_PROFILE_ALIAS_REGEX = re.compile(r"manager_profile_alias=([A-Za-z0-9._-]+)")
 EXECUTOR_PROVIDERS = {"codex", "openrouter", "blackbox"}
 BLACKBOX_LANES = {"free", "api_key"}
 BLACKBOX_DEFAULT_MODELS = {
@@ -104,28 +105,28 @@ NEW_EXECUTOR_LOG_MAX_BYTES = 3 * 1024 * 1024 * 1024
 NEW_EXECUTOR_LOG_CHECK_INTERVAL_SECONDS = 900
 NEW_EXECUTOR_LOG_STATE_FILE = NEW_EXECUTOR_LOG_ROOT / "MAINTENANCE_STATE.json"
 TRACE_EVENT_SCHEMA_VERSION = "trace-event-envelope.v1"
-CANONICAL_ID_PATTERN = re.compile(r"^[a-z]+\\.[a-z0-9][a-z0-9-]{1,95}$")
-GROUND_SYNC_DEFAULT_EVERY_N_CYCLES = 10
+CANONICAL_ID_PATTERN = re.compile(r"^[a-z]+\.[a-z0-9][a-z0-9-]{1,95}$")
+GROUND_SYNC_DEFAULT_EVERY_N_CYCLES = 1
 GROUND_SYNC_DEFAULT_TIMEOUT_SECONDS = 120
 GROUND_SYNC_MANAGER_NAME = "ground-sync"
 GROUND_SYNC_SNAPSHOT_BASENAME = "current.trace_event_envelope.jsonl"
-TRACE_EVENT_TIMESTAMP_REGEX = re.compile(r"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$")
+TRACE_EVENT_TIMESTAMP_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 TRACE_EVENT_SOURCE_SHA_REGEX = re.compile(r"^[0-9a-f]{7,40}$")
 TRACE_EVENT_ACTOR_TYPES = {"manager", "worker", "service", "operator", "system"}
 TRACE_EVENT_OUTCOME_STATUS = {"success", "failure", "partial", "blocked", "noop", "unknown"}
 TRACE_EVENT_RISK_LEVELS = {"low", "medium", "high", "critical"}
 CANONICAL_ID_PATTERNS = {
-    "project_id": re.compile(r"^prj\\.[a-z0-9][a-z0-9-]{1,95}$"),
-    "era_id": re.compile(r"^era\\.[a-z0-9][a-z0-9-]{1,95}$"),
-    "plan_id": re.compile(r"^plan\\.[a-z0-9][a-z0-9-]{1,95}$"),
-    "phase_id": re.compile(r"^phase\\.[a-z0-9][a-z0-9-]{1,95}$"),
-    "lane_id": re.compile(r"^lane\\.[a-z0-9][a-z0-9-]{1,95}$"),
-    "task_id": re.compile(r"^task\\.[a-z0-9][a-z0-9-]{1,95}$"),
-    "run_id": re.compile(r"^run\\.[a-z0-9][a-z0-9-]{1,95}$"),
-    "thread_id": re.compile(r"^thread\\.[a-z0-9][a-z0-9-]{1,95}$"),
-    "event_id": re.compile(r"^event\\.[a-z0-9][a-z0-9-]{1,95}$"),
-    "decision_id": re.compile(r"^decision\\.[a-z0-9][a-z0-9-]{1,95}$"),
-    "artifact_id": re.compile(r"^artifact\\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "project_id": re.compile(r"^prj\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "era_id": re.compile(r"^era\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "plan_id": re.compile(r"^plan\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "phase_id": re.compile(r"^phase\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "lane_id": re.compile(r"^lane\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "task_id": re.compile(r"^task\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "run_id": re.compile(r"^run\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "thread_id": re.compile(r"^thread\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "event_id": re.compile(r"^event\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "decision_id": re.compile(r"^decision\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "artifact_id": re.compile(r"^artifact\.[a-z0-9][a-z0-9-]{1,95}$"),
 }
 
 
@@ -888,7 +889,7 @@ def _emit_cycle_trace_events(
     manager_decision_id = _canonical_id("decision", f"{identity['repo_slug']}-c{cycle_number:06d}-manager")
     manager_artifact_id = _canonical_id(
         "artifact",
-        f"{identity['repo_slug']}-c{cycle_number:06d}-cycle-manager-decision"
+        f"{identity['repo_slug']}-c{cycle_number:06d}-cycle-manager-decision",
     )
     manager_timestamp = _normalize_event_ts(decision_payload.get("updated_at"))
     manager_decision = str(decision_payload.get("decision") or "").strip().lower()
@@ -967,7 +968,7 @@ def _emit_cycle_trace_events(
         "timestamp_utc": dispatch_timestamp,
         "identity": {
             "project_id": identity["project_id"],
-            "era_id": identity["era_id"],
+            "era_id": identity.get("era_id"),
             "plan_id": identity["plan_id"],
             "phase_id": identity["phase_id"],
             "lane_id": identity["lane_id"],
@@ -4081,6 +4082,25 @@ def _build_config(req: Any) -> RunConfig:
     executor_model = str(getattr(req, "executor_model", "") or "").strip() or None
     blackbox_lane = _normalize_blackbox_lane(getattr(req, "blackbox_lane", "free"))
     allow_worker_executor_override = bool(getattr(req, "allow_worker_executor_override", False))
+    ground_sync_enabled_raw = getattr(req, "ground_sync_enabled", True)
+    if isinstance(ground_sync_enabled_raw, str):
+        ground_sync_enabled = ground_sync_enabled_raw.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        ground_sync_enabled = bool(ground_sync_enabled_raw)
+    ground_sync_every_n_cycles = getattr(req, "ground_sync_every_n_cycles", GROUND_SYNC_DEFAULT_EVERY_N_CYCLES)
+    try:
+        ground_sync_every_n_cycles = int(ground_sync_every_n_cycles)
+    except (TypeError, ValueError):
+        ground_sync_every_n_cycles = GROUND_SYNC_DEFAULT_EVERY_N_CYCLES
+    if ground_sync_every_n_cycles <= 0:
+        ground_sync_every_n_cycles = GROUND_SYNC_DEFAULT_EVERY_N_CYCLES
+    ground_sync_timeout_seconds = getattr(req, "ground_sync_timeout_seconds", GROUND_SYNC_DEFAULT_TIMEOUT_SECONDS)
+    try:
+        ground_sync_timeout_seconds = int(ground_sync_timeout_seconds)
+    except (TypeError, ValueError):
+        ground_sync_timeout_seconds = GROUND_SYNC_DEFAULT_TIMEOUT_SECONDS
+    if ground_sync_timeout_seconds < 30:
+        ground_sync_timeout_seconds = 30
 
     return RunConfig(
         repo_root=repo_root,
@@ -4097,6 +4117,9 @@ def _build_config(req: Any) -> RunConfig:
         executor_model=executor_model,
         blackbox_lane=blackbox_lane,
         allow_worker_executor_override=allow_worker_executor_override,
+        ground_sync_enabled=ground_sync_enabled,
+        ground_sync_every_n_cycles=ground_sync_every_n_cycles,
+        ground_sync_timeout_seconds=ground_sync_timeout_seconds,
     )
 
 
@@ -4407,6 +4430,24 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 dispatch_counts,
                 base_summary=base_summary,
             )
+            trace_errors: list[str] = []
+            try:
+                trace_errors = _emit_cycle_trace_events(
+                    cfg,
+                    cycle_number=cycle_number,
+                    dispatch_counts=dispatch_counts,
+                )
+            except Exception as exc:  # noqa: BLE001
+                trace_errors.append(f"trace cycle emission runtime error: {exc}")
+            for trace_error in trace_errors:
+                warnings.append(
+                    {
+                        "code": "trace_event_emission_failed",
+                        "message": trace_error,
+                        "stage": "op-simple-build",
+                        "details": {"cycle_number": cycle_number},
+                    }
+                )
 
             terminate_path = cfg.repo_root / TERMINATE_FILE_NAME
             if terminate_path.exists():
@@ -4415,6 +4456,28 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 stop_reason = _termination_from_summary(summary)
                 if stop_reason not in {"project_done", "insurmountable_blocker"} and watchdog_stop:
                     stop_reason = "watchdog_idle_stop"
+
+            if cfg.ground_sync_enabled and not stop_reason and cycle_number % cfg.ground_sync_every_n_cycles == 0:
+                sync_status, sync_message = _run_ground_sync(
+                    cfg,
+                    cycle_number=cycle_number,
+                    trigger="cadence",
+                )
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} manager={GROUND_SYNC_MANAGER_NAME} status={sync_status} message={sync_message}",
+                    flush=True,
+                )
+                if sync_status == "failed":
+                    warnings.append(
+                        {
+                            "code": "ground_sync_failed",
+                            "message": sync_message,
+                            "stage": "op-simple-build",
+                            "details": {"cycle_number": cycle_number, "trigger": "cadence"},
+                        }
+                    )
 
             _snapshot_cycle(cfg, cycle_number)
             previous_state_signature, _ = _worker_task_state_signature(cfg)
@@ -4438,6 +4501,28 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 init_state=init_state,
                 warnings=warnings,
             )
+
+        if cfg.ground_sync_enabled:
+            sync_status, sync_message = _run_ground_sync(
+                cfg,
+                cycle_number=cycle_number,
+                trigger="terminal",
+            )
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle={cycle_number} manager={GROUND_SYNC_MANAGER_NAME} status={sync_status} message={sync_message}",
+                flush=True,
+            )
+            if sync_status == "failed":
+                warnings.append(
+                    {
+                        "code": "ground_sync_failed",
+                        "message": sync_message,
+                        "stage": "op-simple-build",
+                        "details": {"cycle_number": cycle_number, "trigger": "terminal"},
+                    }
+                )
 
         data = {
             "cycle_number": cycle_number,
