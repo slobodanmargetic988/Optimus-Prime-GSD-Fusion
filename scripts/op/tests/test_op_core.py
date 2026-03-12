@@ -1199,6 +1199,59 @@ def test_op_simple_build_accepts_run_base_source_branch_override():
         assert req.run_base_source_branch == "op-simple-canary-prev"
 
 
+def test_op_simple_build_executor_defaults():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request({"command": "/op-simple-build", "repo_root": str(root)})
+        assert req.executor_provider == "codex"
+        assert req.executor_model is None
+        assert req.blackbox_lane == "free"
+        assert req.allow_worker_executor_override is False
+
+
+def test_op_simple_build_accepts_executor_overrides_and_profile_alias():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-simple-build",
+                "repo_root": str(root),
+                "profile": "openrouter_free",
+                "executor_provider": "blackbox",
+                "executor_model": "blackboxai/minimax/minimax-m2.5",
+                "blackbox_lane": "api_key",
+                "allow_worker_executor_override": True,
+            }
+        )
+        assert req.profile == "openrouter_free"
+        assert req.codex_profile == "openrouter_free"
+        assert req.executor_provider == "blackbox"
+        assert req.executor_model == "blackboxai/minimax/minimax-m2.5"
+        assert req.blackbox_lane == "api_key"
+        assert req.allow_worker_executor_override is True
+
+
+def test_parse_request_rejects_invalid_executor_provider():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        try:
+            MODULE.parse_request(
+                {
+                    "command": "/op-simple-build",
+                    "repo_root": str(root),
+                    "executor_provider": "invalid-provider",
+                }
+            )
+        except MODULE.OpError as exc:
+            assert exc.code == "input_error"
+            assert "executor_provider" in exc.message
+        else:  # pragma: no cover - defensive
+            raise AssertionError("expected parse_request to reject invalid executor_provider")
+
+
 def test_op_simple_build_dry_run_runs_without_codex():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

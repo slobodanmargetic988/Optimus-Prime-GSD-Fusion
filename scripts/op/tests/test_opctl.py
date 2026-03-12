@@ -338,3 +338,53 @@ def test_merge_payload_includes_reset_exhausted_retries_flag(monkeypatch: pytest
     parsed = MODULE.parse_args()
     payload = MODULE.merge_payload(parsed)
     assert payload.get("reset_exhausted_retries") is True
+
+
+def test_merge_payload_sets_executor_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-simple-build",
+            "--repo-root",
+            "/tmp/repo",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("executor_provider") == "codex"
+    assert payload.get("blackbox_lane") == "free"
+    assert payload.get("allow_worker_executor_override") is False
+
+
+def test_merge_payload_parses_executor_flags_and_profile_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-build",
+            "--repo-root",
+            "/tmp/repo",
+            "--profile",
+            "openrouter_free",
+            "--executor-provider",
+            "blackbox",
+            "--executor-model",
+            "blackboxai/minimax/minimax-free",
+            "--blackbox-lane",
+            "api_key",
+            "--allow-worker-executor-override",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("profile") == "openrouter_free"
+    assert payload.get("codex_profile") == "openrouter_free"
+    assert payload.get("executor_provider") == "blackbox"
+    assert payload.get("executor_model") == "blackboxai/minimax/minimax-free"
+    assert payload.get("blackbox_lane") == "api_key"
+    assert payload.get("allow_worker_executor_override") is True

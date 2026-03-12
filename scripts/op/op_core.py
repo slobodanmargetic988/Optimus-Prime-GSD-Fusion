@@ -298,6 +298,12 @@ class OpRequest:
     run_base_source_branch: str | None = None
     boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "xhigh"
+    profile: str | None = None
+    codex_profile: str | None = None
+    executor_provider: str = "codex"
+    executor_model: str | None = None
+    blackbox_lane: str = "free"
+    allow_worker_executor_override: bool = False
 
 
 def utc_now_iso() -> str:
@@ -1784,6 +1790,10 @@ def _default_worker_row(slot: str, *, run_id: str | None = None) -> dict[str, An
         "dispatch_pid": None,
         "dispatch_thread_id": None,
         "codex_profile_alias": None,
+        "current_task_provider": None,
+        "next_task_provider": None,
+        "current_task_model": None,
+        "next_task_model": None,
         "worktree_root": None,
         "updated_at": now,
     }
@@ -1986,6 +1996,10 @@ def _ensure_worker_registry_v2(repo_root: Path, build_state: dict[str, Any]) -> 
         row.setdefault("previous_lane_id", "n/a")
         row.setdefault("dispatch_thread_id", None)
         row.setdefault("codex_profile_alias", None)
+        row.setdefault("current_task_provider", None)
+        row.setdefault("next_task_provider", None)
+        row.setdefault("current_task_model", None)
+        row.setdefault("next_task_model", None)
         row.setdefault("worktree_root", None)
         row.setdefault("session_state", _worker_state(row) or "not_running")
         if row.get("active_task") is not None and row.get("active_task_id") is None:
@@ -8760,6 +8774,7 @@ def _dispatch_task_packet(
     source_gap_ids: list[str] | None = None,
     gap_stage: str | None = None,
 ) -> dict[str, Any]:
+    # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=medium_tooling.
     script = _resolve_skill_script("dispatch-worker-packet", "dispatch_worker_packet.py")
     task_id = _as_str(task.get("task_id")) or "TASK-UNKNOWN"
     requirement_ids = [
@@ -8810,6 +8825,29 @@ def _dispatch_task_packet(
         start_from_commit = _git_text(req.repo_root, "rev-parse", "HEAD") or "HEAD"
     worktree_root = worktree_root_override or str(req.repo_root)
     branch_name = branch_name_override or _branch_name_for_stage(slot_name, task_id, stage, run_id=run_id)
+    executor_provider = (_as_str(getattr(req, "executor_provider", None)) or "codex").lower()
+    executor_model = _as_str(getattr(req, "executor_model", None))
+    blackbox_lane = (_as_str(getattr(req, "blackbox_lane", None)) or "free").lower()
+    if _as_bool(getattr(req, "allow_worker_executor_override", False), default=False):
+        provider_override = (_as_str(task.get("next_task_provider")) or "").lower()
+        model_override = _as_str(task.get("next_task_model"))
+        if provider_override:
+            if provider_override in {"codex", "openrouter", "blackbox"}:
+                executor_provider = provider_override
+            else:
+                dispatch_warnings.append(
+                    {
+                        "code": "dispatch_executor_override_invalid",
+                        "message": (
+                            f"invalid next_task_provider override '{provider_override}' for {task_id}; "
+                            f"using build executor '{executor_provider}'"
+                        ),
+                        "stage": "build_loop",
+                        "task_id": task_id,
+                    }
+                )
+        if model_override:
+            executor_model = model_override
     payload = {
         "slot": slot_name,
         "role": cfg["role"],
@@ -8822,6 +8860,9 @@ def _dispatch_task_packet(
         "acceptance_criteria": acceptance_refs,
         "packet_version": 1,
         "codex_profile_alias": codex_profile_alias,
+        "executor_provider": executor_provider,
+        "executor_model": executor_model,
+        "blackbox_lane": blackbox_lane,
         "mcp_mode": "disable-all",
         "mcp_allowlist": [],
         "sandbox_mode": "danger-full-access",
@@ -15085,6 +15126,24 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
     run_base_source_branch = _as_str(payload.get("run_base_source_branch"))
     boss_model = _as_str(payload.get("boss_model")) or "gpt-5.3-codex"
     boss_reasoning_effort = _as_str(payload.get("boss_reasoning_effort")) or "xhigh"
+    profile = _as_str(payload.get("profile"))
+    codex_profile = _as_str(payload.get("codex_profile")) or profile
+    executor_provider = (_as_str(payload.get("executor_provider")) or "codex").lower()
+    if executor_provider not in {"codex", "openrouter", "blackbox"}:
+        raise OpError(
+            "input_error",
+            "executor_provider must be one of: codex, openrouter, blackbox",
+            stage="input",
+        )
+    blackbox_lane = (_as_str(payload.get("blackbox_lane")) or "free").lower()
+    if blackbox_lane not in {"free", "api_key"}:
+        raise OpError(
+            "input_error",
+            "blackbox_lane must be one of: free, api_key",
+            stage="input",
+        )
+    executor_model = _as_str(payload.get("executor_model"))
+    allow_worker_executor_override = _as_bool(payload.get("allow_worker_executor_override"), default=False)
 
     return OpRequest(
         command=command,
@@ -15106,6 +15165,12 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,
         boss_reasoning_effort=boss_reasoning_effort,
+        profile=profile,
+        codex_profile=codex_profile,
+        executor_provider=executor_provider,
+        executor_model=executor_model,
+        blackbox_lane=blackbox_lane,
+        allow_worker_executor_override=allow_worker_executor_override,
     )
 
 

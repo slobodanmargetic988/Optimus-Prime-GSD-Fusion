@@ -36,6 +36,17 @@ FORBIDDEN_WORKER_MCPS = {"linear", "linear_sse"}
 SANDBOX_MODES = {"workspace-write", "danger-full-access"}
 TEST_TRAIN_MODES = {"off", "final-stage", "forced-shared-env"}
 DISPATCH_MODES = {"exec", "resume"}
+EXECUTOR_PROVIDERS = {"codex", "openrouter", "blackbox"}
+BLACKBOX_LANES = {"free", "api_key"}
+BLACKBOX_DEFAULT_MODELS = {
+    "free": "blackboxai/minimax/minimax-free",
+    "api_key": "blackboxai/minimax/minimax-m2.5",
+}
+BLACKBOX_KEYCHAIN_SERVICE = "BLACKBOXAI_KEY"
+NEW_EXECUTOR_LOG_ROOT = Path("/Users/slobodan/projects/LOGS") / "op-executors"
+NEW_EXECUTOR_LOG_MAX_BYTES = 3 * 1024 * 1024 * 1024
+NEW_EXECUTOR_LOG_CHECK_INTERVAL_SECONDS = 900
+NEW_EXECUTOR_LOG_STATE_FILE = NEW_EXECUTOR_LOG_ROOT / "MAINTENANCE_STATE.json"
 RESUME_EARLY_EXIT_PROBE_SECONDS = 1.5
 RESUME_EARLY_EXIT_POLL_SECONDS = 0.1
 RESUME_FAILURE_LOG_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -84,6 +95,9 @@ class DispatchInput:
     acceptance_criteria: list[str]
     packet_version: int
     codex_profile_alias: str
+    executor_provider: str
+    executor_model: str | None
+    blackbox_lane: str
     mcp_mode: str
     mcp_allowlist: list[str]
     sandbox_mode: str
@@ -203,6 +217,122 @@ def _bool(value: Any, *, default: bool = False) -> bool:
         if text in {"0", "false", "no", "n", "off"}:
             return False
     raise ToolError("input_error", "boolean value expected", stage="input")
+
+
+def _normalize_executor_provider(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in EXECUTOR_PROVIDERS:
+        return text
+    return "codex"
+
+
+def _normalize_blackbox_lane(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in BLACKBOX_LANES:
+        return text
+    return "free"
+
+
+def _maintenance_epoch(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _maintain_new_executor_logs() -> None:
+    now_epoch = time.time()
+    state: dict[str, Any] = {}
+    if NEW_EXECUTOR_LOG_STATE_FILE.exists():
+        try:
+            payload = json.loads(NEW_EXECUTOR_LOG_STATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                state = payload
+        except (OSError, json.JSONDecodeError):
+            state = {}
+    last_checked_epoch = _maintenance_epoch(state.get("last_checked_epoch"))
+    if now_epoch - last_checked_epoch < float(NEW_EXECUTOR_LOG_CHECK_INTERVAL_SECONDS):
+        return
+
+    NEW_EXECUTOR_LOG_ROOT.mkdir(parents=True, exist_ok=True)
+    files: list[Path] = []
+    for path in NEW_EXECUTOR_LOG_ROOT.rglob("*"):
+        if not path.is_file() or path == NEW_EXECUTOR_LOG_STATE_FILE:
+            continue
+        files.append(path)
+    total_bytes = 0
+    for path in files:
+        try:
+            total_bytes += int(path.stat().st_size)
+        except OSError:
+            continue
+
+    if total_bytes > NEW_EXECUTOR_LOG_MAX_BYTES:
+        def _mtime(item: Path) -> float:
+            try:
+                return float(item.stat().st_mtime)
+            except OSError:
+                return 0.0
+
+        for path in sorted(files, key=_mtime):
+            if total_bytes <= NEW_EXECUTOR_LOG_MAX_BYTES:
+                break
+            try:
+                original_size = int(path.stat().st_size)
+                path.write_text("", encoding="utf-8")
+            except OSError:
+                continue
+            total_bytes = max(0, total_bytes - original_size)
+
+    atomic_write_json(
+        NEW_EXECUTOR_LOG_STATE_FILE,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "last_checked_epoch": int(now_epoch),
+            "total_bytes": int(total_bytes),
+            "max_bytes": int(NEW_EXECUTOR_LOG_MAX_BYTES),
+        },
+    )
+
+
+def _append_new_executor_event(scope: str, row: dict[str, Any]) -> None:
+    try:
+        _maintain_new_executor_logs()
+        path = NEW_EXECUTOR_LOG_ROOT / scope / "events.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, sort_keys=False) + "\n")
+    except OSError:
+        return
+
+
+def _resolve_blackbox_api_key() -> str | None:
+    user = str(os.environ.get("USER") or "").strip()
+    if not user:
+        return None
+    try:
+        proc = subprocess.run(
+            [
+                "security",
+                "find-generic-password",
+                "-a",
+                user,
+                "-s",
+                BLACKBOX_KEYCHAIN_SERVICE,
+                "-w",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    key = str(proc.stdout or "").strip()
+    return key or None
 
 
 def validate_slot_role(slot: str, role: str) -> None:
@@ -450,6 +580,10 @@ def validate_policy(cfg: DispatchInput) -> None:
     if cfg.dispatch_mode == "resume":
         if not isinstance(cfg.resume_thread_id, str) or not cfg.resume_thread_id.strip():
             raise ToolError("validation_error", "resume dispatch mode requires resume_thread_id", stage="validate")
+    if cfg.executor_provider not in EXECUTOR_PROVIDERS:
+        raise ToolError("validation_error", "executor_provider must be codex|openrouter|blackbox", stage="validate")
+    if cfg.blackbox_lane not in BLACKBOX_LANES:
+        raise ToolError("validation_error", "blackbox_lane must be free|api_key", stage="validate")
 
 
 
@@ -500,6 +634,9 @@ def config_from_args(args: argparse.Namespace) -> DispatchInput:
             else int(data.get("packet_version", 1))
         ),
         codex_profile_alias=(args.codex_profile_alias or _must_str(data, "codex_profile_alias")).strip(),
+        executor_provider=_normalize_executor_provider(args.executor_provider or data.get("executor_provider") or "codex"),
+        executor_model=((args.executor_model or data.get("executor_model") or "").strip() or None),
+        blackbox_lane=_normalize_blackbox_lane(args.blackbox_lane or data.get("blackbox_lane") or "free"),
         mcp_mode=(args.mcp_mode or _must_str(data, "mcp_mode")).strip(),
         mcp_allowlist=(
             _list_of_str(data, "mcp_allowlist", required=False)
@@ -671,6 +808,9 @@ def render_packet(cfg: DispatchInput) -> str:
         f"start_from_branch: {cfg.start_from_branch}\n"
         f"start_from_commit: {cfg.start_from_commit}\n"
         f"codex_profile_alias: {cfg.codex_profile_alias}\n"
+        f"executor_provider: {cfg.executor_provider}\n"
+        f"executor_model: {cfg.executor_model or 'none'}\n"
+        f"blackbox_lane: {cfg.blackbox_lane}\n"
         f"mcp_mode: {cfg.mcp_mode}\n"
         f"mcp_allowlist: {mcp_line}\n"
         f"sandbox_mode: {cfg.sandbox_mode}\n"
@@ -864,6 +1004,7 @@ class ThreadDispatchRunner:
         raise ToolError("dispatch_failed", "thread-dispatch script not found", stage="dispatch")
 
     def dispatch(self, cfg: DispatchInput, packet_path: Path) -> dict[str, Any]:
+        # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=medium_tooling.
         script = self._script_path()
         use_danger_full_access = cfg.sandbox_mode == "danger-full-access"
         codex_home = resolve_codex_home_from_alias(cfg.codex_profile_alias)
@@ -893,6 +1034,9 @@ class ThreadDispatchRunner:
                 cmd.extend(["--extra-arg=--dangerously-bypass-approvals-and-sandbox"])
             else:
                 cmd.extend([f"--extra-arg=--sandbox", f"--extra-arg={cfg.sandbox_mode}"])
+            model_text = str(cfg.executor_model or "").strip()
+            if model_text:
+                cmd.extend(["--extra-arg=--model", f"--extra-arg={model_text}"])
             for d in cfg.sandbox_add_dirs:
                 cmd.extend([f"--extra-arg=--add-dir", f"--extra-arg={d}"])
             return cmd
@@ -1043,6 +1187,98 @@ class ThreadDispatchRunner:
         }
 
 
+class BlackboxDispatchRunner:
+    def __init__(self, repo_root: Path):
+        self.repo_root = repo_root
+
+    def dispatch(self, cfg: DispatchInput, packet_path: Path) -> dict[str, Any]:
+        # LLM interaction classification: reasoning_effort=medium_effort, tooling_effort=low_tooling.
+        try:
+            prompt_text = packet_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ToolError("dispatch_failed", f"unable to read packet for blackbox dispatch: {exc}", stage="dispatch") from exc
+
+        lane = _normalize_blackbox_lane(cfg.blackbox_lane)
+        model = str(cfg.executor_model or "").strip() or BLACKBOX_DEFAULT_MODELS[lane]
+        env = os.environ.copy()
+        if lane == "free":
+            env.pop("BLACKBOX_API_KEY", None)
+            env.pop("OPENAI_API_KEY", None)
+        else:
+            key = _resolve_blackbox_api_key()
+            if not key:
+                raise ToolError(
+                    "dispatch_failed",
+                    "BLACKBOXAI_KEY is missing in macOS Keychain for blackbox api_key lane",
+                    stage="dispatch",
+                )
+            env["BLACKBOX_API_KEY"] = key
+
+        dispatch_logs_dir = cfg.repo_root / "reports" / "optimus-prime" / "runtime" / "dispatch-logs"
+        dispatch_logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = (dispatch_logs_dir / f"dispatch-blackbox-{cfg.slot}-{now_compact_utc()}.log").resolve()
+        warnings: list[dict[str, Any]] = []
+        dispatch_mode_used = "exec"
+        if cfg.dispatch_mode == "resume" and cfg.resume_thread_id:
+            warnings.append(
+                {
+                    "code": "dispatch_resume_not_supported_for_blackbox",
+                    "message": "blackbox dispatch does not support resume; falling back to fresh exec dispatch",
+                    "stage": "dispatch",
+                }
+            )
+
+        try:
+            with log_path.open("w", encoding="utf-8") as handle:
+                proc = subprocess.Popen(
+                    ["blackbox", "-m", model, "-p", prompt_text],
+                    cwd=str(cfg.worktree_root),
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                )
+        except FileNotFoundError as exc:
+            raise ToolError("dispatch_failed", "blackbox binary not found", stage="dispatch") from exc
+        except OSError as exc:
+            raise ToolError("dispatch_failed", f"blackbox dispatch failed to start: {exc}", stage="dispatch") from exc
+
+        _append_new_executor_event(
+            "op-build/dispatch-blackbox",
+            {
+                "schema_version": SCHEMA_VERSION,
+                "timestamp": utc_now_iso(),
+                "slot": cfg.slot,
+                "task_identifier": cfg.task_identifier,
+                "executor_provider": "blackbox",
+                "executor_model": model,
+                "blackbox_lane": lane,
+                "dispatch_mode_used": dispatch_mode_used,
+                "pid": int(proc.pid),
+                "dispatch_log": str(log_path),
+            },
+        )
+
+        payload = {
+            "status": "started",
+            "pid": int(proc.pid),
+            "log_file": str(log_path),
+            "provider": "blackbox",
+            "model": model,
+        }
+        return {
+            "dispatch_started": True,
+            "pid": int(proc.pid),
+            "dispatch_log": str(log_path),
+            "dispatch_mode_used": dispatch_mode_used,
+            "fallback_reason_code": "dispatch_resume_not_supported_for_blackbox"
+            if cfg.dispatch_mode == "resume" and cfg.resume_thread_id
+            else None,
+            "warnings": warnings,
+            "raw": payload,
+        }
+
+
 def atomic_write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -1129,6 +1365,9 @@ def update_worker_registry(path: Path, cfg: DispatchInput, packet: Path, dispatc
         "start_from_branch": cfg.start_from_branch,
         "start_from_commit": cfg.start_from_commit,
         "codex_profile_alias": cfg.codex_profile_alias,
+        "executor_provider": cfg.executor_provider,
+        "executor_model": cfg.executor_model,
+        "blackbox_lane": cfg.blackbox_lane,
         "mcp_mode": cfg.mcp_mode,
         "mcp_allowlist": cfg.mcp_allowlist,
         "sandbox_mode": cfg.sandbox_mode,
@@ -1200,6 +1439,9 @@ def update_branch_lineage(path: Path, cfg: DispatchInput, dispatch: dict[str, An
         "branch": cfg.branch_name,
         "start_from_branch": cfg.start_from_branch,
         "start_from_commit": cfg.start_from_commit,
+        "executor_provider": cfg.executor_provider,
+        "executor_model": cfg.executor_model,
+        "blackbox_lane": cfg.blackbox_lane,
         "worktree_root": str(cfg.worktree_root),
         "op_build_mode": cfg.op_build_mode,
         "plan_id": cfg.plan_id,
@@ -1274,6 +1516,9 @@ def build_result(cfg: DispatchInput, packet: Path) -> dict[str, Any]:
         "slot": cfg.slot,
         "role": cfg.role,
         "task_identifier": cfg.task_identifier,
+        "executor_provider": cfg.executor_provider,
+        "executor_model": cfg.executor_model,
+        "blackbox_lane": cfg.blackbox_lane,
         "packet_path": str(packet),
         "dispatch_started": False,
         "pid": None,
@@ -1312,7 +1557,11 @@ def build_result(cfg: DispatchInput, packet: Path) -> dict[str, Any]:
 
 def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None = None) -> dict[str, Any]:
     if dispatcher is None:
-        dispatcher = ThreadDispatchRunner(repo_root=cfg.repo_root)
+        provider = _normalize_executor_provider(cfg.executor_provider)
+        if provider == "blackbox":
+            dispatcher = BlackboxDispatchRunner(repo_root=cfg.repo_root)
+        else:
+            dispatcher = ThreadDispatchRunner(repo_root=cfg.repo_root)
 
     packet = packet_path(cfg)
     result = build_result(cfg, packet)
@@ -1326,6 +1575,8 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
             "status": "skipped_dry_run",
             "pid": None,
             "dispatch_log": None,
+            "executor_provider": cfg.executor_provider,
+            "executor_model": cfg.executor_model,
         }
         result["state_updates"] = {
             "worktree_prereqs": "skipped_dry_run",
@@ -1425,6 +1676,8 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "status": "started" if dispatch["dispatch_started"] else "failed",
         "pid": int(dispatch["pid"]),
         "dispatch_log": str(dispatch["dispatch_log"]),
+        "executor_provider": cfg.executor_provider,
+        "executor_model": cfg.executor_model,
         "dispatch_thread_id": dispatch_thread_id,
         "dispatch_mode_used": dispatch.get("dispatch_mode_used", "exec"),
         "fallback_reason_code": dispatch.get("fallback_reason_code"),
@@ -1475,6 +1728,9 @@ def run_dispatch_worker_packet(cfg: DispatchInput, dispatcher: Dispatcher | None
         "dispatch_mode_used": dispatch.get("dispatch_mode_used", "exec"),
         "lane_id": cfg.lane_id,
         "codex_profile_alias": cfg.codex_profile_alias,
+        "executor_provider": cfg.executor_provider,
+        "executor_model": cfg.executor_model,
+        "blackbox_lane": cfg.blackbox_lane,
         "mcp_mode": cfg.mcp_mode,
         "mcp_allowlist": cfg.mcp_allowlist,
         "sandbox_mode": cfg.sandbox_mode,
@@ -1596,6 +1852,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--acceptance-criteria-json")
     parser.add_argument("--packet-version", type=int)
     parser.add_argument("--codex-profile-alias")
+    parser.add_argument("--executor-provider", choices=sorted(EXECUTOR_PROVIDERS))
+    parser.add_argument("--executor-model")
+    parser.add_argument("--blackbox-lane", choices=sorted(BLACKBOX_LANES))
     parser.add_argument("--mcp-mode")
     parser.add_argument("--mcp-allowlist", action="append")
     parser.add_argument("--sandbox-mode")

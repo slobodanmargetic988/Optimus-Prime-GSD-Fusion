@@ -45,6 +45,9 @@ def make_cfg(root: Path, **overrides):
         acceptance_criteria=overrides.get("acceptance_criteria", ["tool works", "tests pass"]),
         packet_version=overrides.get("packet_version", 1),
         codex_profile_alias=overrides.get("codex_profile_alias", "codex"),
+        executor_provider=overrides.get("executor_provider", "codex"),
+        executor_model=overrides.get("executor_model"),
+        blackbox_lane=overrides.get("blackbox_lane", "free"),
         mcp_mode=overrides.get("mcp_mode", "disable-all"),
         mcp_allowlist=overrides.get("mcp_allowlist", []),
         sandbox_mode=overrides.get("sandbox_mode", "danger-full-access"),
@@ -279,6 +282,14 @@ class DispatchWorkerPacketTests(unittest.TestCase):
         with self.assertRaises(MODULE.ToolError):
             MODULE._optional_bool("maybe")
 
+    def test_validate_policy_rejects_invalid_executor_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_cfg(Path(tmp), executor_provider="invalid-provider")
+            with self.assertRaises(MODULE.ToolError) as ctx:
+                MODULE.validate_policy(cfg)
+            self.assertEqual(ctx.exception.code, "validation_error")
+            self.assertIn("executor_provider", ctx.exception.message)
+
     def test_dry_run_returns_no_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -344,6 +355,40 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             thread_history = (root / "reports" / "optimus-prime" / "THREAD_HISTORY.log").read_text(encoding="utf-8")
             self.assertIn("slot | worker type | thread-id", thread_history)
             self.assertIn("dev-1 | developer | unknown", thread_history)
+
+    def test_run_dispatch_worker_packet_selects_blackbox_runner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = make_cfg(root, executor_provider="blackbox", blackbox_lane="free")
+            payload = {
+                "dispatch_started": True,
+                "pid": 9991,
+                "dispatch_log": str((root / "blackbox.log").resolve()),
+                "dispatch_mode_used": "exec",
+                "fallback_reason_code": None,
+                "warnings": [],
+                "raw": {"status": "started", "pid": 9991, "log_file": str((root / "blackbox.log").resolve())},
+            }
+            with mock.patch.object(MODULE.BlackboxDispatchRunner, "dispatch", return_value=payload), mock.patch.object(
+                MODULE.ThreadDispatchRunner,
+                "dispatch",
+                side_effect=AssertionError("thread runner should not be used for blackbox provider"),
+            ):
+                out = MODULE.run_dispatch_worker_packet(cfg, dispatcher=None)
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["dispatch"]["executor_provider"], "blackbox")
+
+    def test_blackbox_dispatch_runner_requires_keychain_key_for_api_lane(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = make_cfg(root, executor_provider="blackbox", blackbox_lane="api_key")
+            packet = root / "packet.md"
+            packet.write_text("prompt body", encoding="utf-8")
+            with mock.patch.object(MODULE, "_resolve_blackbox_api_key", return_value=None):
+                with self.assertRaises(MODULE.ToolError) as ctx:
+                    MODULE.BlackboxDispatchRunner(repo_root=root).dispatch(cfg, packet)
+            self.assertEqual(ctx.exception.code, "dispatch_failed")
+            self.assertIn("BLACKBOXAI_KEY", ctx.exception.message)
 
     def test_resume_dispatch_preserves_existing_thread_id_when_dispatch_payload_omits_it(self):
         with tempfile.TemporaryDirectory() as tmp:

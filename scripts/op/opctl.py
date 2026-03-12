@@ -164,6 +164,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-parallel-workers", type=int)
     parser.add_argument("--sleep-minutes", type=float)
     parser.add_argument("--run-base-source-branch")
+    parser.add_argument("--profile")
+    parser.add_argument("--executor-provider", choices=["codex", "openrouter", "blackbox"], default=None)
+    parser.add_argument("--executor-model")
+    parser.add_argument("--blackbox-lane", choices=["free", "api_key"], default=None)
+    parser.add_argument("--allow-worker-executor-override", action="store_true")
     parser.add_argument("--boss-model")
     parser.add_argument("--boss-reasoning-effort")
     parser.add_argument("--dry-run", action="store_true")
@@ -205,6 +210,17 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["sleep_minutes"] = args.sleep_minutes
     if args.run_base_source_branch is not None:
         payload["run_base_source_branch"] = args.run_base_source_branch
+    if args.profile is not None:
+        payload["profile"] = args.profile
+        payload["codex_profile"] = args.profile
+    if args.executor_provider is not None:
+        payload["executor_provider"] = args.executor_provider
+    if args.executor_model is not None:
+        payload["executor_model"] = args.executor_model
+    if args.blackbox_lane is not None:
+        payload["blackbox_lane"] = args.blackbox_lane
+    if args.allow_worker_executor_override:
+        payload["allow_worker_executor_override"] = True
     if args.boss_model is not None:
         payload["boss_model"] = args.boss_model
     if args.boss_reasoning_effort is not None:
@@ -217,6 +233,9 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
     payload.setdefault("repo_root", str(Path.cwd().resolve()))
     payload.setdefault("non_interactive", True)
     payload.setdefault("output_mode", "json")
+    payload.setdefault("executor_provider", "codex")
+    payload.setdefault("blackbox_lane", "free")
+    payload.setdefault("allow_worker_executor_override", False)
 
     command_raw = str(payload.get("command") or "").strip()
     try:

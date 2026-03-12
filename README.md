@@ -124,6 +124,17 @@ This runs autonomous execution with strict gates until:
 - done with full evidence, or
 - deterministic hard stop condition is reached.
 
+Executor routing flags:
+- `--executor-provider codex|openrouter|blackbox` (default: `codex`)
+- `--executor-model <model-id>` (optional)
+- `--blackbox-lane free|api_key` (default: `free`)
+- `--allow-worker-executor-override` (default off)
+- `--profile <alias>` (Codex/OpenRouter profile selection)
+
+Blackbox canary docs:
+- [docs/runbooks/BLACKBOX_CANARY_RUNBOOK.md](docs/runbooks/BLACKBOX_CANARY_RUNBOOK.md)
+- [docs/runbooks/BLACKBOX_CANARY_VALIDATION_TEMPLATE.md](docs/runbooks/BLACKBOX_CANARY_VALIDATION_TEMPLATE.md)
+
 Build cycle manager order:
 1. `profile-manager`
 2. `production-line-manager`

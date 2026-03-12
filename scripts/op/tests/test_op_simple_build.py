@@ -69,6 +69,33 @@ def test_build_config_accepts_run_base_source_branch_override(tmp_path: Path) ->
     assert cfg.run_base_source_branch == "op-simple-canary-prev"
 
 
+def test_build_config_defaults_executor_settings(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(make_req(tmp_path))
+    assert cfg.codex_profile is None
+    assert cfg.executor_provider == "codex"
+    assert cfg.executor_model is None
+    assert cfg.blackbox_lane == "free"
+    assert cfg.allow_worker_executor_override is False
+
+
+def test_build_config_accepts_executor_overrides(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(
+        make_req(
+            tmp_path,
+            profile="openrouter_free",
+            executor_provider="blackbox",
+            executor_model="blackboxai/minimax/minimax-m2.5",
+            blackbox_lane="api_key",
+            allow_worker_executor_override=True,
+        )
+    )
+    assert cfg.codex_profile == "openrouter_free"
+    assert cfg.executor_provider == "blackbox"
+    assert cfg.executor_model == "blackboxai/minimax/minimax-m2.5"
+    assert cfg.blackbox_lane == "api_key"
+    assert cfg.allow_worker_executor_override is True
+
+
 def write_boss_artifacts(root: Path, cycle_number: int, *, overrides: dict[str, dict[str, object]] | None = None) -> None:
     override_map = overrides or {}
     base_payloads: dict[str, dict[str, object]] = {
@@ -378,6 +405,79 @@ def test_codex_exec_prompt_resume_uses_model_and_reasoning_flags(tmp_path: Path,
     assert "123e4567-e89b-12d3-a456-426614174001" in cmd
 
 
+def test_codex_exec_prompt_supports_profile_flag(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
+    out = MODULE._codex_exec_prompt(
+        cfg,
+        "BOSS",
+        7,
+        30,
+        "prompt body",
+        codex_profile="openrouter_free",
+    )
+    assert out.status == "ok"
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    assert "-p" in cmd
+    profile_idx = cmd.index("-p")
+    assert cmd[profile_idx + 1] == "openrouter_free"
+
+
+def test_build_blackbox_exec_command_free_lane_unsets_keys(tmp_path: Path, monkeypatch) -> None:
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        executor_provider="blackbox",
+        blackbox_lane="free",
+    )
+    monkeypatch.setenv("BLACKBOX_API_KEY", "abc")
+    monkeypatch.setenv("OPENAI_API_KEY", "def")
+    cmd, env, error = MODULE._build_blackbox_exec_command(cfg, "prompt body")
+    assert error is None
+    assert cmd[:2] == ["blackbox", "-m"]
+    assert "blackboxai/minimax/minimax-free" in cmd
+    assert env is not None
+    assert "BLACKBOX_API_KEY" not in env
+    assert "OPENAI_API_KEY" not in env
+
+
+def test_build_blackbox_exec_command_api_key_lane_uses_keychain_lookup(tmp_path: Path, monkeypatch) -> None:
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        executor_provider="blackbox",
+        blackbox_lane="api_key",
+    )
+    monkeypatch.setattr(MODULE, "_resolve_blackbox_api_key", lambda: "secret-key")
+    cmd, env, error = MODULE._build_blackbox_exec_command(cfg, "prompt body")
+    assert error is None
+    assert cmd[:2] == ["blackbox", "-m"]
+    assert "blackboxai/minimax/minimax-m2.5" in cmd
+    assert env is not None
+    assert env.get("BLACKBOX_API_KEY") == "secret-key"
+
+
 def test_dispatch_packets_writes_launch_and_registry(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -476,6 +576,121 @@ def test_dispatch_packets_writes_launch_and_registry(tmp_path: Path, monkeypatch
     assert worker_registry["workers"][0]["pid"] == 4321
 
 
+def test_dispatch_packets_override_flag_off_ignores_worker_executor_override(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        executor_provider="codex",
+        allow_worker_executor_override=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_packets"],
+        {
+            "schema_version": "1.0",
+            "packets": [{"worker_id": "worker-1", "packet_id": "packet-1", "profile_alias": "codex", "prompt": "do task"}],
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "workers": [
+                {
+                    "worker_id": "worker-1",
+                    "worktree": str(tmp_path / "workstation-1"),
+                    "status": "idle",
+                    "next_task_provider": "blackbox",
+                    "next_task_model": "blackboxai/minimax/minimax-m2.5",
+                }
+            ],
+        },
+    )
+    (tmp_path / "workstation-1").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(MODULE, "_resolve_dispatch_script", lambda _cfg: Path("/tmp/fake-dispatch.py"))
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):
+        captured_cmds.append(list(cmd))
+        payload = {"status": "started", "session_id": "thread-123", "pid": 4321}
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+    counters = MODULE._dispatch_packets(cfg, cycle_number=1)
+    assert counters["launched"] == 1
+    assert captured_cmds
+    assert captured_cmds[0][0] == "python3"
+    launch_row = json.loads((tmp_path / MODULE.DISPATCH_LAUNCH_LOG_FILE).read_text(encoding="utf-8").splitlines()[0])
+    assert launch_row["executor_provider"] == "codex"
+
+
+def test_dispatch_packets_override_flag_on_applies_worker_executor_override(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        executor_provider="codex",
+        allow_worker_executor_override=True,
+        blackbox_lane="free",
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_packets"],
+        {
+            "schema_version": "1.0",
+            "packets": [{"worker_id": "worker-1", "packet_id": "packet-1", "profile_alias": "codex", "prompt": "do task"}],
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "workers": [
+                {
+                    "worker_id": "worker-1",
+                    "worktree": str(tmp_path / "workstation-1"),
+                    "status": "idle",
+                    "next_task_provider": "blackbox",
+                    "next_task_model": "blackboxai/minimax/minimax-free",
+                }
+            ],
+        },
+    )
+    (tmp_path / "workstation-1").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(MODULE, "_resolve_dispatch_script", lambda _cfg: None)
+    monkeypatch.setattr(
+        MODULE,
+        "_build_blackbox_exec_command",
+        lambda _cfg, _prompt, model=None: (["blackbox", "-m", str(model or "x"), "-p", "do task"], {}, None),
+    )
+    monkeypatch.setattr(MODULE, "_append_new_executor_event", lambda *_args, **_kwargs: None)
+
+    class FakeProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", lambda *args, **kwargs: FakeProc(9876))
+
+    counters = MODULE._dispatch_packets(cfg, cycle_number=2)
+
+    assert counters["launched"] == 1
+    launch_row = json.loads((tmp_path / MODULE.DISPATCH_LAUNCH_LOG_FILE).read_text(encoding="utf-8").splitlines()[0])
+    assert launch_row["executor_provider"] == "blackbox"
+    assert launch_row["executor_model"] == "blackboxai/minimax/minimax-free"
+    assert launch_row["pid"] == 9876
+    worker_registry = json.loads((tmp_path / MODULE.ARTIFACT_FILES["worker_registry"]).read_text(encoding="utf-8"))
+    worker = worker_registry["workers"][0]
+    assert worker["current_task_provider"] == "blackbox"
+    assert worker["current_task_model"] == "blackboxai/minimax/minimax-free"
+
+
 def test_watchdog_emits_exit_signal_after_idle_threshold(tmp_path: Path) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -532,6 +747,30 @@ def test_rate_gate_wait_logs_heartbeat_and_rescan(tmp_path: Path, monkeypatch) -
     assert refresh_calls["count"] >= 2
     rows = [json.loads(line) for line in (tmp_path / MODULE.MANAGER_CALL_LOG_FILE).read_text(encoding="utf-8").splitlines()]
     assert any(row.get("manager") == "rate-gate" and row.get("status") == "heartbeat" for row in rows)
+
+
+def test_rate_gate_wait_is_skipped_for_blackbox_executor(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        executor_provider="blackbox",
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    called = {"refresh": 0}
+
+    def fake_refresh(*_args, **_kwargs):
+        called["refresh"] += 1
+        return True, "should not be called"
+
+    monkeypatch.setattr(MODULE, "_refresh_profile_snapshot_via_skill", fake_refresh)
+    warnings: list[dict[str, object]] = []
+    MODULE._run_rate_gate_wait(cfg, cycle_number=9, warnings=warnings)
+    assert called["refresh"] == 0
+    assert warnings == []
 
 
 def test_rate_gate_wait_conservative_when_snapshot_unknown(tmp_path: Path, monkeypatch) -> None:

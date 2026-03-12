@@ -71,6 +71,17 @@ BOSS_REQUIRED_ARTIFACTS = [
 ]
 TASK_ATTEMPT_STAGES = ("dev", "lane_test", "test_fix", "lane_review", "review_fix", "deep_review", "deep_fix")
 SESSION_ID_REGEX = re.compile(r"(?:session id|session_id)\s*[:=]\s*([0-9a-fA-F-]{36})", re.IGNORECASE)
+EXECUTOR_PROVIDERS = {"codex", "openrouter", "blackbox"}
+BLACKBOX_LANES = {"free", "api_key"}
+BLACKBOX_DEFAULT_MODELS = {
+    "free": "blackboxai/minimax/minimax-free",
+    "api_key": "blackboxai/minimax/minimax-m2.5",
+}
+BLACKBOX_KEYCHAIN_SERVICE = "BLACKBOXAI_KEY"
+NEW_EXECUTOR_LOG_ROOT = Path("/Users/slobodan/projects/LOGS") / "op-executors"
+NEW_EXECUTOR_LOG_MAX_BYTES = 3 * 1024 * 1024 * 1024
+NEW_EXECUTOR_LOG_CHECK_INTERVAL_SECONDS = 900
+NEW_EXECUTOR_LOG_STATE_FILE = NEW_EXECUTOR_LOG_ROOT / "MAINTENANCE_STATE.json"
 
 
 @dataclass
@@ -100,6 +111,11 @@ class RunConfig:
     run_base_source_branch: str = "main"
     boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "xhigh"
+    codex_profile: str | None = None
+    executor_provider: str = "codex"
+    executor_model: str | None = None
+    blackbox_lane: str = "free"
+    allow_worker_executor_override: bool = False
 
 
 class SimpleBuildError(Exception):
@@ -138,6 +154,159 @@ def _read_json(path: Path, *, default: Any) -> Any:
     except (OSError, json.JSONDecodeError):
         return default
     return payload
+
+
+def _normalize_executor_provider(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in EXECUTOR_PROVIDERS:
+        return text
+    return "codex"
+
+
+def _normalize_blackbox_lane(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in BLACKBOX_LANES:
+        return text
+    return "free"
+
+
+def _executor_uses_codex_backend(provider: str) -> bool:
+    return provider in {"codex", "openrouter"}
+
+
+def _resolve_executor_model(cfg: RunConfig, *, provider: str | None = None, model_override: str | None = None) -> str | None:
+    resolved_provider = _normalize_executor_provider(provider or cfg.executor_provider)
+    model_text = str(model_override or cfg.executor_model or "").strip()
+    if model_text:
+        return model_text
+    if resolved_provider == "blackbox":
+        lane = _normalize_blackbox_lane(cfg.blackbox_lane)
+        return BLACKBOX_DEFAULT_MODELS.get(lane, BLACKBOX_DEFAULT_MODELS["free"])
+    return None
+
+
+def _maintenance_epoch(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _maintain_new_executor_logs() -> None:
+    now_epoch = time.time()
+    state = _read_json(NEW_EXECUTOR_LOG_STATE_FILE, default={})
+    if isinstance(state, dict):
+        last_checked_epoch = _maintenance_epoch(state.get("last_checked_epoch"))
+        if now_epoch - last_checked_epoch < float(NEW_EXECUTOR_LOG_CHECK_INTERVAL_SECONDS):
+            return
+
+    NEW_EXECUTOR_LOG_ROOT.mkdir(parents=True, exist_ok=True)
+    files: list[Path] = []
+    for path in NEW_EXECUTOR_LOG_ROOT.rglob("*"):
+        if not path.is_file() or path == NEW_EXECUTOR_LOG_STATE_FILE:
+            continue
+        files.append(path)
+    total_bytes = 0
+    for path in files:
+        try:
+            total_bytes += int(path.stat().st_size)
+        except OSError:
+            continue
+
+    if total_bytes > NEW_EXECUTOR_LOG_MAX_BYTES:
+        def _mtime(item: Path) -> float:
+            try:
+                return float(item.stat().st_mtime)
+            except OSError:
+                return 0.0
+
+        for path in sorted(files, key=_mtime):
+            if total_bytes <= NEW_EXECUTOR_LOG_MAX_BYTES:
+                break
+            try:
+                original_size = int(path.stat().st_size)
+                path.write_text("", encoding="utf-8")
+            except OSError:
+                continue
+            total_bytes = max(0, total_bytes - original_size)
+
+    _atomic_write_json(
+        NEW_EXECUTOR_LOG_STATE_FILE,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "last_checked_epoch": int(now_epoch),
+            "total_bytes": int(total_bytes),
+            "max_bytes": int(NEW_EXECUTOR_LOG_MAX_BYTES),
+        },
+    )
+
+
+def _write_new_executor_blob(scope: str, filename: str, content: str) -> str | None:
+    try:
+        _maintain_new_executor_logs()
+        target = NEW_EXECUTOR_LOG_ROOT / scope / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return str(target.resolve())
+    except OSError:
+        return None
+
+
+def _append_new_executor_event(scope: str, row: dict[str, Any]) -> None:
+    try:
+        _maintain_new_executor_logs()
+        path = NEW_EXECUTOR_LOG_ROOT / scope / "events.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, sort_keys=False) + "\n")
+    except OSError:
+        return
+
+
+def _resolve_blackbox_api_key() -> str | None:
+    user = str(os.environ.get("USER") or "").strip()
+    if not user:
+        return None
+    try:
+        proc = subprocess.run(
+            [
+                "security",
+                "find-generic-password",
+                "-a",
+                user,
+                "-s",
+                BLACKBOX_KEYCHAIN_SERVICE,
+                "-w",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    key = str(proc.stdout or "").strip()
+    return key or None
+
+
+def _build_blackbox_exec_command(cfg: RunConfig, prompt_text: str, *, model: str | None = None) -> tuple[list[str], dict[str, str] | None, str | None]:
+    resolved_model = str(model or _resolve_executor_model(cfg, provider="blackbox") or "").strip()
+    if not resolved_model:
+        return [], None, "blackbox model could not be resolved"
+    lane = _normalize_blackbox_lane(cfg.blackbox_lane)
+    env = os.environ.copy()
+    if lane == "free":
+        env.pop("BLACKBOX_API_KEY", None)
+        env.pop("OPENAI_API_KEY", None)
+    else:
+        api_key = _resolve_blackbox_api_key()
+        if not api_key:
+            return [], None, "BLACKBOXAI_KEY is missing in macOS Keychain"
+        env["BLACKBOX_API_KEY"] = api_key
+    return ["blackbox", "-m", resolved_model, "-p", prompt_text], env, None
 
 
 def _safe_unlink(path: Path) -> None:
@@ -404,6 +573,10 @@ def _seed_worker_registry_from_workstations(cfg: RunConfig, workstations: list[d
                 "status": "idle",
                 "current_task_profile": None,
                 "next_task_profile": None,
+                "current_task_provider": None,
+                "next_task_provider": None,
+                "current_task_model": None,
+                "next_task_model": None,
                 "current_task_id": None,
                 "current_packet_id": None,
                 "pid": None,
@@ -777,7 +950,9 @@ def _codex_exec_prompt(
     resume_session_id: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    codex_profile: str | None = None,
 ) -> ManagerResult:
+    # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=medium_tooling.
     started_at = utc_now_iso()
     start_time = time.monotonic()
     cycle_dir = _ensure_history_cycle_dir(cfg, cycle_number)
@@ -788,6 +963,7 @@ def _codex_exec_prompt(
 
     reasoning_effort_text = str(reasoning_effort or "").strip()
     model_text = str(model or "").strip()
+    codex_profile_text = str(codex_profile or "").strip()
     if resume_session_id:
         cmd = [
             "codex",
@@ -795,6 +971,8 @@ def _codex_exec_prompt(
             "resume",
             "--dangerously-bypass-approvals-and-sandbox",
         ]
+        if codex_profile_text:
+            cmd.extend(["-p", codex_profile_text])
         if model_text:
             cmd.extend(["--model", model_text])
         if reasoning_effort_text:
@@ -813,6 +991,8 @@ def _codex_exec_prompt(
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
         ]
+        if codex_profile_text:
+            cmd.extend(["-p", codex_profile_text])
         if model_text:
             cmd.extend(["--model", model_text])
         if reasoning_effort_text:
@@ -889,6 +1069,119 @@ def _codex_exec_prompt(
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
             message="codex binary not found",
+            reason_code="manager_binary_missing",
+        )
+
+
+def _blackbox_exec_prompt(
+    cfg: RunConfig,
+    manager_name: str,
+    cycle_number: int,
+    timeout_seconds: int,
+    prompt_text: str,
+    *,
+    model: str | None = None,
+) -> ManagerResult:
+    # LLM interaction classification: reasoning_effort=medium_effort, tooling_effort=low_tooling.
+    started_at = utc_now_iso()
+    start_time = time.monotonic()
+    cycle_dir = _ensure_history_cycle_dir(cfg, cycle_number)
+    safe_name = manager_name.lower().replace(" ", "-")
+    stdout_path = cycle_dir / f"manager-{safe_name}.stdout.log"
+    stderr_path = cycle_dir / f"manager-{safe_name}.stderr.log"
+
+    cmd, env, prep_error = _build_blackbox_exec_command(cfg, prompt_text, model=model)
+    if prep_error:
+        finished_at = utc_now_iso()
+        return ManagerResult(
+            manager=manager_name,
+            status="failed",
+            timeout=False,
+            returncode=None,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=round(time.monotonic() - start_time, 3),
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
+            message=prep_error,
+            reason_code="manager_blackbox_prepare_failed",
+        )
+
+    try:
+        completed = subprocess.run(
+            cmd,
+            cwd=str(cfg.repo_root),
+            text=True,
+            capture_output=True,
+            timeout=max(1, int(timeout_seconds)),
+            check=False,
+            env=env,
+        )
+        stdout_text = completed.stdout or ""
+        stderr_text = completed.stderr or ""
+        stdout_path.write_text(stdout_text, encoding="utf-8")
+        stderr_path.write_text(stderr_text, encoding="utf-8")
+        scope = "op-simple-build/manager-blackbox"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        _write_new_executor_blob(scope, f"{stamp}-cycle{cycle_number:06d}-{safe_name}.stdout.log", stdout_text)
+        _write_new_executor_blob(scope, f"{stamp}-cycle{cycle_number:06d}-{safe_name}.stderr.log", stderr_text)
+        _append_new_executor_event(
+            scope,
+            {
+                "schema_version": SCHEMA_VERSION,
+                "timestamp": utc_now_iso(),
+                "manager": manager_name,
+                "cycle_number": int(cycle_number),
+                "executor_provider": "blackbox",
+                "executor_model": str(model or _resolve_executor_model(cfg, provider="blackbox") or ""),
+                "blackbox_lane": _normalize_blackbox_lane(cfg.blackbox_lane),
+                "status": "ok" if completed.returncode == 0 else "failed",
+                "returncode": int(completed.returncode),
+            },
+        )
+        finished_at = utc_now_iso()
+        return ManagerResult(
+            manager=manager_name,
+            status="ok" if completed.returncode == 0 else "failed",
+            timeout=False,
+            returncode=int(completed.returncode),
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=round(time.monotonic() - start_time, 3),
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
+            message=None if completed.returncode == 0 else "blackbox returned non-zero",
+            reason_code=None if completed.returncode == 0 else "manager_non_zero_exit",
+            session_id=None,
+        )
+    except subprocess.TimeoutExpired:
+        finished_at = utc_now_iso()
+        return ManagerResult(
+            manager=manager_name,
+            status="timeout",
+            timeout=True,
+            returncode=None,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=round(time.monotonic() - start_time, 3),
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
+            message="manager call timed out",
+            reason_code="manager_timeout",
+        )
+    except FileNotFoundError:
+        finished_at = utc_now_iso()
+        return ManagerResult(
+            manager=manager_name,
+            status="failed",
+            timeout=False,
+            returncode=None,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=round(time.monotonic() - start_time, 3),
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
+            message="blackbox binary not found",
             reason_code="manager_binary_missing",
         )
 
@@ -1067,12 +1360,14 @@ def _invoke_manager(
     else:
         template = _load_prompt_template(cfg, manager_name)
         path_map = _artifact_path_map(cfg)
+        executor_provider = _normalize_executor_provider(cfg.executor_provider)
+        uses_codex_backend = _executor_uses_codex_backend(executor_provider)
         selected_manager_alias: str | None = None
         selected_manager_home: str | None = None
         resume_session_id: str | None = None
         prior_profile_alias: str | None = None
         prior_previous_profile_alias: str | None = None
-        if manager_name == "BOSS":
+        if manager_name == "BOSS" and uses_codex_backend:
             boss_session_state = _read_boss_session_state(cfg)
             prior_session_id = str(boss_session_state.get("session_id") or "").strip() or None
             prior_profile_alias = str(boss_session_state.get("profile_alias") or "").strip() or None
@@ -1101,6 +1396,15 @@ def _invoke_manager(
                 "op_simple_schema_catalog": str(_schema_catalog_path(cfg)),
             },
             "required_outputs": [path_map[item] for item in expected_artifacts],
+            "executor": {
+                "provider": executor_provider,
+                "model": _resolve_executor_model(
+                    cfg,
+                    provider=executor_provider,
+                    model_override=cfg.executor_model or (cfg.boss_model if manager_name == "BOSS" else None),
+                ),
+                "blackbox_lane": _normalize_blackbox_lane(cfg.blackbox_lane),
+            },
         }
         prompt_text = template.strip()
         if prompt_text:
@@ -1109,39 +1413,57 @@ def _invoke_manager(
         prompt_text += json.dumps(packet, indent=2, sort_keys=False)
         prompt_text += "\n```\n"
         timeout = int(MANAGER_TIMEOUT_SECONDS.get(manager_name, 300))
-        result = _codex_exec_prompt(
+        manager_model = _resolve_executor_model(
             cfg,
-            manager_name,
-            cycle_number,
-            timeout,
-            prompt_text,
-            codex_home=selected_manager_home,
-            resume_session_id=resume_session_id,
-            model=cfg.boss_model if manager_name == "BOSS" else None,
-            reasoning_effort=cfg.boss_reasoning_effort if manager_name == "BOSS" else None,
+            provider=executor_provider,
+            model_override=cfg.executor_model or (cfg.boss_model if manager_name == "BOSS" else None),
         )
-        if manager_name == "BOSS" and resume_session_id and result.status == "failed" and not result.timeout:
-            retry = _codex_exec_prompt(
+        if uses_codex_backend:
+            result = _codex_exec_prompt(
                 cfg,
                 manager_name,
                 cycle_number,
                 timeout,
                 prompt_text,
                 codex_home=selected_manager_home,
-                resume_session_id=None,
-                model=cfg.boss_model,
-                reasoning_effort=cfg.boss_reasoning_effort,
+                resume_session_id=resume_session_id,
+                model=manager_model,
+                reasoning_effort=cfg.boss_reasoning_effort if manager_name == "BOSS" else None,
+                codex_profile=cfg.codex_profile,
             )
-            if retry.status == "ok":
-                result = retry
-                result.message = "fresh_session_retry_after_resume_failure"
-            else:
-                result.message = (
-                    f"{result.message or 'resume_failed'}; fresh_session_retry_failed"
-                    if result.message
-                    else "fresh_session_retry_failed"
+            if manager_name == "BOSS" and resume_session_id and result.status == "failed" and not result.timeout:
+                retry = _codex_exec_prompt(
+                    cfg,
+                    manager_name,
+                    cycle_number,
+                    timeout,
+                    prompt_text,
+                    codex_home=selected_manager_home,
+                    resume_session_id=None,
+                    model=manager_model,
+                    reasoning_effort=cfg.boss_reasoning_effort,
+                    codex_profile=cfg.codex_profile,
                 )
-        if manager_name == "BOSS" and result.status == "ok":
+                if retry.status == "ok":
+                    result = retry
+                    result.message = "fresh_session_retry_after_resume_failure"
+                else:
+                    result.message = (
+                        f"{result.message or 'resume_failed'}; fresh_session_retry_failed"
+                        if result.message
+                        else "fresh_session_retry_failed"
+                    )
+        else:
+            result = _blackbox_exec_prompt(
+                cfg,
+                manager_name,
+                cycle_number,
+                timeout,
+                prompt_text,
+                model=manager_model,
+            )
+
+        if manager_name == "BOSS" and uses_codex_backend and result.status == "ok":
             persisted_session_id = str(result.session_id or resume_session_id or "").strip()
             if persisted_session_id:
                 switched_profile = bool(
@@ -1159,9 +1481,9 @@ def _invoke_manager(
                     profile_alias=selected_manager_alias,
                     previous_profile_alias=previous_profile_alias,
                 )
-        if manager_name == "BOSS" and result.status != "ok":
+        if manager_name == "BOSS" and uses_codex_backend and result.status != "ok":
             _safe_unlink(cfg.repo_root / BOSS_SESSION_STATE_FILE)
-        if selected_manager_alias:
+        if uses_codex_backend and selected_manager_alias:
             result.message = (
                 f"{result.message}; manager_profile_alias={selected_manager_alias}"
                 if result.message
@@ -1503,6 +1825,8 @@ def _refresh_rate_gate_snapshot(cfg: RunConfig) -> bool:
 
 
 def _run_rate_gate_wait(cfg: RunConfig, cycle_number: int, warnings: list[dict[str, Any]]) -> None:
+    if not _executor_uses_codex_backend(_normalize_executor_provider(cfg.executor_provider)):
+        return
     if cfg.dry_run:
         return
     refreshed, refresh_message = _refresh_profile_snapshot_via_skill(cfg, cycle_number)
@@ -1725,6 +2049,10 @@ def _update_worker_registry_dispatch_state(cfg: RunConfig, event_rows: list[dict
                 "status": "idle",
                 "current_task_profile": None,
                 "next_task_profile": None,
+                "current_task_provider": None,
+                "next_task_provider": None,
+                "current_task_model": None,
+                "next_task_model": None,
                 "current_task_id": None,
                 "current_packet_id": None,
                 "pid": None,
@@ -1735,8 +2063,17 @@ def _update_worker_registry_dispatch_state(cfg: RunConfig, event_rows: list[dict
             worker_index[worker_id] = row
 
         dispatch_status = str(event.get("status") or "").strip()
+        event_profile = str(event.get("profile_alias") or "").strip() or None
+        event_provider = str(event.get("executor_provider") or "").strip() or None
+        event_model = str(event.get("executor_model") or "").strip() or None
         if dispatch_status == "launched":
             row["status"] = "in_progress"
+            row["current_task_profile"] = event_profile
+            row["current_task_provider"] = event_provider
+            row["current_task_model"] = event_model
+            row["next_task_profile"] = None
+            row["next_task_provider"] = None
+            row["next_task_model"] = None
         elif dispatch_status == "launch_failed":
             row["status"] = "dispatch_failed"
         else:
@@ -1774,7 +2111,86 @@ def _active_worker_count(cfg: RunConfig) -> int:
     return active_count
 
 
+def _resolve_worker_dispatch_executor(cfg: RunConfig, worker_row: dict[str, Any] | None) -> tuple[str, str | None, str | None]:
+    provider = _normalize_executor_provider(cfg.executor_provider)
+    model = _resolve_executor_model(cfg, provider=provider) if provider == "blackbox" else str(cfg.executor_model or "").strip() or None
+    warning: str | None = None
+    if not cfg.allow_worker_executor_override or not isinstance(worker_row, dict):
+        return provider, model, warning
+
+    override_provider = str(worker_row.get("next_task_provider") or "").strip().lower()
+    override_model = str(worker_row.get("next_task_model") or "").strip()
+    if override_provider:
+        if override_provider in EXECUTOR_PROVIDERS:
+            provider = override_provider
+            if provider == "blackbox" and not override_model:
+                model = _resolve_executor_model(cfg, provider=provider)
+            elif provider in {"codex", "openrouter"} and not override_model:
+                model = str(cfg.executor_model or "").strip() or None
+        else:
+            warning = (
+                f"invalid worker next_task_provider='{override_provider}' ignored; using base provider '{provider}'"
+            )
+    if override_model:
+        model = override_model
+    return provider, model, warning
+
+
+def _launch_blackbox_dispatch(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    worker_id: str,
+    packet_id: str,
+    worker_worktree: Path,
+    prompt: str,
+    model: str | None,
+) -> tuple[str, int | None, str | None, str]:
+    # LLM interaction classification: reasoning_effort=medium_effort, tooling_effort=low_tooling.
+    cmd, env, prep_error = _build_blackbox_exec_command(cfg, prompt, model=model)
+    if prep_error:
+        return "launch_failed", None, None, prep_error
+
+    cycle_dir = _ensure_history_cycle_dir(cfg, cycle_number)
+    safe_worker = re.sub(r"[^A-Za-z0-9._-]+", "-", worker_id or "worker")
+    safe_packet = re.sub(r"[^A-Za-z0-9._-]+", "-", packet_id or "packet")
+    dispatch_log = cycle_dir / f"dispatch-blackbox-{safe_worker}-{safe_packet}.log"
+    try:
+        with dispatch_log.open("w", encoding="utf-8") as handle:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(worker_worktree),
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+            )
+    except FileNotFoundError:
+        return "launch_failed", None, None, "blackbox binary not found"
+    except OSError as exc:
+        return "launch_failed", None, None, f"blackbox dispatch failed to start: {exc}"
+
+    _append_new_executor_event(
+        "op-simple-build/dispatch-blackbox",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "timestamp": utc_now_iso(),
+            "cycle_number": int(cycle_number),
+            "worker_id": worker_id,
+            "packet_id": packet_id,
+            "executor_provider": "blackbox",
+            "executor_model": str(model or _resolve_executor_model(cfg, provider="blackbox") or ""),
+            "blackbox_lane": _normalize_blackbox_lane(cfg.blackbox_lane),
+            "pid": int(proc.pid),
+            "dispatch_log": str(dispatch_log.resolve()),
+            "status": "started",
+        },
+    )
+    return "launched", int(proc.pid), None, "blackbox dispatch started"
+
+
 def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
+    # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=medium_tooling.
     counters = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
     packets = _load_worker_packets(cfg)
     if not packets:
@@ -1797,20 +2213,24 @@ def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
         worker_row = worker_by_id.get(worker_id) if worker_id else None
         worker_worktree_raw = str((worker_row or {}).get("worktree") or "").strip()
         worker_worktree = Path(worker_worktree_raw).expanduser() if worker_worktree_raw else None
+        dispatch_provider, dispatch_model, dispatch_warning = _resolve_worker_dispatch_executor(cfg, worker_row)
 
         timestamp = utc_now_iso()
         event = {
             "cycle_number": cycle_number,
             "worker_id": worker_id,
             "packet_id": packet_id,
+            "profile_alias": profile_alias,
             "thread_id": None,
             "pid": None,
+            "executor_provider": dispatch_provider,
+            "executor_model": dispatch_model,
             "status": "unknown",
             "timestamp": timestamp,
             "message": "",
         }
 
-        if script is None:
+        if _executor_uses_codex_backend(dispatch_provider) and script is None:
             event["status"] = "launch_failed"
             event["message"] = "thread-dispatch script not found"
             counters["launch_failed"] += 1
@@ -1834,59 +2254,91 @@ def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
             _append_jsonl(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE, event)
             continue
 
-        cmd = [
-            "python3",
-            str(script),
-            "--cwd",
-            str(worker_worktree.resolve()),
-            "--prompt",
-            prompt,
-            "--background",
-            "--no-full-auto",
-            "--extra-arg=--dangerously-bypass-approvals-and-sandbox",
-        ]
-        profile_home = alias_to_home.get(profile_alias)
-        if profile_home:
-            cmd.extend(["--codex-home", profile_home])
+        if _executor_uses_codex_backend(dispatch_provider):
+            cmd = [
+                "python3",
+                str(script),
+                "--cwd",
+                str(worker_worktree.resolve()),
+                "--prompt",
+                prompt,
+                "--background",
+                "--no-full-auto",
+                "--extra-arg=--dangerously-bypass-approvals-and-sandbox",
+            ]
+            codex_profile_text = str(cfg.codex_profile or "").strip()
+            if codex_profile_text:
+                cmd.extend(["--extra-arg=-p", f"--extra-arg={codex_profile_text}"])
+            model_text = str(dispatch_model or "").strip()
+            if model_text:
+                cmd.extend(["--extra-arg=--model", f"--extra-arg={model_text}"])
+            profile_home = alias_to_home.get(profile_alias)
+            if profile_home:
+                cmd.extend(["--codex-home", profile_home])
 
-        try:
-            proc = subprocess.run(cmd, cwd=str(cfg.repo_root), capture_output=True, text=True, timeout=30, check=False)
-            stdout_text = (proc.stdout or "").strip()
-            stderr_text = (proc.stderr or "").strip()
-            if proc.returncode == 0:
-                parsed = None
-                try:
-                    parsed = json.loads(stdout_text) if stdout_text else {}
-                except json.JSONDecodeError:
-                    parsed = {}
-                status_text = str((parsed or {}).get("status") or "").strip().lower()
-                thread_id = str((parsed or {}).get("session_id") or "") or None
-                pid_value = (parsed or {}).get("pid")
-                try:
-                    pid_int = int(pid_value) if pid_value is not None else None
-                except (TypeError, ValueError):
-                    pid_int = None
-                event["thread_id"] = thread_id
-                event["pid"] = pid_int
-                if status_text == "started":
-                    event["status"] = "launched"
-                    event["message"] = "dispatch started"
-                    counters["launched"] += 1
-                    active_count += 1
+            try:
+                proc = subprocess.run(cmd, cwd=str(cfg.repo_root), capture_output=True, text=True, timeout=30, check=False)
+                stdout_text = (proc.stdout or "").strip()
+                stderr_text = (proc.stderr or "").strip()
+                if proc.returncode == 0:
+                    parsed = None
+                    try:
+                        parsed = json.loads(stdout_text) if stdout_text else {}
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    status_text = str((parsed or {}).get("status") or "").strip().lower()
+                    thread_id = str((parsed or {}).get("session_id") or "") or None
+                    pid_value = (parsed or {}).get("pid")
+                    try:
+                        pid_int = int(pid_value) if pid_value is not None else None
+                    except (TypeError, ValueError):
+                        pid_int = None
+                    event["thread_id"] = thread_id
+                    event["pid"] = pid_int
+                    if status_text == "started":
+                        event["status"] = "launched"
+                        event["message"] = "dispatch started"
+                        counters["launched"] += 1
+                        active_count += 1
+                    else:
+                        event["status"] = "unknown"
+                        event["message"] = "dispatch returned ambiguous status"
+                        counters["unknown"] += 1
+                        active_count += 1
                 else:
-                    event["status"] = "unknown"
-                    event["message"] = "dispatch returned ambiguous status"
-                    counters["unknown"] += 1
-                    active_count += 1
-            else:
-                event["status"] = "launch_failed"
-                event["message"] = stderr_text or stdout_text or "dispatch command failed"
+                    event["status"] = "launch_failed"
+                    event["message"] = stderr_text or stdout_text or "dispatch command failed"
+                    counters["launch_failed"] += 1
+            except subprocess.TimeoutExpired:
+                event["status"] = "unknown"
+                event["message"] = "dispatch command timeout"
+                counters["unknown"] += 1
+                active_count += 1
+        else:
+            status, pid, thread_id, message = _launch_blackbox_dispatch(
+                cfg,
+                cycle_number=cycle_number,
+                worker_id=worker_id,
+                packet_id=packet_id,
+                worker_worktree=worker_worktree.resolve(),
+                prompt=prompt,
+                model=dispatch_model,
+            )
+            event["status"] = status
+            event["pid"] = pid
+            event["thread_id"] = thread_id
+            event["message"] = message
+            if status == "launched":
+                counters["launched"] += 1
+                active_count += 1
+            elif status == "launch_failed":
                 counters["launch_failed"] += 1
-        except subprocess.TimeoutExpired:
-            event["status"] = "unknown"
-            event["message"] = "dispatch command timeout"
-            counters["unknown"] += 1
-            active_count += 1
+            else:
+                counters["unknown"] += 1
+
+        if dispatch_warning:
+            current_message = str(event.get("message") or "").strip()
+            event["message"] = f"{current_message}; {dispatch_warning}" if current_message else dispatch_warning
 
         event_rows.append(event)
         _append_jsonl(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE, event)
@@ -2116,6 +2568,11 @@ def _build_config(req: Any) -> RunConfig:
     run_base_source_branch = str(getattr(req, "run_base_source_branch", "") or "").strip() or "main"
     boss_model = str(getattr(req, "boss_model", "") or "").strip() or "gpt-5.3-codex"
     boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "xhigh"
+    codex_profile = str(getattr(req, "codex_profile", getattr(req, "profile", "")) or "").strip() or None
+    executor_provider = _normalize_executor_provider(getattr(req, "executor_provider", "codex"))
+    executor_model = str(getattr(req, "executor_model", "") or "").strip() or None
+    blackbox_lane = _normalize_blackbox_lane(getattr(req, "blackbox_lane", "free"))
+    allow_worker_executor_override = bool(getattr(req, "allow_worker_executor_override", False))
 
     return RunConfig(
         repo_root=repo_root,
@@ -2126,6 +2583,11 @@ def _build_config(req: Any) -> RunConfig:
         run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,
         boss_reasoning_effort=boss_reasoning_effort,
+        codex_profile=codex_profile,
+        executor_provider=executor_provider,
+        executor_model=executor_model,
+        blackbox_lane=blackbox_lane,
+        allow_worker_executor_override=allow_worker_executor_override,
     )
 
 
