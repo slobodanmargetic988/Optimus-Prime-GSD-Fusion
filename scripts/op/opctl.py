@@ -169,6 +169,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--executor-model")
     parser.add_argument("--blackbox-lane", choices=["free", "api_key"], default=None)
     parser.add_argument("--allow-worker-executor-override", action="store_true")
+    parser.add_argument("--cycle-release-mode", choices=["token_conservative", "max_work"], default=None)
+    parser.add_argument("--cycle-release-timeout-seconds", type=int)
+    parser.add_argument("--cycle-release-poll-seconds", type=int)
     parser.add_argument("--boss-model")
     parser.add_argument("--boss-reasoning-effort")
     parser.add_argument("--dry-run", action="store_true")
@@ -221,6 +224,12 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["blackbox_lane"] = args.blackbox_lane
     if args.allow_worker_executor_override:
         payload["allow_worker_executor_override"] = True
+    if args.cycle_release_mode is not None:
+        payload["cycle_release_mode"] = args.cycle_release_mode
+    if args.cycle_release_timeout_seconds is not None:
+        payload["cycle_release_timeout_seconds"] = args.cycle_release_timeout_seconds
+    if args.cycle_release_poll_seconds is not None:
+        payload["cycle_release_poll_seconds"] = args.cycle_release_poll_seconds
     if args.boss_model is not None:
         payload["boss_model"] = args.boss_model
     if args.boss_reasoning_effort is not None:
@@ -236,6 +245,9 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
     payload.setdefault("executor_provider", "codex")
     payload.setdefault("blackbox_lane", "free")
     payload.setdefault("allow_worker_executor_override", False)
+    payload.setdefault("cycle_release_mode", "token_conservative")
+    payload.setdefault("cycle_release_timeout_seconds", 300)
+    payload.setdefault("cycle_release_poll_seconds", 5)
 
     command_raw = str(payload.get("command") or "").strip()
     try:

@@ -114,6 +114,10 @@ GROUND_SYNC_DEFAULT_EVERY_N_CYCLES = 1
 GROUND_SYNC_DEFAULT_TIMEOUT_SECONDS = 120
 GROUND_SYNC_MANAGER_NAME = "ground-sync"
 GROUND_SYNC_SNAPSHOT_BASENAME = "current.trace_event_envelope.jsonl"
+DEFAULT_CYCLE_RELEASE_MODE = "token_conservative"
+DEFAULT_CYCLE_RELEASE_TIMEOUT_SECONDS = 300
+DEFAULT_CYCLE_RELEASE_POLL_SECONDS = 5
+CYCLE_RELEASE_MODES = {"token_conservative", "max_work"}
 TRACE_EVENT_TIMESTAMP_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 TRACE_EVENT_SOURCE_SHA_REGEX = re.compile(r"^[0-9a-f]{7,40}$")
 TRACE_EVENT_ACTOR_TYPES = {"manager", "worker", "service", "operator", "system"}
@@ -170,6 +174,9 @@ class RunConfig:
     ground_sync_enabled: bool = True
     ground_sync_every_n_cycles: int = GROUND_SYNC_DEFAULT_EVERY_N_CYCLES
     ground_sync_timeout_seconds: int = GROUND_SYNC_DEFAULT_TIMEOUT_SECONDS
+    cycle_release_mode: str = DEFAULT_CYCLE_RELEASE_MODE
+    cycle_release_timeout_seconds: int = DEFAULT_CYCLE_RELEASE_TIMEOUT_SECONDS
+    cycle_release_poll_seconds: int = DEFAULT_CYCLE_RELEASE_POLL_SECONDS
 
 
 class SimpleBuildError(Exception):
@@ -230,6 +237,13 @@ def _normalize_blackbox_lane(value: Any) -> str:
     if text in BLACKBOX_LANES:
         return text
     return "free"
+
+
+def _normalize_cycle_release_mode(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in CYCLE_RELEASE_MODES:
+        return text
+    return DEFAULT_CYCLE_RELEASE_MODE
 
 
 def _executor_uses_codex_backend(provider: str) -> bool:
@@ -3647,6 +3661,125 @@ def _watchdog_near_idle_threshold(cfg: RunConfig) -> bool:
     return age_minutes >= float(near_threshold)
 
 
+def _cycle_release_baseline(cfg: RunConfig) -> tuple[str, int, int, int]:
+    signature, in_progress_workers = _worker_task_state_signature(cfg)
+    live_workers = _live_pid_in_progress_worker_count(cfg)
+    task_counts = _task_counts_from_execution_state(cfg)
+    task_in_progress = int(task_counts.get("in_progress") or 0)
+    return signature, in_progress_workers, live_workers, task_in_progress
+
+
+def _await_cycle_release_signal(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    baseline_signature: str,
+    baseline_in_progress_workers: int,
+    baseline_live_workers: int,
+    baseline_task_in_progress: int,
+) -> dict[str, Any]:
+    wait_started_at = time.monotonic()
+    mode = _normalize_cycle_release_mode(cfg.cycle_release_mode)
+    timeout_seconds = max(1, int(cfg.cycle_release_timeout_seconds))
+    poll_seconds = max(1, int(cfg.cycle_release_poll_seconds))
+
+    if baseline_in_progress_workers <= 0 or baseline_live_workers <= 0 or baseline_task_in_progress <= 0:
+        return {
+            "mode": mode,
+            "decision": "no_wait_no_live_workers",
+            "waited_seconds": 0.0,
+            "timed_out": False,
+            "in_progress_workers": baseline_in_progress_workers,
+            "live_workers": baseline_live_workers,
+            "task_in_progress": baseline_task_in_progress,
+        }
+
+    print(
+        "[op-simple-build] "
+        f"[{utc_now_iso()}] "
+        f"cycle={cycle_number} cycle-release mode={mode} wait_start "
+        f"baseline_in_progress_workers={baseline_in_progress_workers} "
+        f"baseline_live_workers={baseline_live_workers} "
+        f"baseline_task_in_progress={baseline_task_in_progress} "
+        f"timeout_s={timeout_seconds} poll_s={poll_seconds}",
+        flush=True,
+    )
+
+    while True:
+        elapsed = time.monotonic() - wait_started_at
+        if elapsed >= float(timeout_seconds):
+            in_progress_workers = baseline_in_progress_workers
+            live_workers = baseline_live_workers
+            task_in_progress = baseline_task_in_progress
+            try:
+                _sig, in_progress_workers, live_workers, task_in_progress = _cycle_release_baseline(cfg)
+            except Exception:  # noqa: BLE001
+                pass
+            waited = round(float(time.monotonic() - wait_started_at), 3)
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle={cycle_number} cycle-release mode={mode} wait_timeout "
+                f"waited_s={waited} in_progress_workers={in_progress_workers} "
+                f"live_workers={live_workers} task_in_progress={task_in_progress}",
+                flush=True,
+            )
+            return {
+                "mode": mode,
+                "decision": "timeout_fallback",
+                "waited_seconds": waited,
+                "timed_out": True,
+                "in_progress_workers": int(in_progress_workers),
+                "live_workers": int(live_workers),
+                "task_in_progress": int(task_in_progress),
+            }
+
+        remaining = float(timeout_seconds) - float(elapsed)
+        sleep_seconds = poll_seconds if remaining > float(poll_seconds) else remaining
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+
+        signature, in_progress_workers, live_workers, task_in_progress = _cycle_release_baseline(cfg)
+
+        if mode == "token_conservative":
+            released = (
+                in_progress_workers <= 0
+                or live_workers <= 0
+                or task_in_progress <= 0
+            )
+            decision = "all_workers_settled"
+        else:
+            released = (
+                signature != baseline_signature
+                or in_progress_workers < baseline_in_progress_workers
+                or live_workers < baseline_live_workers
+                or task_in_progress < baseline_task_in_progress
+            )
+            decision = "first_progress_signal"
+
+        if not released:
+            continue
+
+        waited = round(float(time.monotonic() - wait_started_at), 3)
+        print(
+            "[op-simple-build] "
+            f"[{utc_now_iso()}] "
+            f"cycle={cycle_number} cycle-release mode={mode} release_signal={decision} "
+            f"waited_s={waited} in_progress_workers={in_progress_workers} "
+            f"live_workers={live_workers} task_in_progress={task_in_progress}",
+            flush=True,
+        )
+        return {
+            "mode": mode,
+            "decision": decision,
+            "waited_seconds": waited,
+            "timed_out": False,
+            "in_progress_workers": int(in_progress_workers),
+            "live_workers": int(live_workers),
+            "task_in_progress": int(task_in_progress),
+        }
+
+
 def _write_watchdog_recovery_nudge(
     cfg: RunConfig,
     *,
@@ -4305,6 +4438,25 @@ def _build_config(req: Any) -> RunConfig:
         ground_sync_timeout_seconds = GROUND_SYNC_DEFAULT_TIMEOUT_SECONDS
     if ground_sync_timeout_seconds < 30:
         ground_sync_timeout_seconds = 30
+    cycle_release_mode = _normalize_cycle_release_mode(
+        getattr(req, "cycle_release_mode", DEFAULT_CYCLE_RELEASE_MODE)
+    )
+    cycle_release_timeout_seconds = getattr(
+        req, "cycle_release_timeout_seconds", DEFAULT_CYCLE_RELEASE_TIMEOUT_SECONDS
+    )
+    try:
+        cycle_release_timeout_seconds = int(cycle_release_timeout_seconds)
+    except (TypeError, ValueError):
+        cycle_release_timeout_seconds = DEFAULT_CYCLE_RELEASE_TIMEOUT_SECONDS
+    if cycle_release_timeout_seconds <= 0:
+        cycle_release_timeout_seconds = DEFAULT_CYCLE_RELEASE_TIMEOUT_SECONDS
+    cycle_release_poll_seconds = getattr(req, "cycle_release_poll_seconds", DEFAULT_CYCLE_RELEASE_POLL_SECONDS)
+    try:
+        cycle_release_poll_seconds = int(cycle_release_poll_seconds)
+    except (TypeError, ValueError):
+        cycle_release_poll_seconds = DEFAULT_CYCLE_RELEASE_POLL_SECONDS
+    if cycle_release_poll_seconds <= 0:
+        cycle_release_poll_seconds = DEFAULT_CYCLE_RELEASE_POLL_SECONDS
 
     return RunConfig(
         repo_root=repo_root,
@@ -4324,6 +4476,9 @@ def _build_config(req: Any) -> RunConfig:
         ground_sync_enabled=ground_sync_enabled,
         ground_sync_every_n_cycles=ground_sync_every_n_cycles,
         ground_sync_timeout_seconds=ground_sync_timeout_seconds,
+        cycle_release_mode=cycle_release_mode,
+        cycle_release_timeout_seconds=cycle_release_timeout_seconds,
+        cycle_release_poll_seconds=cycle_release_poll_seconds,
     )
 
 
@@ -4684,7 +4839,12 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     )
 
             _snapshot_cycle(cfg, cycle_number)
-            previous_state_signature, _ = _worker_task_state_signature(cfg)
+            (
+                previous_state_signature,
+                next_in_progress_workers,
+                next_live_workers,
+                next_task_in_progress,
+            ) = _cycle_release_baseline(cfg)
 
             if stop_reason:
                 final_summary = f"OP Simple build stopped: {stop_reason}."
@@ -4695,7 +4855,35 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 break
 
             if cfg.sleep_minutes > 0:
-                time.sleep(cfg.sleep_minutes * 60.0)
+                sleep_seconds = max(0.0, float(cfg.sleep_minutes) * 60.0)
+                if sleep_seconds > 0:
+                    if (
+                        next_in_progress_workers > 0
+                        and next_live_workers > 0
+                        and next_task_in_progress > 0
+                    ):
+                        release_wait_result = _await_cycle_release_signal(
+                            cfg,
+                            cycle_number=cycle_number,
+                            baseline_signature=previous_state_signature,
+                            baseline_in_progress_workers=next_in_progress_workers,
+                            baseline_live_workers=next_live_workers,
+                            baseline_task_in_progress=next_task_in_progress,
+                        )
+                        waited_seconds = float(release_wait_result.get("waited_seconds") or 0.0)
+                        if waited_seconds < sleep_seconds and bool(release_wait_result.get("timed_out")):
+                            remaining_sleep = sleep_seconds - waited_seconds
+                            if remaining_sleep > 0:
+                                print(
+                                    "[op-simple-build] "
+                                    f"[{utc_now_iso()}] "
+                                    f"cycle={cycle_number} cycle-release timeout fallback "
+                                    f"sleep_remaining_s={remaining_sleep:.3f}",
+                                    flush=True,
+                                )
+                                time.sleep(remaining_sleep)
+                    else:
+                        time.sleep(sleep_seconds)
 
         if stop_reason == "project_done":
             _run_wrapup_manager(

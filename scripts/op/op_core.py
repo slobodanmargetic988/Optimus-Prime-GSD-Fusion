@@ -305,6 +305,9 @@ class OpRequest:
     executor_model: str | None = None
     blackbox_lane: str = "free"
     allow_worker_executor_override: bool = False
+    cycle_release_mode: str = "token_conservative"
+    cycle_release_timeout_seconds: int = 300
+    cycle_release_poll_seconds: int = 5
 
 
 def utc_now_iso() -> str:
@@ -15356,6 +15359,27 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         )
     executor_model = _as_str(payload.get("executor_model"))
     allow_worker_executor_override = _as_bool(payload.get("allow_worker_executor_override"), default=False)
+    cycle_release_mode = (_as_str(payload.get("cycle_release_mode")) or "token_conservative").lower()
+    if cycle_release_mode not in {"token_conservative", "max_work"}:
+        raise OpError(
+            "input_error",
+            "cycle_release_mode must be one of: token_conservative, max_work",
+            stage="input",
+        )
+    cycle_release_timeout_raw = payload.get("cycle_release_timeout_seconds", 300)
+    try:
+        cycle_release_timeout_seconds = int(cycle_release_timeout_raw)
+    except (TypeError, ValueError) as exc:
+        raise OpError("input_error", "cycle_release_timeout_seconds must be integer", stage="input") from exc
+    if cycle_release_timeout_seconds <= 0:
+        cycle_release_timeout_seconds = 300
+    cycle_release_poll_raw = payload.get("cycle_release_poll_seconds", 5)
+    try:
+        cycle_release_poll_seconds = int(cycle_release_poll_raw)
+    except (TypeError, ValueError) as exc:
+        raise OpError("input_error", "cycle_release_poll_seconds must be integer", stage="input") from exc
+    if cycle_release_poll_seconds <= 0:
+        cycle_release_poll_seconds = 5
 
     return OpRequest(
         command=command,
@@ -15383,6 +15407,9 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         executor_model=executor_model,
         blackbox_lane=blackbox_lane,
         allow_worker_executor_override=allow_worker_executor_override,
+        cycle_release_mode=cycle_release_mode,
+        cycle_release_timeout_seconds=cycle_release_timeout_seconds,
+        cycle_release_poll_seconds=cycle_release_poll_seconds,
     )
 
 

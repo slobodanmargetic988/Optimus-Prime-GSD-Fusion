@@ -91,6 +91,13 @@ def test_build_config_defaults_ground_sync_settings(tmp_path: Path) -> None:
     assert cfg.ground_sync_timeout_seconds == MODULE.GROUND_SYNC_DEFAULT_TIMEOUT_SECONDS
 
 
+def test_build_config_defaults_cycle_release_settings(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(make_req(tmp_path))
+    assert cfg.cycle_release_mode == MODULE.DEFAULT_CYCLE_RELEASE_MODE
+    assert cfg.cycle_release_timeout_seconds == MODULE.DEFAULT_CYCLE_RELEASE_TIMEOUT_SECONDS
+    assert cfg.cycle_release_poll_seconds == MODULE.DEFAULT_CYCLE_RELEASE_POLL_SECONDS
+
+
 def test_build_config_accepts_ground_sync_overrides(tmp_path: Path) -> None:
     cfg = MODULE._build_config(
         make_req(
@@ -103,6 +110,20 @@ def test_build_config_accepts_ground_sync_overrides(tmp_path: Path) -> None:
     assert cfg.ground_sync_enabled is False
     assert cfg.ground_sync_every_n_cycles == 3
     assert cfg.ground_sync_timeout_seconds == 45
+
+
+def test_build_config_accepts_cycle_release_overrides(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(
+        make_req(
+            tmp_path,
+            cycle_release_mode="max_work",
+            cycle_release_timeout_seconds="90",
+            cycle_release_poll_seconds="2",
+        )
+    )
+    assert cfg.cycle_release_mode == "max_work"
+    assert cfg.cycle_release_timeout_seconds == 90
+    assert cfg.cycle_release_poll_seconds == 2
 
 
 def test_build_config_accepts_executor_overrides(tmp_path: Path) -> None:
@@ -379,6 +400,140 @@ def test_worker_state_signature_and_counts_helpers(tmp_path: Path, monkeypatch) 
     MODULE._atomic_write_json(tmp_path / MODULE.ARTIFACT_FILES["worker_registry"], payload)
     signature_after, _ = MODULE._worker_task_state_signature(cfg)
     assert signature_after != signature_before
+
+
+def test_await_cycle_release_signal_token_conservative_releases_on_settle(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=5,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+        cycle_release_mode="token_conservative",
+        cycle_release_timeout_seconds=20,
+        cycle_release_poll_seconds=1,
+    )
+    sequence = iter(
+        [
+            ("sig-a", 2, 2, 2),
+            ("sig-b", 1, 1, 1),
+            ("sig-c", 0, 0, 0),
+        ]
+    )
+
+    def fake_cycle_release_baseline(_cfg):
+        return next(sequence)
+
+    ticks = {"t": 0.0}
+
+    def fake_monotonic():
+        ticks["t"] += 1.0
+        return ticks["t"]
+
+    monkeypatch.setattr(MODULE, "_cycle_release_baseline", fake_cycle_release_baseline)
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(MODULE.time, "monotonic", fake_monotonic)
+
+    out = MODULE._await_cycle_release_signal(
+        cfg,
+        cycle_number=11,
+        baseline_signature="sig-a",
+        baseline_in_progress_workers=2,
+        baseline_live_workers=2,
+        baseline_task_in_progress=2,
+    )
+
+    assert out["mode"] == "token_conservative"
+    assert out["timed_out"] is False
+    assert out["decision"] == "all_workers_settled"
+    assert out["in_progress_workers"] == 0
+
+
+def test_await_cycle_release_signal_max_work_releases_on_first_progress(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=5,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+        cycle_release_mode="max_work",
+        cycle_release_timeout_seconds=20,
+        cycle_release_poll_seconds=1,
+    )
+    sequence = iter(
+        [
+            ("sig-a", 2, 2, 2),
+            ("sig-b", 2, 2, 2),
+        ]
+    )
+
+    def fake_cycle_release_baseline(_cfg):
+        return next(sequence)
+
+    ticks = {"t": 0.0}
+
+    def fake_monotonic():
+        ticks["t"] += 1.0
+        return ticks["t"]
+
+    monkeypatch.setattr(MODULE, "_cycle_release_baseline", fake_cycle_release_baseline)
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(MODULE.time, "monotonic", fake_monotonic)
+
+    out = MODULE._await_cycle_release_signal(
+        cfg,
+        cycle_number=12,
+        baseline_signature="sig-a",
+        baseline_in_progress_workers=2,
+        baseline_live_workers=2,
+        baseline_task_in_progress=2,
+    )
+
+    assert out["mode"] == "max_work"
+    assert out["timed_out"] is False
+    assert out["decision"] == "first_progress_signal"
+    assert out["in_progress_workers"] == 2
+
+
+def test_await_cycle_release_signal_returns_timeout_fallback(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=5,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+        cycle_release_mode="token_conservative",
+        cycle_release_timeout_seconds=3,
+        cycle_release_poll_seconds=1,
+    )
+
+    def fake_cycle_release_baseline(_cfg):
+        return ("sig-a", 2, 2, 2)
+
+    ticks = {"t": 0.0}
+
+    def fake_monotonic():
+        ticks["t"] += 1.0
+        return ticks["t"]
+
+    monkeypatch.setattr(MODULE, "_cycle_release_baseline", fake_cycle_release_baseline)
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(MODULE.time, "monotonic", fake_monotonic)
+
+    out = MODULE._await_cycle_release_signal(
+        cfg,
+        cycle_number=13,
+        baseline_signature="sig-a",
+        baseline_in_progress_workers=2,
+        baseline_live_workers=2,
+        baseline_task_in_progress=2,
+    )
+
+    assert out["timed_out"] is True
+    assert out["decision"] == "timeout_fallback"
 
 
 def test_quiet_cycle_gate_skips_boss_when_state_unchanged(tmp_path: Path, monkeypatch) -> None:
