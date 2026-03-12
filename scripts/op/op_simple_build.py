@@ -900,15 +900,16 @@ def _latest_dispatch_event_for_cycle(cfg: RunConfig, cycle_number: int) -> dict[
     return rows[-1] if rows else {}
 
 
-def _latest_manager_event_for_cycle(cfg: RunConfig, *, cycle_number: int, manager_name: str) -> dict[str, Any]:
+def _manager_events_for_cycle(cfg: RunConfig, cycle_number: int) -> list[dict[str, Any]]:
     path = cfg.repo_root / MANAGER_CALL_LOG_FILE
     if not path.exists():
-        return {}
+        return []
     try:
         rows = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return {}
-    for raw in reversed(rows):
+        return []
+    out: list[dict[str, Any]] = []
+    for raw in rows:
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
@@ -921,6 +922,12 @@ def _latest_manager_event_for_cycle(cfg: RunConfig, *, cycle_number: int, manage
             row_cycle = 0
         if row_cycle != cycle_number:
             continue
+        out.append(payload)
+    return out
+
+
+def _latest_manager_event_for_cycle(cfg: RunConfig, *, cycle_number: int, manager_name: str) -> dict[str, Any]:
+    for payload in reversed(_manager_events_for_cycle(cfg, cycle_number)):
         if str(payload.get("manager") or "").strip() != manager_name:
             continue
         return payload
@@ -1132,6 +1139,124 @@ def _dispatch_routing_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _emit_additional_manager_trace_events(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    identity: dict[str, Any],
+    source_payload: dict[str, Any],
+    excluded_managers: set[str] | None = None,
+) -> list[str]:
+    trace_errors: list[str] = []
+    excluded = {str(item or "").strip() for item in (excluded_managers or set())}
+    rows = _manager_events_for_cycle(cfg, cycle_number)
+    for idx, row in enumerate(rows):
+        manager_name = str(row.get("manager") or "").strip()
+        if not manager_name or manager_name in excluded:
+            continue
+        manager_slug = _slugify_identifier(manager_name)
+        manager_event_id = _canonical_id(
+            "event",
+            f"{identity['repo_slug']}-c{cycle_number:06d}-manager-{manager_slug}-{idx + 1}",
+        )
+        manager_decision_id = _canonical_id(
+            "decision",
+            f"{identity['repo_slug']}-c{cycle_number:06d}-manager-{manager_slug}-{idx + 1}",
+        )
+        message = str(row.get("message") or "").strip()
+        rationale = (
+            message
+            if len(message) >= 10
+            else f"Runtime manager {manager_name} invocation status was recorded for cycle {cycle_number}."
+        )
+        status = str(row.get("status") or "").strip().lower()
+        timeout = bool(row.get("timeout"))
+        if status == "ok":
+            outcome_status = "success"
+        elif timeout or status == "timeout":
+            outcome_status = "blocked"
+        elif status in {"failed", "error"}:
+            outcome_status = "failure"
+        else:
+            outcome_status = "partial"
+        reason_code = _reason_code(row.get("reason_code"), fallback=f"MANAGER_{manager_slug.upper()}_STATUS_RECORDED")
+        llm_meta = _manager_llm_metadata(cfg, manager_name=manager_name, log_row=row)
+        manager_inputs: dict[str, Any] = {
+            "manager_name": manager_name,
+            "status": status or "unknown",
+            "timeout": timeout,
+        }
+        if llm_meta:
+            manager_inputs["llm"] = llm_meta
+        manager_metrics: dict[str, Any] = {}
+        try:
+            duration_seconds = float(row.get("duration_seconds"))
+        except (TypeError, ValueError):
+            duration_seconds = None
+        if duration_seconds is not None and duration_seconds >= 0:
+            manager_metrics["duration_seconds"] = duration_seconds
+        returncode = row.get("returncode")
+        if isinstance(returncode, int):
+            manager_metrics["returncode"] = returncode
+        event = {
+            "schema_version": TRACE_EVENT_SCHEMA_VERSION,
+            "event_name": "runtime.manager.invocation",
+            "timestamp_utc": str(row.get("finished_at") or row.get("started_at") or utc_now_iso()),
+            "identity": {
+                "project_id": identity["project_id"],
+                "era_id": identity.get("era_id"),
+                "plan_id": identity["plan_id"],
+                "phase_id": identity["phase_id"],
+                "lane_id": identity["lane_id"],
+                "task_id": identity["task_id"],
+                "run_id": identity["run_id"],
+                "thread_id": _canonical_id("thread", f"{identity['repo_slug']}-manager-{manager_slug}"),
+                "event_id": manager_event_id,
+                "decision_id": manager_decision_id,
+            },
+            "actor": {"type": "manager", "id": manager_slug},
+            "decision": {
+                "question": f"How did manager '{manager_name}' invocation resolve in cycle {cycle_number}?",
+                "rationale": rationale,
+                "reason_codes": [reason_code],
+            },
+            "operation": {
+                "name": "invoke_manager",
+                "intent": "Capture manager invocation telemetry for this cycle.",
+                "inputs": manager_inputs,
+            },
+            "outcome": {
+                "status": outcome_status,
+                "summary": f"manager={manager_name} status={status or 'unknown'} timeout={str(timeout).lower()}",
+                "error_code": reason_code if outcome_status in {"failure", "blocked"} else None,
+                "retryable": timeout,
+                "metrics": manager_metrics,
+            },
+            "risk": {"level": "low" if outcome_status == "success" else "medium"},
+            "evidence": {
+                "artifacts": [
+                    {
+                        "artifact_id": _canonical_id(
+                            "artifact",
+                            f"{identity['repo_slug']}-c{cycle_number:06d}-manager-log-{manager_slug}-{idx + 1}",
+                        ),
+                        "kind": "manager_call_log",
+                        "uri": str(MANAGER_CALL_LOG_FILE),
+                    }
+                ]
+            },
+            "source": source_payload,
+        }
+        event_identity = event.get("identity")
+        if isinstance(event_identity, dict):
+            event["identity"] = {k: v for k, v in event_identity.items() if v is not None}
+        try:
+            _emit_trace_event_envelope(cfg, cycle_number=cycle_number, payload=event)
+        except SimpleBuildError as exc:
+            trace_errors.append(f"additional manager trace emission failed ({manager_name}): {exc.message}")
+    return trace_errors
+
+
 def _emit_cycle_trace_events(
     cfg: RunConfig,
     *,
@@ -1242,6 +1367,15 @@ def _emit_cycle_trace_events(
         _emit_trace_event_envelope(cfg, cycle_number=cycle_number, payload=manager_event)
     except SimpleBuildError as exc:
         trace_errors.append(f"manager trace emission failed: {exc.message}")
+    trace_errors.extend(
+        _emit_additional_manager_trace_events(
+            cfg,
+            cycle_number=cycle_number,
+            identity=identity,
+            source_payload=source_payload,
+            excluded_managers={"BOSS"},
+        )
+    )
 
     dispatch_attempted = int(dispatch_counts.get("attempted") or 0)
     dispatch_launched = int(dispatch_counts.get("launched") or 0)

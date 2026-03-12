@@ -2278,6 +2278,95 @@ def test_run_wrapup_trace_includes_llm_hardening_from_report(tmp_path: Path, mon
     assert wrapup_llm.get("prompt_complexity_score") == 28
 
 
+def test_emit_cycle_trace_events_emits_additional_manager_invocation_for_non_boss(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["cycle_manager_decision"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 1,
+            "decision": "proceed",
+            "reason_code": "registry_ready",
+            "message": "cycle proceeds",
+            "worker_registry_ready": True,
+        },
+    )
+    MODULE._append_manager_log(
+        cfg,
+        {
+            "schema_version": "1.0",
+            "cycle_number": 1,
+            "manager": "BOSS",
+            "status": "ok",
+            "timeout": False,
+            "returncode": 0,
+            "started_at": "2026-01-01T00:00:00Z",
+            "finished_at": "2026-01-01T00:00:01Z",
+            "duration_seconds": 1.0,
+            "executor_provider": "codex",
+            "executor_model": "gpt-5.3-codex",
+            "profile_alias": "codex",
+            "reasoning_effort": "xhigh",
+            "tooling_effort": "medium_tooling",
+        },
+    )
+    MODULE._append_manager_log(
+        cfg,
+        {
+            "schema_version": "1.0",
+            "cycle_number": 1,
+            "manager": "planner-audit",
+            "status": "ok",
+            "timeout": False,
+            "returncode": 0,
+            "started_at": "2026-01-01T00:00:01Z",
+            "finished_at": "2026-01-01T00:00:02Z",
+            "duration_seconds": 1.0,
+            "executor_provider": "codex",
+            "executor_model": "gpt-5.3-codex",
+            "profile_alias": "codex",
+            "reasoning_effort": "high_effort",
+            "tooling_effort": "medium_tooling",
+            "mini_jobs": 3,
+            "prompt_complexity_score": 44,
+            "checker_result": "pass",
+            "override_applied": False,
+        },
+    )
+
+    trace_errors = MODULE._emit_cycle_trace_events(
+        cfg,
+        cycle_number=1,
+        dispatch_counts={"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+    )
+    assert trace_errors == []
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / MODULE.TRACE_EVENT_LOG_FILE).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    extra = [
+        row
+        for row in rows
+        if row.get("event_name") == "runtime.manager.invocation"
+        and (row.get("actor") or {}).get("id") == "planner-audit"
+    ]
+    assert extra
+    llm = (((extra[0].get("operation") or {}).get("inputs") or {}).get("llm") or {})
+    assert llm.get("mini_jobs") == 3
+    assert llm.get("prompt_complexity_score") == 44
+    assert llm.get("checker_result") == "pass"
+
+
 def test_run_ground_sync_triggers_cadence_and_terminal(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     sync_calls: list[tuple[int, str]] = []
