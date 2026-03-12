@@ -34,8 +34,8 @@ DISPATCH_LAUNCH_LOG_FILE = CURRENT_DIR / "dispatch_launch_log.jsonl"
 INITIALIZE_STATE_FILE = CURRENT_DIR / "initialize_state.json"
 BOSS_EVIDENCE_FILE = CURRENT_DIR / "boss_evidence.json"
 BOSS_SESSION_STATE_FILE = CURRENT_DIR / "boss_session_state.json"
-APP_LIFECYCLE_FILE = Path("app_lifecycle.json")
 TRACE_EVENT_LOG_FILE = CURRENT_DIR / "trace_event_envelope.jsonl"
+APP_LIFECYCLE_FILE = Path("app_lifecycle.json")
 
 ARTIFACT_FILES = {
     "cycle_manager_decision": CURRENT_DIR / "cycle_manager_decision.json",
@@ -60,6 +60,10 @@ MANAGER_TIMEOUT_SECONDS = {
     "wrapup-manager": 720,
     "watchdog": 120,
     "summary": 120,
+}
+BLACKBOX_MANAGER_TIMEOUT_SECONDS = {
+    "BOSS": 1800,
+    "wrapup-manager": 1800,
 }
 
 QUIET_CYCLE_FORCE_FULL_EVERY = 5
@@ -99,6 +103,30 @@ NEW_EXECUTOR_LOG_ROOT = Path("/Users/slobodan/projects/LOGS") / "op-executors"
 NEW_EXECUTOR_LOG_MAX_BYTES = 3 * 1024 * 1024 * 1024
 NEW_EXECUTOR_LOG_CHECK_INTERVAL_SECONDS = 900
 NEW_EXECUTOR_LOG_STATE_FILE = NEW_EXECUTOR_LOG_ROOT / "MAINTENANCE_STATE.json"
+TRACE_EVENT_SCHEMA_VERSION = "trace-event-envelope.v1"
+CANONICAL_ID_PATTERN = re.compile(r"^[a-z]+\\.[a-z0-9][a-z0-9-]{1,95}$")
+GROUND_SYNC_DEFAULT_EVERY_N_CYCLES = 10
+GROUND_SYNC_DEFAULT_TIMEOUT_SECONDS = 120
+GROUND_SYNC_MANAGER_NAME = "ground-sync"
+GROUND_SYNC_SNAPSHOT_BASENAME = "current.trace_event_envelope.jsonl"
+TRACE_EVENT_TIMESTAMP_REGEX = re.compile(r"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$")
+TRACE_EVENT_SOURCE_SHA_REGEX = re.compile(r"^[0-9a-f]{7,40}$")
+TRACE_EVENT_ACTOR_TYPES = {"manager", "worker", "service", "operator", "system"}
+TRACE_EVENT_OUTCOME_STATUS = {"success", "failure", "partial", "blocked", "noop", "unknown"}
+TRACE_EVENT_RISK_LEVELS = {"low", "medium", "high", "critical"}
+CANONICAL_ID_PATTERNS = {
+    "project_id": re.compile(r"^prj\\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "era_id": re.compile(r"^era\\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "plan_id": re.compile(r"^plan\\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "phase_id": re.compile(r"^phase\\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "lane_id": re.compile(r"^lane\\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "task_id": re.compile(r"^task\\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "run_id": re.compile(r"^run\\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "thread_id": re.compile(r"^thread\\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "event_id": re.compile(r"^event\\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "decision_id": re.compile(r"^decision\\.[a-z0-9][a-z0-9-]{1,95}$"),
+    "artifact_id": re.compile(r"^artifact\\.[a-z0-9][a-z0-9-]{1,95}$"),
+}
 
 
 @dataclass
@@ -134,6 +162,9 @@ class RunConfig:
     executor_model: str | None = None
     blackbox_lane: str = "free"
     allow_worker_executor_override: bool = False
+    ground_sync_enabled: bool = True
+    ground_sync_every_n_cycles: int = GROUND_SYNC_DEFAULT_EVERY_N_CYCLES
+    ground_sync_timeout_seconds: int = GROUND_SYNC_DEFAULT_TIMEOUT_SECONDS
 
 
 class SimpleBuildError(Exception):
@@ -149,6 +180,14 @@ def utc_now_iso() -> str:
 
 def _json_dumps(payload: Any) -> str:
     return json.dumps(payload, indent=2, sort_keys=False) + "\n"
+
+
+def _coerce_output_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 def _atomic_write_json(path: Path, payload: Any) -> None:
@@ -761,6 +800,338 @@ def _git_run(repo_root: Path, *args: str) -> tuple[int, str, str]:
     return int(proc.returncode), (proc.stdout or "").strip(), (proc.stderr or "").strip()
 
 
+def _reason_code(value: Any, *, fallback: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "")).strip("_").upper()
+    if not text:
+        text = fallback
+    return text[:96]
+
+
+def _discover_earth_root(repo_root: Path) -> Path | None:
+    for candidate in [repo_root, *repo_root.parents]:
+        script_path = candidate / "ground-control-hub" / "scripts" / "ground_ingestion_normalize.py"
+        contracts_path = candidate / "contracts"
+        if script_path.exists() and contracts_path.exists():
+            return candidate
+    return None
+
+
+def _trace_identity_context(cfg: RunConfig, cycle_number: int) -> dict[str, str]:
+    base_identity = _canonical_identity_for_cycle(cfg, cycle_number)
+    repo_slug = _slugify_identifier(cfg.repo_root.name)
+    out = {
+        "project_id": base_identity["project_id"],
+        "run_id": base_identity["run_id"],
+        "plan_id": _canonical_id("plan", "op-simple-build"),
+        "phase_id": _canonical_id("phase", "runtime-orchestration"),
+        "lane_id": _canonical_id("lane", "op-simple-cycle"),
+        "task_id": _canonical_id("task", f"cycle-{cycle_number:06d}"),
+        "repo_slug": repo_slug,
+    }
+    era_id = base_identity.get("era_id")
+    if isinstance(era_id, str) and era_id.strip():
+        out["era_id"] = era_id
+    return out
+
+
+def _latest_dispatch_event_for_cycle(cfg: RunConfig, cycle_number: int) -> dict[str, Any]:
+    path = cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE
+    if not path.exists():
+        return {}
+    try:
+        rows = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for raw in reversed(rows):
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        try:
+            row_cycle = int(payload.get("cycle_number") or 0)
+        except (TypeError, ValueError):
+            row_cycle = 0
+        if row_cycle == cycle_number:
+            return payload
+    return {}
+
+
+def _emit_cycle_trace_events(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    dispatch_counts: dict[str, int],
+) -> list[str]:
+    trace_errors: list[str] = []
+    decision_payload = _read_cycle_decision(cfg)
+    identity = _trace_identity_context(cfg, cycle_number)
+    repo_name = cfg.repo_root.name
+    repo_branch = _git_text(cfg.repo_root, "branch", "--show-current") or ""
+    commit_sha = _git_text(cfg.repo_root, "rev-parse", "HEAD") or ""
+    source_payload: dict[str, Any] = {
+        "repo": repo_name,
+        "branch": repo_branch,
+    }
+    if commit_sha and TRACE_EVENT_SOURCE_SHA_REGEX.fullmatch(commit_sha):
+        source_payload["commit_sha"] = commit_sha
+
+    def _normalize_event_ts(value: Any) -> str:
+        text = str(value or "").strip()
+        if text and TRACE_EVENT_TIMESTAMP_REGEX.fullmatch(text):
+            return text
+        return utc_now_iso()
+
+    manager_reason_code = _reason_code(decision_payload.get("reason_code"), fallback="CYCLE_DECISION_RECORDED")
+    manager_event_id = _canonical_id("event", f"{identity['repo_slug']}-c{cycle_number:06d}-manager")
+    manager_decision_id = _canonical_id("decision", f"{identity['repo_slug']}-c{cycle_number:06d}-manager")
+    manager_artifact_id = _canonical_id(
+        "artifact",
+        f"{identity['repo_slug']}-c{cycle_number:06d}-cycle-manager-decision"
+    )
+    manager_timestamp = _normalize_event_ts(decision_payload.get("updated_at"))
+    manager_decision = str(decision_payload.get("decision") or "").strip().lower()
+    manager_outcome_status = "success" if manager_decision == "proceed" else "blocked"
+    manager_rationale = str(decision_payload.get("message") or "").strip()
+    if len(manager_rationale) < 10:
+        manager_rationale = "Cycle manager decision persisted to keep orchestration state deterministic."
+    manager_event = {
+        "schema_version": TRACE_EVENT_SCHEMA_VERSION,
+        "event_name": "runtime.manager.cycle_decision",
+        "timestamp_utc": manager_timestamp,
+        "identity": {
+            "project_id": identity["project_id"],
+            "era_id": identity.get("era_id"),
+            "plan_id": identity["plan_id"],
+            "phase_id": identity["phase_id"],
+            "lane_id": identity["lane_id"],
+            "task_id": identity["task_id"],
+            "run_id": identity["run_id"],
+            "thread_id": _canonical_id("thread", f"{identity['repo_slug']}-manager-boss"),
+            "event_id": manager_event_id,
+            "decision_id": manager_decision_id,
+        },
+        "actor": {"type": "manager", "id": "boss-manager"},
+        "decision": {
+            "question": "Should this cycle proceed?",
+            "rationale": manager_rationale,
+            "reason_codes": [manager_reason_code],
+        },
+        "operation": {
+            "name": "write_cycle_manager_decision",
+            "intent": "Persist deterministic cycle manager decision for the current OP simple cycle.",
+        },
+        "outcome": {
+            "status": manager_outcome_status,
+            "summary": f"Cycle {cycle_number} decision={decision_payload.get('decision')}.",
+        },
+        "risk": {"level": "low"},
+        "evidence": {
+            "artifacts": [
+                {
+                    "artifact_id": manager_artifact_id,
+                    "kind": "cycle_manager_decision",
+                    "uri": str(ARTIFACT_FILES["cycle_manager_decision"]),
+                }
+            ]
+        },
+        "source": source_payload,
+    }
+    manager_identity = manager_event.get("identity")
+    if isinstance(manager_identity, dict):
+        manager_event["identity"] = {k: v for k, v in manager_identity.items() if v is not None}
+    try:
+        _emit_trace_event_envelope(cfg, cycle_number=cycle_number, payload=manager_event)
+    except SimpleBuildError as exc:
+        trace_errors.append(f"manager trace emission failed: {exc.message}")
+
+    dispatch_attempted = int(dispatch_counts.get("attempted") or 0)
+    dispatch_launched = int(dispatch_counts.get("launched") or 0)
+    dispatch_failed = int(dispatch_counts.get("launch_failed") or 0)
+    dispatch_unknown = int(dispatch_counts.get("unknown") or 0)
+    dispatch_row = _latest_dispatch_event_for_cycle(cfg, cycle_number)
+    dispatch_timestamp = _normalize_event_ts(dispatch_row.get("timestamp"))
+    dispatch_event_id = _canonical_id("event", f"{identity['repo_slug']}-c{cycle_number:06d}-dispatch")
+    dispatch_decision_id = _canonical_id("decision", f"{identity['repo_slug']}-c{cycle_number:06d}-dispatch")
+    dispatch_status = "noop"
+    if dispatch_attempted > 0 and dispatch_launched > 0 and dispatch_failed == 0 and dispatch_unknown == 0:
+        dispatch_status = "success"
+    elif dispatch_failed > 0 and dispatch_launched == 0:
+        dispatch_status = "failure"
+    elif dispatch_attempted > 0:
+        dispatch_status = "partial"
+    dispatch_event = {
+        "schema_version": TRACE_EVENT_SCHEMA_VERSION,
+        "event_name": "runtime.dispatch.launch_cycle",
+        "timestamp_utc": dispatch_timestamp,
+        "identity": {
+            "project_id": identity["project_id"],
+            "era_id": identity["era_id"],
+            "plan_id": identity["plan_id"],
+            "phase_id": identity["phase_id"],
+            "lane_id": identity["lane_id"],
+            "task_id": identity["task_id"],
+            "run_id": identity["run_id"],
+            "thread_id": _canonical_id("thread", f"{identity['repo_slug']}-work-dispatcher"),
+            "event_id": dispatch_event_id,
+            "decision_id": dispatch_decision_id,
+        },
+        "actor": {"type": "service", "id": "work-dispatcher"},
+        "decision": {
+            "question": "Should dispatch launch worker packets in this cycle?",
+            "rationale": (
+                f"dispatch attempted={dispatch_attempted} launched={dispatch_launched} "
+                f"failed={dispatch_failed} unknown={dispatch_unknown}"
+            ),
+            "reason_codes": ["DISPATCH_COUNTS_RECORDED"],
+        },
+        "operation": {
+            "name": "dispatch_packets",
+            "intent": "Launch available worker packets according to runtime policies and capacity limits.",
+        },
+        "outcome": {
+            "status": dispatch_status,
+            "summary": (
+                f"Cycle {cycle_number} dispatch attempted={dispatch_attempted}, launched={dispatch_launched}, "
+                f"failed={dispatch_failed}, unknown={dispatch_unknown}."
+            ),
+        },
+        "risk": {"level": "medium" if dispatch_attempted > 0 else "low"},
+        "evidence": {
+            "artifacts": [
+                {
+                    "artifact_id": _canonical_id(
+                        "artifact",
+                        f"{identity['repo_slug']}-c{cycle_number:06d}-dispatch-launch-log",
+                    ),
+                    "kind": "dispatch_launch_log",
+                    "uri": str(DISPATCH_LAUNCH_LOG_FILE),
+                },
+                {
+                    "artifact_id": _canonical_id(
+                        "artifact",
+                        f"{identity['repo_slug']}-c{cycle_number:06d}-dispatch-registry",
+                    ),
+                    "kind": "dispatch_registry",
+                    "uri": str(ARTIFACT_FILES["dispatch_registry"]),
+                },
+            ]
+        },
+        "source": source_payload,
+    }
+    dispatch_identity = dispatch_event.get("identity")
+    if isinstance(dispatch_identity, dict):
+        dispatch_event["identity"] = {k: v for k, v in dispatch_identity.items() if v is not None}
+    try:
+        _emit_trace_event_envelope(cfg, cycle_number=cycle_number, payload=dispatch_event)
+    except SimpleBuildError as exc:
+        trace_errors.append(f"dispatch trace emission failed: {exc.message}")
+    return trace_errors
+
+
+def _project_trace_snapshot_path(earth_root: Path, project_id: str) -> Path:
+    return earth_root / "reports" / "ground-ingest-inputs" / project_id / GROUND_SYNC_SNAPSHOT_BASENAME
+
+
+def _sync_trace_snapshot_to_ground_inbox(cfg: RunConfig, *, earth_root: Path, project_id: str) -> Path:
+    source = cfg.repo_root / TRACE_EVENT_LOG_FILE
+    target = _project_trace_snapshot_path(earth_root, project_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    text = source.read_text(encoding="utf-8")
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(target)
+    return target
+
+
+def _collect_ground_ingest_inputs(earth_root: Path) -> list[Path]:
+    base = earth_root / "reports" / "ground-ingest-inputs"
+    if not base.exists():
+        return []
+    rows: list[Path] = []
+    for path in sorted(base.rglob(GROUND_SYNC_SNAPSHOT_BASENAME)):
+        if not path.is_file():
+            continue
+        try:
+            if path.stat().st_size <= 0:
+                continue
+        except OSError:
+            continue
+        rows.append(path.resolve())
+    return rows
+
+
+def _run_ground_sync(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    trigger: str,
+) -> tuple[str, str]:
+    if cfg.dry_run:
+        return "skipped_dry_run", "ground sync skipped for dry run"
+    earth_root = _discover_earth_root(cfg.repo_root)
+    if earth_root is None:
+        return "skipped_no_earth_root", "ground sync skipped: Earth root not detected"
+
+    identity = _trace_identity_context(cfg, cycle_number)
+    source_trace = cfg.repo_root / TRACE_EVENT_LOG_FILE
+    if not source_trace.exists():
+        return "skipped_no_trace_file", f"ground sync skipped: missing trace file {source_trace}"
+
+    script_path = earth_root / "ground-control-hub" / "scripts" / "ground_ingestion_normalize.py"
+    if not script_path.exists():
+        return "skipped_no_ground_script", f"ground sync skipped: normalizer script missing at {script_path}"
+
+    try:
+        snapshot_path = _sync_trace_snapshot_to_ground_inbox(
+            cfg,
+            earth_root=earth_root,
+            project_id=identity["project_id"],
+        )
+    except OSError as exc:
+        return "failed", f"ground sync snapshot write failed: {exc}"
+
+    inputs = _collect_ground_ingest_inputs(earth_root)
+    if not inputs:
+        return "skipped_no_inputs", "ground sync skipped: no ingest input snapshots discovered"
+
+    output_graph = earth_root / "ground-control-hub" / "artifacts" / "ground_portfolio_graph.v1.json"
+    output_normalized = earth_root / "ground-control-hub" / "artifacts" / "ground_normalized_events.v1.jsonl"
+    cmd: list[str] = ["python3", str(script_path)]
+    for path in inputs:
+        cmd.extend(["--trace-jsonl", str(path)])
+    cmd.extend(
+        [
+            "--output",
+            str(output_graph),
+            "--normalized-events-output",
+            str(output_normalized),
+        ]
+    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cfg.repo_root),
+            capture_output=True,
+            text=True,
+            timeout=max(30, int(cfg.ground_sync_timeout_seconds)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "failed", "ground sync timed out while running normalizer"
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip() or (proc.stdout or "").strip() or "unknown error"
+        return "failed", f"ground sync normalizer failed: {detail}"
+    return (
+        "ok",
+        (
+            f"ground sync completed trigger={trigger} snapshot={snapshot_path} "
+            f"inputs={len(inputs)} output={output_graph}"
+        ),
+    )
+
+
 def _create_run_base_branch(cfg: RunConfig) -> dict[str, Any]:
     active_branch = _git_text(cfg.repo_root, "branch", "--show-current") or "main"
     source_branch = str(cfg.run_base_source_branch or "").strip() or "main"
@@ -1358,6 +1729,14 @@ def _append_manager_log(cfg: RunConfig, row: dict[str, Any]) -> None:
     _append_jsonl(cfg.repo_root / MANAGER_CALL_LOG_FILE, row)
 
 
+def _resolve_manager_timeout_seconds(cfg: RunConfig, manager_name: str, *, provider: str) -> int:
+    timeout = int(MANAGER_TIMEOUT_SECONDS.get(manager_name, 300))
+    resolved_provider = _normalize_executor_provider(provider)
+    if resolved_provider == "blackbox":
+        timeout = int(BLACKBOX_MANAGER_TIMEOUT_SECONDS.get(manager_name, timeout))
+    return max(1, timeout)
+
+
 def _codex_exec_prompt(
     cfg: RunConfig,
     manager_name: str,
@@ -1533,6 +1912,8 @@ def _blackbox_exec_prompt(
     safe_name = manager_name.lower().replace(" ", "-")
     stdout_path = cycle_dir / f"manager-{safe_name}.stdout.log"
     stderr_path = cycle_dir / f"manager-{safe_name}.stderr.log"
+    scope = "op-simple-build/manager-blackbox"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     cmd, env, prep_error = _build_blackbox_exec_command(cfg, prompt_text, model=model)
     if prep_error:
@@ -1561,12 +1942,10 @@ def _blackbox_exec_prompt(
             check=False,
             env=env,
         )
-        stdout_text = completed.stdout or ""
-        stderr_text = completed.stderr or ""
+        stdout_text = _coerce_output_text(completed.stdout)
+        stderr_text = _coerce_output_text(completed.stderr)
         stdout_path.write_text(stdout_text, encoding="utf-8")
         stderr_path.write_text(stderr_text, encoding="utf-8")
-        scope = "op-simple-build/manager-blackbox"
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         _write_new_executor_blob(scope, f"{stamp}-cycle{cycle_number:06d}-{safe_name}.stdout.log", stdout_text)
         _write_new_executor_blob(scope, f"{stamp}-cycle{cycle_number:06d}-{safe_name}.stderr.log", stderr_text)
         _append_new_executor_event(
@@ -1581,6 +1960,7 @@ def _blackbox_exec_prompt(
                 "blackbox_lane": _normalize_blackbox_lane(cfg.blackbox_lane),
                 "status": "ok" if completed.returncode == 0 else "failed",
                 "returncode": int(completed.returncode),
+                "timeout_seconds": int(timeout_seconds),
             },
         )
         finished_at = utc_now_iso()
@@ -1598,7 +1978,29 @@ def _blackbox_exec_prompt(
             reason_code=None if completed.returncode == 0 else "manager_non_zero_exit",
             session_id=None,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        stdout_text = _coerce_output_text(exc.stdout)
+        stderr_text = _coerce_output_text(exc.stderr)
+        stdout_path.write_text(stdout_text, encoding="utf-8")
+        stderr_path.write_text(stderr_text, encoding="utf-8")
+        _write_new_executor_blob(scope, f"{stamp}-cycle{cycle_number:06d}-{safe_name}.stdout.log", stdout_text)
+        _write_new_executor_blob(scope, f"{stamp}-cycle{cycle_number:06d}-{safe_name}.stderr.log", stderr_text)
+        _append_new_executor_event(
+            scope,
+            {
+                "schema_version": SCHEMA_VERSION,
+                "timestamp": utc_now_iso(),
+                "manager": manager_name,
+                "cycle_number": int(cycle_number),
+                "executor_provider": "blackbox",
+                "executor_model": str(model or _resolve_executor_model(cfg, provider="blackbox") or ""),
+                "blackbox_lane": _normalize_blackbox_lane(cfg.blackbox_lane),
+                "status": "timeout",
+                "returncode": None,
+                "timeout_seconds": int(timeout_seconds),
+                "timed_out": True,
+            },
+        )
         finished_at = utc_now_iso()
         return ManagerResult(
             manager=manager_name,
@@ -1610,7 +2012,7 @@ def _blackbox_exec_prompt(
             duration_seconds=round(time.monotonic() - start_time, 3),
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
-            message="manager call timed out",
+            message=f"manager call timed out after {int(timeout_seconds)}s",
             reason_code="manager_timeout",
         )
     except FileNotFoundError:
@@ -1884,7 +2286,11 @@ def _invoke_manager(
         prompt_text += "Runtime packet (JSON):\n```json\n"
         prompt_text += json.dumps(packet, indent=2, sort_keys=False)
         prompt_text += "\n```\n"
-        timeout = int(MANAGER_TIMEOUT_SECONDS.get(manager_name, 300))
+        timeout = _resolve_manager_timeout_seconds(
+            cfg,
+            manager_name,
+            provider=executor_provider,
+        )
         manager_model = _resolve_executor_model(
             cfg,
             provider=executor_provider,

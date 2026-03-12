@@ -2521,6 +2521,139 @@ def test_invoke_manager_wrapup_uses_selected_profile_home_and_boss_model_reasoni
     assert out.message == "manager_profile_alias=codex-wrapup"
 
 
+def test_invoke_manager_blackbox_boss_uses_extended_timeout(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        executor_provider="blackbox",
+        blackbox_lane="free",
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+    captured: dict[str, int | None] = {"timeout_seconds": None}
+
+    def fake_blackbox_exec_prompt(_cfg, _manager_name, _cycle_number, timeout_seconds, _prompt_text, *, model=None):
+        captured["timeout_seconds"] = int(timeout_seconds)
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            message=f"model={model}",
+        )
+
+    monkeypatch.setattr(MODULE, "_blackbox_exec_prompt", fake_blackbox_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=1,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "ok"
+    assert captured["timeout_seconds"] == MODULE.BLACKBOX_MANAGER_TIMEOUT_SECONDS["BOSS"]
+
+
+def test_invoke_manager_codex_boss_keeps_default_timeout(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        executor_provider="codex",
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+    captured: dict[str, int | None] = {"timeout_seconds": None}
+
+    def fake_codex_exec_prompt(_cfg, _manager_name, _cycle_number, timeout_seconds, _prompt_text, **_kwargs):
+        captured["timeout_seconds"] = int(timeout_seconds)
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=1,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "ok"
+    assert captured["timeout_seconds"] == MODULE.MANAGER_TIMEOUT_SECONDS["BOSS"]
+
+
+def test_blackbox_exec_prompt_timeout_persists_partial_output(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        executor_provider="blackbox",
+        blackbox_lane="free",
+    )
+    captured_events: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        MODULE,
+        "_build_blackbox_exec_command",
+        lambda _cfg, _prompt_text, model=None: (["blackbox", "-m", str(model or "m"), "-p", "prompt"], {}, None),
+    )
+    monkeypatch.setattr(MODULE, "_write_new_executor_blob", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(MODULE, "_append_new_executor_event", lambda _scope, row: captured_events.append(dict(row)))
+
+    def fake_run(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=["blackbox", "-m", "blackboxai/minimax/minimax-free", "-p", "prompt"],
+            timeout=5,
+            output="partial stdout",
+            stderr="partial stderr",
+        )
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
+    out = MODULE._blackbox_exec_prompt(
+        cfg,
+        "BOSS",
+        9,
+        5,
+        "prompt",
+        model="blackboxai/minimax/minimax-free",
+    )
+
+    assert out.status == "timeout"
+    assert out.timeout is True
+    assert "after 5s" in str(out.message or "")
+    assert out.stdout_path and Path(out.stdout_path).read_text(encoding="utf-8") == "partial stdout"
+    assert out.stderr_path and Path(out.stderr_path).read_text(encoding="utf-8") == "partial stderr"
+    assert captured_events
+    assert captured_events[-1]["status"] == "timeout"
+    assert captured_events[-1]["timeout_seconds"] == 5
+    assert captured_events[-1]["timed_out"] is True
+
+
 def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
