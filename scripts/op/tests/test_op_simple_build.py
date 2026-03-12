@@ -827,6 +827,11 @@ def test_build_blackbox_exec_command_free_lane_unsets_keys(tmp_path: Path, monke
     assert error is None
     assert cmd[:2] == ["blackbox", "-m"]
     assert "blackboxai/minimax/minimax-free" in cmd
+    assert "--approval-mode" in cmd
+    assert "yolo" in cmd
+    assert "--include-directories" in cmd
+    include_idx = cmd.index("--include-directories")
+    assert cmd[include_idx + 1] == "."
     assert env is not None
     assert "BLACKBOX_API_KEY" not in env
     assert "OPENAI_API_KEY" not in env
@@ -847,6 +852,11 @@ def test_build_blackbox_exec_command_api_key_lane_uses_keychain_lookup(tmp_path:
     assert error is None
     assert cmd[:2] == ["blackbox", "-m"]
     assert "blackboxai/minimax/minimax-m2.5" in cmd
+    assert "--approval-mode" in cmd
+    assert "yolo" in cmd
+    assert "--include-directories" in cmd
+    include_idx = cmd.index("--include-directories")
+    assert cmd[include_idx + 1] == "."
     assert env is not None
     assert env.get("BLACKBOX_API_KEY") == "secret-key"
 

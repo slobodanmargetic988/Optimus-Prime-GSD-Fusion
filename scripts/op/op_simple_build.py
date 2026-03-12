@@ -368,7 +368,17 @@ def _build_blackbox_exec_command(cfg: RunConfig, prompt_text: str, *, model: str
         if not api_key:
             return [], None, "BLACKBOXAI_KEY is missing in macOS Keychain"
         env["BLACKBOX_API_KEY"] = api_key
-    return ["blackbox", "-m", resolved_model, "-p", prompt_text], env, None
+    return [
+        "blackbox",
+        "-m",
+        resolved_model,
+        "--approval-mode",
+        "yolo",
+        "--include-directories",
+        ".",
+        "-p",
+        prompt_text,
+    ], env, None
 
 
 def _safe_unlink(path: Path) -> None:
