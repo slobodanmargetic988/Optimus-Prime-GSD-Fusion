@@ -34,6 +34,19 @@ Required output:
   - `summary`
   - `notes` (array of short strings)
 
+Optional telemetry extension:
+- `llm_hardening` object with:
+  - `mini_jobs` (integer)
+  - `prompt_complexity_score` (0-100)
+  - `checker_result` (`pass|fail|not_applicable`)
+  - `checker_id` (string)
+  - `override_applied` (boolean)
+  - `override_reason_code` (string, required when `override_applied=true`)
+  - `override_explanation` (string, required when `override_applied=true`)
+  - `override_evidence_refs` (string array, required when `override_applied=true`)
+  - `risk_level` (`low|medium|high|critical`, required when `override_applied=true`)
+  - `fallback_or_followup_action` (string, required when `override_applied=true`)
+
 Lifecycle finalization contract:
 - Open `<repo-root>/app_lifecycle.json`.
 - Find the active era:

@@ -123,6 +123,8 @@ TRACE_EVENT_SOURCE_SHA_REGEX = re.compile(r"^[0-9a-f]{7,40}$")
 TRACE_EVENT_ACTOR_TYPES = {"manager", "worker", "service", "operator", "system"}
 TRACE_EVENT_OUTCOME_STATUS = {"success", "failure", "partial", "blocked", "noop", "unknown"}
 TRACE_EVENT_RISK_LEVELS = {"low", "medium", "high", "critical"}
+LLM_HARDENING_CHECKER_RESULTS = {"pass", "fail", "not_applicable"}
+LLM_HARDENING_RISK_LEVELS = {"low", "medium", "high", "critical"}
 CANONICAL_ID_PATTERNS = {
     "project_id": re.compile(r"^prj\.[a-z0-9][a-z0-9-]{1,95}$"),
     "era_id": re.compile(r"^era\.[a-z0-9][a-z0-9-]{1,95}$"),
@@ -939,6 +941,116 @@ def _manager_profile_alias_from_log_row(row: dict[str, Any]) -> str | None:
     return parsed or None
 
 
+def _coerce_non_negative_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
+def _normalize_prompt_complexity_score(value: Any) -> int | None:
+    parsed = _coerce_non_negative_int(value)
+    if parsed is None:
+        return None
+    return max(0, min(100, parsed))
+
+
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "1", "yes", "y", "on"}:
+            return True
+        if text in {"false", "0", "no", "n", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _normalize_string_list(payload: Any) -> list[str]:
+    if not isinstance(payload, list):
+        return []
+    out: list[str] = []
+    for item in payload:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        out.append(text)
+    return list(dict.fromkeys(out))
+
+
+def _normalize_llm_hardening_payload(payload: Any) -> dict[str, Any]:
+    row = payload if isinstance(payload, dict) else {}
+    checker_result = str(row.get("checker_result") or "").strip().lower()
+    if checker_result not in LLM_HARDENING_CHECKER_RESULTS:
+        checker_result = "not_applicable"
+    risk_level = str(row.get("risk_level") or "").strip().lower()
+    if risk_level not in LLM_HARDENING_RISK_LEVELS:
+        risk_level = ""
+
+    out = {
+        "mini_jobs": _coerce_non_negative_int(row.get("mini_jobs")),
+        "prompt_complexity_score": _normalize_prompt_complexity_score(row.get("prompt_complexity_score")),
+        "checker_result": checker_result,
+        "checker_id": str(row.get("checker_id") or "").strip() or None,
+        "override_applied": _coerce_bool(row.get("override_applied"), default=False),
+        "override_reason_code": str(row.get("override_reason_code") or "").strip() or None,
+        "override_explanation": str(row.get("override_explanation") or "").strip() or None,
+        "override_evidence_refs": _normalize_string_list(row.get("override_evidence_refs")),
+        "risk_level": risk_level or None,
+        "fallback_or_followup_action": str(row.get("fallback_or_followup_action") or "").strip() or None,
+    }
+    if not out["override_applied"]:
+        out["override_reason_code"] = None
+        out["override_explanation"] = None
+        out["override_evidence_refs"] = []
+        out["risk_level"] = None
+        out["fallback_or_followup_action"] = None
+    return out
+
+
+def _extract_manager_llm_hardening(
+    cfg: RunConfig,
+    *,
+    manager_name: str,
+    expected_artifacts: list[str],
+    cycle_number: int,
+) -> tuple[dict[str, Any], bool, str | None]:
+    artifact_candidates: list[str] = list(expected_artifacts)
+    if manager_name == "BOSS" and "cycle_manager_decision" not in artifact_candidates:
+        artifact_candidates.append("cycle_manager_decision")
+    if manager_name == "wrapup-manager" and "wrapup_manager_report" not in artifact_candidates:
+        artifact_candidates.append("wrapup_manager_report")
+
+    for artifact_key in artifact_candidates:
+        path_ref = ARTIFACT_FILES.get(artifact_key)
+        if path_ref is None:
+            continue
+        artifact_path = cfg.repo_root / path_ref
+        if not artifact_path.exists():
+            continue
+        payload = _read_json(artifact_path, default=None)
+        if not isinstance(payload, dict):
+            continue
+        if "cycle_number" in payload:
+            try:
+                artifact_cycle = int(payload.get("cycle_number"))
+            except (TypeError, ValueError):
+                continue
+            if artifact_cycle != cycle_number:
+                continue
+        llm_hardening = payload.get("llm_hardening")
+        if not isinstance(llm_hardening, dict):
+            continue
+        return _normalize_llm_hardening_payload(llm_hardening), True, artifact_key
+    return _normalize_llm_hardening_payload({}), False, None
+
+
 def _manager_llm_metadata(cfg: RunConfig, *, manager_name: str, log_row: dict[str, Any] | None) -> dict[str, Any]:
     row = log_row if isinstance(log_row, dict) else {}
     provider = _normalize_executor_provider(row.get("executor_provider") or cfg.executor_provider)
@@ -955,6 +1067,7 @@ def _manager_llm_metadata(cfg: RunConfig, *, manager_name: str, log_row: dict[st
     tooling_effort = str(row.get("tooling_effort") or "").strip() or (
         "medium_tooling" if manager_name in {"BOSS", "wrapup-manager"} else ""
     )
+    llm_hardening = _normalize_llm_hardening_payload(row)
 
     out = {
         "role": "manager",
@@ -964,6 +1077,16 @@ def _manager_llm_metadata(cfg: RunConfig, *, manager_name: str, log_row: dict[st
         "profile_alias": profile_alias,
         "reasoning_effort": reasoning_effort or None,
         "tooling_effort": tooling_effort or None,
+        "mini_jobs": llm_hardening.get("mini_jobs"),
+        "prompt_complexity_score": llm_hardening.get("prompt_complexity_score"),
+        "checker_result": llm_hardening.get("checker_result"),
+        "checker_id": llm_hardening.get("checker_id"),
+        "override_applied": bool(llm_hardening.get("override_applied")),
+        "override_reason_code": llm_hardening.get("override_reason_code"),
+        "override_explanation": llm_hardening.get("override_explanation"),
+        "override_evidence_refs": llm_hardening.get("override_evidence_refs") or None,
+        "risk_level": llm_hardening.get("risk_level"),
+        "fallback_or_followup_action": llm_hardening.get("fallback_or_followup_action"),
     }
     return {key: value for key, value in out.items() if value is not None and str(value).strip() != ""}
 
@@ -2590,6 +2713,23 @@ def _invoke_manager(
             result.message = message
             result.details = details
 
+    llm_hardening, llm_hardening_present, llm_hardening_source = _extract_manager_llm_hardening(
+        cfg,
+        manager_name=manager_name,
+        expected_artifacts=expected_artifacts,
+        cycle_number=cycle_number,
+    )
+    print(
+        "[op-simple-build] "
+        f"[{utc_now_iso()}] "
+        f"cycle={cycle_number} manager={manager_name} llm_hardening="
+        f"{'present' if llm_hardening_present else 'missing'} "
+        f"source={llm_hardening_source or 'none'} "
+        f"checker_result={llm_hardening.get('checker_result')} "
+        f"override_applied={str(bool(llm_hardening.get('override_applied'))).lower()}",
+        flush=True,
+    )
+
     _append_manager_log(
         cfg,
         {
@@ -2611,6 +2751,16 @@ def _invoke_manager(
             "profile_alias": log_profile_alias,
             "reasoning_effort": log_reasoning_effort,
             "tooling_effort": log_tooling_effort,
+            "mini_jobs": llm_hardening.get("mini_jobs"),
+            "prompt_complexity_score": llm_hardening.get("prompt_complexity_score"),
+            "checker_result": llm_hardening.get("checker_result"),
+            "checker_id": llm_hardening.get("checker_id"),
+            "override_applied": bool(llm_hardening.get("override_applied")),
+            "override_reason_code": llm_hardening.get("override_reason_code"),
+            "override_explanation": llm_hardening.get("override_explanation"),
+            "override_evidence_refs": llm_hardening.get("override_evidence_refs") or [],
+            "risk_level": llm_hardening.get("risk_level"),
+            "fallback_or_followup_action": llm_hardening.get("fallback_or_followup_action"),
         },
     )
     return result

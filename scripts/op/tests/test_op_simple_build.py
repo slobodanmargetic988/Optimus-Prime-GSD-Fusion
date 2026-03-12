@@ -2209,6 +2209,8 @@ def test_run_emits_cycle_trace_events_for_manager_and_dispatch(tmp_path: Path) -
     manager_llm = (((manager_event.get("operation") or {}).get("inputs") or {}).get("llm") or {})
     assert manager_llm.get("role") == "manager"
     assert manager_llm.get("provider") in {"codex", "openrouter", "blackbox"}
+    assert manager_llm.get("checker_result") == "not_applicable"
+    assert manager_llm.get("override_applied") is False
     dispatch_inputs = ((dispatch_event.get("operation") or {}).get("inputs") or {})
     dispatch_routing = dispatch_inputs.get("routing") or {}
     assert isinstance(dispatch_routing.get("provider_stats"), dict)
@@ -2216,6 +2218,64 @@ def test_run_emits_cycle_trace_events_for_manager_and_dispatch(tmp_path: Path) -
     assert isinstance(dispatch_routing.get("profile_stats"), dict)
     for row in trace_rows:
         assert MODULE._validate_trace_event_envelope_v1(row) == []
+
+
+def test_run_wrapup_trace_includes_llm_hardening_from_report(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+
+    def fake_write_wrapup_stub(cfg, cycle_number: int):
+        MODULE._atomic_write_json(
+            cfg.repo_root / MODULE.ARTIFACT_FILES["wrapup_manager_report"],
+            {
+                "schema_version": "1.0",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "cycle_number": cycle_number,
+                "status": "dry_run",
+                "stop_reason": "project_done",
+                "run_base_branch": "main",
+                "summary": "wrapup complete",
+                "llm_hardening": {
+                    "mini_jobs": 2,
+                    "prompt_complexity_score": 28,
+                    "checker_result": "pass",
+                    "checker_id": "scripts/check_wrapup.py",
+                    "override_applied": False,
+                },
+            },
+        )
+
+    monkeypatch.setattr(MODULE, "_write_wrapup_stub", fake_write_wrapup_stub)
+    monkeypatch.setattr(
+        MODULE,
+        "_render_cycle_summary",
+        lambda *_args, **_kwargs: {
+            "schema_version": "1.0",
+            "cycle_number": 1,
+            "project_done": True,
+            "insurmountable_blocker": False,
+            "termination": {},
+            "stop_reason": "",
+            "task_counts": {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0},
+            "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+            "manager_statuses": {},
+            "notes": "",
+        },
+    )
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, max_build_cycles=1, dry_run=True, sleep_minutes=0))
+
+    assert out["ok"] is True
+    trace_rows = [
+        json.loads(line)
+        for line in (tmp_path / MODULE.TRACE_EVENT_LOG_FILE).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    wrapup_event = next(row for row in trace_rows if row.get("event_name") == "merge.lifecycle.wrapup_manager")
+    wrapup_llm = (((wrapup_event.get("operation") or {}).get("inputs") or {}).get("llm") or {})
+    assert wrapup_llm.get("checker_result") == "pass"
+    assert wrapup_llm.get("override_applied") is False
+    assert wrapup_llm.get("mini_jobs") == 2
+    assert wrapup_llm.get("prompt_complexity_score") == 28
 
 
 def test_run_ground_sync_triggers_cadence_and_terminal(tmp_path: Path, monkeypatch) -> None:
@@ -2448,6 +2508,72 @@ def test_invoke_manager_dry_run_logs_executor_metadata(tmp_path: Path) -> None:
     assert latest["executor_model"] == "gpt-5.3-codex"
     assert latest["reasoning_effort"] == "xhigh"
     assert latest["tooling_effort"] == "medium_tooling"
+    assert latest["checker_result"] == "not_applicable"
+    assert latest["override_applied"] is False
+
+
+def test_invoke_manager_extracts_llm_hardening_from_cycle_manager_decision(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["cycle_manager_decision"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 1,
+            "decision": "proceed",
+            "reason_code": "registry_ready",
+            "message": "manager decision with telemetry",
+            "worker_registry_ready": True,
+            "llm_hardening": {
+                "mini_jobs": 4,
+                "prompt_complexity_score": 61,
+                "checker_result": "fail",
+                "checker_id": "scripts/check_cycle.py",
+                "override_applied": True,
+                "override_reason_code": "checker_false_negative",
+                "override_explanation": "checker guardrail did not match current runtime packet shape",
+                "override_evidence_refs": ["reports/op/checks/cycle-1.json"],
+                "risk_level": "medium",
+                "fallback_or_followup_action": "re-run checker on normalized packet next cycle",
+            },
+        },
+    )
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=1,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "ok"
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / MODULE.MANAGER_CALL_LOG_FILE).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    latest = rows[-1]
+    assert latest["mini_jobs"] == 4
+    assert latest["prompt_complexity_score"] == 61
+    assert latest["checker_result"] == "fail"
+    assert latest["checker_id"] == "scripts/check_cycle.py"
+    assert latest["override_applied"] is True
+    assert latest["override_reason_code"] == "checker_false_negative"
+    assert latest["risk_level"] == "medium"
+    llm_meta = MODULE._manager_llm_metadata(cfg, manager_name="BOSS", log_row=latest)
+    assert llm_meta["mini_jobs"] == 4
+    assert llm_meta["prompt_complexity_score"] == 61
+    assert llm_meta["checker_result"] == "fail"
+    assert llm_meta["override_applied"] is True
+    assert llm_meta["override_reason_code"] == "checker_false_negative"
 
 
 def test_run_persists_summary_manager_status_entry(tmp_path: Path) -> None:

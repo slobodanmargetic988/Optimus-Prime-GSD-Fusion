@@ -91,6 +91,7 @@ Runtime freshness rule: every required BOSS-authored artifact must include top-l
 | reason_code | string | Machine-readable reason |
 | message | string | Human-readable explanation |
 | worker_registry_ready | boolean | Downstream readiness check |
+| llm_hardening | object (optional) | LLM prompt/checker telemetry extension |
 
 ```json
 {
@@ -102,6 +103,18 @@ Runtime freshness rule: every required BOSS-authored artifact must include top-l
   "worker_registry_ready": true
 }
 ```
+
+Optional `llm_hardening` extension fields:
+- `mini_jobs` (integer)
+- `prompt_complexity_score` (0-100)
+- `checker_result` (`pass|fail|not_applicable`)
+- `checker_id` (string)
+- `override_applied` (boolean)
+- `override_reason_code` (string when override is applied)
+- `override_explanation` (string when override is applied)
+- `override_evidence_refs` (string array when override is applied)
+- `risk_level` (`low|medium|high|critical` when override is applied)
+- `fallback_or_followup_action` (string when override is applied)
 
 ## 4) production_line_register.json
 
@@ -413,3 +426,17 @@ Runtime freshness rule: every required BOSS-authored artifact must include top-l
   ]
 }
 ```
+
+## 12) wrapup_manager_report.json
+
+Common top-level fields:
+- `schema_version`
+- `updated_at`
+- `cycle_number`
+- `status`
+- `stop_reason`
+- `run_base_branch`
+- `summary`
+
+Optional telemetry extension:
+- `llm_hardening` object with the same optional keys defined in section `3) cycle_manager_decision.json`.
