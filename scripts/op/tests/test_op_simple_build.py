@@ -282,6 +282,73 @@ def test_boss_failure_skips_cycle_and_writes_conservative_summary(tmp_path: Path
     assert (tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"]).exists()
 
 
+def test_worker_state_signature_and_counts_helpers(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 1,
+            "workers": [
+                {
+                    "worker_id": "worker-1",
+                    "status": "in_progress",
+                    "pid": 111,
+                    "thread_id": "thread-1",
+                    "current_task_id": "TASK-1",
+                    "current_task_provider": "blackbox",
+                    "current_task_model": "blackboxai/minimax/minimax-free",
+                },
+                {
+                    "worker_id": "worker-2",
+                    "status": "pending",
+                    "pid": None,
+                    "thread_id": "",
+                    "current_task_id": "",
+                    "current_task_provider": "codex",
+                    "current_task_model": "",
+                },
+            ],
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 1,
+            "tasks": [
+                {"task_id": "TASK-1", "status": "in_progress", "assigned_worker": "worker-1", "assigned_provider": "blackbox"},
+                {"task_id": "TASK-2", "status": "pending", "assigned_worker": "", "assigned_provider": ""},
+                {"task_id": "TASK-3", "status": "blocked", "assigned_worker": "", "assigned_provider": ""},
+            ],
+        },
+    )
+
+    monkeypatch.setattr(MODULE, "_is_pid_alive", lambda pid: pid == 111)
+
+    signature_before, in_progress = MODULE._worker_task_state_signature(cfg)
+    assert isinstance(signature_before, str) and len(signature_before) == 64
+    assert in_progress == 1
+    assert MODULE._live_pid_in_progress_worker_count(cfg) == 1
+    assert MODULE._task_counts_from_execution_state(cfg) == {"pending": 1, "in_progress": 1, "done": 0, "blocked": 1}
+
+    payload = MODULE._read_json(tmp_path / MODULE.ARTIFACT_FILES["worker_registry"], default={})
+    payload["workers"][0]["current_task_model"] = "blackboxai/minimax/minimax-m2.5"
+    MODULE._atomic_write_json(tmp_path / MODULE.ARTIFACT_FILES["worker_registry"], payload)
+    signature_after, _ = MODULE._worker_task_state_signature(cfg)
+    assert signature_after != signature_before
+
+
 def test_quiet_cycle_gate_skips_boss_when_state_unchanged(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     boss_calls: list[int] = []

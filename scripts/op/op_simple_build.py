@@ -2923,6 +2923,179 @@ def _active_worker_count(cfg: RunConfig) -> int:
     return active_count
 
 
+def _live_pid_in_progress_worker_count(cfg: RunConfig) -> int:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
+    if not isinstance(payload, dict):
+        return 0
+    workers = payload.get("workers")
+    if not isinstance(workers, list):
+        return 0
+    live_count = 0
+    for row in workers:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").strip() != "in_progress":
+            continue
+        pid = _coerce_pid(row.get("pid"))
+        if pid is not None and _is_pid_alive(pid):
+            live_count += 1
+    return live_count
+
+
+def _task_counts_from_execution_state(cfg: RunConfig) -> dict[str, int]:
+    counts = {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0}
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["task_execution_state"], default={})
+    tasks = payload.get("tasks") if isinstance(payload, dict) else None
+    if not isinstance(tasks, list):
+        return counts
+    for row in tasks:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").strip()
+        if status in counts:
+            counts[status] += 1
+    return counts
+
+
+def _worker_task_state_signature(cfg: RunConfig) -> tuple[str, int]:
+    worker_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
+    worker_rows = worker_payload.get("workers") if isinstance(worker_payload, dict) else None
+    normalized_workers: list[dict[str, Any]] = []
+    in_progress_workers = 0
+    if isinstance(worker_rows, list):
+        for row in worker_rows:
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("status") or "").strip()
+            if status == "in_progress":
+                in_progress_workers += 1
+            normalized_workers.append(
+                {
+                    "worker_id": str(row.get("worker_id") or "").strip(),
+                    "status": status,
+                    "pid": _coerce_pid(row.get("pid")),
+                    "thread_id": str(row.get("thread_id") or "").strip(),
+                    "current_task_id": str(row.get("current_task_id") or "").strip(),
+                    "current_packet_id": str(row.get("current_packet_id") or "").strip(),
+                    "current_task_profile": str(row.get("current_task_profile") or "").strip(),
+                    "next_task_profile": str(row.get("next_task_profile") or "").strip(),
+                    "current_task_provider": str(row.get("current_task_provider") or "").strip(),
+                    "current_task_model": str(row.get("current_task_model") or "").strip(),
+                    "next_task_provider": str(row.get("next_task_provider") or "").strip(),
+                    "next_task_model": str(row.get("next_task_model") or "").strip(),
+                }
+            )
+    normalized_workers.sort(key=lambda item: item.get("worker_id") or "")
+
+    task_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["task_execution_state"], default={})
+    task_rows = task_payload.get("tasks") if isinstance(task_payload, dict) else None
+    normalized_tasks: list[dict[str, str]] = []
+    if isinstance(task_rows, list):
+        for row in task_rows:
+            if not isinstance(row, dict):
+                continue
+            normalized_tasks.append(
+                {
+                    "task_id": str(row.get("task_id") or "").strip(),
+                    "status": str(row.get("status") or "").strip(),
+                    "assigned_worker": str(row.get("assigned_worker") or "").strip(),
+                    "assigned_profile": str(row.get("assigned_profile") or "").strip(),
+                    "assigned_provider": str(row.get("assigned_provider") or "").strip(),
+                    "assigned_model": str(row.get("assigned_model") or "").strip(),
+                }
+            )
+    normalized_tasks.sort(key=lambda item: item.get("task_id") or "")
+
+    digest_payload = {"workers": normalized_workers, "tasks": normalized_tasks}
+    digest = hashlib.sha256(
+        json.dumps(digest_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return digest, in_progress_workers
+
+
+def _watchdog_near_idle_threshold(cfg: RunConfig) -> bool:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["watchdog_state"], default={})
+    if not isinstance(payload, dict):
+        return False
+    try:
+        age_minutes = float(payload.get("watchdog_age_minutes"))
+    except (TypeError, ValueError):
+        try:
+            age_minutes = float(payload.get("last_commit_age_minutes"))
+        except (TypeError, ValueError):
+            return False
+    try:
+        stale_after_minutes = int(payload.get("stale_after_minutes") or WATCHDOG_STALE_COMMIT_MINUTES)
+    except (TypeError, ValueError):
+        stale_after_minutes = WATCHDOG_STALE_COMMIT_MINUTES
+    if stale_after_minutes <= 0:
+        stale_after_minutes = WATCHDOG_STALE_COMMIT_MINUTES
+    near_threshold = stale_after_minutes - WATCHDOG_NEAR_STALE_MARGIN_MINUTES
+    if near_threshold < 0:
+        near_threshold = 0
+    return age_minutes >= float(near_threshold)
+
+
+def _write_watchdog_recovery_nudge(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    monitored_branch: str,
+    commit_ref: str,
+    last_commit_sha: str,
+    last_commit_at_utc: str,
+    watchdog_age_minutes: float,
+    stale_after_minutes: int,
+) -> None:
+    nudge_path = cfg.repo_root / RECOVERY_INSTRUCTIONS_FILE
+    if nudge_path.exists():
+        return
+
+    generated_at = utc_now_iso()
+    age_minutes = round(float(watchdog_age_minutes), 3)
+    body = f"""# Recovery Nudge: Broad Runtime Sweep
+
+Generated at: {generated_at}
+Cycle: {cycle_number}
+Reason: Watchdog observed no repository movement for {age_minutes} minutes.
+Branch: {monitored_branch}
+Commit ref: {commit_ref}
+Last observed commit sha: {last_commit_sha}
+Last observed commit timestamp: {last_commit_at_utc}
+Watchdog stop threshold: {stale_after_minutes} minutes
+
+This nudge is broad by design. Run a full diagnostics sweep before deciding to skip repeatedly.
+
+## Broad diagnostics checklist (not limited to one failure mode)
+1. Inspect repeated cycle-gate skip reasons in `.op-simple/current/cycle_manager_decision.json` and recent `.op-simple/history/cycle-*/cycle_manager_decision.json`.
+2. Reconcile all in-progress workers with `pid=null` by scanning canonical and non-obvious evidence locations.
+3. Ingest reviewer outcomes from:
+   - `<worker_worktree>/reports/handoffs/<task_identifier>.handoff.json`
+   - `<worker_worktree>/.codex-dispatch/dispatch-*.log`
+4. Normalize decision aliases during ingestion when needed (`reviewer_decision` -> `decision`) and update canonical artifacts.
+5. Verify `task_execution_state.json`, `worker_registry.json`, and `production_line_register.json` are aligned after reconciliation.
+6. Validate worker packet/worktree integrity (`worker_packets.json` entries map to valid worker rows and existing worktrees).
+7. Validate profile gating posture (`profile_snapshot.json`) so dispatch is not starved by hard/soft gate mistakes.
+8. Check for dispatch launch failures/timeouts in `.op-simple/current/dispatch_launch_log.jsonl`.
+9. If evidence is still missing, create explicit remediation tasks instead of repeating passive skips.
+
+After applying this nudge, rename this file to `recovery_instructions_CONSUMED.md`.
+"""
+
+    try:
+        nudge_path.write_text(body, encoding="utf-8")
+    except OSError:
+        return
+
+    print(
+        "[op-simple-build] "
+        f"[{utc_now_iso()}] "
+        f"cycle={cycle_number} watchdog emitted recovery nudge "
+        f"path={RECOVERY_INSTRUCTIONS_FILE} age_minutes={age_minutes}",
+        flush=True,
+    )
+
+
 def _resolve_worker_dispatch_executor(cfg: RunConfig, worker_row: dict[str, Any] | None) -> tuple[str, str | None, str | None]:
     provider = _normalize_executor_provider(cfg.executor_provider)
     model = _resolve_executor_model(cfg, provider=provider) if provider == "blackbox" else str(cfg.executor_model or "").strip() or None
