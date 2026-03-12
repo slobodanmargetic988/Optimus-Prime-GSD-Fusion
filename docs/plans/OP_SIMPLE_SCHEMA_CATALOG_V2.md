@@ -116,6 +116,12 @@ Optional `llm_hardening` extension fields:
 - `risk_level` (`low|medium|high|critical` when override is applied)
 - `fallback_or_followup_action` (string when override is applied)
 
+Runtime propagation note:
+- `manager_call_log.jsonl` rows and trace `operation.inputs.llm` include:
+  - `hardening_telemetry_state` (`present|missing|unknown`)
+  - `hardening_telemetry_source` (artifact key when state is `present`)
+- This distinguishes explicit `checker_result="not_applicable"` telemetry from missing `llm_hardening` emission.
+
 ## 4) production_line_register.json
 
 | Field | Type | Why it exists |

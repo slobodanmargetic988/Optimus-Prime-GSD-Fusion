@@ -2210,6 +2210,7 @@ def test_run_emits_cycle_trace_events_for_manager_and_dispatch(tmp_path: Path) -
     assert manager_llm.get("role") == "manager"
     assert manager_llm.get("provider") in {"codex", "openrouter", "blackbox"}
     assert manager_llm.get("checker_result") == "not_applicable"
+    assert manager_llm.get("hardening_telemetry_state") == "missing"
     assert manager_llm.get("override_applied") is False
     dispatch_inputs = ((dispatch_event.get("operation") or {}).get("inputs") or {})
     dispatch_routing = dispatch_inputs.get("routing") or {}
@@ -2276,6 +2277,8 @@ def test_run_wrapup_trace_includes_llm_hardening_from_report(tmp_path: Path, mon
     assert wrapup_llm.get("override_applied") is False
     assert wrapup_llm.get("mini_jobs") == 2
     assert wrapup_llm.get("prompt_complexity_score") == 28
+    assert wrapup_llm.get("hardening_telemetry_state") == "present"
+    assert wrapup_llm.get("hardening_telemetry_source") == "wrapup_manager_report"
 
 
 def test_emit_cycle_trace_events_emits_additional_manager_invocation_for_non_boss(tmp_path: Path) -> None:
@@ -2599,6 +2602,11 @@ def test_invoke_manager_dry_run_logs_executor_metadata(tmp_path: Path) -> None:
     assert latest["tooling_effort"] == "medium_tooling"
     assert latest["checker_result"] == "not_applicable"
     assert latest["override_applied"] is False
+    assert latest["llm_hardening_state"] == "missing"
+    assert latest.get("llm_hardening_source") is None
+    llm_meta = MODULE._manager_llm_metadata(cfg, manager_name="BOSS", log_row=latest)
+    assert llm_meta.get("hardening_telemetry_state") == "missing"
+    assert llm_meta.get("checker_result") == "not_applicable"
 
 
 def test_invoke_manager_extracts_llm_hardening_from_cycle_manager_decision(tmp_path: Path) -> None:
@@ -2657,12 +2665,64 @@ def test_invoke_manager_extracts_llm_hardening_from_cycle_manager_decision(tmp_p
     assert latest["override_applied"] is True
     assert latest["override_reason_code"] == "checker_false_negative"
     assert latest["risk_level"] == "medium"
+    assert latest["llm_hardening_state"] == "present"
+    assert latest["llm_hardening_source"] == "cycle_manager_decision"
     llm_meta = MODULE._manager_llm_metadata(cfg, manager_name="BOSS", log_row=latest)
     assert llm_meta["mini_jobs"] == 4
     assert llm_meta["prompt_complexity_score"] == 61
     assert llm_meta["checker_result"] == "fail"
     assert llm_meta["override_applied"] is True
     assert llm_meta["override_reason_code"] == "checker_false_negative"
+    assert llm_meta["hardening_telemetry_state"] == "present"
+    assert llm_meta["hardening_telemetry_source"] == "cycle_manager_decision"
+
+
+def test_invoke_manager_distinguishes_missing_vs_explicit_not_applicable_hardening(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["cycle_manager_decision"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 1,
+            "decision": "proceed",
+            "reason_code": "registry_ready",
+            "message": "explicit not_applicable telemetry",
+            "worker_registry_ready": True,
+            "llm_hardening": {
+                "checker_result": "not_applicable",
+                "override_applied": False,
+            },
+        },
+    )
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=1,
+        context={},
+        expected_artifacts=[],
+    )
+    assert out.status == "ok"
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / MODULE.MANAGER_CALL_LOG_FILE).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    latest = rows[-1]
+    assert latest["checker_result"] == "not_applicable"
+    assert latest["llm_hardening_state"] == "present"
+    assert latest["llm_hardening_source"] == "cycle_manager_decision"
+    llm_meta = MODULE._manager_llm_metadata(cfg, manager_name="BOSS", log_row=latest)
+    assert llm_meta["checker_result"] == "not_applicable"
+    assert llm_meta["hardening_telemetry_state"] == "present"
 
 
 def test_run_persists_summary_manager_status_entry(tmp_path: Path) -> None:

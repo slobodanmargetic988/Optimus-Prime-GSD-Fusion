@@ -125,6 +125,7 @@ TRACE_EVENT_OUTCOME_STATUS = {"success", "failure", "partial", "blocked", "noop"
 TRACE_EVENT_RISK_LEVELS = {"low", "medium", "high", "critical"}
 LLM_HARDENING_CHECKER_RESULTS = {"pass", "fail", "not_applicable"}
 LLM_HARDENING_RISK_LEVELS = {"low", "medium", "high", "critical"}
+LLM_HARDENING_TELEMETRY_STATES = {"present", "missing", "unknown"}
 CANONICAL_ID_PATTERNS = {
     "project_id": re.compile(r"^prj\.[a-z0-9][a-z0-9-]{1,95}$"),
     "era_id": re.compile(r"^era\.[a-z0-9][a-z0-9-]{1,95}$"),
@@ -1075,6 +1076,12 @@ def _manager_llm_metadata(cfg: RunConfig, *, manager_name: str, log_row: dict[st
         "medium_tooling" if manager_name in {"BOSS", "wrapup-manager"} else ""
     )
     llm_hardening = _normalize_llm_hardening_payload(row)
+    telemetry_state = str(row.get("llm_hardening_state") or "").strip().lower()
+    if telemetry_state not in LLM_HARDENING_TELEMETRY_STATES:
+        telemetry_state = "unknown"
+    telemetry_source = str(row.get("llm_hardening_source") or "").strip() or None
+    if telemetry_state != "present":
+        telemetry_source = None
 
     out = {
         "role": "manager",
@@ -1094,6 +1101,8 @@ def _manager_llm_metadata(cfg: RunConfig, *, manager_name: str, log_row: dict[st
         "override_evidence_refs": llm_hardening.get("override_evidence_refs") or None,
         "risk_level": llm_hardening.get("risk_level"),
         "fallback_or_followup_action": llm_hardening.get("fallback_or_followup_action"),
+        "hardening_telemetry_state": telemetry_state,
+        "hardening_telemetry_source": telemetry_source,
     }
     return {key: value for key, value in out.items() if value is not None and str(value).strip() != ""}
 
@@ -2895,6 +2904,8 @@ def _invoke_manager(
             "override_evidence_refs": llm_hardening.get("override_evidence_refs") or [],
             "risk_level": llm_hardening.get("risk_level"),
             "fallback_or_followup_action": llm_hardening.get("fallback_or_followup_action"),
+            "llm_hardening_state": "present" if llm_hardening_present else "missing",
+            "llm_hardening_source": llm_hardening_source,
         },
     )
     return result
