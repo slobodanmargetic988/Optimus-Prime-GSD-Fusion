@@ -2411,7 +2411,7 @@ def _invoke_manager(
     log_profile_alias = str(cfg.codex_profile or "").strip() or None
     if not _executor_uses_codex_backend(log_executor_provider):
         log_profile_alias = None
-    log_reasoning_effort = str(cfg.boss_reasoning_effort).strip() if manager_name == "BOSS" else None
+    log_reasoning_effort = str(cfg.boss_reasoning_effort).strip() if manager_uses_boss_model else None
     log_tooling_effort = "medium_tooling" if manager_name in {"BOSS", "wrapup-manager"} else None
     if cfg.dry_run:
         if manager_name == "BOSS":
@@ -2443,7 +2443,7 @@ def _invoke_manager(
         resume_session_id: str | None = None
         prior_profile_alias: str | None = None
         prior_previous_profile_alias: str | None = None
-        if manager_name == "BOSS" and uses_codex_backend:
+        if manager_uses_boss_profile and uses_codex_backend:
             boss_session_state = _read_boss_session_state(cfg)
             prior_session_id = str(boss_session_state.get("session_id") or "").strip() or None
             prior_profile_alias = str(boss_session_state.get("profile_alias") or "").strip() or None
@@ -2479,7 +2479,7 @@ def _invoke_manager(
                 "model": _resolve_executor_model(
                     cfg,
                     provider=executor_provider,
-                    model_override=cfg.executor_model or (cfg.boss_model if manager_name == "BOSS" else None),
+                    model_override=cfg.executor_model or (cfg.boss_model if manager_uses_boss_model else None),
                 ),
                 "blackbox_lane": _normalize_blackbox_lane(cfg.blackbox_lane),
             },
@@ -2506,7 +2506,7 @@ def _invoke_manager(
         manager_model = _resolve_executor_model(
             cfg,
             provider=executor_provider,
-            model_override=cfg.executor_model or (cfg.boss_model if manager_name == "BOSS" else None),
+            model_override=cfg.executor_model or (cfg.boss_model if manager_uses_boss_model else None),
         )
         log_executor_model = manager_model
         if uses_codex_backend:
@@ -2519,7 +2519,7 @@ def _invoke_manager(
                 codex_home=selected_manager_home,
                 resume_session_id=resume_session_id,
                 model=manager_model,
-                reasoning_effort=cfg.boss_reasoning_effort if manager_name == "BOSS" else None,
+                reasoning_effort=cfg.boss_reasoning_effort if manager_uses_boss_model else None,
                 codex_profile=cfg.codex_profile,
             )
             if manager_name == "BOSS" and resume_session_id and result.status == "failed" and not result.timeout:
@@ -4115,8 +4115,18 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
     if offset_minutes is not None and offset_minutes < 0:
         offset_minutes = 0.0
 
-    reset_target = force_reset_target or not previous_sha or previous_sha != current_sha or offset_minutes is None
     reset_at_utc = str(state.get("watchdog_target_reset_at_utc") or "").strip()
+    reset_target = force_reset_target or not previous_sha or previous_sha != current_sha or offset_minutes is None
+    run_lock = _read_json(cfg.repo_root / RUN_LOCK_FILE, default={})
+    run_started_at_utc = ""
+    if isinstance(run_lock, dict):
+        run_started_at_utc = str(run_lock.get("started_at") or "").strip()
+    run_started_at = _parse_iso_datetime(run_started_at_utc)
+    previous_target_reset = _parse_iso_datetime(reset_at_utc)
+    if run_started_at is not None and (
+        previous_target_reset is None or run_started_at > previous_target_reset
+    ):
+        reset_target = True
     watchdog_age_minutes: float | None = None
     if commit_age_minutes is None:
         is_stale = False

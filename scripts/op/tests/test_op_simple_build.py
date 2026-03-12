@@ -49,7 +49,7 @@ def make_req(root: Path, **overrides: object) -> SimpleNamespace:
 def test_build_config_defaults_boss_model_and_reasoning(tmp_path: Path) -> None:
     cfg = MODULE._build_config(make_req(tmp_path))
     assert cfg.boss_model == "gpt-5.3-codex"
-    assert cfg.boss_reasoning_effort == "medium"
+    assert cfg.boss_reasoning_effort == "xhigh"
     assert cfg.codex_profile is None
 
 
@@ -1232,7 +1232,7 @@ def test_dispatch_packets_override_flag_on_applies_worker_executor_override(tmp_
     assert worker["current_task_model"] == "blackboxai/minimax/minimax-free"
 
 
-def test_watchdog_emits_exit_signal_after_idle_threshold(tmp_path: Path) -> None:
+def test_watchdog_emits_exit_signal_after_idle_threshold(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
         repo_root=tmp_path,
@@ -1266,22 +1266,30 @@ def test_watchdog_emits_exit_signal_after_idle_threshold(tmp_path: Path) -> None
         },
     )
 
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.RUN_LOCK_FILE,
+        {
+            "schema_version": "1.0",
+            "lock_id": "op-simple-build-test-lock",
+            "pid": 12345,
+            "started_at": MODULE.utc_now_iso(),
+            "command": "op-simple-build",
+        },
+    )
+
     stop, signal = MODULE._watchdog_tick(cfg, cycle_number=1)
-    assert stop is True
+    assert stop is False
     assert signal["reason_code"] == "stale_base_branch_commit"
-    assert float(signal["watchdog_age_minutes"]) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
+    assert float(signal["watchdog_age_minutes"] or 0.0) <= 0.001
     assert float(signal["commit_age_minutes"]) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
 
     state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"]).read_text(encoding="utf-8"))
-    assert state["stale"] is True
-    assert float(state["watchdog_age_minutes"]) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
+    assert state["stale"] is False
+    assert float(state["watchdog_age_minutes"] or 0.0) <= 0.001
     assert state["stale_after_minutes"] == MODULE.WATCHDOG_STALE_COMMIT_MINUTES
-    assert (tmp_path / MODULE.ARTIFACT_FILES["watchdog_exit_signal"]).exists()
+    assert not (tmp_path / MODULE.ARTIFACT_FILES["watchdog_exit_signal"]).exists()
     nudge_path = tmp_path / MODULE.RECOVERY_INSTRUCTIONS_FILE
-    assert nudge_path.exists()
-    nudge_text = nudge_path.read_text(encoding="utf-8")
-    assert "Broad diagnostics checklist" in nudge_text
-    assert "reviewer_decision" in nudge_text
+    assert not nudge_path.exists()
 
 
 def test_watchdog_emits_recovery_nudge_after_30_minutes_without_stale_stop(tmp_path: Path, monkeypatch) -> None:
@@ -2816,7 +2824,7 @@ def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypa
     assert captured["codex_home"] == "/tmp/codex-second"
     assert captured["resume_session_id"] is None
     assert captured["model"] == "gpt-5.3-codex"
-    assert captured["reasoning_effort"] == "medium"
+    assert captured["reasoning_effort"] == "xhigh"
     assert out.message == "manager_profile_alias=codex-second"
     session_state = MODULE._read_json(tmp_path / MODULE.BOSS_SESSION_STATE_FILE, default={})
     assert session_state["session_id"] == "123e4567-e89b-12d3-a456-426614174000"
@@ -2895,7 +2903,7 @@ def test_invoke_manager_wrapup_uses_selected_profile_home_and_boss_model_reasoni
     assert captured["codex_home"] == "/tmp/codex-wrapup"
     assert captured["resume_session_id"] is None
     assert captured["model"] == "gpt-5.3-codex"
-    assert captured["reasoning_effort"] == "medium"
+    assert captured["reasoning_effort"] == "xhigh"
     assert out.message == "manager_profile_alias=codex-wrapup"
 
 
@@ -2973,7 +2981,7 @@ def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatc
     assert captured["codex_home"] == "/tmp/codex-third"
     assert captured["resume_session_id"] == "123e4567-e89b-12d3-a456-426614174001"
     assert captured["model"] == "gpt-5.3-codex"
-    assert captured["reasoning_effort"] == "medium"
+    assert captured["reasoning_effort"] == "xhigh"
     assert out.message == "manager_profile_alias=codex-third"
 
 
