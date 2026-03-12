@@ -1,0 +1,46 @@
+{
+  "schema_version": "research-packet.v1",
+  "identity": {
+    "project_id": "prj.myownmint",
+    "run_id": "run.20260312t200000z-r001",
+    "event_id": "event.20260312t200500z-research-packet",
+    "era_id": "era.2026q1-execution",
+    "plan_id": "plan.myownmint-phase2"
+  },
+  "context": {
+    "mission_refs": [
+      "mission.md"
+    ],
+    "scope_refs": [
+      "scope.md"
+    ],
+    "strategy_ref": "strategy/current/STRATEGY.json"
+  },
+  "topics": [
+    {
+      "topic_id": "topic.dispatch-cycle-control",
+      "title": "Watcher-driven cycle release",
+      "recommendation_summary": "Use watcher signal thresholds with timeout fallback to reduce non-actionable cycles.",
+      "tradeoffs": [
+        "Lower idle cycles may increase scheduler complexity.",
+        "Timeout tuning must avoid false positive worker-stall resets."
+      ],
+      "risk_level": "medium"
+    }
+  ],
+  "open_questions": [
+    "Should max-work mode be enabled per project profile or globally?"
+  ],
+  "evidence_refs": [
+    {
+      "artifact_id": "artifact.research-dispatch-cycle-20260312",
+      "kind": "research_note",
+      "uri": "reports/dispatch_cycle_research_20260312.md",
+      "notes": "Canary findings from Tetris and Tetris2."
+    }
+  ],
+  "source": {
+    "repo": "Optimus-Prime-GSD-Fusion",
+    "tool": "op-tools/research"
+  }
+}
