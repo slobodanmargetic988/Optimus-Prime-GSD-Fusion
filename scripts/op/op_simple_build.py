@@ -47,6 +47,7 @@ ARTIFACT_FILES = {
     "worker_registry": CURRENT_DIR / "worker_registry.json",
     "dispatch_registry": CURRENT_DIR / "dispatch_registry.json",
     "cycle_summary": CURRENT_DIR / "cycle_summary.json",
+    "terminal_capsule": CURRENT_DIR / "terminal_capsule.json",
     "wrapup_manager_report": CURRENT_DIR / "wrapup_manager_report.json",
     "watchdog_state": CURRENT_DIR / "watchdog_state.json",
     "watchdog_exit_signal": CURRENT_DIR / "watchdog_exit_signal.json",
@@ -118,6 +119,7 @@ DEFAULT_CYCLE_RELEASE_MODE = "token_conservative"
 DEFAULT_CYCLE_RELEASE_TIMEOUT_SECONDS = 300
 DEFAULT_CYCLE_RELEASE_POLL_SECONDS = 5
 CYCLE_RELEASE_MODES = {"token_conservative", "max_work"}
+DEFAULT_WORKTREES_PARENT = Path("/Users/slobodan/Forest")
 TRACE_EVENT_TIMESTAMP_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 TRACE_EVENT_SOURCE_SHA_REGEX = re.compile(r"^[0-9a-f]{7,40}$")
 TRACE_EVENT_ACTOR_TYPES = {"manager", "worker", "service", "operator", "system"}
@@ -165,6 +167,8 @@ class RunConfig:
     max_build_cycles: int | None
     max_parallel_workers: int
     dry_run: bool
+    worktrees_parent: Path = DEFAULT_WORKTREES_PARENT
+    selected_aliases: list[str] | None = None
     resume_mode: bool = False
     run_base_source_branch: str = "main"
     boss_model: str = "gpt-5.3-codex"
@@ -197,12 +201,73 @@ def _json_dumps(payload: Any) -> str:
     return json.dumps(payload, indent=2, sort_keys=False) + "\n"
 
 
+def _path_within_parent(path_value: Path, parent: Path) -> bool:
+    try:
+        path_value.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
 def _coerce_output_text(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return str(value)
+
+
+def _normalize_selected_aliases(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    raw_items: list[str] = []
+    if isinstance(value, str):
+        raw_items.extend(value.split(","))
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                raw_items.extend(item.split(","))
+            else:
+                raw_items.append(str(item))
+    else:
+        raw_items.append(str(value))
+
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_items:
+        alias = str(raw or "").strip().lower()
+        if not alias or alias in seen:
+            continue
+        seen.add(alias)
+        aliases.append(alias)
+    return aliases or None
+
+
+def _repo_workstation_prefix(repo_root: Path) -> str:
+    raw = str(repo_root.name or "").strip().lower()
+    normalized = re.sub(r"[^a-z0-9._-]+", "-", raw)
+    normalized = re.sub(r"-{2,}", "-", normalized).strip("-._")
+    return normalized or "repo"
+
+
+def _workstation_id_for_index(cfg: RunConfig, idx: int) -> str:
+    return f"{_repo_workstation_prefix(cfg.repo_root)}-workstation-{idx}"
+
+
+def _alias_candidates(alias: str) -> list[str]:
+    text = str(alias or "").strip().lower()
+    if not text:
+        return []
+    out = [text]
+    if text == "codex":
+        return out
+    if text.startswith("codex-"):
+        short = text[len("codex-") :].strip()
+        if short:
+            out.append(short)
+        return out
+    out.append(f"codex-{text}")
+    return out
 
 
 def _atomic_write_json(path: Path, payload: Any) -> None:
@@ -1711,6 +1776,8 @@ def _default_initialize_state(repo_root: Path, max_parallel_workers: int, run_me
         "monitored_branch": monitored_branch,
         "workflow": {
             "max_parallel_workers": max_parallel_workers,
+            "worktrees_parent": str(DEFAULT_WORKTREES_PARENT),
+            "selected_aliases": [],
         },
         "run_context": run_context,
     }
@@ -1725,6 +1792,8 @@ def _ensure_initialize_state(cfg: RunConfig, run_meta: dict[str, Any] | None = N
         workflow["max_parallel_workers"] = cfg.max_parallel_workers
     if isinstance(run_meta, dict):
         workflow["max_parallel_workers"] = cfg.max_parallel_workers
+    workflow["worktrees_parent"] = str(cfg.worktrees_parent)
+    workflow["selected_aliases"] = list(cfg.selected_aliases or [])
     state["workflow"] = workflow
     if not isinstance(state.get("monitored_branch"), str) or not str(state.get("monitored_branch")).strip():
         state["monitored_branch"] = _git_text(cfg.repo_root, "branch", "--show-current") or "main"
@@ -1819,17 +1888,41 @@ def _ensure_workstation_prep(
     run_context = state.get("run_context") if isinstance(state, dict) and isinstance(state.get("run_context"), dict) else {}
     run_base_branch = str(run_context.get("run_base_branch") or "").strip() or (_git_text(cfg.repo_root, "branch", "--show-current") or "main")
     max_slots = max(1, min(10, int(cfg.max_parallel_workers or 1)))
+    expected_parent = cfg.worktrees_parent.expanduser().resolve()
 
     if not force_refresh and isinstance(payload, dict):
+        payload_parent_raw = str(payload.get("worktrees_parent") or "").strip()
+        payload_parent_ok = False
+        if payload_parent_raw:
+            try:
+                payload_parent_ok = Path(payload_parent_raw).expanduser().resolve() == expected_parent
+            except OSError:
+                payload_parent_ok = False
         rows = payload.get("workstations")
-        if isinstance(rows, list) and rows:
+        if payload_parent_ok and isinstance(rows, list) and rows:
             valid_rows = []
-            for row in rows[:max_slots]:
+            for idx, row in enumerate(rows[:max_slots], start=1):
                 if not isinstance(row, dict):
+                    continue
+                workstation_id = _workstation_id_for_index(cfg, idx)
+                if str(row.get("workstation_id") or "").strip() != workstation_id:
                     continue
                 branch_ok = str(row.get("branch") or "").strip().startswith(run_base_branch)
                 worktree_raw = str(row.get("worktree") or "").strip()
-                worktree_ok = bool(worktree_raw) and Path(worktree_raw).exists()
+                worktree_ok = False
+                if worktree_raw:
+                    try:
+                        worktree_path = Path(worktree_raw).expanduser().resolve()
+                    except OSError:
+                        worktree_path = None
+                    if (
+                        isinstance(worktree_path, Path)
+                        and worktree_path.exists()
+                        and worktree_path.is_dir()
+                        and worktree_path.name == workstation_id
+                        and _path_within_parent(worktree_path, expected_parent)
+                    ):
+                        worktree_ok = True
                 if branch_ok and worktree_ok:
                     valid_rows.append(row)
             if len(valid_rows) == max_slots:
@@ -1839,11 +1932,12 @@ def _ensure_workstation_prep(
         current_sha = _git_text(cfg.repo_root, "rev-parse", "HEAD") or ""
         rows = []
         for idx in range(1, max_slots + 1):
+            workstation_id = _workstation_id_for_index(cfg, idx)
             rows.append(
                 {
-                    "workstation_id": f"workstation-{idx}",
+                    "workstation_id": workstation_id,
                     "branch": f"{run_base_branch}-w{idx:02d}",
-                    "worktree": str((cfg.repo_root / f"workstation-{idx}").resolve()),
+                    "worktree": str((expected_parent / workstation_id).resolve()),
                     "prepared_at": utc_now_iso(),
                     "status": "prepared",
                     "preparation_notes": "dry-run baseline",
@@ -1853,6 +1947,7 @@ def _ensure_workstation_prep(
         out = {
             "schema_version": SCHEMA_VERSION,
             "prepared_at": utc_now_iso(),
+            "worktrees_parent": str(expected_parent),
             "workstations": rows,
         }
         _atomic_write_json(target, out)
@@ -1869,7 +1964,7 @@ def _ensure_workstation_prep(
     prepared_rows: list[dict[str, Any]] = []
     failures: list[str] = []
     for idx in range(1, max_slots + 1):
-        workstation_id = f"workstation-{idx}"
+        workstation_id = _workstation_id_for_index(cfg, idx)
         worker_branch = f"{run_base_branch}-w{idx:02d}"
         cmd = [
             "python3",
@@ -1883,7 +1978,7 @@ def _ensure_workstation_prep(
             "--base-ref",
             run_base_branch,
             "--worktrees-parent",
-            str(cfg.repo_root),
+            str(expected_parent),
             "--force-reset-existing",
             "--output",
             "json",
@@ -1917,14 +2012,28 @@ def _ensure_workstation_prep(
             failures.append(f"{workstation_id}: {err_text}")
             continue
 
-        target_path = str(parsed.get("target_path") or (cfg.repo_root / workstation_id))
+        expected_target_path = (expected_parent / workstation_id).resolve()
+        target_path = str(parsed.get("target_path") or expected_target_path)
         resolved_branch = str(parsed.get("branch_name_resolved") or worker_branch)
-        head_sha = _git_text(Path(target_path), "rev-parse", "HEAD") if target_path else ""
+        try:
+            resolved_target_path = Path(target_path).expanduser().resolve()
+        except OSError:
+            failures.append(f"{workstation_id}: invalid target_path")
+            continue
+        if resolved_target_path != expected_target_path:
+            failures.append(
+                f"{workstation_id}: target_path mismatch (expected {expected_target_path}, got {resolved_target_path})"
+            )
+            continue
+        if not resolved_target_path.exists() or not resolved_target_path.is_dir():
+            failures.append(f"{workstation_id}: target_path missing or not a directory")
+            continue
+        head_sha = _git_text(resolved_target_path, "rev-parse", "HEAD") if target_path else ""
         prepared_rows.append(
             {
                 "workstation_id": workstation_id,
                 "branch": resolved_branch,
-                "worktree": str(Path(target_path).resolve()) if target_path else "",
+                "worktree": str(resolved_target_path),
                 "prepared_at": utc_now_iso(),
                 "status": "prepared",
                 "preparation_notes": str(parsed.get("message") or "prepared"),
@@ -1941,6 +2050,7 @@ def _ensure_workstation_prep(
     out = {
         "schema_version": SCHEMA_VERSION,
         "prepared_at": utc_now_iso(),
+        "worktrees_parent": str(expected_parent),
         "workstations": prepared_rows,
     }
     _atomic_write_json(target, out)
@@ -2007,6 +2117,21 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "termination": {},
             "stop_reason": "",
             "notes": "",
+        },
+        "terminal_capsule": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "cycle_number": 0,
+            "reason_code": "not_terminal",
+            "stop_reason": "",
+            "cycle_mode": "normal",
+            "manager": None,
+            "manager_status": "",
+            "manager_timeout": False,
+            "manager_message": "",
+            "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+            "watchdog_signal": {},
+            "details": {},
         },
         "wrapup_manager_report": {
             "schema_version": SCHEMA_VERSION,
@@ -2077,6 +2202,7 @@ def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
         "worker_registry",
         "dispatch_registry",
         "cycle_summary",
+        "terminal_capsule",
         "wrapup_manager_report",
         "watchdog_state",
         "watchdog_exit_signal",
@@ -2328,7 +2454,11 @@ def _codex_exec_prompt(
             reason_code=None if completed.returncode == 0 else "manager_non_zero_exit",
             session_id=_extract_session_id(completed.stdout or "", completed.stderr or ""),
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        stdout_text = _coerce_output_text(exc.stdout)
+        stderr_text = _coerce_output_text(exc.stderr)
+        stdout_path.write_text(stdout_text, encoding="utf-8")
+        stderr_path.write_text(stderr_text, encoding="utf-8")
         finished_at = utc_now_iso()
         return ManagerResult(
             manager=manager_name,
@@ -2496,7 +2626,7 @@ def _blackbox_exec_prompt(
         )
 
 
-def _profile_rows_from_disk() -> list[dict[str, Any]]:
+def _profile_rows_from_disk(*, selected_aliases: list[str] | None = None) -> list[dict[str, Any]]:
     root = Path.home()
     rows: list[dict[str, Any]] = []
     try:
@@ -2522,6 +2652,28 @@ def _profile_rows_from_disk() -> list[dict[str, Any]]:
                 "reset_at": None,
             }
         )
+    if selected_aliases:
+        discovered: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            alias = str(row.get("alias") or "").strip().lower()
+            if alias and alias not in discovered:
+                discovered[alias] = row
+
+        filtered: list[dict[str, Any]] = []
+        used_aliases: set[str] = set()
+        for requested in selected_aliases:
+            for candidate in _alias_candidates(requested):
+                row = discovered.get(candidate)
+                if row is None:
+                    continue
+                alias = str(row.get("alias") or "").strip().lower()
+                if alias in used_aliases:
+                    continue
+                filtered.append(row)
+                used_aliases.add(alias)
+                break
+        return filtered
+
     if len(rows) > 1:
         rows = [row for row in rows if str(row.get("alias") or "").strip() != "codex"]
     return rows
@@ -3281,8 +3433,9 @@ def _resolve_rate_snapshot_script(cfg: RunConfig) -> Path | None:
     return None
 
 
-def _rate_snapshot_profile_args() -> list[str]:
-    rows = _profile_rows_from_disk()
+def _rate_snapshot_profile_args(cfg: RunConfig) -> tuple[list[str], list[str]]:
+    selected_aliases = list(cfg.selected_aliases or [])
+    rows = _profile_rows_from_disk(selected_aliases=selected_aliases or None)
     args: list[str] = []
     seen: set[str] = set()
     for row in rows:
@@ -3299,9 +3452,16 @@ def _rate_snapshot_profile_args() -> list[str]:
         if not codex_home:
             continue
         args.append(f"{alias}={codex_home}")
-    if not args:
+    if not args and not selected_aliases:
         args.append("codex=default")
-    return args
+    discovered = {str(row.get("alias") or "").strip().lower() for row in rows if isinstance(row, dict)}
+    missing: list[str] = []
+    for alias in selected_aliases:
+        candidates = _alias_candidates(alias)
+        if any(candidate in discovered for candidate in candidates):
+            continue
+        missing.append(alias)
+    return args, missing
 
 
 def _profile_rows_from_rate_snapshot_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3377,7 +3537,19 @@ def _refresh_profile_snapshot_via_skill(cfg: RunConfig, cycle_number: int) -> tu
         return False, "codex-rate-snapshot script not found"
 
     cmd: list[str] = ["python3", str(script)]
-    for arg in _rate_snapshot_profile_args():
+    profile_args, missing_aliases = _rate_snapshot_profile_args(cfg)
+    if missing_aliases:
+        print(
+            "[op-simple-build] "
+            f"[{utc_now_iso()}] "
+            "selected_aliases requested but not discovered under ~/.codex*: "
+            f"{', '.join(missing_aliases)}",
+            flush=True,
+        )
+    if not profile_args:
+        selected_text = ", ".join(cfg.selected_aliases or [])
+        return False, f"selected_aliases filter resolved to zero discovered profiles: {selected_text}"
+    for arg in profile_args:
         cmd.extend(["--profile", arg])
     cmd.append("--json-pretty")
 
@@ -4223,6 +4395,7 @@ def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
     script = _resolve_dispatch_script(cfg)
     alias_to_home = _profile_alias_to_home(cfg)
     worker_by_id = _worker_registry_index(cfg)
+    expected_parent = cfg.worktrees_parent.expanduser().resolve()
     event_rows: list[dict[str, Any]] = []
     active_count = _active_worker_count(cfg)
 
@@ -4277,13 +4450,32 @@ def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
             event_rows.append(event)
             _append_jsonl(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE, event)
             continue
+        try:
+            worker_worktree_resolved = worker_worktree.resolve()
+        except OSError:
+            event["status"] = "launch_failed"
+            event["message"] = "worker worktree path cannot be resolved"
+            counters["launch_failed"] += 1
+            event_rows.append(event)
+            _append_jsonl(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE, event)
+            continue
+        if not _path_within_parent(worker_worktree_resolved, expected_parent):
+            event["status"] = "launch_failed"
+            event["message"] = (
+                "worker worktree outside configured worktrees_parent: "
+                f"{worker_worktree_resolved}"
+            )
+            counters["launch_failed"] += 1
+            event_rows.append(event)
+            _append_jsonl(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE, event)
+            continue
 
         if _executor_uses_codex_backend(dispatch_provider):
             cmd = [
                 "python3",
                 str(script),
                 "--cwd",
-                str(worker_worktree.resolve()),
+                str(worker_worktree_resolved),
                 "--prompt",
                 prompt,
                 "--background",
@@ -4549,6 +4741,90 @@ def _run_wrapup_manager(
     )
 
 
+def _normalized_dispatch_counts(dispatch_counts: dict[str, Any] | None) -> dict[str, int]:
+    payload = dispatch_counts if isinstance(dispatch_counts, dict) else {}
+    return {
+        "attempted": int(payload.get("attempted") or 0),
+        "launched": int(payload.get("launched") or 0),
+        "launch_failed": int(payload.get("launch_failed") or 0),
+        "unknown": int(payload.get("unknown") or 0),
+    }
+
+
+def _write_terminal_capsule(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    reason_code: str,
+    stop_reason: str | None,
+    cycle_mode: str,
+    manager_name: str | None,
+    manager_result: ManagerResult | None,
+    manager_statuses: dict[str, dict[str, str]] | None,
+    dispatch_counts: dict[str, Any] | None,
+    watchdog_signal: dict[str, Any] | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    manager_status = ""
+    manager_timeout = False
+    manager_message = ""
+    manager_stdout_path = None
+    manager_stderr_path = None
+    manager_duration_seconds = None
+    if isinstance(manager_result, ManagerResult):
+        manager_status = str(manager_result.status or "").strip()
+        manager_timeout = bool(manager_result.timeout)
+        manager_message = str(manager_result.message or "").strip()
+        manager_stdout_path = manager_result.stdout_path
+        manager_stderr_path = manager_result.stderr_path
+        manager_duration_seconds = float(manager_result.duration_seconds)
+
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": int(cycle_number),
+        "reason_code": str(reason_code or "").strip() or "unknown_terminal_reason",
+        "stop_reason": str(stop_reason or "").strip(),
+        "cycle_mode": str(cycle_mode or "").strip() or "normal",
+        "manager": str(manager_name or "").strip() or None,
+        "manager_status": manager_status,
+        "manager_timeout": manager_timeout,
+        "manager_message": manager_message,
+        "manager_stdout_path": manager_stdout_path,
+        "manager_stderr_path": manager_stderr_path,
+        "manager_duration_seconds": manager_duration_seconds,
+        "manager_statuses": manager_statuses if isinstance(manager_statuses, dict) else {},
+        "dispatch_counts": _normalized_dispatch_counts(dispatch_counts),
+        "watchdog_signal": watchdog_signal if isinstance(watchdog_signal, dict) else {},
+        "details": details if isinstance(details, dict) else {},
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["terminal_capsule"], payload)
+
+
+def _persist_cycle_summary_stop_reason(cfg: RunConfig, *, cycle_number: int, stop_reason: str | None) -> None:
+    normalized_reason = str(stop_reason or "").strip()
+    if not normalized_reason:
+        return
+    summary_path = cfg.repo_root / ARTIFACT_FILES["cycle_summary"]
+    summary_payload = _read_json(summary_path, default={})
+    if not isinstance(summary_payload, dict):
+        summary_payload = {}
+    termination_payload = summary_payload.get("termination")
+    if not isinstance(termination_payload, dict):
+        termination_payload = {}
+    if normalized_reason not in NON_TERMINAL_STOP_REASONS:
+        termination_payload["reason_code"] = normalized_reason
+    summary_payload["schema_version"] = SCHEMA_VERSION
+    summary_payload["cycle_number"] = int(cycle_number)
+    summary_payload["termination"] = termination_payload
+    summary_payload["stop_reason"] = normalized_reason
+    if normalized_reason == "project_done":
+        summary_payload["project_done"] = True
+    elif normalized_reason == "insurmountable_blocker":
+        summary_payload["insurmountable_blocker"] = True
+    _atomic_write_json(summary_path, summary_payload)
+
+
 def _render_cycle_summary(
     cfg: RunConfig,
     cycle_number: int,
@@ -4575,12 +4851,7 @@ def _render_cycle_summary(
         "cycle_number": cycle_number,
         "manager_statuses": manager_statuses,
         "task_counts": merged_counts,
-        "dispatch_counts": {
-            "attempted": int(dispatch_counts.get("attempted") or 0),
-            "launched": int(dispatch_counts.get("launched") or 0),
-            "launch_failed": int(dispatch_counts.get("launch_failed") or 0),
-            "unknown": int(dispatch_counts.get("unknown") or 0),
-        },
+        "dispatch_counts": _normalized_dispatch_counts(dispatch_counts),
         "project_done": bool(summary.get("project_done")),
         "insurmountable_blocker": bool(summary.get("insurmountable_blocker")),
         "termination": summary.get("termination") if isinstance(summary.get("termination"), dict) else {},
@@ -4714,12 +4985,20 @@ def _build_config(req: Any) -> RunConfig:
         max_parallel_workers = 8
     if max_parallel_workers <= 0:
         max_parallel_workers = 8
+    worktrees_parent_raw = getattr(req, "worktrees_parent", None)
+    if isinstance(worktrees_parent_raw, str) and worktrees_parent_raw.strip():
+        worktrees_parent = Path(worktrees_parent_raw).expanduser().resolve()
+    elif isinstance(worktrees_parent_raw, Path):
+        worktrees_parent = worktrees_parent_raw.expanduser().resolve()
+    else:
+        worktrees_parent = DEFAULT_WORKTREES_PARENT
     command = str(getattr(req, "command", "") or "").strip().lower()
     resume_mode = command == "op-resume"
     run_base_source_branch = str(getattr(req, "run_base_source_branch", "") or "").strip() or "main"
     boss_model = str(getattr(req, "boss_model", "") or "").strip() or "gpt-5.3-codex"
     boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "xhigh"
     codex_profile = str(getattr(req, "codex_profile", getattr(req, "profile", "")) or "").strip() or None
+    selected_aliases = _normalize_selected_aliases(getattr(req, "selected_aliases", None))
     executor_provider = _normalize_executor_provider(getattr(req, "executor_provider", "codex"))
     executor_model = str(getattr(req, "executor_model", "") or "").strip() or None
     blackbox_lane = _normalize_blackbox_lane(getattr(req, "blackbox_lane", "free"))
@@ -4769,11 +5048,13 @@ def _build_config(req: Any) -> RunConfig:
         max_build_cycles=max_cycles,
         max_parallel_workers=max_parallel_workers,
         dry_run=bool(getattr(req, "dry_run", False)),
+        worktrees_parent=worktrees_parent,
         resume_mode=resume_mode,
         run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,
         boss_reasoning_effort=boss_reasoning_effort,
         codex_profile=codex_profile,
+        selected_aliases=selected_aliases,
         executor_provider=executor_provider,
         executor_model=executor_model,
         blackbox_lane=blackbox_lane,
@@ -4897,6 +5178,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
             manager_statuses: dict[str, dict[str, str]] = {}
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
+            cycle_mode = "normal"
             state_signature, in_progress_workers = _worker_task_state_signature(cfg)
             live_pid_in_progress_workers = _live_pid_in_progress_worker_count(cfg)
             task_counts_snapshot = _task_counts_from_execution_state(cfg)
@@ -4990,6 +5272,46 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 manager_statuses["BOSS"] = {"status": boss_result.status, "note": boss_result.message or ""}
 
             if boss_result is not None and boss_result.timeout:
+                manager_statuses["rate-gate"] = {
+                    "status": "skipped",
+                    "note": "cycle fail-closed after BOSS timeout",
+                }
+                manager_statuses["work-dispatcher"] = {
+                    "status": "skipped",
+                    "note": "cycle fail-closed after BOSS timeout",
+                }
+                manager_statuses["watchdog"] = {
+                    "status": "skipped",
+                    "note": "watchdog skipped after BOSS timeout fail-closed decision",
+                }
+                manager_statuses["summary"] = {"status": "ok", "note": "summary written"}
+                _write_cycle_manager_decision(
+                    cfg,
+                    cycle_number,
+                    decision="skip_cycle",
+                    reason_code=boss_result.reason_code or "manager_timeout",
+                    message=boss_result.message or "BOSS timed out",
+                    worker_registry_ready=True,
+                )
+                timeout_base_summary = {
+                    "schema_version": SCHEMA_VERSION,
+                    "cycle_number": cycle_number,
+                    "manager_statuses": {},
+                    "task_counts": task_counts_snapshot,
+                    "dispatch_counts": _normalized_dispatch_counts(dispatch_counts),
+                    "project_done": False,
+                    "insurmountable_blocker": False,
+                    "termination": {"reason_code": boss_result.reason_code or "manager_timeout"},
+                    "stop_reason": "",
+                    "notes": "cycle skipped by runtime safety rules after BOSS timeout",
+                }
+                _render_cycle_summary(
+                    cfg,
+                    cycle_number,
+                    manager_statuses,
+                    dispatch_counts,
+                    base_summary=timeout_base_summary,
+                )
                 _atomic_write_json(
                     cfg.repo_root / BOSS_EVIDENCE_FILE,
                     {
@@ -5000,6 +5322,19 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                         "timestamp": utc_now_iso(),
                     },
                 )
+                _write_terminal_capsule(
+                    cfg,
+                    cycle_number=cycle_number,
+                    reason_code=boss_result.reason_code or "manager_timeout",
+                    stop_reason=None,
+                    cycle_mode=cycle_mode,
+                    manager_name="BOSS",
+                    manager_result=boss_result,
+                    manager_statuses=manager_statuses,
+                    dispatch_counts=dispatch_counts,
+                    details={"event": "timeout_cycle_fail_closed"},
+                )
+                _snapshot_cycle(cfg, cycle_number)
                 print(
                     "[op-simple-build] "
                     f"[{utc_now_iso()}] "
@@ -5152,6 +5487,20 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             ) = _cycle_release_baseline(cfg)
 
             if stop_reason:
+                _persist_cycle_summary_stop_reason(cfg, cycle_number=cycle_number, stop_reason=stop_reason)
+                _write_terminal_capsule(
+                    cfg,
+                    cycle_number=cycle_number,
+                    reason_code=stop_reason,
+                    stop_reason=stop_reason,
+                    cycle_mode=cycle_mode,
+                    manager_name="BOSS" if boss_result is not None else None,
+                    manager_result=boss_result,
+                    manager_statuses=manager_statuses,
+                    dispatch_counts=dispatch_counts,
+                    watchdog_signal=watchdog_signal if isinstance(watchdog_signal, dict) else None,
+                    details={"event": "terminal_cycle_resolution"},
+                )
                 final_summary = f"OP Simple build stopped: {stop_reason}."
                 break
 
@@ -5189,6 +5538,9 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                                 time.sleep(remaining_sleep)
                     else:
                         time.sleep(sleep_seconds)
+
+        if stop_reason:
+            _persist_cycle_summary_stop_reason(cfg, cycle_number=cycle_number, stop_reason=stop_reason)
 
         if stop_reason == "project_done":
             _run_wrapup_manager(

@@ -51,6 +51,7 @@ def test_build_config_defaults_boss_model_and_reasoning(tmp_path: Path) -> None:
     assert cfg.boss_model == "gpt-5.3-codex"
     assert cfg.boss_reasoning_effort == "xhigh"
     assert cfg.codex_profile is None
+    assert cfg.worktrees_parent == MODULE.DEFAULT_WORKTREES_PARENT
 
 
 def test_build_config_accepts_boss_model_and_reasoning_override(tmp_path: Path) -> None:
@@ -144,6 +145,22 @@ def test_build_config_accepts_executor_overrides(tmp_path: Path) -> None:
     assert cfg.allow_worker_executor_override is True
 
 
+def test_build_config_accepts_worktrees_parent_override(tmp_path: Path) -> None:
+    custom_parent = tmp_path / "forest"
+    cfg = MODULE._build_config(make_req(tmp_path, worktrees_parent=str(custom_parent)))
+    assert cfg.worktrees_parent == custom_parent.resolve()
+
+
+def test_build_config_accepts_selected_aliases_csv(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(make_req(tmp_path, selected_aliases="six, seven, eight, nine, ten"))
+    assert cfg.selected_aliases == ["six", "seven", "eight", "nine", "ten"]
+
+
+def test_build_config_accepts_selected_aliases_list_and_dedupes(tmp_path: Path) -> None:
+    cfg = MODULE._build_config(make_req(tmp_path, selected_aliases=["Six", "seven", "six", " eight "]))
+    assert cfg.selected_aliases == ["six", "seven", "eight"]
+
+
 def write_boss_artifacts(root: Path, cycle_number: int, *, overrides: dict[str, dict[str, object]] | None = None) -> None:
     override_map = overrides or {}
     base_payloads: dict[str, dict[str, object]] = {
@@ -233,11 +250,46 @@ def test_boss_timeout_respects_max_cycles(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
     monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        MODULE,
+        "_ensure_workstation_prep",
+        lambda _cfg, initialize_state=None, force_refresh=False: {
+            "schema_version": "1.0",
+            "worktrees_parent": str((tmp_path / "forest").resolve()),
+            "workstations": [],
+        },
+    )
 
-    out = MODULE.run_op_simple_build(make_req(tmp_path, dry_run=False, max_build_cycles=1, sleep_minutes=0))
+    out = MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            dry_run=False,
+            max_build_cycles=1,
+            sleep_minutes=0,
+            worktrees_parent=str(tmp_path / "forest"),
+        )
+    )
 
     assert out["ok"] is True
     assert "after BOSS timeout" in out["summary"]
+    decision_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_manager_decision"]).read_text(encoding="utf-8"))
+    assert decision_payload["cycle_number"] == 1
+    assert decision_payload["decision"] == "skip_cycle"
+    assert decision_payload["reason_code"] == "manager_timeout"
+
+    summary_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_summary"]).read_text(encoding="utf-8"))
+    assert summary_payload["cycle_number"] == 1
+    assert summary_payload["manager_statuses"]["BOSS"]["status"] == "timeout"
+
+    capsule_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["terminal_capsule"]).read_text(encoding="utf-8"))
+    assert capsule_payload["cycle_number"] == 1
+    assert capsule_payload["reason_code"] == "manager_timeout"
+    assert capsule_payload["manager_status"] == "timeout"
+
+    cycle_dir = tmp_path / MODULE.HISTORY_DIR / "cycle-000001"
+    assert (cycle_dir / "cycle_summary.json").exists()
+    assert (cycle_dir / "cycle_manager_decision.json").exists()
+    assert (cycle_dir / "terminal_capsule.json").exists()
 
 
 def test_summary_preserves_termination_markers(tmp_path: Path) -> None:
@@ -966,6 +1018,38 @@ def test_codex_exec_prompt_supports_profile_flag(tmp_path: Path, monkeypatch) ->
     assert cmd[profile_idx + 1] == "openrouter_free"
 
 
+def test_codex_exec_prompt_timeout_persists_partial_stdout_stderr(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=30, output="partial stdout", stderr="partial stderr")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
+    out = MODULE._codex_exec_prompt(
+        cfg,
+        "BOSS",
+        7,
+        30,
+        "prompt body",
+    )
+    assert out.status == "timeout"
+    assert out.timeout is True
+
+    cycle_dir = tmp_path / MODULE.HISTORY_DIR / "cycle-000007"
+    stdout_path = cycle_dir / "manager-boss.stdout.log"
+    stderr_path = cycle_dir / "manager-boss.stderr.log"
+    assert stdout_path.read_text(encoding="utf-8") == "partial stdout"
+    assert stderr_path.read_text(encoding="utf-8") == "partial stderr"
+
+
 def test_build_blackbox_exec_command_free_lane_unsets_keys(tmp_path: Path, monkeypatch) -> None:
     cfg = MODULE.RunConfig(
         repo_root=tmp_path,
@@ -1024,6 +1108,7 @@ def test_dispatch_packets_writes_launch_and_registry(tmp_path: Path, monkeypatch
         max_build_cycles=1,
         max_parallel_workers=8,
         dry_run=False,
+        worktrees_parent=tmp_path,
         codex_profile="openrouter_free",
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
@@ -1117,6 +1202,57 @@ def test_dispatch_packets_writes_launch_and_registry(tmp_path: Path, monkeypatch
     assert worker_registry["workers"][0]["pid"] == 4321
 
 
+def test_dispatch_packets_rejects_worktree_outside_configured_parent(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    allowed_parent = tmp_path / "forest"
+    allowed_parent.mkdir(parents=True, exist_ok=True)
+    outside_worktree = tmp_path / "outside-worktree"
+    outside_worktree.mkdir(parents=True, exist_ok=True)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        worktrees_parent=allowed_parent,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_packets"],
+        {
+            "schema_version": "1.0",
+            "packets": [{"worker_id": "worker-1", "packet_id": "packet-1", "profile_alias": "codex", "prompt": "do task"}],
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "workers": [{"worker_id": "worker-1", "worktree": str(outside_worktree), "status": "idle"}],
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [{"alias": "codex", "codex_home": "/tmp/.codex"}],
+        },
+    )
+    monkeypatch.setattr(MODULE, "_resolve_dispatch_script", lambda _cfg: Path("/tmp/fake-dispatch.py"))
+    monkeypatch.setattr(
+        MODULE.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("dispatch command should not execute")),
+    )
+
+    counters = MODULE._dispatch_packets(cfg, cycle_number=3)
+
+    assert counters == {"attempted": 1, "launched": 0, "launch_failed": 1, "unknown": 0}
+    launch_row = json.loads((tmp_path / MODULE.DISPATCH_LAUNCH_LOG_FILE).read_text(encoding="utf-8").splitlines()[0])
+    assert launch_row["status"] == "launch_failed"
+    assert "outside configured worktrees_parent" in str(launch_row["message"] or "")
+
+
 def test_dispatch_packets_override_flag_off_ignores_worker_executor_override(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -1125,6 +1261,7 @@ def test_dispatch_packets_override_flag_off_ignores_worker_executor_override(tmp
         max_build_cycles=1,
         max_parallel_workers=8,
         dry_run=False,
+        worktrees_parent=tmp_path,
         executor_provider="codex",
         allow_worker_executor_override=False,
     )
@@ -1177,6 +1314,7 @@ def test_dispatch_packets_override_flag_on_applies_worker_executor_override(tmp_
         max_build_cycles=1,
         max_parallel_workers=8,
         dry_run=False,
+        worktrees_parent=tmp_path,
         executor_provider="codex",
         allow_worker_executor_override=True,
         blackbox_lane="free",
@@ -1569,6 +1707,7 @@ def test_dispatch_respects_parallel_worker_cap(tmp_path: Path, monkeypatch) -> N
         max_build_cycles=1,
         max_parallel_workers=1,
         dry_run=False,
+        worktrees_parent=tmp_path,
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
     MODULE._atomic_write_json(
@@ -1629,6 +1768,7 @@ def test_dispatch_ignores_dead_pid_for_parallel_capacity(tmp_path: Path, monkeyp
         max_build_cycles=1,
         max_parallel_workers=1,
         dry_run=False,
+        worktrees_parent=tmp_path,
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
     MODULE._atomic_write_json(
@@ -1766,6 +1906,8 @@ def test_normalize_dead_worker_leases_clears_pid_only_and_preserves_assignments(
 
 
 def test_ensure_workstation_prep_prepares_slots_and_seeds_worker_registry(tmp_path: Path, monkeypatch) -> None:
+    worktrees_parent = tmp_path / "forest"
+    worktrees_parent.mkdir(parents=True, exist_ok=True)
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
         repo_root=tmp_path,
@@ -1773,6 +1915,7 @@ def test_ensure_workstation_prep_prepares_slots_and_seeds_worker_registry(tmp_pa
         max_build_cycles=1,
         max_parallel_workers=2,
         dry_run=False,
+        worktrees_parent=worktrees_parent,
     )
     (tmp_path / ".op-simple" / "current").mkdir(parents=True, exist_ok=True)
     init_state = MODULE._ensure_initialize_state(
@@ -1794,9 +1937,10 @@ def test_ensure_workstation_prep_prepares_slots_and_seeds_worker_registry(tmp_pa
 
     def fake_run(cmd, *args, **kwargs):
         if isinstance(cmd, list) and len(cmd) >= 2 and cmd[0] == "python3" and cmd[1] == str(fake_script):
+            assert cmd[cmd.index("--worktrees-parent") + 1] == str(worktrees_parent.resolve())
             worktree_name = cmd[cmd.index("--worktree-name") + 1]
             branch_name = cmd[cmd.index("--branch-name") + 1]
-            target_path = tmp_path / worktree_name
+            target_path = worktrees_parent / worktree_name
             target_path.mkdir(parents=True, exist_ok=True)
             payload = {
                 "ok": True,
@@ -1812,7 +1956,8 @@ def test_ensure_workstation_prep_prepares_slots_and_seeds_worker_registry(tmp_pa
     out = MODULE._ensure_workstation_prep(cfg, initialize_state=init_state, force_refresh=True)
 
     assert len(out["workstations"]) == 2
-    assert out["workstations"][0]["workstation_id"] == "workstation-1"
+    assert out["worktrees_parent"] == str(worktrees_parent.resolve())
+    assert out["workstations"][0]["workstation_id"] == MODULE._workstation_id_for_index(cfg, 1)
     assert out["workstations"][0]["branch"].startswith("op-simple-canary-test-w")
     assert Path(out["workstations"][0]["worktree"]).exists()
 
@@ -2054,6 +2199,76 @@ def test_run_prefers_project_done_over_watchdog_stop(tmp_path: Path, monkeypatch
 
     assert out["ok"] is True
     assert out["data"]["stop_reason"] == "project_done"
+
+
+def test_run_persists_watchdog_terminal_stop_reason_to_cycle_summary(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+
+    def fake_invoke_manager(cfg, *, manager_name, cycle_number, context, expected_artifacts):
+        if manager_name == "BOSS":
+            write_boss_artifacts(cfg.repo_root, cycle_number)
+            return MODULE.ManagerResult(
+                manager="BOSS",
+                status="ok",
+                timeout=False,
+                returncode=0,
+                started_at="2026-01-01T00:00:00Z",
+                finished_at="2026-01-01T00:00:01Z",
+                duration_seconds=1.0,
+                message="ok",
+            )
+        raise AssertionError(f"unexpected manager call: {manager_name}")
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+    monkeypatch.setattr(
+        MODULE,
+        "_watchdog_tick",
+        lambda _cfg, _cycle, *, force_reset_target=False: (
+            True,
+            {
+                "reason_code": "stale_base_branch_commit",
+                "message": "stale branch",
+                "watchdog_age_minutes": 151.0,
+            },
+        ),
+    )
+    monkeypatch.setattr(MODULE, "_run_rate_gate_wait", lambda _cfg, _cycle, _warnings: None)
+    monkeypatch.setattr(
+        MODULE,
+        "_dispatch_packets",
+        lambda _cfg, _cycle: {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_ensure_workstation_prep",
+        lambda _cfg, initialize_state=None, force_refresh=False: {
+            "schema_version": "1.0",
+            "worktrees_parent": str((tmp_path / "forest").resolve()),
+            "workstations": [],
+        },
+    )
+
+    out = MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            dry_run=False,
+            max_build_cycles=5,
+            sleep_minutes=0,
+            ground_sync_enabled=False,
+            worktrees_parent=str(tmp_path / "forest"),
+        )
+    )
+
+    assert out["ok"] is True
+    assert out["data"]["stop_reason"] == "watchdog_idle_stop"
+
+    summary_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_summary"]).read_text(encoding="utf-8"))
+    assert summary_payload["stop_reason"] == "watchdog_idle_stop"
+    assert (summary_payload.get("termination") or {}).get("reason_code") == "watchdog_idle_stop"
+
+    capsule_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["terminal_capsule"]).read_text(encoding="utf-8"))
+    assert capsule_payload["stop_reason"] == "watchdog_idle_stop"
+    assert capsule_payload["reason_code"] == "watchdog_idle_stop"
 
 
 def test_run_ignores_unrecognized_summary_stop_reason(tmp_path: Path, monkeypatch) -> None:
@@ -2776,6 +2991,97 @@ def test_profile_rows_from_disk_keeps_default_when_single_profile(tmp_path: Path
     aliases = [str(row.get("alias")) for row in rows if isinstance(row, dict)]
 
     assert aliases == ["codex"]
+
+
+def test_profile_rows_from_disk_filters_to_selected_aliases(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in (".codex-six", ".codex-seven", ".codex-eight"):
+        profile = tmp_path / name
+        profile.mkdir(parents=True, exist_ok=True)
+        (profile / "auth.json").write_text("{}", encoding="utf-8")
+
+    rows = MODULE._profile_rows_from_disk(selected_aliases=["codex-seven", "codex-six"])
+    aliases = [str(row.get("alias")) for row in rows if isinstance(row, dict)]
+
+    assert aliases == ["codex-seven", "codex-six"]
+
+
+def test_rate_snapshot_profile_args_respects_selected_aliases_filter(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in (".codex-six", ".codex-seven", ".codex-eight"):
+        profile = tmp_path / name
+        profile.mkdir(parents=True, exist_ok=True)
+        (profile / "auth.json").write_text("{}", encoding="utf-8")
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+        selected_aliases=["six", "seven", "ten"],
+    )
+
+    args, missing = MODULE._rate_snapshot_profile_args(cfg)
+
+    assert args == [f"codex-six={(tmp_path / '.codex-six').resolve()}", f"codex-seven={(tmp_path / '.codex-seven').resolve()}"]
+    assert missing == ["ten"]
+
+
+def test_profile_rows_from_disk_selected_aliases_accepts_full_or_short_alias(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in (".codex-six", ".codex-seven"):
+        profile = tmp_path / name
+        profile.mkdir(parents=True, exist_ok=True)
+        (profile / "auth.json").write_text("{}", encoding="utf-8")
+
+    short_rows = MODULE._profile_rows_from_disk(selected_aliases=["six"])
+    full_rows = MODULE._profile_rows_from_disk(selected_aliases=["codex-six"])
+
+    short_aliases = [str(row.get("alias")) for row in short_rows if isinstance(row, dict)]
+    full_aliases = [str(row.get("alias")) for row in full_rows if isinstance(row, dict)]
+
+    assert short_aliases == ["codex-six"]
+    assert full_aliases == ["codex-six"]
+
+
+def test_rate_snapshot_profile_args_autodiscovers_when_selected_aliases_not_set(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    default_profile = tmp_path / ".codex"
+    secondary_profile = tmp_path / ".codex-second"
+    default_profile.mkdir(parents=True, exist_ok=True)
+    secondary_profile.mkdir(parents=True, exist_ok=True)
+    (default_profile / "auth.json").write_text("{}", encoding="utf-8")
+    (secondary_profile / "auth.json").write_text("{}", encoding="utf-8")
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+        selected_aliases=None,
+    )
+
+    args, missing = MODULE._rate_snapshot_profile_args(cfg)
+
+    assert args == [f"codex-second={(tmp_path / '.codex-second').resolve()}"]
+    assert missing == []
+
+
+def test_rate_snapshot_profile_args_defaults_to_codex_when_no_profiles_discovered(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+        selected_aliases=None,
+    )
+
+    args, missing = MODULE._rate_snapshot_profile_args(cfg)
+
+    assert args == ["codex=default"]
+    assert missing == []
 
 
 def test_select_boss_profile_from_snapshot_prefers_highest_weekly_not_5h_gated(tmp_path: Path) -> None:
