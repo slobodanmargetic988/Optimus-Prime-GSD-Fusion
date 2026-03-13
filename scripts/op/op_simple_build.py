@@ -47,6 +47,7 @@ ARTIFACT_FILES = {
     "worker_registry": CURRENT_DIR / "worker_registry.json",
     "dispatch_registry": CURRENT_DIR / "dispatch_registry.json",
     "cycle_summary": CURRENT_DIR / "cycle_summary.json",
+    "mergeability_report": CURRENT_DIR / "mergeability_report.json",
     "terminal_capsule": CURRENT_DIR / "terminal_capsule.json",
     "wrapup_manager_report": CURRENT_DIR / "wrapup_manager_report.json",
     "watchdog_state": CURRENT_DIR / "watchdog_state.json",
@@ -2122,6 +2123,27 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "stop_reason": "",
             "notes": "",
         },
+        "mergeability_report": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "cycle_number": 0,
+            "cycle_mode": "normal",
+            "run_base_ref": "",
+            "run_base_sha": "",
+            "lane_shas": {},
+            "unmerged_commit_count": 0,
+            "merge_blockers": [],
+            "gate_owner": "none",
+            "lane_status": {},
+            "lane_merge_gate_pending_cleared_count": 0,
+            "mergeability_advanced": False,
+            "progression": {
+                "done_worker_commits": 0,
+                "lane_fan_in_ready": 0,
+                "lane_tester_gate_passed": 0,
+                "lane_to_run_merge_ready": 0,
+            },
+        },
         "terminal_capsule": {
             "schema_version": SCHEMA_VERSION,
             "updated_at": utc_now_iso(),
@@ -2206,6 +2228,7 @@ def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
         "worker_registry",
         "dispatch_registry",
         "cycle_summary",
+        "mergeability_report",
         "terminal_capsule",
         "wrapup_manager_report",
         "watchdog_state",
@@ -4861,6 +4884,195 @@ def _persist_cycle_summary_stop_reason(cfg: RunConfig, *, cycle_number: int, sto
     _atomic_write_json(summary_path, summary_payload)
 
 
+def _mergeability_run_base_ref(cfg: RunConfig) -> str:
+    init_state = _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
+    run_context = init_state.get("run_context") if isinstance(init_state, dict) else {}
+    if isinstance(run_context, dict):
+        candidate = str(run_context.get("run_base_branch") or "").strip()
+        if candidate:
+            return candidate
+    monitored_branch = str(init_state.get("monitored_branch") or "").strip() if isinstance(init_state, dict) else ""
+    if monitored_branch:
+        return monitored_branch
+    return "main"
+
+
+def _mergeability_progress_fingerprint(payload: dict[str, Any]) -> str:
+    seed = {
+        "run_base_sha": str(payload.get("run_base_sha") or ""),
+        "lane_shas": payload.get("lane_shas") if isinstance(payload.get("lane_shas"), dict) else {},
+        "lane_status": payload.get("lane_status") if isinstance(payload.get("lane_status"), dict) else {},
+        "merge_blockers": payload.get("merge_blockers") if isinstance(payload.get("merge_blockers"), list) else [],
+        "unmerged_commit_count": int(payload.get("unmerged_commit_count") or 0),
+    }
+    return hashlib.sha256(json.dumps(seed, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _build_mergeability_report(cfg: RunConfig, *, cycle_number: int, cycle_mode: str) -> dict[str, Any]:
+    task_path = cfg.repo_root / ARTIFACT_FILES["task_execution_state"]
+    task_payload = _read_json(task_path, default={})
+    tasks = task_payload.get("tasks") if isinstance(task_payload, dict) else None
+    task_rows = [row for row in tasks if isinstance(row, dict)] if isinstance(tasks, list) else []
+
+    lane_task_counts: dict[str, dict[str, int]] = {}
+    lane_gate_pending_rows: dict[str, list[dict[str, Any]]] = {}
+    task_to_lane: dict[str, str] = {}
+    for row in task_rows:
+        lane_id = str(row.get("lane_id") or "").strip() or "unscoped"
+        task_id = str(row.get("task_id") or "").strip()
+        if task_id:
+            task_to_lane[task_id] = lane_id
+        counts = lane_task_counts.setdefault(lane_id, {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0})
+        status = str(row.get("status") or "").strip()
+        if status in counts:
+            counts[status] += 1
+        if bool(row.get("lane_merge_gate_pending")):
+            lane_gate_pending_rows.setdefault(lane_id, []).append(row)
+
+    worker_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
+    workers = worker_payload.get("workers") if isinstance(worker_payload, dict) else None
+    worker_rows = [row for row in workers if isinstance(row, dict)] if isinstance(workers, list) else []
+
+    run_base_ref = _mergeability_run_base_ref(cfg)
+    run_base_sha = _git_text(cfg.repo_root, "rev-parse", run_base_ref) or _git_text(cfg.repo_root, "rev-parse", "HEAD")
+    lane_sha_sets: dict[str, set[str]] = {}
+    done_worker_commits = 0
+    for row in worker_rows:
+        status = str(row.get("status") or "").strip()
+        task_id = str(row.get("current_task_id") or "").strip()
+        lane_id = task_to_lane.get(task_id) or "unscoped"
+        branch = str(row.get("branch") or "").strip()
+        if status == "done":
+            done_worker_commits += 1
+        if not branch:
+            continue
+        branch_sha = _git_text(cfg.repo_root, "rev-parse", branch)
+        if not branch_sha:
+            continue
+        if run_base_sha and branch_sha == run_base_sha:
+            continue
+        lane_sha_sets.setdefault(lane_id, set()).add(branch_sha)
+
+    lane_ids = set(lane_task_counts.keys()) | set(lane_sha_sets.keys())
+    lane_status: dict[str, dict[str, Any]] = {}
+    merge_blockers: list[dict[str, Any]] = []
+    lane_merge_gate_pending_cleared_count = 0
+    progression = {
+        "done_worker_commits": int(done_worker_commits),
+        "lane_fan_in_ready": 0,
+        "lane_tester_gate_passed": 0,
+        "lane_to_run_merge_ready": 0,
+    }
+
+    for lane_id in sorted(lane_ids):
+        counts = lane_task_counts.get(lane_id, {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0})
+        done_count = int(counts.get("done") or 0)
+        pending_count = int(counts.get("pending") or 0)
+        in_progress_count = int(counts.get("in_progress") or 0)
+        blocked_count = int(counts.get("blocked") or 0)
+        has_work_remaining = pending_count > 0 or in_progress_count > 0
+        fan_in_ready = done_count > 0
+        gate_pending_rows = lane_gate_pending_rows.get(lane_id, [])
+        lane_merge_gate_pending = bool(gate_pending_rows)
+
+        if blocked_count > 0:
+            tester_gate_status = "blocked_tasks_present"
+            lane_to_run_merge_status = "blocked"
+            merge_blockers.append(
+                {
+                    "lane_id": lane_id,
+                    "reason_code": "lane_blocked_tasks",
+                    "owner": "BOSS",
+                    "message": f"lane has blocked tasks={blocked_count}",
+                }
+            )
+        elif has_work_remaining:
+            tester_gate_status = "pending_lane_completion"
+            lane_to_run_merge_status = "waiting_for_lane_completion"
+            merge_blockers.append(
+                {
+                    "lane_id": lane_id,
+                    "reason_code": "lane_pending_tasks",
+                    "owner": "BOSS",
+                    "message": (
+                        "lane has unfinished tasks "
+                        f"(pending={pending_count}, in_progress={in_progress_count})"
+                    ),
+                }
+            )
+        elif fan_in_ready:
+            tester_gate_status = "pass"
+            lane_to_run_merge_status = "ready"
+        else:
+            tester_gate_status = "not_required"
+            lane_to_run_merge_status = "idle"
+
+        if lane_merge_gate_pending and tester_gate_status == "pass":
+            for row in gate_pending_rows:
+                row["lane_merge_gate_pending"] = False
+                row["lane_merge_gate_cleared_at"] = utc_now_iso()
+            lane_merge_gate_pending_cleared_count += len(gate_pending_rows)
+            lane_merge_gate_pending = False
+
+        if fan_in_ready:
+            progression["lane_fan_in_ready"] += 1
+        if tester_gate_status == "pass":
+            progression["lane_tester_gate_passed"] += 1
+        if lane_to_run_merge_status == "ready":
+            progression["lane_to_run_merge_ready"] += 1
+
+        lane_status[lane_id] = {
+            "task_counts": {
+                "pending": pending_count,
+                "in_progress": in_progress_count,
+                "done": done_count,
+                "blocked": blocked_count,
+            },
+            "fan_in_status": "ready" if fan_in_ready else "idle",
+            "tester_gate_status": tester_gate_status,
+            "lane_to_run_merge_status": lane_to_run_merge_status,
+            "lane_merge_gate_pending": lane_merge_gate_pending,
+            "lane_unmerged_commit_count": len(lane_sha_sets.get(lane_id, set())),
+        }
+
+    if lane_merge_gate_pending_cleared_count > 0 and isinstance(task_payload, dict):
+        task_payload["schema_version"] = SCHEMA_VERSION
+        task_payload["updated_at"] = utc_now_iso()
+        task_payload["cycle_number"] = int(cycle_number)
+        task_payload["tasks"] = task_rows
+        _atomic_write_json(task_path, task_payload)
+
+    lane_shas = {lane_id: sorted(values) for lane_id, values in sorted(lane_sha_sets.items(), key=lambda item: item[0])}
+    unmerged_commit_count = sum(len(values) for values in lane_shas.values())
+    report_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": int(cycle_number),
+        "cycle_mode": str(cycle_mode or "").strip() or "normal",
+        "run_base_ref": run_base_ref,
+        "run_base_sha": run_base_sha,
+        "lane_shas": lane_shas,
+        "unmerged_commit_count": int(unmerged_commit_count),
+        "merge_blockers": merge_blockers,
+        "gate_owner": "BOSS" if merge_blockers else "none",
+        "lane_status": lane_status,
+        "lane_merge_gate_pending_cleared_count": int(lane_merge_gate_pending_cleared_count),
+        "progression": progression,
+    }
+    report_payload["progress_fingerprint"] = _mergeability_progress_fingerprint(report_payload)
+    previous_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["mergeability_report"], default={})
+    previous_fingerprint = (
+        str(previous_payload.get("progress_fingerprint") or "").strip()
+        if isinstance(previous_payload, dict)
+        else ""
+    )
+    report_payload["mergeability_advanced"] = bool(
+        previous_fingerprint and report_payload["progress_fingerprint"] != previous_fingerprint
+    )
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["mergeability_report"], report_payload)
+    return report_payload
+
+
 def _render_cycle_summary(
     cfg: RunConfig,
     cycle_number: int,
@@ -5217,6 +5429,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             manager_statuses: dict[str, dict[str, str]] = {}
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
             cycle_mode = "normal"
+            mergeability_report: dict[str, Any] | None = None
             state_signature, in_progress_workers = _worker_task_state_signature(cfg)
             live_pid_in_progress_workers = _live_pid_in_progress_worker_count(cfg)
             task_counts_snapshot = _task_counts_from_execution_state(cfg)
@@ -5364,6 +5577,21 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                         "timestamp": utc_now_iso(),
                     },
                 )
+                try:
+                    mergeability_report = _build_mergeability_report(
+                        cfg,
+                        cycle_number=cycle_number,
+                        cycle_mode=cycle_mode,
+                    )
+                    manager_statuses["merge-engine"] = {
+                        "status": "ok",
+                        "note": (
+                            "mergeability report refreshed after timeout cycle "
+                            f"unmerged_commits={int(mergeability_report.get('unmerged_commit_count') or 0)}"
+                        ),
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    manager_statuses["merge-engine"] = {"status": "failed", "note": f"mergeability refresh failed: {exc}"}
                 _write_terminal_capsule(
                     cfg,
                     cycle_number=cycle_number,
@@ -5374,7 +5602,11 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     manager_result=boss_result,
                     manager_statuses=manager_statuses,
                     dispatch_counts=dispatch_counts,
-                    details={"event": "timeout_cycle_fail_closed"},
+                    details={
+                        "event": "timeout_cycle_fail_closed",
+                        "mergeability_report_ref": str((cfg.repo_root / ARTIFACT_FILES["mergeability_report"]).resolve()),
+                        "unmerged_commit_count": int((mergeability_report or {}).get("unmerged_commit_count") or 0),
+                    },
                 )
                 _snapshot_cycle(cfg, cycle_number)
                 print(
@@ -5480,6 +5712,31 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 else:
                     dispatch_counts = _dispatch_packets(cfg, cycle_number)
                     manager_statuses["work-dispatcher"] = {"status": "ok", "note": "dispatch cycle completed"}
+
+            try:
+                mergeability_report = _build_mergeability_report(
+                    cfg,
+                    cycle_number=cycle_number,
+                    cycle_mode=cycle_mode,
+                )
+                manager_statuses["merge-engine"] = {
+                    "status": "ok",
+                    "note": (
+                        "mergeability report refreshed "
+                        f"unmerged_commits={int(mergeability_report.get('unmerged_commit_count') or 0)} "
+                        f"advanced={str(bool(mergeability_report.get('mergeability_advanced'))).lower()}"
+                    ),
+                }
+            except Exception as exc:  # noqa: BLE001
+                manager_statuses["merge-engine"] = {"status": "failed", "note": f"mergeability refresh failed: {exc}"}
+                warnings.append(
+                    {
+                        "code": "mergeability_report_failed",
+                        "message": str(exc),
+                        "stage": "op-simple-build",
+                        "details": {"cycle_number": cycle_number},
+                    }
+                )
 
             manager_statuses["summary"] = {"status": "ok", "note": "summary written"}
             base_summary: dict[str, Any] | None = None
@@ -5589,7 +5846,11 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     manager_statuses=manager_statuses,
                     dispatch_counts=dispatch_counts,
                     watchdog_signal=watchdog_signal if isinstance(watchdog_signal, dict) else None,
-                    details={"event": "terminal_cycle_resolution"},
+                    details={
+                        "event": "terminal_cycle_resolution",
+                        "mergeability_report_ref": str((cfg.repo_root / ARTIFACT_FILES["mergeability_report"]).resolve()),
+                        "unmerged_commit_count": int((mergeability_report or {}).get("unmerged_commit_count") or 0),
+                    },
                 )
                 final_summary = f"OP Simple build stopped: {stop_reason}."
                 break

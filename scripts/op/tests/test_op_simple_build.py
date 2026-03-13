@@ -498,6 +498,110 @@ def test_worker_liveness_ignores_stale_thread_markers(tmp_path: Path, monkeypatc
     assert MODULE._live_pid_in_progress_worker_count(cfg) == 1
 
 
+def test_build_mergeability_report_clears_lane_merge_gate_pending_when_lane_ready(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 5,
+            "tasks": [
+                {
+                    "task_id": "TASK-1",
+                    "lane_id": "phase-1/lane-a",
+                    "status": "done",
+                    "lane_merge_gate_pending": True,
+                }
+            ],
+            "blockers": [],
+            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
+            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 5,
+            "workers": [
+                {
+                    "worker_id": "worker-1",
+                    "status": "done",
+                    "current_task_id": "TASK-1",
+                    "branch": "main",
+                }
+            ],
+        },
+    )
+
+    report = MODULE._build_mergeability_report(cfg, cycle_number=5, cycle_mode="merge_recovery")
+
+    lane_report = report["lane_status"]["phase-1/lane-a"]
+    assert lane_report["tester_gate_status"] == "pass"
+    assert lane_report["lane_to_run_merge_status"] == "ready"
+    assert report["lane_merge_gate_pending_cleared_count"] == 1
+
+    task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
+    task_row = task_state["tasks"][0]
+    assert task_row["lane_merge_gate_pending"] is False
+    assert isinstance(task_row.get("lane_merge_gate_cleared_at"), str)
+
+
+def test_build_mergeability_report_marks_pending_lane_as_blocked_for_merge(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 6,
+            "tasks": [
+                {
+                    "task_id": "TASK-2",
+                    "lane_id": "phase-2/lane-b",
+                    "status": "in_progress",
+                },
+                {
+                    "task_id": "TASK-3",
+                    "lane_id": "phase-2/lane-b",
+                    "status": "pending",
+                },
+            ],
+            "blockers": [],
+            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
+            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
+        },
+    )
+
+    report = MODULE._build_mergeability_report(cfg, cycle_number=6, cycle_mode="normal")
+
+    lane_report = report["lane_status"]["phase-2/lane-b"]
+    assert lane_report["tester_gate_status"] == "pending_lane_completion"
+    assert lane_report["lane_to_run_merge_status"] == "waiting_for_lane_completion"
+    assert report["gate_owner"] == "BOSS"
+    assert any(item.get("reason_code") == "lane_pending_tasks" for item in report["merge_blockers"])
+
+
 def test_await_cycle_release_signal_token_conservative_releases_on_settle(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
