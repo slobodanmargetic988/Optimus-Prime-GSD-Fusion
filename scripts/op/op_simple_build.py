@@ -55,6 +55,7 @@ ARTIFACT_FILES = {
     "workstation_prep": CURRENT_DIR / "workstation_prep.json",
     "llm_profile_mode": CURRENT_DIR / "llm_profile_mode.json",
     "llm_profile_rate_registry": CURRENT_DIR / "llm_profile_rate_registry.json",
+    "timeout_adaptation_state": CURRENT_DIR / "timeout_adaptation_state.json",
 }
 
 MANAGER_TIMEOUT_SECONDS = {
@@ -826,6 +827,125 @@ def _write_boss_session_state(
         "previous_profile_alias": str(previous_profile_alias or profile_alias or "").strip(),
     }
     _atomic_write_json(cfg.repo_root / BOSS_SESSION_STATE_FILE, payload)
+
+
+def _default_timeout_adaptation_state() -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "consecutive_boss_timeouts": 0,
+        "timeout_threshold": 2,
+        "adaptation_active": False,
+        "rotation_required": False,
+        "last_timeout_cycle": None,
+        "last_timeout_profile_alias": "",
+        "last_timeout_reason": "",
+        "last_rotation_decision": {},
+        "last_boss_runtime_checks": {},
+    }
+
+
+def _load_timeout_adaptation_state(cfg: RunConfig) -> dict[str, Any]:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["timeout_adaptation_state"], default={})
+    if not isinstance(payload, dict):
+        payload = {}
+    out = _default_timeout_adaptation_state()
+    out.update(payload)
+    try:
+        out["consecutive_boss_timeouts"] = max(0, int(out.get("consecutive_boss_timeouts") or 0))
+    except (TypeError, ValueError):
+        out["consecutive_boss_timeouts"] = 0
+    try:
+        out["timeout_threshold"] = max(1, int(out.get("timeout_threshold") or 2))
+    except (TypeError, ValueError):
+        out["timeout_threshold"] = 2
+    out["adaptation_active"] = bool(out.get("adaptation_active"))
+    out["rotation_required"] = bool(out.get("rotation_required"))
+    out["last_timeout_profile_alias"] = str(out.get("last_timeout_profile_alias") or "").strip()
+    out["last_timeout_reason"] = str(out.get("last_timeout_reason") or "").strip()
+    if not isinstance(out.get("last_rotation_decision"), dict):
+        out["last_rotation_decision"] = {}
+    if not isinstance(out.get("last_boss_runtime_checks"), dict):
+        out["last_boss_runtime_checks"] = {}
+    return out
+
+
+def _write_timeout_adaptation_state(cfg: RunConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    out = _load_timeout_adaptation_state(cfg)
+    out.update(payload if isinstance(payload, dict) else {})
+    out["schema_version"] = SCHEMA_VERSION
+    out["updated_at"] = utc_now_iso()
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["timeout_adaptation_state"], out)
+    return out
+
+
+def _profile_alias_from_manager_result(result: ManagerResult | None) -> str | None:
+    if not isinstance(result, ManagerResult):
+        return None
+    message = str(result.message or "")
+    match = MANAGER_PROFILE_ALIAS_REGEX.search(message)
+    if not match:
+        return None
+    alias = str(match.group(1) or "").strip()
+    return alias or None
+
+
+def _record_boss_timeout_state(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    result: ManagerResult | None,
+    reason_code: str,
+) -> dict[str, Any]:
+    state = _load_timeout_adaptation_state(cfg)
+    threshold = int(state.get("timeout_threshold") or 2)
+    streak = int(state.get("consecutive_boss_timeouts") or 0) + 1
+    timeout_alias = _profile_alias_from_manager_result(result) or str(state.get("last_timeout_profile_alias") or "").strip()
+    eligible_aliases = [
+        item.get("alias")
+        for item in _boss_profile_candidates_from_snapshot(cfg)
+        if isinstance(item, dict) and bool(item.get("eligible"))
+    ]
+    eligible_aliases = [str(alias) for alias in eligible_aliases if isinstance(alias, str) and alias.strip()]
+    rotation_required = streak >= threshold and len(set(eligible_aliases)) > 1
+    updated = _write_timeout_adaptation_state(
+        cfg,
+        {
+            "consecutive_boss_timeouts": streak,
+            "adaptation_active": streak >= threshold,
+            "rotation_required": rotation_required,
+            "last_timeout_cycle": int(cycle_number),
+            "last_timeout_profile_alias": timeout_alias,
+            "last_timeout_reason": str(reason_code or "").strip() or "manager_timeout",
+            "eligible_profile_aliases": sorted(set(eligible_aliases)),
+        },
+    )
+    return updated
+
+
+def _record_boss_non_timeout_state(cfg: RunConfig, *, cycle_number: int, status: str) -> dict[str, Any]:
+    state = _load_timeout_adaptation_state(cfg)
+    if int(state.get("consecutive_boss_timeouts") or 0) == 0 and not bool(state.get("rotation_required")):
+        return state
+    return _write_timeout_adaptation_state(
+        cfg,
+        {
+            "consecutive_boss_timeouts": 0,
+            "adaptation_active": False,
+            "rotation_required": False,
+            "last_timeout_cycle": state.get("last_timeout_cycle"),
+            "last_boss_status_after_timeout": str(status or "").strip(),
+            "last_boss_status_cycle": int(cycle_number),
+        },
+    )
+
+
+def _record_boss_rotation_decision(cfg: RunConfig, *, decision: dict[str, Any]) -> dict[str, Any]:
+    return _write_timeout_adaptation_state(cfg, {"last_rotation_decision": decision if isinstance(decision, dict) else {}})
+
+
+def _record_boss_runtime_checks(cfg: RunConfig, *, checks: dict[str, Any]) -> dict[str, Any]:
+    return _write_timeout_adaptation_state(cfg, {"last_boss_runtime_checks": checks if isinstance(checks, dict) else {}})
 
 
 def _active_lifecycle_era_id(cfg: RunConfig) -> str | None:
@@ -2205,6 +2325,19 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "last_request_at": None,
             "last_request_source": None,
         },
+        "timeout_adaptation_state": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "consecutive_boss_timeouts": 0,
+            "timeout_threshold": 2,
+            "adaptation_active": False,
+            "rotation_required": False,
+            "last_timeout_cycle": None,
+            "last_timeout_profile_alias": "",
+            "last_timeout_reason": "",
+            "last_rotation_decision": {},
+            "last_boss_runtime_checks": {},
+        },
     }
 
     for key, rel in ARTIFACT_FILES.items():
@@ -2236,6 +2369,7 @@ def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
         "workstation_prep",
         "llm_profile_mode",
         "llm_profile_rate_registry",
+        "timeout_adaptation_state",
     ]
     for key in reset_keys:
         path = cfg.repo_root / ARTIFACT_FILES[key]
@@ -2891,15 +3025,36 @@ def _invoke_manager(
         resume_session_id: str | None = None
         prior_profile_alias: str | None = None
         prior_previous_profile_alias: str | None = None
+        timeout_state = _load_timeout_adaptation_state(cfg) if manager_name == "BOSS" else {}
+        rotation_selection_evidence: dict[str, Any] = {}
         if manager_uses_boss_profile and uses_codex_backend:
             boss_session_state = _read_boss_session_state(cfg)
             prior_session_id = str(boss_session_state.get("session_id") or "").strip() or None
             prior_profile_alias = str(boss_session_state.get("profile_alias") or "").strip() or None
             prior_previous_profile_alias = str(boss_session_state.get("previous_profile_alias") or "").strip() or None
-            selected_manager_alias, selected_manager_home = _select_boss_profile_from_snapshot(
-                cfg,
-                preferred_alias=prior_profile_alias,
+            excluded_aliases: set[str] = set()
+            if manager_name == "BOSS" and bool(timeout_state.get("rotation_required")):
+                timed_out_alias = str(timeout_state.get("last_timeout_profile_alias") or "").strip()
+                if timed_out_alias:
+                    excluded_aliases.add(timed_out_alias)
+            selected_manager_alias, selected_manager_home, rotation_selection_evidence = (
+                _select_boss_profile_from_snapshot_with_evidence(
+                    cfg,
+                    preferred_alias=prior_profile_alias,
+                    excluded_aliases=excluded_aliases,
+                )
             )
+            if manager_name == "BOSS" and selected_manager_alias is None and excluded_aliases:
+                # Fallback preserves continuity when no alternate eligible alias exists.
+                fallback_alias, fallback_home, fallback_evidence = _select_boss_profile_from_snapshot_with_evidence(
+                    cfg,
+                    preferred_alias=prior_profile_alias,
+                    excluded_aliases=set(),
+                )
+                selected_manager_alias = fallback_alias
+                selected_manager_home = fallback_home
+                rotation_selection_evidence["fallback_without_exclusion"] = True
+                rotation_selection_evidence["fallback_evidence"] = fallback_evidence
             if not selected_manager_home:
                 selected_manager_home = str(boss_session_state.get("codex_home") or "").strip() or None
             if manager_name == "BOSS" and prior_session_id and selected_manager_alias and prior_profile_alias:
@@ -2912,6 +3067,17 @@ def _invoke_manager(
                     resume_session_id = prior_session_id
                 else:
                     resume_session_id = None
+            if manager_name == "BOSS":
+                rotation_decision = {
+                    "cycle_number": int(cycle_number),
+                    "rotation_required": bool(timeout_state.get("rotation_required")),
+                    "last_timeout_profile_alias": str(timeout_state.get("last_timeout_profile_alias") or "").strip(),
+                    "preferred_alias": prior_profile_alias,
+                    "selected_alias": selected_manager_alias,
+                    "selected_home": selected_manager_home,
+                    "selection_evidence": rotation_selection_evidence,
+                }
+                _record_boss_rotation_decision(cfg, decision=rotation_decision)
         packet = {
             "schema_version": SCHEMA_VERSION,
             "manager": manager_name,
@@ -2958,40 +3124,83 @@ def _invoke_manager(
         )
         log_executor_model = manager_model
         if uses_codex_backend:
-            result = _codex_exec_prompt(
-                cfg,
-                manager_name,
-                cycle_number,
-                timeout,
-                prompt_text,
-                codex_home=selected_manager_home,
-                resume_session_id=resume_session_id,
-                model=manager_model,
-                reasoning_effort=cfg.boss_reasoning_effort if manager_uses_boss_model else None,
-                codex_profile=cfg.codex_profile,
-            )
-            if manager_name == "BOSS" and resume_session_id and result.status == "failed" and not result.timeout:
-                retry = _codex_exec_prompt(
+            runtime_checks = {
+                "cycle_number": int(cycle_number),
+                "manager": manager_name,
+                "executor_provider": executor_provider,
+                "uses_codex_backend": True,
+                "codex_binary_available": bool(shutil.which("codex")),
+                "llm_profile_mode_enabled": bool(_llm_profile_mode_enabled(cfg)),
+                "llm_profile_value": str(cfg.codex_profile or "").strip() or None,
+                "selected_profile_alias": selected_manager_alias,
+                "selected_codex_home": selected_manager_home,
+                "selected_codex_home_exists": bool(
+                    Path(str(selected_manager_home)).expanduser().exists()
+                )
+                if selected_manager_home
+                else None,
+            }
+            invalid_reasons: list[str] = []
+            if not bool(runtime_checks["codex_binary_available"]):
+                invalid_reasons.append("codex_binary_missing")
+            if bool(runtime_checks["llm_profile_mode_enabled"]) and not str(runtime_checks["llm_profile_value"] or "").strip():
+                invalid_reasons.append("llm_profile_mode_missing_profile")
+            runtime_checks["invalid_reasons"] = invalid_reasons
+            runtime_checks["runtime_context_valid"] = len(invalid_reasons) == 0
+            if manager_name == "BOSS":
+                _record_boss_runtime_checks(cfg, checks=runtime_checks)
+            if invalid_reasons:
+                now_iso = utc_now_iso()
+                result = ManagerResult(
+                    manager=manager_name,
+                    status="failed",
+                    timeout=False,
+                    returncode=None,
+                    started_at=now_iso,
+                    finished_at=now_iso,
+                    duration_seconds=0.0,
+                    message=(
+                        "boss runtime context invalid: "
+                        + ", ".join(invalid_reasons)
+                    ),
+                    reason_code="boss_runtime_context_invalid",
+                    details={"invalid_reasons": invalid_reasons, "runtime_checks": runtime_checks},
+                )
+            else:
+                result = _codex_exec_prompt(
                     cfg,
                     manager_name,
                     cycle_number,
                     timeout,
                     prompt_text,
                     codex_home=selected_manager_home,
-                    resume_session_id=None,
+                    resume_session_id=resume_session_id,
                     model=manager_model,
-                    reasoning_effort=cfg.boss_reasoning_effort,
+                    reasoning_effort=cfg.boss_reasoning_effort if manager_uses_boss_model else None,
                     codex_profile=cfg.codex_profile,
                 )
-                if retry.status == "ok":
-                    result = retry
-                    result.message = "fresh_session_retry_after_resume_failure"
-                else:
-                    result.message = (
-                        f"{result.message or 'resume_failed'}; fresh_session_retry_failed"
-                        if result.message
-                        else "fresh_session_retry_failed"
+                if manager_name == "BOSS" and resume_session_id and result.status == "failed" and not result.timeout:
+                    retry = _codex_exec_prompt(
+                        cfg,
+                        manager_name,
+                        cycle_number,
+                        timeout,
+                        prompt_text,
+                        codex_home=selected_manager_home,
+                        resume_session_id=None,
+                        model=manager_model,
+                        reasoning_effort=cfg.boss_reasoning_effort,
+                        codex_profile=cfg.codex_profile,
                     )
+                    if retry.status == "ok":
+                        result = retry
+                        result.message = "fresh_session_retry_after_resume_failure"
+                    else:
+                        result.message = (
+                            f"{result.message or 'resume_failed'}; fresh_session_retry_failed"
+                            if result.message
+                            else "fresh_session_retry_failed"
+                        )
         else:
             result = _blackbox_exec_prompt(
                 cfg,
@@ -3055,6 +3264,17 @@ def _invoke_manager(
         flush=True,
     )
 
+    timeout_log_state = _load_timeout_adaptation_state(cfg) if manager_name == "BOSS" else {}
+    timeout_log_rotation = (
+        timeout_log_state.get("last_rotation_decision")
+        if isinstance(timeout_log_state.get("last_rotation_decision"), dict)
+        else {}
+    )
+    timeout_log_runtime = (
+        timeout_log_state.get("last_boss_runtime_checks")
+        if isinstance(timeout_log_state.get("last_boss_runtime_checks"), dict)
+        else {}
+    )
     _append_manager_log(
         cfg,
         {
@@ -3088,6 +3308,15 @@ def _invoke_manager(
             "fallback_or_followup_action": llm_hardening.get("fallback_or_followup_action"),
             "llm_hardening_state": "present" if llm_hardening_present else "missing",
             "llm_hardening_source": llm_hardening_source,
+            "timeout_streak": int(timeout_log_state.get("consecutive_boss_timeouts") or 0),
+            "timeout_adaptation_active": bool(timeout_log_state.get("adaptation_active")),
+            "timeout_rotation_required": bool(timeout_log_state.get("rotation_required")),
+            "rotation_selected_alias": timeout_log_rotation.get("selected_alias"),
+            "rotation_rejected_reason": timeout_log_rotation.get("selection_evidence", {}).get("prior_alias_rejected_reason")
+            if isinstance(timeout_log_rotation.get("selection_evidence"), dict)
+            else None,
+            "runtime_context_valid": timeout_log_runtime.get("runtime_context_valid"),
+            "runtime_context_invalid_reasons": timeout_log_runtime.get("invalid_reasons"),
         },
     )
     return result
@@ -3384,26 +3613,22 @@ def _llm_profile_consume_request_budget(cfg: RunConfig, *, source: str) -> tuple
     return True, None
 
 
-def _select_boss_profile_from_snapshot(cfg: RunConfig, *, preferred_alias: str | None = None) -> tuple[str | None, str | None]:
+def _boss_profile_candidates_from_snapshot(cfg: RunConfig) -> list[dict[str, Any]]:
     payload = _read_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], default={})
     if not isinstance(payload, dict):
-        return None, None
+        return []
     rows = payload.get("profiles")
     if not isinstance(rows, list):
-        return None, None
+        return []
 
     candidate_rows = [row for row in rows if isinstance(row, dict)]
     if len(candidate_rows) > 1:
         candidate_rows = [row for row in candidate_rows if str(row.get("alias") or "").strip() != "codex"]
 
-    ranked: list[tuple[float, float, str, str]] = []
+    candidates: list[dict[str, Any]] = []
     for row in candidate_rows:
         alias = str(row.get("alias") or "").strip()
         codex_home = str(row.get("codex_home") or "").strip()
-        if not alias or not codex_home:
-            continue
-        if bool(row.get("hard_gated")):
-            continue
 
         five_hour_remaining = _extract_remaining_percent(row.get("window_5h_remaining_pct"))
         if five_hour_remaining is None:
@@ -3413,8 +3638,6 @@ def _select_boss_profile_from_snapshot(cfg: RunConfig, *, preferred_alias: str |
                 five_hour_remaining = None
         if five_hour_remaining is None and isinstance(row.get("five_hour"), dict):
             five_hour_remaining = _extract_remaining_percent(row.get("five_hour"))
-        if five_hour_remaining is None or five_hour_remaining <= 1.0:
-            continue
 
         week_remaining = _extract_remaining_percent(row.get("window_week_remaining_pct"))
         if week_remaining is None:
@@ -3424,22 +3647,97 @@ def _select_boss_profile_from_snapshot(cfg: RunConfig, *, preferred_alias: str |
                 week_remaining = None
         if week_remaining is None and isinstance(row.get("weekly"), dict):
             week_remaining = _extract_remaining_percent(row.get("weekly"))
-        if week_remaining is None:
-            continue
+        candidate = {
+            "alias": alias,
+            "codex_home": codex_home,
+            "hard_gated": bool(row.get("hard_gated")),
+            "five_hour_remaining": five_hour_remaining,
+            "week_remaining": week_remaining,
+            "eligible": False,
+            "ineligible_reason": "",
+        }
+        if not alias or not codex_home:
+            candidate["ineligible_reason"] = "missing_alias_or_codex_home"
+        elif bool(candidate["hard_gated"]):
+            candidate["ineligible_reason"] = "hard_gated"
+        elif five_hour_remaining is None:
+            candidate["ineligible_reason"] = "missing_5h_remaining"
+        elif float(five_hour_remaining) <= 1.0:
+            candidate["ineligible_reason"] = "five_hour_depleted"
+        elif week_remaining is None:
+            candidate["ineligible_reason"] = "missing_week_remaining"
+        else:
+            candidate["eligible"] = True
+            candidate["ineligible_reason"] = ""
+        candidates.append(candidate)
+    candidates.sort(key=lambda item: str(item.get("alias") or ""))
+    return candidates
 
-        ranked.append((week_remaining, five_hour_remaining, alias, codex_home))
 
-    if not ranked:
-        return None, None
-
+def _select_boss_profile_from_snapshot_with_evidence(
+    cfg: RunConfig,
+    *,
+    preferred_alias: str | None = None,
+    excluded_aliases: set[str] | None = None,
+) -> tuple[str | None, str | None, dict[str, Any]]:
+    candidates = _boss_profile_candidates_from_snapshot(cfg)
     preferred_alias_text = str(preferred_alias or "").strip()
-    if preferred_alias_text:
-        for week_remaining, _five_hour_remaining, alias, codex_home in ranked:
-            if alias == preferred_alias_text and week_remaining >= 50.0:
-                return alias, codex_home
+    excluded = {str(item or "").strip() for item in (excluded_aliases or set()) if str(item or "").strip()}
+    eligible = [item for item in candidates if bool(item.get("eligible"))]
+    eligible_after_exclusion = [item for item in eligible if str(item.get("alias") or "").strip() not in excluded]
+    selected_alias: str | None = None
+    selected_home: str | None = None
+    selected_reason = "no_eligible_profile"
+    prior_alias_rejected_reason = ""
 
-    ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
-    _week_remaining, _five_hour_remaining, alias, codex_home = ranked[0]
+    if preferred_alias_text:
+        preferred_row = next((item for item in eligible_after_exclusion if item.get("alias") == preferred_alias_text), None)
+        if preferred_row is not None and float(preferred_row.get("week_remaining") or 0.0) >= 50.0:
+            selected_alias = str(preferred_row.get("alias") or "").strip() or None
+            selected_home = str(preferred_row.get("codex_home") or "").strip() or None
+            selected_reason = "keep_preferred_alias_weekly_ge_50"
+        else:
+            if preferred_row is None and preferred_alias_text in excluded:
+                prior_alias_rejected_reason = "excluded_for_timeout_rotation"
+            elif preferred_row is None:
+                prior_alias_rejected_reason = "preferred_alias_not_eligible"
+            else:
+                prior_alias_rejected_reason = "preferred_alias_weekly_below_50"
+
+    if selected_alias is None and eligible_after_exclusion:
+        ranked = sorted(
+            eligible_after_exclusion,
+            key=lambda item: (
+                -float(item.get("week_remaining") or 0.0),
+                -float(item.get("five_hour_remaining") or 0.0),
+                str(item.get("alias") or ""),
+            ),
+        )
+        top = ranked[0]
+        selected_alias = str(top.get("alias") or "").strip() or None
+        selected_home = str(top.get("codex_home") or "").strip() or None
+        selected_reason = "highest_weekly_then_5h_capacity"
+
+    evidence = {
+        "preferred_alias": preferred_alias_text,
+        "excluded_aliases": sorted(excluded),
+        "eligible_aliases": sorted(str(item.get("alias") or "") for item in eligible),
+        "eligible_aliases_after_exclusion": sorted(
+            str(item.get("alias") or "") for item in eligible_after_exclusion
+        ),
+        "selected_alias": selected_alias,
+        "selected_reason": selected_reason,
+        "prior_alias_rejected_reason": prior_alias_rejected_reason,
+        "candidates": candidates,
+    }
+    return selected_alias, selected_home, evidence
+
+
+def _select_boss_profile_from_snapshot(cfg: RunConfig, *, preferred_alias: str | None = None) -> tuple[str | None, str | None]:
+    alias, codex_home, _evidence = _select_boss_profile_from_snapshot_with_evidence(
+        cfg,
+        preferred_alias=preferred_alias,
+    )
     return alias, codex_home
 
 
@@ -4824,6 +5122,7 @@ def _write_terminal_capsule(
     watchdog_signal: dict[str, Any] | None = None,
     details: dict[str, Any] | None = None,
 ) -> None:
+    timeout_state = _load_timeout_adaptation_state(cfg)
     manager_status = ""
     manager_timeout = False
     manager_message = ""
@@ -4856,6 +5155,14 @@ def _write_terminal_capsule(
         "dispatch_counts": _normalized_dispatch_counts(dispatch_counts),
         "watchdog_signal": watchdog_signal if isinstance(watchdog_signal, dict) else {},
         "details": details if isinstance(details, dict) else {},
+        "timeout_state": {
+            "consecutive_boss_timeouts": int(timeout_state.get("consecutive_boss_timeouts") or 0),
+            "timeout_threshold": int(timeout_state.get("timeout_threshold") or 2),
+            "adaptation_active": bool(timeout_state.get("adaptation_active")),
+            "rotation_required": bool(timeout_state.get("rotation_required")),
+            "last_timeout_profile_alias": str(timeout_state.get("last_timeout_profile_alias") or "").strip(),
+            "last_timeout_reason": str(timeout_state.get("last_timeout_reason") or "").strip(),
+        },
     }
     _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["terminal_capsule"], payload)
 
@@ -5094,6 +5401,26 @@ def _render_cycle_summary(
         "done": int(task_counts.get("done") or 0),
         "blocked": int(task_counts.get("blocked") or 0),
     }
+    timeout_state = _load_timeout_adaptation_state(cfg)
+    timeout_summary = {
+        "consecutive_boss_timeouts": int(timeout_state.get("consecutive_boss_timeouts") or 0),
+        "timeout_threshold": int(timeout_state.get("timeout_threshold") or 2),
+        "adaptation_active": bool(timeout_state.get("adaptation_active")),
+        "rotation_required_next_cycle": bool(timeout_state.get("rotation_required")),
+        "last_timeout_cycle": timeout_state.get("last_timeout_cycle"),
+        "last_timeout_profile_alias": str(timeout_state.get("last_timeout_profile_alias") or "").strip(),
+        "last_timeout_reason": str(timeout_state.get("last_timeout_reason") or "").strip(),
+    }
+    profile_rotation_evidence = (
+        timeout_state.get("last_rotation_decision")
+        if isinstance(timeout_state.get("last_rotation_decision"), dict)
+        else {}
+    )
+    runtime_check_evidence = (
+        timeout_state.get("last_boss_runtime_checks")
+        if isinstance(timeout_state.get("last_boss_runtime_checks"), dict)
+        else {}
+    )
 
     out = {
         "schema_version": SCHEMA_VERSION,
@@ -5107,6 +5434,9 @@ def _render_cycle_summary(
         "termination": summary.get("termination") if isinstance(summary.get("termination"), dict) else {},
         "stop_reason": str(summary.get("stop_reason") or ""),
         "notes": str(summary.get("notes") or ""),
+        "timeout_state": timeout_summary,
+        "profile_rotation_evidence": profile_rotation_evidence,
+        "boss_runtime_context_evidence": runtime_check_evidence,
     }
 
     _atomic_write_json(summary_path, out)
@@ -5524,6 +5854,33 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 manager_statuses["BOSS"] = {"status": boss_result.status, "note": boss_result.message or ""}
 
             if boss_result is not None and boss_result.timeout:
+                timeout_state = _record_boss_timeout_state(
+                    cfg,
+                    cycle_number=cycle_number,
+                    result=boss_result,
+                    reason_code=boss_result.reason_code or "manager_timeout",
+                )
+                timeout_streak = int(timeout_state.get("consecutive_boss_timeouts") or 0)
+                timeout_threshold = int(timeout_state.get("timeout_threshold") or 2)
+                adaptation_active = bool(timeout_state.get("adaptation_active"))
+                rotation_required = bool(timeout_state.get("rotation_required"))
+                timeout_alias = str(timeout_state.get("last_timeout_profile_alias") or "").strip()
+                timeout_reason_code = (
+                    "boss_timeout_fail_closed_adaptation_pending"
+                    if adaptation_active
+                    else "boss_timeout_fail_closed"
+                )
+                timeout_forensic_message = (
+                    f"fail-closed after BOSS timeout; timeout_streak={timeout_streak}/{timeout_threshold}; "
+                    f"adaptation_active={str(adaptation_active).lower()}; "
+                    f"rotation_required_next_cycle={str(rotation_required).lower()}; "
+                    f"timed_out_profile_alias={timeout_alias or 'unknown'}"
+                )
+                manager_statuses["BOSS"]["note"] = (
+                    f"{manager_statuses['BOSS'].get('note')}; {timeout_forensic_message}"
+                    if manager_statuses["BOSS"].get("note")
+                    else timeout_forensic_message
+                )
                 manager_statuses["rate-gate"] = {
                     "status": "skipped",
                     "note": "cycle fail-closed after BOSS timeout",
@@ -5541,8 +5898,8 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     cfg,
                     cycle_number,
                     decision="skip_cycle",
-                    reason_code=boss_result.reason_code or "manager_timeout",
-                    message=boss_result.message or "BOSS timed out",
+                    reason_code=timeout_reason_code,
+                    message=timeout_forensic_message,
                     worker_registry_ready=True,
                     cycle_mode=cycle_mode,
                 )
@@ -5555,9 +5912,9 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "dispatch_counts": _normalized_dispatch_counts(dispatch_counts),
                     "project_done": False,
                     "insurmountable_blocker": False,
-                    "termination": {"reason_code": boss_result.reason_code or "manager_timeout"},
+                    "termination": {"reason_code": timeout_reason_code},
                     "stop_reason": "",
-                    "notes": "cycle skipped by runtime safety rules after BOSS timeout",
+                    "notes": timeout_forensic_message,
                 }
                 _render_cycle_summary(
                     cfg,
@@ -5595,7 +5952,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 _write_terminal_capsule(
                     cfg,
                     cycle_number=cycle_number,
-                    reason_code=boss_result.reason_code or "manager_timeout",
+                    reason_code=timeout_reason_code,
                     stop_reason=None,
                     cycle_mode=cycle_mode,
                     manager_name="BOSS",
@@ -5606,6 +5963,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                         "event": "timeout_cycle_fail_closed",
                         "mergeability_report_ref": str((cfg.repo_root / ARTIFACT_FILES["mergeability_report"]).resolve()),
                         "unmerged_commit_count": int((mergeability_report or {}).get("unmerged_commit_count") or 0),
+                        "timeout_state": timeout_state,
                     },
                 )
                 _snapshot_cycle(cfg, cycle_number)
@@ -5623,6 +5981,8 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 continue
             if boss_result is not None:
                 _safe_unlink(cfg.repo_root / BOSS_EVIDENCE_FILE)
+                if not boss_result.timeout:
+                    _record_boss_non_timeout_state(cfg, cycle_number=cycle_number, status=boss_result.status)
 
             if boss_result is not None and boss_result.status != "ok":
                 warnings.append(

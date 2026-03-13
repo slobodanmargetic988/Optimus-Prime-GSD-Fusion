@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 OP_SIMPLE_BUILD_PATH = Path(__file__).resolve().parents[1] / "op_simple_build.py"
 BOSS_PROMPT_PATH = Path(__file__).resolve().parents[2] / "op_simple" / "prompts" / "managers" / "boss.md"
@@ -18,6 +20,11 @@ MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+
+
+@pytest.fixture(autouse=True)
+def _force_codex_binary_present(monkeypatch):
+    monkeypatch.setattr(MODULE.shutil, "which", lambda _binary: "/usr/bin/codex")
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -275,15 +282,16 @@ def test_boss_timeout_respects_max_cycles(tmp_path: Path, monkeypatch) -> None:
     decision_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_manager_decision"]).read_text(encoding="utf-8"))
     assert decision_payload["cycle_number"] == 1
     assert decision_payload["decision"] == "skip_cycle"
-    assert decision_payload["reason_code"] == "manager_timeout"
+    assert decision_payload["reason_code"] == "boss_timeout_fail_closed"
 
     summary_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_summary"]).read_text(encoding="utf-8"))
     assert summary_payload["cycle_number"] == 1
     assert summary_payload["manager_statuses"]["BOSS"]["status"] == "timeout"
+    assert summary_payload["timeout_state"]["consecutive_boss_timeouts"] == 1
 
     capsule_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["terminal_capsule"]).read_text(encoding="utf-8"))
     assert capsule_payload["cycle_number"] == 1
-    assert capsule_payload["reason_code"] == "manager_timeout"
+    assert capsule_payload["reason_code"] == "boss_timeout_fail_closed"
     assert capsule_payload["manager_status"] == "timeout"
 
     cycle_dir = tmp_path / MODULE.HISTORY_DIR / "cycle-000001"
@@ -3560,6 +3568,74 @@ def test_select_boss_profile_from_snapshot_falls_back_on_missing_or_malformed(tm
     assert home is None
 
 
+def test_record_boss_timeout_state_triggers_adaptation_after_two_timeouts(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-old",
+                    "codex_home": "/tmp/codex-old",
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 90.0,
+                    "hard_gated": False,
+                },
+                {
+                    "alias": "codex-new",
+                    "codex_home": "/tmp/codex-new",
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 85.0,
+                    "hard_gated": False,
+                },
+            ],
+        },
+    )
+    timeout_result = MODULE.ManagerResult(
+        manager="BOSS",
+        status="timeout",
+        timeout=True,
+        returncode=None,
+        started_at="2026-01-01T00:00:00Z",
+        finished_at="2026-01-01T00:00:10Z",
+        duration_seconds=10.0,
+        message="timed out; manager_profile_alias=codex-old",
+        reason_code="manager_timeout",
+    )
+
+    first = MODULE._record_boss_timeout_state(
+        cfg,
+        cycle_number=1,
+        result=timeout_result,
+        reason_code="manager_timeout",
+    )
+    second = MODULE._record_boss_timeout_state(
+        cfg,
+        cycle_number=2,
+        result=timeout_result,
+        reason_code="manager_timeout",
+    )
+
+    assert first["consecutive_boss_timeouts"] == 1
+    assert first["adaptation_active"] is False
+    assert first["rotation_required"] is False
+
+    assert second["consecutive_boss_timeouts"] == 2
+    assert second["adaptation_active"] is True
+    assert second["rotation_required"] is True
+    assert second["last_timeout_profile_alias"] == "codex-old"
+
+
 def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -3628,6 +3704,154 @@ def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypa
     session_state = MODULE._read_json(tmp_path / MODULE.BOSS_SESSION_STATE_FILE, default={})
     assert session_state["session_id"] == "123e4567-e89b-12d3-a456-426614174000"
     assert session_state["codex_home"] == "/tmp/codex-second"
+
+
+def test_invoke_manager_boss_rotates_profile_after_timeout_requirement(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-old",
+                    "codex_home": "/tmp/codex-old",
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 90.0,
+                    "hard_gated": False,
+                },
+                {
+                    "alias": "codex-new",
+                    "codex_home": "/tmp/codex-new",
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 85.0,
+                    "hard_gated": False,
+                },
+            ],
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.BOSS_SESSION_STATE_FILE,
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "session_id": "123e4567-e89b-12d3-a456-426614174111",
+            "codex_home": "/tmp/codex-old",
+            "profile_alias": "codex-old",
+            "previous_profile_alias": "codex-old",
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["timeout_adaptation_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "consecutive_boss_timeouts": 2,
+            "timeout_threshold": 2,
+            "adaptation_active": True,
+            "rotation_required": True,
+            "last_timeout_cycle": 9,
+            "last_timeout_profile_alias": "codex-old",
+            "last_timeout_reason": "manager_timeout",
+        },
+    )
+
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+    monkeypatch.setattr(MODULE.shutil, "which", lambda _binary: "/usr/bin/codex")
+    captured = {"codex_home": None}
+
+    def fake_codex_exec_prompt(*_args, **kwargs):
+        captured["codex_home"] = kwargs.get("codex_home")
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            session_id="123e4567-e89b-12d3-a456-426614174222",
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=11,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "ok"
+    assert captured["codex_home"] == "/tmp/codex-new"
+    assert out.message == "manager_profile_alias=codex-new"
+
+    timeout_state = MODULE._read_json(tmp_path / MODULE.ARTIFACT_FILES["timeout_adaptation_state"], default={})
+    decision = timeout_state.get("last_rotation_decision") if isinstance(timeout_state, dict) else {}
+    assert decision.get("selected_alias") == "codex-new"
+    evidence = decision.get("selection_evidence") if isinstance(decision, dict) else {}
+    assert isinstance(evidence, dict)
+    assert evidence.get("prior_alias_rejected_reason") == "excluded_for_timeout_rotation"
+
+
+def test_invoke_manager_boss_fails_closed_when_runtime_context_invalid(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-second",
+                    "codex_home": "/tmp/codex-second",
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 90.0,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+    monkeypatch.setattr(MODULE.shutil, "which", lambda _binary: None)
+    monkeypatch.setattr(
+        MODULE,
+        "_codex_exec_prompt",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not call codex exec when invalid")),
+    )
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=4,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "failed"
+    assert out.reason_code == "boss_runtime_context_invalid"
+    assert "codex_binary_missing" in str(out.message)
+    timeout_state = MODULE._read_json(tmp_path / MODULE.ARTIFACT_FILES["timeout_adaptation_state"], default={})
+    checks = timeout_state.get("last_boss_runtime_checks") if isinstance(timeout_state, dict) else {}
+    assert checks.get("runtime_context_valid") is False
+    assert "codex_binary_missing" in (checks.get("invalid_reasons") or [])
 
 
 def test_invoke_manager_wrapup_uses_selected_profile_home_and_boss_model_reasoning(tmp_path: Path, monkeypatch) -> None:
