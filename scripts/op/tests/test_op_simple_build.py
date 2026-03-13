@@ -610,6 +610,61 @@ def test_build_mergeability_report_marks_pending_lane_as_blocked_for_merge(tmp_p
     assert any(item.get("reason_code") == "lane_pending_tasks" for item in report["merge_blockers"])
 
 
+def test_apply_restart_determinism_hooks_supports_watchdog_resume_idempotency(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["watchdog_exit_signal"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 3,
+            "reason_code": "stale_base_branch_commit",
+            "message": "stale",
+        },
+    )
+
+    first = MODULE._apply_restart_determinism_hooks(cfg, cycle_number=3, resume_mode=True)
+    second = MODULE._apply_restart_determinism_hooks(cfg, cycle_number=3, resume_mode=True)
+
+    assert first["scenario"] == "watchdog_resume"
+    assert first["idempotent_continuation"] is False
+    assert second["scenario"] == "watchdog_resume"
+    assert second["idempotent_continuation"] is True
+
+
+def test_packet4_gate_closure_scaffold_writer_builds_expected_artifacts(tmp_path: Path, monkeypatch) -> None:
+    json_path = tmp_path / "packet4_gate_evidence_bundle_2026-03-13.json"
+    md_path = tmp_path / "packet4_gate_evidence_bundle_2026-03-13.md"
+    monkeypatch.setattr(
+        MODULE,
+        "_packet4_gate_closure_paths",
+        lambda *, date_text: {"json": json_path, "md": md_path},
+    )
+
+    out = MODULE._write_packet4_gate_closure_scaffold(
+        date_text="2026-03-13",
+        generated_at_utc="2026-03-13T12:00:00Z",
+        repo="earth-root",
+    )
+
+    assert out["json"] == str(json_path)
+    assert out["md"] == str(md_path)
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload["packet"] == "Packet 4"
+    assert payload["status"] == "warn"
+    md_text = md_path.read_text(encoding="utf-8")
+    assert "Packet 4 Gate Evidence Bundle (Scaffold)" in md_text
+    assert "Decision: `hold`" in md_text
+
+
 def test_await_cycle_release_signal_token_conservative_releases_on_settle(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -2373,6 +2428,27 @@ def test_run_persists_watchdog_terminal_stop_reason_to_cycle_summary(tmp_path: P
                 duration_seconds=1.0,
                 message="ok",
             )
+        if manager_name == "wrapup-manager":
+            MODULE._atomic_write_json(
+                cfg.repo_root / MODULE.ARTIFACT_FILES["wrapup_manager_report"],
+                {
+                    "schema_version": "1.0",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "cycle_number": cycle_number,
+                    "status": "ok",
+                    "stop_reason": "watchdog_idle_stop",
+                    "summary": "watchdog wrapup",
+                },
+            )
+            return MODULE.ManagerResult(
+                manager="wrapup-manager",
+                status="ok",
+                timeout=False,
+                returncode=0,
+                started_at="2026-01-01T00:00:00Z",
+                finished_at="2026-01-01T00:00:01Z",
+                duration_seconds=1.0,
+            )
         raise AssertionError(f"unexpected manager call: {manager_name}")
 
     monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
@@ -2587,6 +2663,65 @@ def test_run_invokes_wrapup_manager_once_on_project_done(tmp_path: Path, monkeyp
     for row in trace_rows:
         validation_errors = MODULE._validate_trace_event_envelope_v1(row)
         assert validation_errors == []
+
+
+def test_run_invokes_wrapup_manager_on_watchdog_terminal_stop(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    calls: list[str] = []
+
+    def fake_invoke_manager(*_args, **kwargs):
+        manager = str(kwargs.get("manager_name") or "")
+        calls.append(manager)
+        return MODULE.ManagerResult(
+            manager=manager,
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+        )
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+    monkeypatch.setattr(
+        MODULE,
+        "_watchdog_tick",
+        lambda _cfg, _cycle, *, force_reset_target=False: (
+            True,
+            {"reason_code": "stale_base_branch_commit", "message": "watchdog stale"},
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_render_cycle_summary",
+        lambda *_args, **_kwargs: {
+            "schema_version": "1.0",
+            "cycle_number": 1,
+            "project_done": False,
+            "insurmountable_blocker": False,
+            "termination": {},
+            "stop_reason": "",
+            "task_counts": {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0},
+            "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+            "manager_statuses": {},
+            "notes": "",
+        },
+    )
+
+    out = MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            max_build_cycles=1,
+            dry_run=True,
+            sleep_minutes=0,
+            ground_sync_enabled=False,
+        )
+    )
+
+    assert out["ok"] is True
+    assert out["data"]["stop_reason"] == "watchdog_idle_stop"
+    assert calls.count("BOSS") == 1
+    assert calls.count("wrapup-manager") == 1
 
 
 def test_emit_trace_event_envelope_rejects_invalid_payload(tmp_path: Path) -> None:

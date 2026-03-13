@@ -446,3 +446,113 @@ Common top-level fields:
 
 Optional telemetry extension:
 - `llm_hardening` object with the same optional keys defined in section `3) cycle_manager_decision.json`.
+
+## 13) Packet 2A/3/4 hardening extensions (2026-03-13)
+
+### cycle_manager_decision.json additions
+
+- `cycle_mode` (`normal|merge_recovery|terminal_stale`)
+
+### cycle_summary.json additions
+
+- `cycle_mode` (`normal|merge_recovery|terminal_stale`)
+- `timeout_state` object:
+  - `consecutive_boss_timeouts`
+  - `timeout_threshold`
+  - `adaptation_active`
+  - `rotation_required_next_cycle`
+  - `last_timeout_cycle`
+  - `last_timeout_profile_alias`
+  - `last_timeout_reason`
+- `profile_rotation_evidence` object (last BOSS alias selection decision and eligibility reasoning)
+- `boss_runtime_context_evidence` object (binary/profile context checks)
+
+Invariant:
+- When a terminal stop reason is resolved (`project_done`, `insurmountable_blocker`, `watchdog_idle_stop`), `cycle_summary.stop_reason` must be persisted and non-empty for that cycle.
+
+## 14) mergeability_report.json
+
+| Field | Type | Why it exists |
+|---|---|---|
+| schema_version | string | Contract version |
+| updated_at | string(UTC) | Recency |
+| cycle_number | integer | Cycle identity |
+| cycle_mode | string | Runtime mode for this mergeability snapshot |
+| run_base_ref | string | Run-base branch/ref under evaluation |
+| run_base_sha | string | Run-base commit anchor |
+| lane_shas | object<string,array<string>> | Per-lane unmerged branch head SHAs |
+| unmerged_commit_count | integer | Aggregate unmerged commit signal |
+| merge_blockers | array | Explicit blockers preventing lane->run merge |
+| gate_owner | string | Current owner for merge-gate progression |
+| lane_status | object | Per-lane deterministic stage state |
+| lane_merge_gate_pending_cleared_count | integer | Auto-cleared pending merge-gate rows in this cycle |
+| progression | object | Stage counters (`done_worker_commits`, `lane_fan_in_ready`, `lane_tester_gate_passed`, `lane_to_run_merge_ready`) |
+| progress_fingerprint | string | Deterministic mergeability digest |
+| mergeability_advanced | boolean | Whether mergeability fingerprint changed from previous cycle |
+
+Invariant:
+- Runtime writes `mergeability_report.json` every cycle, including timeout/unhappy-path cycles where feasible.
+
+## 15) terminal_capsule.json
+
+| Field | Type | Why it exists |
+|---|---|---|
+| schema_version | string | Contract version |
+| updated_at | string(UTC) | Recency |
+| cycle_number | integer | Cycle identity |
+| reason_code | string | Terminal/unhappy-path reason |
+| stop_reason | string | Resolved stop reason when terminal |
+| cycle_mode | string | Runtime mode in that cycle |
+| manager | string\|null | Manager associated with capsule reason |
+| manager_status | string | Manager status (`ok|failed|timeout|...`) |
+| manager_timeout | boolean | Timeout flag |
+| manager_message | string | Forensic manager message |
+| manager_stdout_path | string\|null | Captured stdout path |
+| manager_stderr_path | string\|null | Captured stderr path |
+| manager_duration_seconds | number\|null | Execution duration |
+| manager_statuses | object | Per-manager cycle status map |
+| dispatch_counts | object | Dispatch counters for cycle context |
+| watchdog_signal | object | Watchdog signal snapshot |
+| details | object | Extra forensics (merge refs, timeout notes, etc.) |
+| timeout_state | object | Timeout streak/adaptation metadata snapshot |
+
+Invariant:
+- Timeout cycles must still emit `terminal_capsule.json`, `cycle_summary.json`, and `cycle_manager_decision.json`.
+
+## 16) timeout_adaptation_state.json
+
+| Field | Type | Why it exists |
+|---|---|---|
+| schema_version | string | Contract version |
+| updated_at | string(UTC) | Recency |
+| consecutive_boss_timeouts | integer | Streak counter |
+| timeout_threshold | integer | Adaptation threshold (current value: `2`) |
+| adaptation_active | boolean | Whether timeout adaptation is active |
+| rotation_required | boolean | Whether next BOSS cycle must rotate alias when alternates are eligible |
+| last_timeout_cycle | integer\|null | Last timeout cycle index |
+| last_timeout_profile_alias | string | Timed-out profile alias |
+| last_timeout_reason | string | Last timeout reason |
+| eligible_profile_aliases | array<string> (optional) | Eligible aliases seen during timeout update |
+| last_rotation_decision | object | Alias selection evidence (selected alias, rejected reason, candidate eligibility) |
+| last_boss_runtime_checks | object | Binary/profile-context validity evidence |
+
+Invariant:
+- After two consecutive BOSS timeouts, adaptation must activate (`adaptation_active=true`).
+- If multiple eligible aliases exist, `rotation_required=true` and next BOSS selection must avoid `last_timeout_profile_alias`.
+
+## 17) restart_determinism_state.json (Packet 3 internals)
+
+| Field | Type | Why it exists |
+|---|---|---|
+| schema_version | string | Contract version |
+| updated_at | string(UTC) | Recency |
+| scenario | string | `fresh_start|watchdog_resume|process_kill_resume|checkpoint_replay` |
+| resume_mode | boolean | Resume invocation mode |
+| checkpoint_fingerprint | string | Deterministic checkpoint hash |
+| last_applied_cycle | integer | Last cycle with restart hook update |
+| idempotent_continuation | boolean | Whether current resume replay is idempotent |
+| invariants | object | Per-scenario invariant checks and last verification timestamps |
+| continuation_log | array | Rolling continuation checkpoints and hook events |
+
+Invariant:
+- Repeated resume with identical checkpoint fingerprint and scenario should set `idempotent_continuation=true`.

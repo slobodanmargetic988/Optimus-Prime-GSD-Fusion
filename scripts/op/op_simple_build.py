@@ -56,6 +56,7 @@ ARTIFACT_FILES = {
     "llm_profile_mode": CURRENT_DIR / "llm_profile_mode.json",
     "llm_profile_rate_registry": CURRENT_DIR / "llm_profile_rate_registry.json",
     "timeout_adaptation_state": CURRENT_DIR / "timeout_adaptation_state.json",
+    "restart_determinism_state": CURRENT_DIR / "restart_determinism_state.json",
 }
 
 MANAGER_TIMEOUT_SECONDS = {
@@ -2338,6 +2339,21 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "last_rotation_decision": {},
             "last_boss_runtime_checks": {},
         },
+        "restart_determinism_state": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "scenario": "fresh_start",
+            "resume_mode": False,
+            "checkpoint_fingerprint": "",
+            "last_applied_cycle": 0,
+            "idempotent_continuation": False,
+            "invariants": {
+                "watchdog_resume": {"enabled": True, "last_verified": None},
+                "process_kill_resume": {"enabled": True, "last_verified": None},
+                "checkpoint_replay": {"enabled": True, "last_verified": None},
+            },
+            "continuation_log": [],
+        },
     }
 
     for key, rel in ARTIFACT_FILES.items():
@@ -2370,6 +2386,7 @@ def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
         "llm_profile_mode",
         "llm_profile_rate_registry",
         "timeout_adaptation_state",
+        "restart_determinism_state",
     ]
     for key in reset_keys:
         path = cfg.repo_root / ARTIFACT_FILES[key]
@@ -5061,6 +5078,21 @@ def _run_wrapup_manager(
     run_context = init_state.get("run_context") if isinstance(init_state, dict) else {}
     if not isinstance(run_context, dict):
         run_context = {}
+    mergeability_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["mergeability_report"], default={})
+    if not isinstance(mergeability_payload, dict):
+        mergeability_payload = {}
+    mergeability_snapshot = {
+        "cycle_mode": str(mergeability_payload.get("cycle_mode") or "").strip(),
+        "run_base_ref": str(mergeability_payload.get("run_base_ref") or "").strip(),
+        "run_base_sha": str(mergeability_payload.get("run_base_sha") or "").strip(),
+        "unmerged_commit_count": int(mergeability_payload.get("unmerged_commit_count") or 0),
+        "merge_blockers": mergeability_payload.get("merge_blockers")
+        if isinstance(mergeability_payload.get("merge_blockers"), list)
+        else [],
+        "lane_status": mergeability_payload.get("lane_status")
+        if isinstance(mergeability_payload.get("lane_status"), dict)
+        else {},
+    }
     context = {
         "stop_reason": stop_reason,
         "run_base_branch": str(run_context.get("run_base_branch") or ""),
@@ -5068,6 +5100,8 @@ def _run_wrapup_manager(
         "run_base_from_commit": str(run_context.get("run_base_from_commit") or ""),
         "app_lifecycle_path": str((cfg.repo_root / APP_LIFECYCLE_FILE).resolve()),
         "app_lifecycle_active_era_id": _active_lifecycle_era_id(cfg),
+        "mergeability_report_path": str((cfg.repo_root / ARTIFACT_FILES["mergeability_report"]).resolve()),
+        "mergeability_snapshot": mergeability_snapshot,
     }
     result = _invoke_manager(
         cfg,
@@ -5378,6 +5412,194 @@ def _build_mergeability_report(cfg: RunConfig, *, cycle_number: int, cycle_mode:
     )
     _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["mergeability_report"], report_payload)
     return report_payload
+
+
+def _restart_checkpoint_fingerprint(cfg: RunConfig) -> str:
+    snapshot = {
+        "cycle_counter": _read_json(cfg.repo_root / CYCLE_COUNTER_FILE, default={}),
+        "task_execution_state": _read_json(cfg.repo_root / ARTIFACT_FILES["task_execution_state"], default={}),
+        "worker_registry": _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={}),
+        "dispatch_registry": _read_json(cfg.repo_root / ARTIFACT_FILES["dispatch_registry"], default={}),
+        "watchdog_state": _read_json(cfg.repo_root / ARTIFACT_FILES["watchdog_state"], default={}),
+        "watchdog_exit_signal": _read_json(cfg.repo_root / ARTIFACT_FILES["watchdog_exit_signal"], default={}),
+    }
+    return hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _determine_restart_scenario(cfg: RunConfig, *, resume_mode: bool) -> str:
+    if not resume_mode:
+        return "fresh_start"
+    watchdog_signal = _read_json(cfg.repo_root / ARTIFACT_FILES["watchdog_exit_signal"], default={})
+    if isinstance(watchdog_signal, dict) and str(watchdog_signal.get("reason_code") or "").strip():
+        return "watchdog_resume"
+    lock_payload = _read_json(cfg.repo_root / RUN_LOCK_FILE, default={})
+    stale_pid = _coerce_pid(lock_payload.get("pid")) if isinstance(lock_payload, dict) else None
+    if stale_pid is not None and not _is_pid_running(stale_pid):
+        return "process_kill_resume"
+    return "checkpoint_replay"
+
+
+def _apply_restart_determinism_hooks(cfg: RunConfig, *, cycle_number: int, resume_mode: bool) -> dict[str, Any]:
+    state = _read_json(cfg.repo_root / ARTIFACT_FILES["restart_determinism_state"], default={})
+    if not isinstance(state, dict):
+        state = {}
+    previous_fingerprint = str(state.get("checkpoint_fingerprint") or "").strip()
+    scenario = _determine_restart_scenario(cfg, resume_mode=resume_mode)
+    checkpoint_fingerprint = _restart_checkpoint_fingerprint(cfg)
+    idempotent_continuation = bool(
+        previous_fingerprint
+        and previous_fingerprint == checkpoint_fingerprint
+        and str(state.get("scenario") or "").strip() == scenario
+    )
+    now_iso = utc_now_iso()
+    invariants = state.get("invariants")
+    if not isinstance(invariants, dict):
+        invariants = {
+            "watchdog_resume": {"enabled": True, "last_verified": None},
+            "process_kill_resume": {"enabled": True, "last_verified": None},
+            "checkpoint_replay": {"enabled": True, "last_verified": None},
+        }
+    scenario_key = scenario if scenario in {"watchdog_resume", "process_kill_resume", "checkpoint_replay"} else "checkpoint_replay"
+    scenario_row = invariants.get(scenario_key) if isinstance(invariants.get(scenario_key), dict) else {"enabled": True}
+    scenario_row["enabled"] = True
+    scenario_row["last_verified"] = now_iso
+    invariants[scenario_key] = scenario_row
+
+    continuation_log = state.get("continuation_log") if isinstance(state.get("continuation_log"), list) else []
+    continuation_log.append(
+        {
+            "cycle_number": int(cycle_number),
+            "timestamp": now_iso,
+            "scenario": scenario,
+            "resume_mode": bool(resume_mode),
+            "checkpoint_fingerprint": checkpoint_fingerprint,
+            "idempotent_continuation": idempotent_continuation,
+        }
+    )
+    continuation_log = continuation_log[-20:]
+
+    out = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": now_iso,
+        "scenario": scenario,
+        "resume_mode": bool(resume_mode),
+        "checkpoint_fingerprint": checkpoint_fingerprint,
+        "last_applied_cycle": int(cycle_number),
+        "idempotent_continuation": idempotent_continuation,
+        "invariants": invariants,
+        "continuation_log": continuation_log,
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["restart_determinism_state"], out)
+    return out
+
+
+def _update_restart_determinism_checkpoint(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    cycle_mode: str,
+    stop_reason: str | None,
+) -> dict[str, Any]:
+    state = _read_json(cfg.repo_root / ARTIFACT_FILES["restart_determinism_state"], default={})
+    if not isinstance(state, dict):
+        state = {}
+    checkpoint_fingerprint = _restart_checkpoint_fingerprint(cfg)
+    continuation_log = state.get("continuation_log") if isinstance(state.get("continuation_log"), list) else []
+    continuation_log.append(
+        {
+            "cycle_number": int(cycle_number),
+            "timestamp": utc_now_iso(),
+            "event": "cycle_checkpoint_update",
+            "cycle_mode": str(cycle_mode or "").strip() or "normal",
+            "stop_reason": str(stop_reason or "").strip(),
+            "checkpoint_fingerprint": checkpoint_fingerprint,
+        }
+    )
+    continuation_log = continuation_log[-20:]
+    state["schema_version"] = SCHEMA_VERSION
+    state["updated_at"] = utc_now_iso()
+    state["checkpoint_fingerprint"] = checkpoint_fingerprint
+    state["last_applied_cycle"] = int(cycle_number)
+    state["continuation_log"] = continuation_log
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["restart_determinism_state"], state)
+    return state
+
+
+def _packet4_gate_closure_scaffold_model(*, generated_at_utc: str, repo: str = "earth-root") -> dict[str, Any]:
+    return {
+        "generated_at_utc": generated_at_utc,
+        "phase": "Phase 2",
+        "packet": "Packet 4",
+        "repo": repo,
+        "status": "warn",
+        "inputs": {
+            "baseline_refs": [],
+            "after_refs": [],
+            "delta_refs": [],
+            "canary_refs": ["Tetris"],
+        },
+        "metrics": {
+            "non_actionable_cycle_ratio": None,
+            "redispatch_loop_ratio": None,
+            "throughput": {"per_cycle": None, "per_hour": None},
+            "retry_quality_outcomes": {
+                "launch_efficiency": None,
+                "failed_or_unknown_ratio": None,
+            },
+            "restart_recovery_consistency": None,
+        },
+        "recommendation": {
+            "decision": "hold",
+            "rationale": "scaffold only; supervised canary evidence pending",
+            "blockers": [],
+        },
+        "artifacts": [],
+        "notes": [
+            "Packet 4 scaffold generated by runtime internals only.",
+            "Do not treat this scaffold as gate-ready evidence until supervised run artifacts are attached.",
+        ],
+    }
+
+
+def _packet4_gate_closure_paths(*, date_text: str) -> dict[str, Path]:
+    report_root = Path("/Users/slobodan/projects/Earth/reports/phase2")
+    base = f"packet4_gate_evidence_bundle_{date_text}"
+    return {
+        "json": report_root / f"{base}.json",
+        "md": report_root / f"{base}.md",
+    }
+
+
+def _write_packet4_gate_closure_scaffold(
+    *,
+    date_text: str,
+    generated_at_utc: str | None = None,
+    repo: str = "earth-root",
+) -> dict[str, str]:
+    now_iso = str(generated_at_utc or utc_now_iso())
+    model = _packet4_gate_closure_scaffold_model(generated_at_utc=now_iso, repo=repo)
+    paths = _packet4_gate_closure_paths(date_text=date_text)
+    paths["json"].parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(paths["json"], model)
+    md_lines = [
+        "# Packet 4 Gate Evidence Bundle (Scaffold)",
+        "",
+        f"- Generated at: `{now_iso}`",
+        f"- Phase: `{model['phase']}`",
+        f"- Packet: `{model['packet']}`",
+        f"- Repo: `{model['repo']}`",
+        f"- Status: `{model['status']}`",
+        "",
+        "## Recommendation",
+        f"- Decision: `{model['recommendation']['decision']}`",
+        f"- Rationale: {model['recommendation']['rationale']}",
+        "",
+        "## Notes",
+    ]
+    for note in model.get("notes", []):
+        md_lines.append(f"- {note}")
+    paths["md"].write_text("\n".join(md_lines).rstrip() + "\n", encoding="utf-8")
+    return {"json": str(paths["json"]), "md": str(paths["md"])}
 
 
 def _render_cycle_summary(
@@ -5722,6 +5944,11 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         _seed_plan_artifacts_from_planner(cfg)
 
         cycle_number = _load_cycle_counter(cfg)
+        _apply_restart_determinism_hooks(
+            cfg,
+            cycle_number=cycle_number,
+            resume_mode=bool(cfg.resume_mode),
+        )
         cycles_this_run = 0
         previous_state_signature: str | None = None
         quiet_cycle_streak = 0
@@ -6163,6 +6390,13 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 if stop_reason not in {"project_done", "insurmountable_blocker"} and watchdog_stop:
                     stop_reason = "watchdog_idle_stop"
 
+            _update_restart_determinism_checkpoint(
+                cfg,
+                cycle_number=cycle_number,
+                cycle_mode=cycle_mode,
+                stop_reason=stop_reason,
+            )
+
             if cfg.ground_sync_enabled and not stop_reason and cycle_number % cfg.ground_sync_every_n_cycles == 0:
                 sync_status, sync_message = _run_ground_sync(
                     cfg,
@@ -6253,7 +6487,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         if stop_reason:
             _persist_cycle_summary_stop_reason(cfg, cycle_number=cycle_number, stop_reason=stop_reason)
 
-        if stop_reason == "project_done":
+        if stop_reason in {"project_done", "watchdog_idle_stop"}:
             _run_wrapup_manager(
                 cfg,
                 cycle_number=cycle_number,
