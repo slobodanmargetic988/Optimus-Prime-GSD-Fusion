@@ -1,0 +1,760 @@
+{
+  "baseline_ready": true,
+  "build_ready": true,
+  "constraints": [],
+  "initialized_at": "2026-03-10T23:36:13Z",
+  "map_fingerprint": "ceba3128c1feba08c2897bcbd22e87d3ea955750a0e326996ded36f4d516262f",
+  "mission": "@file:/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/research/mission.md",
+  "mission_source": {
+    "display": "@file:/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/research/mission.md",
+    "mode": "file",
+    "path": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/research/mission.md",
+    "value": null
+  },
+  "phase_count": 3,
+  "plan_id": "plan-20260313T213203Z-research-tool-wave2-llm-first",
+  "plan_ready": true,
+  "profile_aliases": [
+    "codex",
+    "codex-fifth",
+    "codex-first",
+    "codex-fourth",
+    "codex-frank",
+    "codex-saul",
+    "codex-slobodan",
+    "codex-third"
+  ],
+  "profile_selection_ref": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/research/reports/optimus-prime/planning/PROFILE_SELECTION.json",
+  "repo_fingerprint": "951805db27225b4ac70de3eb48b3a590b610e91bb9519abba84098cee565f149",
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "title": "LLM-first research runtime entrypoint",
+      "acceptance_criteria": [
+        "Research runtime is explicitly LLM-first and supports long-thinking multi-call execution rather than deterministic-only summarization.",
+        "Invocation contract includes target project root, Earth root, output root, provider/profile metadata, and reproducible run identity fields."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_llm-first-research-runtime-entrypoint.py -q",
+        "python3 -m pytest tests/integration/test_llm-first-research-runtime-entrypoint.py -q"
+      ]
+    },
+    {
+      "id": "REQ-002",
+      "title": "Mission and scope ingestion contract",
+      "acceptance_criteria": [
+        "Mission and scope documents are ingested before research call planning with deterministic source references.",
+        "Missing or malformed mission/scope inputs are surfaced as explicit research blockers with reason codes and fallback guidance."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_mission-and-scope-ingestion-contract.py -q",
+        "python3 -m pytest tests/integration/test_mission-and-scope-ingestion-contract.py -q"
+      ]
+    },
+    {
+      "id": "REQ-003",
+      "title": "Optional strategy packet ingestion",
+      "acceptance_criteria": [
+        "Strategy artifacts are ingested when present and linked to research objectives without making strategy a hard runtime dependency.",
+        "When strategy is absent, research outputs explicitly mark assumptions and open questions instead of silently fabricating context."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_optional-strategy-packet-ingestion.py -q",
+        "python3 -m pytest tests/integration/test_optional-strategy-packet-ingestion.py -q"
+      ]
+    },
+    {
+      "id": "REQ-004",
+      "title": "Target project context normalization",
+      "acceptance_criteria": [
+        "Target-project planning/runtime artifacts are normalized into a research context bundle with stable field names.",
+        "Normalization output is replay-stable across reruns for identical inputs and run identity."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_target-project-context-normalization.py -q",
+        "python3 -m pytest tests/integration/test_target-project-context-normalization.py -q"
+      ]
+    },
+    {
+      "id": "REQ-005",
+      "title": "Earth ecosystem context sweep",
+      "acceptance_criteria": [
+        "Research sweep captures relevant cross-project context from Earth subprojects and links findings to source artifacts.",
+        "Sweep output records evidence references so downstream planner decisions can trace each cross-project claim."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_earth-ecosystem-context-sweep.py -q",
+        "python3 -m pytest tests/integration/test_earth-ecosystem-context-sweep.py -q"
+      ]
+    },
+    {
+      "id": "REQ-006",
+      "title": "Research objective extraction from mission intent",
+      "acceptance_criteria": [
+        "Research objectives are derived from mission/scope intent and grouped into implementable tracks.",
+        "Each objective includes success criteria and why it matters for planner decomposition quality."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_research-objective-extraction-from-mission-intent.py -q",
+        "python3 -m pytest tests/integration/test_research-objective-extraction-from-mission-intent.py -q"
+      ]
+    },
+    {
+      "id": "REQ-007",
+      "title": "Milestone-to-research-track decomposition",
+      "acceptance_criteria": [
+        "Project milestones are decomposed into research tracks with explicit milestone_id linkage.",
+        "Each track includes depth priority and expected artifact outputs for planner consumption."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_milestone-to-research-track-decomposition.py -q",
+        "python3 -m pytest tests/integration/test_milestone-to-research-track-decomposition.py -q"
+      ]
+    },
+    {
+      "id": "REQ-008",
+      "title": "Multi-call LLM orchestration plan",
+      "acceptance_criteria": [
+        "Research executes through a multi-call LLM orchestration plan (discovery, synthesis, recommendation) with explicit call objectives.",
+        "Each call handoff records input refs and expected outputs so manager behavior is auditable."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_multi-call-llm-orchestration-plan.py -q",
+        "python3 -m pytest tests/integration/test_multi-call-llm-orchestration-plan.py -q"
+      ]
+    },
+    {
+      "id": "REQ-009",
+      "title": "LLM call trace and cost metadata ledger",
+      "acceptance_criteria": [
+        "Every research LLM call emits trace rows with provider/model/profile, token/cost metadata, and evidence refs.",
+        "Call trace is written as append-only JSONL for replay diagnostics and budget auditing."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_llm-call-trace-and-cost-metadata-ledger.py -q",
+        "python3 -m pytest tests/integration/test_llm-call-trace-and-cost-metadata-ledger.py -q"
+      ]
+    },
+    {
+      "id": "REQ-010",
+      "title": "Deterministic run identity and artifact root bootstrap",
+      "acceptance_criteria": [
+        "Each research run has deterministic run_id and stable artifact-root contracts under `research/current` and history snapshots.",
+        "Artifact bootstrap does not overwrite prior run history and records revision lineage."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_deterministic-run-identity-and-artifact-root-bootstrap.py -q",
+        "python3 -m pytest tests/integration/test_deterministic-run-identity-and-artifact-root-bootstrap.py -q"
+      ]
+    },
+    {
+      "id": "REQ-011",
+      "title": "External source query generation policy",
+      "acceptance_criteria": [
+        "Query generation policy converts research objectives into concrete source queries and target domains.",
+        "Policy output includes recency expectations and authority preferences per objective."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_external-source-query-generation-policy.py -q",
+        "python3 -m pytest tests/integration/test_external-source-query-generation-policy.py -q"
+      ]
+    },
+    {
+      "id": "REQ-012",
+      "title": "Source fetch and extraction workflow",
+      "acceptance_criteria": [
+        "External source retrieval and extraction produce normalized snippets, metadata, and raw source refs.",
+        "Fetch/extract workflow emits reason codes for unreachable or unsupported sources."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_source-fetch-and-extraction-workflow.py -q",
+        "python3 -m pytest tests/integration/test_source-fetch-and-extraction-workflow.py -q"
+      ]
+    },
+    {
+      "id": "REQ-013",
+      "title": "Source recency policy for unstable domains",
+      "acceptance_criteria": [
+        "Research tracks unstable domains with explicit recency windows and stale-source handling.",
+        "Recency decisions are recorded in artifacts so planner can evaluate temporal risk."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_source-recency-policy-for-unstable-domains.py -q",
+        "python3 -m pytest tests/integration/test_source-recency-policy-for-unstable-domains.py -q"
+      ]
+    },
+    {
+      "id": "REQ-014",
+      "title": "Source quality and authority scoring",
+      "acceptance_criteria": [
+        "Each source receives quality/authority scoring with transparent scoring factors.",
+        "Low-confidence sources are retained but clearly marked so recommendations do not treat them as high-confidence facts."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_source-quality-and-authority-scoring.py -q",
+        "python3 -m pytest tests/integration/test_source-quality-and-authority-scoring.py -q"
+      ]
+    },
+    {
+      "id": "REQ-015",
+      "title": "Citation normalization and deduplication",
+      "acceptance_criteria": [
+        "Citations are normalized into canonical entries and deduplicated across topic packs.",
+        "Citation records preserve original URL, title, publisher, and retrieval timestamp."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_citation-normalization-and-deduplication.py -q",
+        "python3 -m pytest tests/integration/test_citation-normalization-and-deduplication.py -q"
+      ]
+    },
+    {
+      "id": "REQ-016",
+      "title": "Provenance metadata and licensing capture",
+      "acceptance_criteria": [
+        "Provenance records include authorship/source metadata and usage/licensing notes where available.",
+        "Licensing uncertainty is explicitly flagged as an open risk instead of omitted."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_provenance-metadata-and-licensing-capture.py -q",
+        "python3 -m pytest tests/integration/test_provenance-metadata-and-licensing-capture.py -q"
+      ]
+    },
+    {
+      "id": "REQ-017",
+      "title": "Conflicting-source detection and reconciliation notes",
+      "acceptance_criteria": [
+        "Conflicting sources are detected and summarized with explicit disagreement notes.",
+        "Research packet includes reconciliation guidance and confidence impact for conflicts."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_conflicting-source-detection-and-reconciliation-notes.py -q",
+        "python3 -m pytest tests/integration/test_conflicting-source-detection-and-reconciliation-notes.py -q"
+      ]
+    },
+    {
+      "id": "REQ-018",
+      "title": "Confidence scoring per claim and recommendation",
+      "acceptance_criteria": [
+        "Claims and recommendations carry confidence scores tied to citation strength and source agreement.",
+        "Confidence scoring model is deterministic for identical normalized inputs."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_confidence-scoring-per-claim-and-recommendation.py -q",
+        "python3 -m pytest tests/integration/test_confidence-scoring-per-claim-and-recommendation.py -q"
+      ]
+    },
+    {
+      "id": "REQ-019",
+      "title": "Unsupported-claim rejection path",
+      "acceptance_criteria": [
+        "Claims without sufficient evidence are rejected with deterministic reason codes.",
+        "Rejected claims are preserved in diagnostics so operators can inspect why they were excluded."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_unsupported-claim-rejection-path.py -q",
+        "python3 -m pytest tests/integration/test_unsupported-claim-rejection-path.py -q"
+      ]
+    },
+    {
+      "id": "REQ-020",
+      "title": "Open research gap capture from missing evidence",
+      "acceptance_criteria": [
+        "Missing evidence and unresolved questions are emitted into open-gap artifacts with owner/action hints.",
+        "Gap artifacts are planner-consumable and linked to impacted milestone/topic IDs."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_open-research-gap-capture-from-missing-evidence.py -q",
+        "python3 -m pytest tests/integration/test_open-research-gap-capture-from-missing-evidence.py -q"
+      ]
+    },
+    {
+      "id": "REQ-021",
+      "title": "UI requirement detector and confidence output",
+      "acceptance_criteria": [
+        "Research determines whether UI work is required and emits confidence with supporting evidence refs.",
+        "UI-required verdict is explicit in machine-readable output to drive downstream visual research tracks."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_ui-requirement-detector-and-confidence-output.py -q",
+        "python3 -m pytest tests/integration/test_ui-requirement-detector-and-confidence-output.py -q"
+      ]
+    },
+    {
+      "id": "REQ-022",
+      "title": "Screen inventory extraction for UI projects",
+      "acceptance_criteria": [
+        "When UI is required, research extracts a concrete screen inventory with screen IDs and user goals.",
+        "Screen inventory includes source grounding from mission/scope/strategy text segments."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_screen-inventory-extraction-for-ui-projects.py -q",
+        "python3 -m pytest tests/integration/test_screen-inventory-extraction-for-ui-projects.py -q"
+      ]
+    },
+    {
+      "id": "REQ-023",
+      "title": "Per-screen research objective generation",
+      "acceptance_criteria": [
+        "Each detected screen receives dedicated research objectives for layout, behavior, and interaction expectations.",
+        "Objectives include priority and dependency hints for planner sequencing."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_per-screen-research-objective-generation.py -q",
+        "python3 -m pytest tests/integration/test_per-screen-research-objective-generation.py -q"
+      ]
+    },
+    {
+      "id": "REQ-024",
+      "title": "Visual reference URL collection per screen",
+      "acceptance_criteria": [
+        "For each UI screen/functionality, research collects multiple visual reference URLs with short rationale notes.",
+        "Reference collection avoids copyrighted redistribution and stores links/provenance only."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_visual-reference-url-collection-per-screen.py -q",
+        "python3 -m pytest tests/integration/test_visual-reference-url-collection-per-screen.py -q"
+      ]
+    },
+    {
+      "id": "REQ-025",
+      "title": "Visual reference provenance and usage notes",
+      "acceptance_criteria": [
+        "Visual references include source attribution, retrieval timestamp, and usage caveats.",
+        "Usage notes identify what should be copied versus adapted versus avoided."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_visual-reference-provenance-and-usage-notes.py -q",
+        "python3 -m pytest tests/integration/test_visual-reference-provenance-and-usage-notes.py -q"
+      ]
+    },
+    {
+      "id": "REQ-026",
+      "title": "Visual pattern clustering and rationale summary",
+      "acceptance_criteria": [
+        "Collected visual references are clustered into reusable design patterns with rationale.",
+        "Pattern summaries map to specific screens and functionality goals."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_visual-pattern-clustering-and-rationale-summary.py -q",
+        "python3 -m pytest tests/integration/test_visual-pattern-clustering-and-rationale-summary.py -q"
+      ]
+    },
+    {
+      "id": "REQ-027",
+      "title": "Accessibility requirement research pack",
+      "acceptance_criteria": [
+        "Accessibility guidance covers semantics, navigation, input states, and assistive-tech compatibility concerns.",
+        "Output includes explicit implementation checkpoints planner can map into tasks."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_accessibility-requirement-research-pack.py -q",
+        "python3 -m pytest tests/integration/test_accessibility-requirement-research-pack.py -q"
+      ]
+    },
+    {
+      "id": "REQ-028",
+      "title": "Responsive behavior and breakpoint research pack",
+      "acceptance_criteria": [
+        "Research produces responsive behavior guidance across mobile/tablet/desktop breakpoints.",
+        "Output includes concrete layout and interaction deltas by breakpoint class."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_responsive-behavior-and-breakpoint-research-pack.py -q",
+        "python3 -m pytest tests/integration/test_responsive-behavior-and-breakpoint-research-pack.py -q"
+      ]
+    },
+    {
+      "id": "REQ-029",
+      "title": "Interaction behavior reference collection",
+      "acceptance_criteria": [
+        "Interaction references cover critical flows, state transitions, and feedback behaviors.",
+        "References are linked to screen IDs and planner-facing functional requirements."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_interaction-behavior-reference-collection.py -q",
+        "python3 -m pytest tests/integration/test_interaction-behavior-reference-collection.py -q"
+      ]
+    },
+    {
+      "id": "REQ-030",
+      "title": "UI risk and anti-pattern notes",
+      "acceptance_criteria": [
+        "Research packet captures UI anti-patterns and likely failure modes for the target product type.",
+        "Each risk includes mitigation guidance and confidence level."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_ui-risk-and-anti-pattern-notes.py -q",
+        "python3 -m pytest tests/integration/test_ui-risk-and-anti-pattern-notes.py -q"
+      ]
+    },
+    {
+      "id": "REQ-031",
+      "title": "Architecture option matrix generation",
+      "acceptance_criteria": [
+        "Research outputs architecture option matrices with pros/cons and applicability boundaries.",
+        "Matrix recommendations include prerequisites and tradeoff rationale."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_architecture-option-matrix-generation.py -q",
+        "python3 -m pytest tests/integration/test_architecture-option-matrix-generation.py -q"
+      ]
+    },
+    {
+      "id": "REQ-032",
+      "title": "Data storage and schema pattern research",
+      "acceptance_criteria": [
+        "Data storage options and schema patterns are researched with workload-fit reasoning.",
+        "Research artifacts include migration and operational risk notes per option."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_data-storage-and-schema-pattern-research.py -q",
+        "python3 -m pytest tests/integration/test_data-storage-and-schema-pattern-research.py -q"
+      ]
+    },
+    {
+      "id": "REQ-033",
+      "title": "API contract and integration pattern research",
+      "acceptance_criteria": [
+        "API and integration patterns are researched for interoperability, failure handling, and maintainability.",
+        "Pattern recommendations include compatibility constraints and testing implications."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_api-contract-and-integration-pattern-research.py -q",
+        "python3 -m pytest tests/integration/test_api-contract-and-integration-pattern-research.py -q"
+      ]
+    },
+    {
+      "id": "REQ-034",
+      "title": "Security and privacy control research",
+      "acceptance_criteria": [
+        "Security/privacy controls are researched for the target domain with practical implementation guidance.",
+        "Outputs include minimum control baseline and escalation controls for higher-risk paths."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_security-and-privacy-control-research.py -q",
+        "python3 -m pytest tests/integration/test_security-and-privacy-control-research.py -q"
+      ]
+    },
+    {
+      "id": "REQ-035",
+      "title": "Compliance and regulatory consideration research",
+      "acceptance_criteria": [
+        "Applicable compliance/regulatory considerations are identified and linked to impacted features.",
+        "Unknown compliance requirements are surfaced as explicit open questions with owner hints."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_compliance-and-regulatory-consideration-research.py -q",
+        "python3 -m pytest tests/integration/test_compliance-and-regulatory-consideration-research.py -q"
+      ]
+    },
+    {
+      "id": "REQ-036",
+      "title": "Performance and scalability reference research",
+      "acceptance_criteria": [
+        "Performance/scalability references are gathered with context on workload assumptions.",
+        "Research includes measurable targets and instrumentation suggestions."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_performance-and-scalability-reference-research.py -q",
+        "python3 -m pytest tests/integration/test_performance-and-scalability-reference-research.py -q"
+      ]
+    },
+    {
+      "id": "REQ-037",
+      "title": "Observability and operability pattern research",
+      "acceptance_criteria": [
+        "Observability/operability patterns cover logging, metrics, tracing, alerting, and runbook expectations.",
+        "Output includes minimum production-operability checklist items for planning."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_observability-and-operability-pattern-research.py -q",
+        "python3 -m pytest tests/integration/test_observability-and-operability-pattern-research.py -q"
+      ]
+    },
+    {
+      "id": "REQ-038",
+      "title": "Infrastructure deployment option analysis",
+      "acceptance_criteria": [
+        "Infrastructure deployment options are compared with operational complexity and reliability tradeoffs.",
+        "Analysis includes dependency on team skills, cost posture, and runtime constraints."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_infrastructure-deployment-option-analysis.py -q",
+        "python3 -m pytest tests/integration/test_infrastructure-deployment-option-analysis.py -q"
+      ]
+    },
+    {
+      "id": "REQ-039",
+      "title": "Cost model assumptions and sensitivity notes",
+      "acceptance_criteria": [
+        "Research includes cost assumptions and sensitivity notes for key architectural choices.",
+        "Cost notes indicate uncertainty bands and main cost-risk drivers."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_cost-model-assumptions-and-sensitivity-notes.py -q",
+        "python3 -m pytest tests/integration/test_cost-model-assumptions-and-sensitivity-notes.py -q"
+      ]
+    },
+    {
+      "id": "REQ-040",
+      "title": "Dependency and supply-chain risk research",
+      "acceptance_criteria": [
+        "Dependency/supply-chain risks are researched with mitigation and substitution guidance.",
+        "Risk output identifies high-risk dependencies requiring extra review before implementation."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_dependency-and-supply-chain-risk-research.py -q",
+        "python3 -m pytest tests/integration/test_dependency-and-supply-chain-risk-research.py -q"
+      ]
+    },
+    {
+      "id": "REQ-041",
+      "title": "Topic pack markdown artifact contract",
+      "acceptance_criteria": [
+        "Every research topic outputs markdown with standardized sections and stable headings.",
+        "Markdown contract supports direct human review and planner references."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_topic-pack-markdown-artifact-contract.py -q",
+        "python3 -m pytest tests/integration/test_topic-pack-markdown-artifact-contract.py -q"
+      ]
+    },
+    {
+      "id": "REQ-042",
+      "title": "Topic pack json artifact contract",
+      "acceptance_criteria": [
+        "Every research topic outputs JSON with stable machine-readable schema.",
+        "JSON contract includes ids, citations, scores, recommendations, and open risks."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_topic-pack-json-artifact-contract.py -q",
+        "python3 -m pytest tests/integration/test_topic-pack-json-artifact-contract.py -q"
+      ]
+    },
+    {
+      "id": "REQ-043",
+      "title": "Research index generation contract",
+      "acceptance_criteria": [
+        "Research index aggregates topic packs, priorities, and coverage status for planner intake.",
+        "Index contract includes deterministic ordering and linkable topic IDs."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_research-index-generation-contract.py -q",
+        "python3 -m pytest tests/integration/test_research-index-generation-contract.py -q"
+      ]
+    },
+    {
+      "id": "REQ-044",
+      "title": "Milestone map artifact contract",
+      "acceptance_criteria": [
+        "Milestone map links milestone IDs to research topics, confidence, and dependency notes.",
+        "Map output is machine-readable and replay-stable."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_milestone-map-artifact-contract.py -q",
+        "python3 -m pytest tests/integration/test_milestone-map-artifact-contract.py -q"
+      ]
+    },
+    {
+      "id": "REQ-045",
+      "title": "Recommendation priority scoring model",
+      "acceptance_criteria": [
+        "Recommendation priority scoring reflects impact, feasibility, risk, and dependency readiness.",
+        "Scoring model output includes factor breakdown to avoid opaque ranking."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_recommendation-priority-scoring-model.py -q",
+        "python3 -m pytest tests/integration/test_recommendation-priority-scoring-model.py -q"
+      ]
+    },
+    {
+      "id": "REQ-046",
+      "title": "Implementation pathway section generation",
+      "acceptance_criteria": [
+        "Research outputs implementation pathways with concrete sequencing guidance.",
+        "Pathway sections explicitly call out prerequisites and blocking assumptions."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_implementation-pathway-section-generation.py -q",
+        "python3 -m pytest tests/integration/test_implementation-pathway-section-generation.py -q"
+      ]
+    },
+    {
+      "id": "REQ-047",
+      "title": "Tradeoff and fallback section generation",
+      "acceptance_criteria": [
+        "Topic packs include tradeoff and fallback sections for major recommendation branches.",
+        "Fallback guidance indicates trigger conditions for switching approach."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_tradeoff-and-fallback-section-generation.py -q",
+        "python3 -m pytest tests/integration/test_tradeoff-and-fallback-section-generation.py -q"
+      ]
+    },
+    {
+      "id": "REQ-048",
+      "title": "Cross-project dependency impact notes",
+      "acceptance_criteria": [
+        "Research captures how target-project decisions affect or depend on other Earth projects.",
+        "Cross-project notes include concrete link refs for traceability."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_cross-project-dependency-impact-notes.py -q",
+        "python3 -m pytest tests/integration/test_cross-project-dependency-impact-notes.py -q"
+      ]
+    },
+    {
+      "id": "REQ-049",
+      "title": "Planner-context handoff packet generation",
+      "acceptance_criteria": [
+        "Research builds planner-context packet with topic IDs, recommendation summaries, and evidence refs.",
+        "Handoff packet is directly consumable by planning flow without manual reshaping."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_planner-context-handoff-packet-generation.py -q",
+        "python3 -m pytest tests/integration/test_planner-context-handoff-packet-generation.py -q"
+      ]
+    },
+    {
+      "id": "REQ-050",
+      "title": "Topic-id cross-reference map for planner usage",
+      "acceptance_criteria": [
+        "Research emits topic-id cross-reference maps suitable for embedding in planner rationale.",
+        "Map includes reverse lookup from milestone/functionality to topic IDs."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_topic-id-cross-reference-map-for-planner-usage.py -q",
+        "python3 -m pytest tests/integration/test_topic-id-cross-reference-map-for-planner-usage.py -q"
+      ]
+    },
+    {
+      "id": "REQ-051",
+      "title": "Research packet schema validator",
+      "acceptance_criteria": [
+        "Research packet validator enforces schema and required-field contracts with deterministic diagnostics.",
+        "Invalid packets fail with explicit failing paths and reason codes."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_research-packet-schema-validator.py -q",
+        "python3 -m pytest tests/integration/test_research-packet-schema-validator.py -q"
+      ]
+    },
+    {
+      "id": "REQ-052",
+      "title": "Topic pack completeness validator",
+      "acceptance_criteria": [
+        "Topic pack validator checks required sections (context/options/tradeoffs/recommendation/risks).",
+        "Completeness failures include actionable diagnostics suitable for automatic retry prompts."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_topic-pack-completeness-validator.py -q",
+        "python3 -m pytest tests/integration/test_topic-pack-completeness-validator.py -q"
+      ]
+    },
+    {
+      "id": "REQ-053",
+      "title": "Citation and provenance validator",
+      "acceptance_criteria": [
+        "Citation/provenance validator checks URL presence, source metadata, and timestamp contracts.",
+        "Validator rejects unsupported citation shapes with deterministic diagnostics."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_citation-and-provenance-validator.py -q",
+        "python3 -m pytest tests/integration/test_citation-and-provenance-validator.py -q"
+      ]
+    },
+    {
+      "id": "REQ-054",
+      "title": "Visual reference validator for UI-required tracks",
+      "acceptance_criteria": [
+        "When UI is required, validator enforces per-screen visual reference link minimums and provenance fields.",
+        "Validator reports missing or weak visual references by screen ID with severity."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_visual-reference-validator-for-ui-required-tracks.py -q",
+        "python3 -m pytest tests/integration/test_visual-reference-validator-for-ui-required-tracks.py -q"
+      ]
+    },
+    {
+      "id": "REQ-055",
+      "title": "Link health checker and stale-reference flags",
+      "acceptance_criteria": [
+        "Link health checker marks dead/stale references and emits refresh-needed flags.",
+        "Stale-link findings are routed into open questions/risk outputs."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_link-health-checker-and-stale-reference-flags.py -q",
+        "python3 -m pytest tests/integration/test_link-health-checker-and-stale-reference-flags.py -q"
+      ]
+    },
+    {
+      "id": "REQ-056",
+      "title": "Replay determinism and idempotent rerun checks",
+      "acceptance_criteria": [
+        "Research reruns with same inputs produce deterministic normalized outputs and stable IDs.",
+        "Idempotent checks detect and report non-deterministic field drift."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_replay-determinism-and-idempotent-rerun-checks.py -q",
+        "python3 -m pytest tests/integration/test_replay-determinism-and-idempotent-rerun-checks.py -q"
+      ]
+    },
+    {
+      "id": "REQ-057",
+      "title": "History snapshot and diff artifact generation",
+      "acceptance_criteria": [
+        "Each run writes history snapshots and structured diffs against previous run outputs.",
+        "Diff artifacts highlight changed recommendations, confidence shifts, and new/removed references."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_history-snapshot-and-diff-artifact-generation.py -q",
+        "python3 -m pytest tests/integration/test_history-snapshot-and-diff-artifact-generation.py -q"
+      ]
+    },
+    {
+      "id": "REQ-058",
+      "title": "Failure reason-code contract for degraded runs",
+      "acceptance_criteria": [
+        "Degraded runs emit deterministic reason-code contracts for partial outputs.",
+        "Degraded outputs remain consumable and clearly marked as partial/not-final where needed."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_failure-reason-code-contract-for-degraded-runs.py -q",
+        "python3 -m pytest tests/integration/test_failure-reason-code-contract-for-degraded-runs.py -q"
+      ]
+    },
+    {
+      "id": "REQ-059",
+      "title": "Planner ingestion smoke contract",
+      "acceptance_criteria": [
+        "Planner-ingestion smoke verifies research packet can be consumed without schema or linkage breakage.",
+        "Smoke output includes concrete artifact refs demonstrating end-to-end ingestion path."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_planner-ingestion-smoke-contract.py -q",
+        "python3 -m pytest tests/integration/test_planner-ingestion-smoke-contract.py -q"
+      ]
+    },
+    {
+      "id": "REQ-060",
+      "title": "End-to-end autonomous research acceptance packet",
+      "acceptance_criteria": [
+        "End-to-end run produces required research artifacts, validators, and planner handoff outputs under one run identity.",
+        "Acceptance packet captures summary, evidence refs, consumability verdict, and open risks for gate review."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_end-to-end-autonomous-research-acceptance-packet.py -q",
+        "python3 -m pytest tests/integration/test_end-to-end-autonomous-research-acceptance-packet.py -q"
+      ]
+    }
+  ],
+  "schema_version": "1.0",
+  "scope": "@file:/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/research/scope.md",
+  "scope_source": {
+    "display": "@file:/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/research/scope.md",
+    "mode": "file",
+    "path": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/research/scope.md",
+    "value": null
+  },
+  "updated_at": "2026-03-13T21:34:39Z"
+}

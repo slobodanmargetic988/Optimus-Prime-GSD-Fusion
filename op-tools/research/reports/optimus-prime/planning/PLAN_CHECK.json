@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "passed": true,
+  "checks": [
+    {
+      "id": "requirement_coverage",
+      "passed": true
+    },
+    {
+      "id": "task_completeness",
+      "passed": true
+    },
+    {
+      "id": "verify_contract_completeness",
+      "passed": true
+    },
+    {
+      "id": "scope_sanity",
+      "passed": true
+    },
+    {
+      "id": "dependency_dag_sanity",
+      "passed": true
+    },
+    {
+      "id": "phase_traceability",
+      "passed": true
+    },
+    {
+      "id": "phase_dependency_dag_sanity",
+      "passed": true
+    },
+    {
+      "id": "task_volume_gate",
+      "passed": true
+    },
+    {
+      "id": "llm_first_research_alignment",
+      "passed": true
+    },
+    {
+      "id": "ui_visual_reference_contract",
+      "passed": true
+    },
+    {
+      "id": "non_ceremonial_task_shape",
+      "passed": true
+    },
+    {
+      "id": "task_scope_lock_contract",
+      "passed": true
+    }
+  ],
+  "coverage": {
+    "requirements_total": 60,
+    "requirements_covered": 60,
+    "missing_requirement_ids": []
+  },
+  "dependency_graph": {
+    "nodes": 222,
+    "edges": 244,
+    "cycle_detected": false,
+    "valid": true
+  },
+  "verify_contract_completeness": true,
+  "phase_traceability": true,
+  "blocking_errors": []
+}
