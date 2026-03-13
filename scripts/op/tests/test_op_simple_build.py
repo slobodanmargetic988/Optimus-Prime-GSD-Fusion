@@ -454,6 +454,50 @@ def test_worker_state_signature_and_counts_helpers(tmp_path: Path, monkeypatch) 
     assert signature_after != signature_before
 
 
+def test_worker_liveness_ignores_stale_thread_markers(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    stale_at = (datetime.now(timezone.utc) - timedelta(seconds=MODULE.THREAD_LIVENESS_MAX_AGE_SECONDS + 60)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    fresh_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "updated_at": fresh_at,
+            "cycle_number": 1,
+            "workers": [
+                {
+                    "worker_id": "worker-stale",
+                    "status": "in_progress",
+                    "pid": None,
+                    "thread_id": "thread-old",
+                    "last_update": stale_at,
+                },
+                {
+                    "worker_id": "worker-fresh",
+                    "status": "in_progress",
+                    "pid": None,
+                    "thread_id": "thread-new",
+                    "last_update": fresh_at,
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(MODULE, "_is_pid_alive", lambda _pid: False)
+
+    assert MODULE._active_worker_count(cfg) == 1
+    assert MODULE._live_pid_in_progress_worker_count(cfg) == 1
+
+
 def test_await_cycle_release_signal_token_conservative_releases_on_settle(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -2233,11 +2277,13 @@ def test_run_persists_watchdog_terminal_stop_reason_to_cycle_summary(tmp_path: P
         ),
     )
     monkeypatch.setattr(MODULE, "_run_rate_gate_wait", lambda _cfg, _cycle, _warnings: None)
-    monkeypatch.setattr(
-        MODULE,
-        "_dispatch_packets",
-        lambda _cfg, _cycle: {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
-    )
+    dispatch_calls = {"count": 0}
+
+    def fake_dispatch(_cfg, _cycle):
+        dispatch_calls["count"] += 1
+        return {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
+
+    monkeypatch.setattr(MODULE, "_dispatch_packets", fake_dispatch)
     monkeypatch.setattr(
         MODULE,
         "_ensure_workstation_prep",
@@ -2269,6 +2315,74 @@ def test_run_persists_watchdog_terminal_stop_reason_to_cycle_summary(tmp_path: P
     capsule_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["terminal_capsule"]).read_text(encoding="utf-8"))
     assert capsule_payload["stop_reason"] == "watchdog_idle_stop"
     assert capsule_payload["reason_code"] == "watchdog_idle_stop"
+    assert dispatch_calls["count"] == 0
+
+
+def test_run_near_stale_enters_merge_recovery_and_reserves_two_dispatch_slots(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+
+    def fake_invoke_manager(cfg, *, manager_name, cycle_number, context, expected_artifacts):
+        if manager_name == "BOSS":
+            write_boss_artifacts(cfg.repo_root, cycle_number)
+            return MODULE.ManagerResult(
+                manager="BOSS",
+                status="ok",
+                timeout=False,
+                returncode=0,
+                started_at="2026-01-01T00:00:00Z",
+                finished_at="2026-01-01T00:00:01Z",
+                duration_seconds=1.0,
+                message="ok",
+            )
+        raise AssertionError(f"unexpected manager call: {manager_name}")
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+    monkeypatch.setattr(
+        MODULE,
+        "_watchdog_tick",
+        lambda _cfg, _cycle, *, force_reset_target=False: (
+            False,
+            {
+                "reason_code": "watchdog_near_stale",
+                "message": "near stale",
+                "watchdog_age_minutes": 142.0,
+                "near_stale": True,
+            },
+        ),
+    )
+    monkeypatch.setattr(MODULE, "_run_rate_gate_wait", lambda _cfg, _cycle, _warnings: None)
+    monkeypatch.setattr(
+        MODULE,
+        "_ensure_workstation_prep",
+        lambda _cfg, initialize_state=None, force_refresh=False: {
+            "schema_version": "1.0",
+            "worktrees_parent": str((tmp_path / "forest").resolve()),
+            "workstations": [],
+        },
+    )
+    captured = {"reserved_slots": None}
+
+    def fake_dispatch(_cfg, _cycle, *, reserved_slots=0):
+        captured["reserved_slots"] = reserved_slots
+        return {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
+
+    monkeypatch.setattr(MODULE, "_dispatch_packets", fake_dispatch)
+
+    out = MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            dry_run=False,
+            max_build_cycles=1,
+            sleep_minutes=0,
+            ground_sync_enabled=False,
+            worktrees_parent=str(tmp_path / "forest"),
+        )
+    )
+
+    assert out["ok"] is True
+    assert captured["reserved_slots"] == MODULE.MERGE_RECOVERY_RESERVED_SLOTS
+    summary_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_summary"]).read_text(encoding="utf-8"))
+    assert summary_payload["cycle_mode"] == "merge_recovery"
 
 
 def test_run_ignores_unrecognized_summary_stop_reason(tmp_path: Path, monkeypatch) -> None:

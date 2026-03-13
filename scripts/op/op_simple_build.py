@@ -73,6 +73,8 @@ WATCHDOG_NEAR_STALE_MARGIN_MINUTES = 10
 WATCHDOG_RECOVERY_NUDGE_MINUTES = 30
 WAIT_HEARTBEAT_SECONDS = 300
 WAIT_RESCAN_SECONDS = 900
+THREAD_LIVENESS_MAX_AGE_SECONDS = 1200
+MERGE_RECOVERY_RESERVED_SLOTS = 2
 LLM_PROFILE_PER_MINUTE_LIMIT = 20
 LLM_PROFILE_PER_DAY_LIMIT = 1000
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
@@ -2067,6 +2069,7 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "reason_code": "default_bootstrap",
             "message": "default bootstrap decision",
             "worker_registry_ready": True,
+            "cycle_mode": "normal",
         },
         "profile_snapshot": {
             "schema_version": SCHEMA_VERSION,
@@ -2109,6 +2112,7 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
         "cycle_summary": {
             "schema_version": SCHEMA_VERSION,
             "cycle_number": 0,
+            "cycle_mode": "normal",
             "manager_statuses": {},
             "task_counts": {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0},
             "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
@@ -2725,6 +2729,7 @@ def _write_boss_stub(cfg: RunConfig, cycle_number: int) -> None:
         "cycle_summary": {
             "schema_version": SCHEMA_VERSION,
             "cycle_number": cycle_number,
+            "cycle_mode": "normal",
             "manager_statuses": {},
             "task_counts": {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0},
             "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
@@ -2798,6 +2803,7 @@ def _write_cycle_manager_decision(
     reason_code: str,
     message: str,
     worker_registry_ready: bool,
+    cycle_mode: str = "normal",
 ) -> None:
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -2806,6 +2812,7 @@ def _write_cycle_manager_decision(
         "reason_code": reason_code,
         "message": message,
         "worker_registry_ready": worker_registry_ready,
+        "cycle_mode": str(cycle_mode or "").strip() or "normal",
     }
     _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["cycle_manager_decision"], payload)
 
@@ -3937,6 +3944,25 @@ def _is_pid_alive(pid_value: Any) -> bool:
     return True
 
 
+def _is_recent_timestamp(value: Any, *, max_age_seconds: int) -> bool:
+    parsed = _parse_iso_datetime(value if isinstance(value, str) else "")
+    if parsed is None:
+        return False
+    age_seconds = (datetime.now(timezone.utc) - parsed).total_seconds()
+    return age_seconds <= float(max(1, int(max_age_seconds)))
+
+
+def _worker_has_live_marker(row: dict[str, Any]) -> bool:
+    pid = _coerce_pid(row.get("pid"))
+    if pid is not None and _is_pid_alive(pid):
+        return True
+    thread_id = str(row.get("thread_id") or "").strip()
+    if not thread_id:
+        return False
+    last_update = str(row.get("last_update") or "").strip()
+    return _is_recent_timestamp(last_update, max_age_seconds=THREAD_LIVENESS_MAX_AGE_SECONDS)
+
+
 def _normalize_dead_worker_leases(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
     registry_path = cfg.repo_root / ARTIFACT_FILES["worker_registry"]
     registry_payload = _read_json(registry_path, default={})
@@ -4001,16 +4027,9 @@ def _active_worker_count(cfg: RunConfig) -> int:
     for row in workers:
         if not isinstance(row, dict):
             continue
-        pid = _coerce_pid(row.get("pid"))
-        thread_id = row.get("thread_id")
-        has_live_marker = False
-        if pid is not None:
-            has_live_marker = _is_pid_alive(pid)
-        elif isinstance(thread_id, str) and bool(thread_id.strip()):
-            has_live_marker = True
         # Count only workers with concrete runtime liveness markers so
-        # pre-dispatch "in_progress" placeholders do not consume capacity.
-        if has_live_marker:
+        # pre-dispatch placeholders and stale thread IDs do not consume capacity.
+        if _worker_has_live_marker(row):
             active_count += 1
     return active_count
 
@@ -4028,8 +4047,7 @@ def _live_pid_in_progress_worker_count(cfg: RunConfig) -> int:
             continue
         if str(row.get("status") or "").strip() != "in_progress":
             continue
-        pid = _coerce_pid(row.get("pid"))
-        if pid is not None and _is_pid_alive(pid):
+        if _worker_has_live_marker(row):
             live_count += 1
     return live_count
 
@@ -4385,7 +4403,12 @@ def _launch_blackbox_dispatch(
     return "launched", int(proc.pid), None, "blackbox dispatch started"
 
 
-def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
+def _dispatch_packets(
+    cfg: RunConfig,
+    cycle_number: int,
+    *,
+    reserved_slots: int = 0,
+) -> dict[str, int]:
     # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=medium_tooling.
     counters = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
     packets = _load_worker_packets(cfg)
@@ -4398,9 +4421,11 @@ def _dispatch_packets(cfg: RunConfig, cycle_number: int) -> dict[str, int]:
     expected_parent = cfg.worktrees_parent.expanduser().resolve()
     event_rows: list[dict[str, Any]] = []
     active_count = _active_worker_count(cfg)
+    reserve = max(0, int(reserved_slots))
+    effective_limit = max(0, int(cfg.max_parallel_workers) - reserve)
 
     for row in packets:
-        if active_count >= cfg.max_parallel_workers:
+        if active_count >= effective_limit:
             break
         counters["attempted"] += 1
         worker_id = str(row.get("worker_id") or "")
@@ -4615,6 +4640,8 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
     ):
         reset_target = True
     watchdog_age_minutes: float | None = None
+    near_stale_threshold_minutes = max(0, int(stale_after_minutes) - int(WATCHDOG_NEAR_STALE_MARGIN_MINUTES))
+    near_stale = False
     if commit_age_minutes is None:
         is_stale = False
     else:
@@ -4623,6 +4650,9 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
             reset_at_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         watchdog_age_minutes = max(0.0, commit_age_minutes - float(offset_minutes or 0.0))
         is_stale = watchdog_age_minutes > float(stale_after_minutes)
+        near_stale = bool(
+            not is_stale and watchdog_age_minutes is not None and watchdog_age_minutes >= float(near_stale_threshold_minutes)
+        )
 
     next_state = {
         "schema_version": SCHEMA_VERSION,
@@ -4637,6 +4667,8 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
         "watchdog_target_reset_at_utc": reset_at_utc,
         "stale_after_minutes": stale_after_minutes,
         "stale": is_stale,
+        "near_stale_threshold_minutes": int(near_stale_threshold_minutes),
+        "near_stale": bool(near_stale),
     }
     _atomic_write_json(state_path, next_state)
 
@@ -4663,6 +4695,8 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
             "stale_after_minutes": stale_after_minutes,
             "watchdog_age_minutes": None,
             "commit_age_minutes": None,
+            "near_stale_threshold_minutes": int(near_stale_threshold_minutes),
+            "near_stale": False,
         }
     else:
         exit_signal = {
@@ -4681,6 +4715,8 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
             "watchdog_target_reset_at_utc": reset_at_utc,
             "stale_after_minutes": stale_after_minutes,
             "commit_age_minutes": round(commit_age_minutes, 3),
+            "near_stale_threshold_minutes": int(near_stale_threshold_minutes),
+            "near_stale": bool(near_stale),
         }
 
     should_stop = is_stale
@@ -4831,6 +4867,7 @@ def _render_cycle_summary(
     manager_statuses: dict[str, dict[str, str]],
     dispatch_counts: dict[str, int],
     *,
+    cycle_mode: str = "normal",
     base_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary_path = cfg.repo_root / ARTIFACT_FILES["cycle_summary"]
@@ -4849,6 +4886,7 @@ def _render_cycle_summary(
     out = {
         "schema_version": SCHEMA_VERSION,
         "cycle_number": cycle_number,
+        "cycle_mode": str(cycle_mode or "").strip() or str(summary.get("cycle_mode") or "").strip() or "normal",
         "manager_statuses": manager_statuses,
         "task_counts": merged_counts,
         "dispatch_counts": _normalized_dispatch_counts(dispatch_counts),
@@ -5223,6 +5261,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     reason_code=quiet_skip_reason,
                     message=manager_statuses["BOSS"]["note"],
                     worker_registry_ready=True,
+                    cycle_mode=cycle_mode,
                 )
                 print(
                     "[op-simple-build] "
@@ -5292,10 +5331,12 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     reason_code=boss_result.reason_code or "manager_timeout",
                     message=boss_result.message or "BOSS timed out",
                     worker_registry_ready=True,
+                    cycle_mode=cycle_mode,
                 )
                 timeout_base_summary = {
                     "schema_version": SCHEMA_VERSION,
                     "cycle_number": cycle_number,
+                    "cycle_mode": cycle_mode,
                     "manager_statuses": {},
                     "task_counts": task_counts_snapshot,
                     "dispatch_counts": _normalized_dispatch_counts(dispatch_counts),
@@ -5310,6 +5351,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     cycle_number,
                     manager_statuses,
                     dispatch_counts,
+                    cycle_mode=cycle_mode,
                     base_summary=timeout_base_summary,
                 )
                 _atomic_write_json(
@@ -5368,6 +5410,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     reason_code=boss_result.reason_code or "boss_failed",
                     message=boss_result.message or "BOSS failed",
                     worker_registry_ready=worker_registry_ready,
+                    cycle_mode=cycle_mode,
                 )
                 manager_statuses["rate-gate"] = {
                     "status": "skipped",
@@ -5377,22 +5420,66 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "status": "skipped",
                     "note": "cycle skipped after BOSS failure",
                 }
-            elif boss_result is not None:
-                _run_rate_gate_wait(cfg, cycle_number, warnings)
-                manager_statuses["rate-gate"] = {"status": "ok", "note": "rate gate completed"}
-                dispatch_counts = _dispatch_packets(cfg, cycle_number)
-                manager_statuses["work-dispatcher"] = {"status": "ok", "note": "dispatch cycle completed"}
-
             watchdog_stop, watchdog_signal = _watchdog_tick(
                 cfg,
                 cycle_number,
                 force_reset_target=watchdog_reset_pending,
             )
             watchdog_reset_pending = False
+            if watchdog_stop:
+                cycle_mode = "terminal_stale"
+            elif bool(watchdog_signal.get("near_stale")):
+                cycle_mode = "merge_recovery"
             manager_statuses["watchdog"] = {
                 "status": "stop" if watchdog_stop else "ok",
-                "note": watchdog_signal.get("message") if watchdog_stop else "watchdog healthy",
+                "note": (
+                    watchdog_signal.get("message")
+                    if watchdog_stop
+                    else (
+                        "watchdog near-stale threshold reached; merge recovery mode enabled"
+                        if cycle_mode == "merge_recovery"
+                        else "watchdog healthy"
+                    )
+                ),
             }
+            if watchdog_stop:
+                manager_statuses.setdefault(
+                    "rate-gate",
+                    {"status": "skipped", "note": "terminal stale detected pre-dispatch"},
+                )
+                manager_statuses.setdefault(
+                    "work-dispatcher",
+                    {"status": "skipped", "note": "terminal stale detected pre-dispatch"},
+                )
+                _write_cycle_manager_decision(
+                    cfg,
+                    cycle_number,
+                    decision="skip_cycle",
+                    reason_code=str(watchdog_signal.get("reason_code") or "stale_base_branch_commit"),
+                    message=str(watchdog_signal.get("message") or "watchdog terminal stale stop"),
+                    worker_registry_ready=True,
+                    cycle_mode=cycle_mode,
+                )
+            elif boss_result is not None and boss_result.status == "ok":
+                _run_rate_gate_wait(cfg, cycle_number, warnings)
+                manager_statuses["rate-gate"] = {"status": "ok", "note": "rate gate completed"}
+                dispatch_reserved_slots = MERGE_RECOVERY_RESERVED_SLOTS if cycle_mode == "merge_recovery" else 0
+                if dispatch_reserved_slots > 0:
+                    dispatch_counts = _dispatch_packets(
+                        cfg,
+                        cycle_number,
+                        reserved_slots=dispatch_reserved_slots,
+                    )
+                    manager_statuses["work-dispatcher"] = {
+                        "status": "ok",
+                        "note": (
+                            "dispatch cycle completed with merge recovery reservation "
+                            f"reserved_slots={dispatch_reserved_slots}"
+                        ),
+                    }
+                else:
+                    dispatch_counts = _dispatch_packets(cfg, cycle_number)
+                    manager_statuses["work-dispatcher"] = {"status": "ok", "note": "dispatch cycle completed"}
 
             manager_statuses["summary"] = {"status": "ok", "note": "summary written"}
             base_summary: dict[str, Any] | None = None
@@ -5400,6 +5487,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 base_summary = {
                     "schema_version": SCHEMA_VERSION,
                     "cycle_number": cycle_number,
+                    "cycle_mode": cycle_mode,
                     "manager_statuses": {},
                     "task_counts": task_counts_snapshot,
                     "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
@@ -5413,6 +5501,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 base_summary = {
                     "schema_version": SCHEMA_VERSION,
                     "cycle_number": cycle_number,
+                    "cycle_mode": cycle_mode,
                     "manager_statuses": {},
                     "task_counts": {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0},
                     "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
@@ -5427,6 +5516,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 cycle_number,
                 manager_statuses,
                 dispatch_counts,
+                cycle_mode=cycle_mode,
                 base_summary=base_summary,
             )
             trace_errors: list[str] = []
