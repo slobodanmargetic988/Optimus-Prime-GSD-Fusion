@@ -211,3 +211,18 @@ def test_slot_name_for_path_rejects_invalid_names(mod):
     assert mod.slot_name_for_path(Path("/tmp/workstation-11")) is None
     assert mod.slot_name_for_path(Path("/tmp/workstation")) is None
     assert mod.slot_name_for_path(Path("/tmp/workstation-random")) is None
+
+
+def test_slot_name_for_path_accepts_repo_prefixed_slot_for_matching_repo(mod, tmp_path):
+    repo_root = tmp_path / "Tetris"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    assert mod.slot_name_for_path(Path("/tmp/tetris-workstation-1"), repo_root=repo_root) == "tetris-workstation-1"
+    assert mod.slot_name_for_path(Path("/tmp/other-workstation-1"), repo_root=repo_root) is None
+
+
+def test_is_valid_worktree_name_accepts_repo_prefixed_or_legacy(mod, tmp_path):
+    repo_root = tmp_path / "Tetris"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    assert mod.is_valid_worktree_name("workstation-1", repo_root) is True
+    assert mod.is_valid_worktree_name("tetris-workstation-1", repo_root) is True
+    assert mod.is_valid_worktree_name("other-workstation-1", repo_root) is False

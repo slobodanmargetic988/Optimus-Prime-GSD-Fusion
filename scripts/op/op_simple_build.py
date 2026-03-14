@@ -90,6 +90,10 @@ TERMINAL_STOP_REASONS = {
     "project_done",
     "insurmountable_blocker",
 }
+WATCHDOG_TERMINAL_STOP_REASONS = {
+    "watchdog_idle_stop",
+    "stale_base_branch_commit",
+}
 
 PLANNER_PLAN_PACKETS_FILE = Path("reports/optimus-prime/planning/PLAN_PACKETS.json")
 BOSS_REQUIRED_ARTIFACTS = [
@@ -1026,11 +1030,29 @@ def _git_run(repo_root: Path, *args: str) -> tuple[int, str, str]:
     return int(proc.returncode), (proc.stdout or "").strip(), (proc.stderr or "").strip()
 
 
+def _git_is_ancestor_commit(repo_root: Path, *, ancestor: str, descendant: str) -> bool | None:
+    ancestor_text = str(ancestor or "").strip()
+    descendant_text = str(descendant or "").strip()
+    if not ancestor_text or not descendant_text:
+        return None
+    code, _out, _err = _git_run(repo_root, "merge-base", "--is-ancestor", ancestor_text, descendant_text)
+    if code == 0:
+        return True
+    if code == 1:
+        return False
+    return None
+
+
 def _reason_code(value: Any, *, fallback: str) -> str:
     text = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "")).strip("_").upper()
     if not text:
         text = fallback
     return text[:96]
+
+
+def _is_watchdog_terminal_reason(value: Any) -> bool:
+    reason = str(value or "").strip()
+    return reason in WATCHDOG_TERMINAL_STOP_REASONS
 
 
 def _discover_earth_root(repo_root: Path) -> Path | None:
@@ -3141,6 +3163,15 @@ def _invoke_manager(
         )
         log_executor_model = manager_model
         if uses_codex_backend:
+            boss_profile_candidates = _boss_profile_candidates_from_snapshot(cfg) if manager_name == "BOSS" else []
+            selected_profile_row = next(
+                (
+                    row
+                    for row in boss_profile_candidates
+                    if str(row.get("alias") or "").strip() == str(selected_manager_alias or "").strip()
+                ),
+                None,
+            )
             runtime_checks = {
                 "cycle_number": int(cycle_number),
                 "manager": manager_name,
@@ -3156,12 +3187,38 @@ def _invoke_manager(
                 )
                 if selected_manager_home
                 else None,
+                "selected_profile_found_in_snapshot": isinstance(selected_profile_row, dict),
+                "selected_profile_eligible": bool((selected_profile_row or {}).get("eligible"))
+                if isinstance(selected_profile_row, dict)
+                else None,
+                "selected_profile_ineligible_reason": str((selected_profile_row or {}).get("ineligible_reason") or "").strip()
+                if isinstance(selected_profile_row, dict)
+                else None,
+                "selected_profile_hard_gated": bool((selected_profile_row or {}).get("hard_gated"))
+                if isinstance(selected_profile_row, dict)
+                else None,
+                "eligible_profile_count": int(sum(1 for row in boss_profile_candidates if bool(row.get("eligible")))),
             }
             invalid_reasons: list[str] = []
             if not bool(runtime_checks["codex_binary_available"]):
                 invalid_reasons.append("codex_binary_missing")
             if bool(runtime_checks["llm_profile_mode_enabled"]) and not str(runtime_checks["llm_profile_value"] or "").strip():
                 invalid_reasons.append("llm_profile_mode_missing_profile")
+            if manager_name == "BOSS":
+                if not str(selected_manager_alias or "").strip():
+                    invalid_reasons.append("selected_profile_alias_missing")
+                if not str(selected_manager_home or "").strip():
+                    invalid_reasons.append("selected_codex_home_missing")
+                elif runtime_checks["selected_codex_home_exists"] is False:
+                    invalid_reasons.append("selected_codex_home_missing_on_disk")
+                if not isinstance(selected_profile_row, dict):
+                    if int(runtime_checks.get("eligible_profile_count") or 0) <= 0:
+                        invalid_reasons.append("no_eligible_profile_in_snapshot")
+                    else:
+                        invalid_reasons.append("selected_profile_not_in_snapshot")
+                elif not bool(selected_profile_row.get("eligible")):
+                    ineligible_reason = str(selected_profile_row.get("ineligible_reason") or "").strip() or "unknown"
+                    invalid_reasons.append(f"selected_profile_ineligible:{ineligible_reason}")
             runtime_checks["invalid_reasons"] = invalid_reasons
             runtime_checks["runtime_context_valid"] = len(invalid_reasons) == 0
             if manager_name == "BOSS":
@@ -4928,6 +4985,69 @@ def _dispatch_packets(
     return counters
 
 
+def _watchdog_progress_signal(cfg: RunConfig) -> dict[str, Any]:
+    mergeability_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["mergeability_report"], default={})
+    if not isinstance(mergeability_payload, dict):
+        mergeability_payload = {}
+    task_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["task_execution_state"], default={})
+    if not isinstance(task_payload, dict):
+        task_payload = {}
+    worker_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
+    if not isinstance(worker_payload, dict):
+        worker_payload = {}
+
+    task_rows = task_payload.get("tasks")
+    tasks = [row for row in task_rows if isinstance(row, dict)] if isinstance(task_rows, list) else []
+    worker_rows = worker_payload.get("workers")
+    workers = [row for row in worker_rows if isinstance(row, dict)] if isinstance(worker_rows, list) else []
+    handoff_payload = task_payload.get("last_handoff_outcome")
+    handoff = handoff_payload if isinstance(handoff_payload, dict) else {}
+    handoff_status = str(handoff.get("status") or "").strip()
+    handoff_timestamp = str(handoff.get("timestamp") or "").strip()
+    if handoff_status.lower() in {"", "unknown", "none"}:
+        handoff_timestamp = ""
+
+    fan_in_accepted_task_count = 0
+    lane_merged_task_count = 0
+    for row in tasks:
+        if str(row.get("lane_fan_in_accepted_at") or "").strip():
+            fan_in_accepted_task_count += 1
+        if str(row.get("lane_to_run_merged_at") or "").strip():
+            lane_merged_task_count += 1
+
+    fan_in_accepted_worker_count = 0
+    for row in workers:
+        if str(row.get("fan_in_status") or "").strip() == "accepted":
+            fan_in_accepted_worker_count += 1
+
+    merge_blockers = mergeability_payload.get("merge_blockers")
+    merge_blocker_count = len(merge_blockers) if isinstance(merge_blockers, list) else 0
+    components = {
+        "mergeability_fingerprint": str(mergeability_payload.get("progress_fingerprint") or "").strip(),
+        "mergeability_unmerged_commit_count": int(mergeability_payload.get("unmerged_commit_count") or 0),
+        "merge_blocker_count": int(merge_blocker_count),
+        "fan_in_accepted_task_count": int(fan_in_accepted_task_count),
+        "lane_merged_task_count": int(lane_merged_task_count),
+        "fan_in_accepted_worker_count": int(fan_in_accepted_worker_count),
+        "last_handoff_status": handoff_status,
+        "last_handoff_timestamp": handoff_timestamp,
+        "last_handoff_reason_codes": sorted(
+            str(item).strip()
+            for item in handoff.get("reason_codes", [])
+            if str(item).strip()
+        )
+        if isinstance(handoff.get("reason_codes"), list)
+        else [],
+    }
+    signal = hashlib.sha256(
+        json.dumps(components, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "signal": signal,
+        "components": components,
+    }
+
+
 def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: bool = False) -> tuple[bool, dict[str, Any]]:
     init_state = _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
     monitored_branch = "main"
@@ -4966,7 +5086,17 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
         offset_minutes = 0.0
 
     reset_at_utc = str(state.get("watchdog_target_reset_at_utc") or "").strip()
-    reset_target = force_reset_target or not previous_sha or previous_sha != current_sha or offset_minutes is None
+    progress_row = _watchdog_progress_signal(cfg)
+    progress_signal = str(progress_row.get("signal") or "").strip()
+    previous_progress_signal = str(state.get("progress_signal") or "").strip()
+    progress_changed = bool(previous_progress_signal and progress_signal and previous_progress_signal != progress_signal)
+    reset_target = (
+        force_reset_target
+        or not previous_sha
+        or previous_sha != current_sha
+        or offset_minutes is None
+        or progress_changed
+    )
     run_lock = _read_json(cfg.repo_root / RUN_LOCK_FILE, default={})
     run_started_at_utc = ""
     if isinstance(run_lock, dict):
@@ -5007,6 +5137,9 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
         "stale": is_stale,
         "near_stale_threshold_minutes": int(near_stale_threshold_minutes),
         "near_stale": bool(near_stale),
+        "progress_signal": progress_signal,
+        "progress_changed": bool(progress_changed),
+        "progress_components": progress_row.get("components") if isinstance(progress_row.get("components"), dict) else {},
     }
     _atomic_write_json(state_path, next_state)
 
@@ -5035,6 +5168,8 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
             "commit_age_minutes": None,
             "near_stale_threshold_minutes": int(near_stale_threshold_minutes),
             "near_stale": False,
+            "progress_signal": progress_signal,
+            "progress_changed": bool(progress_changed),
         }
     else:
         exit_signal = {
@@ -5055,6 +5190,8 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
             "commit_age_minutes": round(commit_age_minutes, 3),
             "near_stale_threshold_minutes": int(near_stale_threshold_minutes),
             "near_stale": bool(near_stale),
+            "progress_signal": progress_signal,
+            "progress_changed": bool(progress_changed),
         }
 
     should_stop = is_stale
@@ -5280,17 +5417,22 @@ def _build_mergeability_report(cfg: RunConfig, *, cycle_number: int, cycle_mode:
     done_worker_commits = 0
     for row in worker_rows:
         status = str(row.get("status") or "").strip()
+        if status != "done":
+            continue
+        done_worker_commits += 1
         task_id = str(row.get("current_task_id") or "").strip()
+        if not task_id:
+            continue
         lane_id = task_to_lane.get(task_id) or "unscoped"
         branch = str(row.get("branch") or "").strip()
-        if status == "done":
-            done_worker_commits += 1
         if not branch:
             continue
         branch_sha = _git_text(cfg.repo_root, "rev-parse", branch)
         if not branch_sha:
             continue
         if run_base_sha and branch_sha == run_base_sha:
+            continue
+        if run_base_sha and _git_is_ancestor_commit(cfg.repo_root, ancestor=branch_sha, descendant=run_base_sha) is True:
             continue
         lane_sha_sets.setdefault(lane_id, set()).add(branch_sha)
 
@@ -5414,6 +5556,201 @@ def _build_mergeability_report(cfg: RunConfig, *, cycle_number: int, cycle_mode:
     return report_payload
 
 
+def _merge_progression_blocker_id(lane_id: str) -> str:
+    lane_text = str(lane_id or "").strip().lower() or "unscoped"
+    digest = hashlib.sha256(lane_text.encode("utf-8")).hexdigest()[:16]
+    return f"lane-merge-{digest}"
+
+
+def _run_merge_progression_engine(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    cycle_mode: str,
+    mergeability_report: dict[str, Any] | None,
+) -> dict[str, Any]:
+    report_payload = mergeability_report if isinstance(mergeability_report, dict) else {}
+    lane_status = report_payload.get("lane_status") if isinstance(report_payload.get("lane_status"), dict) else {}
+    lane_shas = report_payload.get("lane_shas") if isinstance(report_payload.get("lane_shas"), dict) else {}
+    run_base_sha = str(report_payload.get("run_base_sha") or "").strip()
+
+    task_path = cfg.repo_root / ARTIFACT_FILES["task_execution_state"]
+    task_payload = _read_json(task_path, default={})
+    if not isinstance(task_payload, dict):
+        task_payload = {}
+    task_rows = task_payload.get("tasks")
+    tasks = [row for row in task_rows if isinstance(row, dict)] if isinstance(task_rows, list) else []
+
+    worker_path = cfg.repo_root / ARTIFACT_FILES["worker_registry"]
+    worker_payload = _read_json(worker_path, default={})
+    if not isinstance(worker_payload, dict):
+        worker_payload = {}
+    worker_rows = worker_payload.get("workers")
+    workers = [row for row in worker_rows if isinstance(row, dict)] if isinstance(worker_rows, list) else []
+
+    task_to_lane: dict[str, str] = {}
+    lane_done_task_rows: dict[str, list[dict[str, Any]]] = {}
+    for row in tasks:
+        task_id = str(row.get("task_id") or "").strip()
+        lane_id = str(row.get("lane_id") or "").strip() or "unscoped"
+        if task_id:
+            task_to_lane[task_id] = lane_id
+        if str(row.get("status") or "").strip() == "done":
+            lane_done_task_rows.setdefault(lane_id, []).append(row)
+
+    now_iso = utc_now_iso()
+    state_changed = False
+    fan_in_accept_count = 0
+    lane_merge_ready_count = 0
+    lane_merge_completed_count = 0
+    lane_merge_blocked_count = 0
+    workers_released_count = 0
+    blockers_opened_count = 0
+    blockers_resolved_count = 0
+
+    blockers = task_payload.get("blockers")
+    blocker_rows = [row for row in blockers if isinstance(row, dict)] if isinstance(blockers, list) else []
+    blocker_index: dict[str, dict[str, Any]] = {}
+    for row in blocker_rows:
+        blocker_id = str(row.get("blocker_id") or "").strip()
+        if blocker_id:
+            blocker_index[blocker_id] = row
+
+    for lane_id in sorted(lane_status.keys()):
+        lane_row = lane_status.get(lane_id)
+        if not isinstance(lane_row, dict):
+            continue
+        if str(lane_row.get("tester_gate_status") or "").strip() != "pass":
+            continue
+        if str(lane_row.get("lane_to_run_merge_status") or "").strip() != "ready":
+            continue
+        lane_merge_ready_count += 1
+
+        for task_row in lane_done_task_rows.get(lane_id, []):
+            if not str(task_row.get("lane_fan_in_accepted_at") or "").strip():
+                task_row["lane_fan_in_accepted_at"] = now_iso
+                task_row["lane_fan_in_cycle"] = int(cycle_number)
+                state_changed = True
+                fan_in_accept_count += 1
+            if bool(task_row.get("lane_merge_gate_pending")):
+                task_row["lane_merge_gate_pending"] = False
+                task_row["lane_merge_gate_cleared_at"] = now_iso
+                state_changed = True
+
+        for worker_row in workers:
+            if str(worker_row.get("status") or "").strip() != "done":
+                continue
+            task_id = str(worker_row.get("current_task_id") or "").strip()
+            if task_to_lane.get(task_id, "unscoped") != lane_id:
+                continue
+            if str(worker_row.get("fan_in_status") or "").strip() != "accepted":
+                worker_row["fan_in_status"] = "accepted"
+                worker_row["fan_in_cycle"] = int(cycle_number)
+                worker_row["fan_in_accepted_at"] = now_iso
+                state_changed = True
+
+        lane_sha_values = lane_shas.get(lane_id)
+        lane_sha_list = [str(item).strip() for item in lane_sha_values if str(item).strip()] if isinstance(lane_sha_values, list) else []
+        unresolved_shas: list[str] = []
+        for lane_sha in lane_sha_list:
+            ancestor = _git_is_ancestor_commit(cfg.repo_root, ancestor=lane_sha, descendant=run_base_sha)
+            if ancestor is True:
+                continue
+            unresolved_shas.append(lane_sha)
+
+        blocker_id = _merge_progression_blocker_id(lane_id)
+        blocker_row = blocker_index.get(blocker_id)
+        if unresolved_shas:
+            lane_merge_blocked_count += 1
+            message = (
+                f"lane ready for merge but {len(unresolved_shas)} commit(s) are not in run-base; "
+                "operator merge/fan-in action required"
+            )
+            details = {
+                "cycle_number": int(cycle_number),
+                "cycle_mode": str(cycle_mode or "").strip() or "normal",
+                "run_base_sha": run_base_sha,
+                "pending_lane_shas": sorted(unresolved_shas),
+            }
+            if blocker_row is None:
+                blocker_row = {
+                    "blocker_id": blocker_id,
+                    "lane_id": lane_id,
+                    "status": "open",
+                    "owner": "BOSS",
+                    "reason_code": "lane_run_merge_pending_commit_not_in_run_base",
+                    "message": message,
+                    "updated_at": now_iso,
+                    "details": details,
+                }
+                blocker_rows.append(blocker_row)
+                blocker_index[blocker_id] = blocker_row
+                blockers_opened_count += 1
+                state_changed = True
+            else:
+                if str(blocker_row.get("status") or "").strip() != "open":
+                    blocker_row["status"] = "open"
+                    state_changed = True
+                if str(blocker_row.get("message") or "").strip() != message:
+                    blocker_row["message"] = message
+                    state_changed = True
+                blocker_row["updated_at"] = now_iso
+                blocker_row["details"] = details
+        else:
+            lane_merge_completed_count += 1
+            for task_row in lane_done_task_rows.get(lane_id, []):
+                if not str(task_row.get("lane_to_run_merged_at") or "").strip():
+                    task_row["lane_to_run_merged_at"] = now_iso
+                    task_row["lane_to_run_merge_cycle"] = int(cycle_number)
+                    state_changed = True
+            for worker_row in workers:
+                if str(worker_row.get("status") or "").strip() != "done":
+                    continue
+                task_id = str(worker_row.get("current_task_id") or "").strip()
+                if task_to_lane.get(task_id, "unscoped") != lane_id:
+                    continue
+                worker_row["status"] = "idle"
+                worker_row["current_task_id"] = None
+                worker_row["current_packet_id"] = None
+                worker_row["last_update"] = now_iso
+                worker_row["merge_lane_last_merged_at"] = now_iso
+                worker_row["merge_lane_last_merged_cycle"] = int(cycle_number)
+                workers_released_count += 1
+                state_changed = True
+            if blocker_row is not None and str(blocker_row.get("status") or "").strip() != "resolved":
+                blocker_row["status"] = "resolved"
+                blocker_row["resolved_at"] = now_iso
+                blocker_row["updated_at"] = now_iso
+                blockers_resolved_count += 1
+                state_changed = True
+
+    if state_changed:
+        task_payload["schema_version"] = SCHEMA_VERSION
+        task_payload["updated_at"] = now_iso
+        task_payload["cycle_number"] = int(cycle_number)
+        task_payload["tasks"] = tasks
+        task_payload["blockers"] = blocker_rows
+        _atomic_write_json(task_path, task_payload)
+
+        worker_payload["schema_version"] = SCHEMA_VERSION
+        worker_payload["updated_at"] = now_iso
+        worker_payload["cycle_number"] = int(cycle_number)
+        worker_payload["workers"] = workers
+        _atomic_write_json(worker_path, worker_payload)
+
+    return {
+        "cycle_number": int(cycle_number),
+        "state_changed": bool(state_changed),
+        "fan_in_accept_count": int(fan_in_accept_count),
+        "lane_merge_ready_count": int(lane_merge_ready_count),
+        "lane_merge_completed_count": int(lane_merge_completed_count),
+        "lane_merge_blocked_count": int(lane_merge_blocked_count),
+        "workers_released_count": int(workers_released_count),
+        "blockers_opened_count": int(blockers_opened_count),
+        "blockers_resolved_count": int(blockers_resolved_count),
+    }
+
+
 def _restart_checkpoint_fingerprint(cfg: RunConfig) -> str:
     snapshot = {
         "cycle_counter": _read_json(cfg.repo_root / CYCLE_COUNTER_FILE, default={}),
@@ -5426,25 +5763,36 @@ def _restart_checkpoint_fingerprint(cfg: RunConfig) -> str:
     return hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def _determine_restart_scenario(cfg: RunConfig, *, resume_mode: bool) -> str:
+def _determine_restart_scenario(
+    cfg: RunConfig,
+    *,
+    resume_mode: bool,
+    prior_run_lock: dict[str, Any] | None = None,
+) -> str:
     if not resume_mode:
         return "fresh_start"
     watchdog_signal = _read_json(cfg.repo_root / ARTIFACT_FILES["watchdog_exit_signal"], default={})
     if isinstance(watchdog_signal, dict) and str(watchdog_signal.get("reason_code") or "").strip():
         return "watchdog_resume"
-    lock_payload = _read_json(cfg.repo_root / RUN_LOCK_FILE, default={})
+    lock_payload = prior_run_lock if isinstance(prior_run_lock, dict) else _read_json(cfg.repo_root / RUN_LOCK_FILE, default={})
     stale_pid = _coerce_pid(lock_payload.get("pid")) if isinstance(lock_payload, dict) else None
     if stale_pid is not None and not _is_pid_running(stale_pid):
         return "process_kill_resume"
     return "checkpoint_replay"
 
 
-def _apply_restart_determinism_hooks(cfg: RunConfig, *, cycle_number: int, resume_mode: bool) -> dict[str, Any]:
+def _apply_restart_determinism_hooks(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    resume_mode: bool,
+    prior_run_lock: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     state = _read_json(cfg.repo_root / ARTIFACT_FILES["restart_determinism_state"], default={})
     if not isinstance(state, dict):
         state = {}
     previous_fingerprint = str(state.get("checkpoint_fingerprint") or "").strip()
-    scenario = _determine_restart_scenario(cfg, resume_mode=resume_mode)
+    scenario = _determine_restart_scenario(cfg, resume_mode=resume_mode, prior_run_lock=prior_run_lock)
     checkpoint_fingerprint = _restart_checkpoint_fingerprint(cfg)
     idempotent_continuation = bool(
         previous_fingerprint
@@ -5466,6 +5814,7 @@ def _apply_restart_determinism_hooks(cfg: RunConfig, *, cycle_number: int, resum
     invariants[scenario_key] = scenario_row
 
     continuation_log = state.get("continuation_log") if isinstance(state.get("continuation_log"), list) else []
+    prior_lock_pid = _coerce_pid((prior_run_lock or {}).get("pid")) if isinstance(prior_run_lock, dict) else None
     continuation_log.append(
         {
             "cycle_number": int(cycle_number),
@@ -5474,6 +5823,8 @@ def _apply_restart_determinism_hooks(cfg: RunConfig, *, cycle_number: int, resum
             "resume_mode": bool(resume_mode),
             "checkpoint_fingerprint": checkpoint_fingerprint,
             "idempotent_continuation": idempotent_continuation,
+            "prior_run_lock_pid": prior_lock_pid,
+            "prior_run_lock_present": isinstance(prior_run_lock, dict) and bool(prior_run_lock),
         }
     )
     continuation_log = continuation_log[-20:]
@@ -5561,8 +5912,12 @@ def _packet4_gate_closure_scaffold_model(*, generated_at_utc: str, repo: str = "
     }
 
 
+def _packet4_report_root() -> Path:
+    return Path("/Users/slobodan/projects/Earth/reports/phase2")
+
+
 def _packet4_gate_closure_paths(*, date_text: str) -> dict[str, Path]:
-    report_root = Path("/Users/slobodan/projects/Earth/reports/phase2")
+    report_root = _packet4_report_root()
     base = f"packet4_gate_evidence_bundle_{date_text}"
     return {
         "json": report_root / f"{base}.json",
@@ -5600,6 +5955,123 @@ def _write_packet4_gate_closure_scaffold(
         md_lines.append(f"- {note}")
     paths["md"].write_text("\n".join(md_lines).rstrip() + "\n", encoding="utf-8")
     return {"json": str(paths["json"]), "md": str(paths["md"])}
+
+
+def _packet4_kpi_trend_scaffold_model(*, generated_at_utc: str, repo: str = "earth-root") -> dict[str, Any]:
+    return {
+        "generated_at_utc": generated_at_utc,
+        "phase": "Phase 2",
+        "packet": "Packet 4",
+        "repo": repo,
+        "status": "warn",
+        "inputs": {
+            "before_refs": [],
+            "after_refs": [],
+            "delta_refs": [],
+            "canary_refs": ["Tetris"],
+        },
+        "metrics": {
+            "non_actionable_cycle_ratio": {"before": None, "after": None, "delta": None},
+            "redispatch_loop_ratio": {"before": None, "after": None, "delta": None},
+            "throughput": {
+                "per_cycle": {"before": None, "after": None, "delta": None},
+                "per_hour": {"before": None, "after": None, "delta": None},
+            },
+            "retry_quality_outcomes": {
+                "launch_efficiency": {"before": None, "after": None, "delta": None},
+                "failed_or_unknown_ratio": {"before": None, "after": None, "delta": None},
+            },
+            "restart_recovery_consistency": {"before": None, "after": None, "delta": None},
+        },
+        "notes": [
+            "Packet 4 KPI trend scaffold generated by runtime internals only.",
+            "Populate before/after/delta refs after supervised canary execution.",
+        ],
+    }
+
+
+def _packet4_kpi_trend_paths(*, date_text: str) -> dict[str, Path]:
+    report_root = _packet4_report_root()
+    base = f"packet4_kpi_trend_summary_{date_text}"
+    return {
+        "json": report_root / f"{base}.json",
+        "md": report_root / f"{base}.md",
+    }
+
+
+def _write_packet4_kpi_trend_scaffold(
+    *,
+    date_text: str,
+    generated_at_utc: str | None = None,
+    repo: str = "earth-root",
+) -> dict[str, str]:
+    now_iso = str(generated_at_utc or utc_now_iso())
+    model = _packet4_kpi_trend_scaffold_model(generated_at_utc=now_iso, repo=repo)
+    paths = _packet4_kpi_trend_paths(date_text=date_text)
+    paths["json"].parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(paths["json"], model)
+    md_lines = [
+        "# Packet 4 KPI Trend Summary (Scaffold)",
+        "",
+        f"- Generated at: `{now_iso}`",
+        f"- Phase: `{model['phase']}`",
+        f"- Packet: `{model['packet']}`",
+        f"- Repo: `{model['repo']}`",
+        f"- Status: `{model['status']}`",
+        "",
+        "## Comparator Keys",
+        "- non_actionable_cycle_ratio",
+        "- redispatch_loop_ratio",
+        "- throughput.per_cycle",
+        "- throughput.per_hour",
+        "- retry_quality_outcomes.launch_efficiency",
+        "- retry_quality_outcomes.failed_or_unknown_ratio",
+        "- restart_recovery_consistency",
+        "",
+        "## Notes",
+    ]
+    for note in model.get("notes", []):
+        md_lines.append(f"- {note}")
+    paths["md"].write_text("\n".join(md_lines).rstrip() + "\n", encoding="utf-8")
+    return {"json": str(paths["json"]), "md": str(paths["md"])}
+
+
+def _packet4_gate_recommendation_path(*, date_text: str) -> Path:
+    return _packet4_report_root() / f"packet4_gate_recommendation_{date_text}.md"
+
+
+def _write_packet4_gate_recommendation_scaffold(
+    *,
+    date_text: str,
+    generated_at_utc: str | None = None,
+    repo: str = "earth-root",
+) -> str:
+    now_iso = str(generated_at_utc or utc_now_iso())
+    path = _packet4_gate_recommendation_path(date_text=date_text)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Packet 4 Gate Recommendation (Scaffold)",
+        "",
+        f"- Generated at: `{now_iso}`",
+        f"- Phase: `Phase 2`",
+        f"- Packet: `Packet 4`",
+        f"- Repo: `{repo}`",
+        "- Decision: `hold`",
+        "- Rationale: Supervised canary evidence is pending; defer gate close/hold finalization.",
+        "",
+        "## Required Inputs Before Final Recommendation",
+        "- packet2_kpis_after_<repo>_<YYYY-MM-DD>.json/.md",
+        "- packet2_kpi_delta_<repo>_<YYYY-MM-DD>.json/.md",
+        "- packet3 recovery determinism evidence artifacts",
+        "- Tetris canary evidence links",
+        "",
+        "## Blockers (Owner + Due Date)",
+        "- owner: OP runtime path",
+        "- due_date: pending supervised run batch",
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return str(path)
 
 
 def _render_cycle_summary(
@@ -5874,6 +6346,9 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
     cfg = _build_config(req)
     warnings: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    preexisting_run_lock = _read_json(cfg.repo_root / RUN_LOCK_FILE, default={})
+    if not isinstance(preexisting_run_lock, dict):
+        preexisting_run_lock = {}
     artifacts = [str((cfg.repo_root / rel).resolve()) for rel in ARTIFACT_FILES.values()]
     artifacts.extend(
         [
@@ -5948,6 +6423,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             cfg,
             cycle_number=cycle_number,
             resume_mode=bool(cfg.resume_mode),
+            prior_run_lock=preexisting_run_lock,
         )
         cycles_this_run = 0
         previous_state_signature: str | None = None
@@ -6167,11 +6643,26 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                         cycle_number=cycle_number,
                         cycle_mode=cycle_mode,
                     )
+                    progression = _run_merge_progression_engine(
+                        cfg,
+                        cycle_number=cycle_number,
+                        cycle_mode=cycle_mode,
+                        mergeability_report=mergeability_report,
+                    )
+                    if bool(progression.get("state_changed")):
+                        mergeability_report = _build_mergeability_report(
+                            cfg,
+                            cycle_number=cycle_number,
+                            cycle_mode=cycle_mode,
+                        )
                     manager_statuses["merge-engine"] = {
                         "status": "ok",
                         "note": (
                             "mergeability report refreshed after timeout cycle "
-                            f"unmerged_commits={int(mergeability_report.get('unmerged_commit_count') or 0)}"
+                            f"unmerged_commits={int(mergeability_report.get('unmerged_commit_count') or 0)} "
+                            f"state_changed={str(bool(progression.get('state_changed'))).lower()} "
+                            f"lane_merge_completed={int(progression.get('lane_merge_completed_count') or 0)} "
+                            f"lane_merge_blocked={int(progression.get('lane_merge_blocked_count') or 0)}"
                         ),
                     }
                 except Exception as exc:  # noqa: BLE001
@@ -6306,12 +6797,27 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     cycle_number=cycle_number,
                     cycle_mode=cycle_mode,
                 )
+                progression = _run_merge_progression_engine(
+                    cfg,
+                    cycle_number=cycle_number,
+                    cycle_mode=cycle_mode,
+                    mergeability_report=mergeability_report,
+                )
+                if bool(progression.get("state_changed")):
+                    mergeability_report = _build_mergeability_report(
+                        cfg,
+                        cycle_number=cycle_number,
+                        cycle_mode=cycle_mode,
+                    )
                 manager_statuses["merge-engine"] = {
                     "status": "ok",
                     "note": (
                         "mergeability report refreshed "
                         f"unmerged_commits={int(mergeability_report.get('unmerged_commit_count') or 0)} "
-                        f"advanced={str(bool(mergeability_report.get('mergeability_advanced'))).lower()}"
+                        f"advanced={str(bool(mergeability_report.get('mergeability_advanced'))).lower()} "
+                        f"state_changed={str(bool(progression.get('state_changed'))).lower()} "
+                        f"lane_merge_completed={int(progression.get('lane_merge_completed_count') or 0)} "
+                        f"lane_merge_blocked={int(progression.get('lane_merge_blocked_count') or 0)}"
                     ),
                 }
             except Exception as exc:  # noqa: BLE001
@@ -6388,7 +6894,27 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             else:
                 stop_reason = _termination_from_summary(summary)
                 if stop_reason not in {"project_done", "insurmountable_blocker"} and watchdog_stop:
-                    stop_reason = "watchdog_idle_stop"
+                    watchdog_reason = str(watchdog_signal.get("reason_code") or "").strip()
+                    stop_reason = watchdog_reason or "watchdog_idle_stop"
+
+            if boss_result is not None and boss_result.status != "ok" and not boss_result.timeout and not stop_reason:
+                _write_terminal_capsule(
+                    cfg,
+                    cycle_number=cycle_number,
+                    reason_code=boss_result.reason_code or "boss_failed",
+                    stop_reason=None,
+                    cycle_mode=cycle_mode,
+                    manager_name="BOSS",
+                    manager_result=boss_result,
+                    manager_statuses=manager_statuses,
+                    dispatch_counts=dispatch_counts,
+                    watchdog_signal=watchdog_signal if isinstance(watchdog_signal, dict) else None,
+                    details={
+                        "event": "boss_failure_fail_closed",
+                        "mergeability_report_ref": str((cfg.repo_root / ARTIFACT_FILES["mergeability_report"]).resolve()),
+                        "unmerged_commit_count": int((mergeability_report or {}).get("unmerged_commit_count") or 0),
+                    },
+                )
 
             _update_restart_determinism_checkpoint(
                 cfg,
@@ -6487,7 +7013,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         if stop_reason:
             _persist_cycle_summary_stop_reason(cfg, cycle_number=cycle_number, stop_reason=stop_reason)
 
-        if stop_reason in {"project_done", "watchdog_idle_stop"}:
+        if stop_reason == "project_done" or _is_watchdog_terminal_reason(stop_reason):
             _run_wrapup_manager(
                 cfg,
                 cycle_number=cycle_number,

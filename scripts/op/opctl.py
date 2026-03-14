@@ -131,6 +131,9 @@ def _resolve_configured_workflow(repo_root: str) -> dict[str, Any]:
             parallel_workers = None
         if isinstance(parallel_workers, int) and parallel_workers > 0:
             resolved["max_parallel_workers"] = parallel_workers
+        worktrees_parent = workflow.get("worktrees_parent")
+        if isinstance(worktrees_parent, str) and worktrees_parent.strip():
+            resolved["worktrees_parent"] = worktrees_parent.strip()
         fan_in_value = workflow.get("enable_artifact_fan_in")
         if isinstance(fan_in_value, bool):
             resolved["enable_artifact_fan_in"] = fan_in_value
@@ -162,9 +165,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-mode", choices=["json", "json+text"], default=None)
     parser.add_argument("--max-build-cycles", type=int)
     parser.add_argument("--max-parallel-workers", type=int)
+    parser.add_argument("--worktrees-parent")
     parser.add_argument("--sleep-minutes", type=float)
     parser.add_argument("--run-base-source-branch")
     parser.add_argument("--profile")
+    parser.add_argument("--selected-aliases")
     parser.add_argument("--executor-provider", choices=["codex", "openrouter", "blackbox"], default=None)
     parser.add_argument("--executor-model")
     parser.add_argument("--blackbox-lane", choices=["free", "api_key"], default=None)
@@ -209,6 +214,8 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["max_build_cycles"] = args.max_build_cycles
     if args.max_parallel_workers is not None:
         payload["max_parallel_workers"] = args.max_parallel_workers
+    if args.worktrees_parent is not None:
+        payload["worktrees_parent"] = args.worktrees_parent
     if args.sleep_minutes is not None:
         payload["sleep_minutes"] = args.sleep_minutes
     if args.run_base_source_branch is not None:
@@ -216,6 +223,8 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
     if args.profile is not None:
         payload["profile"] = args.profile
         payload["codex_profile"] = args.profile
+    if args.selected_aliases is not None:
+        payload["selected_aliases"] = args.selected_aliases
     if args.executor_provider is not None:
         payload["executor_provider"] = args.executor_provider
     if args.executor_model is not None:
@@ -255,7 +264,7 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
     except ValueError:
         canonical = ""
 
-    if canonical in {"op-build", "op-resume", "op-simple-build"}:
+    if canonical in {"op-build", "op-resume", "op-simple-build", "op-initialize"}:
         workflow = _resolve_configured_workflow(str(payload["repo_root"]))
         if "sleep_minutes" not in payload:
             configured_sleep = workflow.get("sleep_minutes")
@@ -269,6 +278,10 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
             configured_fan_in = workflow.get("enable_artifact_fan_in")
             if isinstance(configured_fan_in, bool):
                 payload["enable_artifact_fan_in"] = configured_fan_in
+        if "worktrees_parent" not in payload:
+            configured_worktrees_parent = workflow.get("worktrees_parent")
+            if isinstance(configured_worktrees_parent, str) and configured_worktrees_parent.strip():
+                payload["worktrees_parent"] = configured_worktrees_parent.strip()
         if canonical == "op-simple-build" and "boss_model" not in payload:
             configured_model = workflow.get("boss_model")
             if isinstance(configured_model, str) and configured_model.strip():

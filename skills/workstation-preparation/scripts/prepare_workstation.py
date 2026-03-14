@@ -19,9 +19,11 @@ from typing import Any
 MAX_WORKSTATIONS = 10
 LEGACY_SLOT_RE = re.compile(r"^workstation-(?:[1-9]|10)$")
 MANAGER_SLOT_RE = re.compile(r"^workstation-(?:dev|test|review)-[1-3]$")
+WORKSTATION_SLOT_SUFFIX_RE = re.compile(r"^workstation-(?:[1-9]|10|(?:dev|test|review)-[1-3])$")
 WORKTREE_NAME_ERROR = (
     "worktree name must be workstation-1 through workstation-10 "
-    "or workstation-(dev|test|review)-[1-3]"
+    "or workstation-(dev|test|review)-[1-3], "
+    "optionally prefixed with '<repo>-', for example 'tetris-workstation-1'"
 )
 DEFAULT_ASSETS_MANIFEST_REL = Path("reports/optimus-prime/config/WORKSTATION_ASSETS.json")
 DEFAULT_ASSETS_STATE_REL = Path("reports/optimus-prime/WORKSTATION_ASSET_STATE.json")
@@ -100,9 +102,19 @@ def list_worktrees(repo_root: Path) -> list[WorktreeEntry]:
     return entries
 
 
-def slot_name_for_path(path: Path) -> str | None:
+def slot_name_for_path(path: Path, repo_root: Path | None = None) -> str | None:
     name = path.name
-    return name if (LEGACY_SLOT_RE.fullmatch(name) or MANAGER_SLOT_RE.fullmatch(name)) else None
+    if LEGACY_SLOT_RE.fullmatch(name) or MANAGER_SLOT_RE.fullmatch(name):
+        return name
+    split = split_prefixed_slot(name)
+    if split is None:
+        return None
+    prefix, _slot_name = split
+    if repo_root is None:
+        return name
+    if prefix.lower() != repo_workstation_prefix(repo_root):
+        return None
+    return name
 
 
 def slot_sort_key(slot_name: str) -> tuple[int, str]:
@@ -126,6 +138,39 @@ def default_base_ref(repo_root: Path) -> str:
 
 def default_worktrees_parent(repo_root: Path) -> Path:
     return (repo_root.parent / f".{repo_root.name}-workstations").resolve()
+
+
+def repo_workstation_prefix(repo_root: Path) -> str:
+    raw = str(repo_root.name or "").strip().lower()
+    normalized = re.sub(r"[^a-z0-9._-]+", "-", raw)
+    normalized = re.sub(r"-{2,}", "-", normalized).strip("-._")
+    return normalized or "repo"
+
+
+def prefixed_slot_name(repo_root: Path, slot_name: str) -> str:
+    return f"{repo_workstation_prefix(repo_root)}-{slot_name}"
+
+
+def split_prefixed_slot(name: str) -> tuple[str, str] | None:
+    if "-workstation-" not in name:
+        return None
+    prefix, _, slot_suffix = name.partition("-workstation-")
+    if not prefix:
+        return None
+    slot_name = f"workstation-{slot_suffix}"
+    if not WORKSTATION_SLOT_SUFFIX_RE.fullmatch(slot_name):
+        return None
+    return prefix, slot_name
+
+
+def is_valid_worktree_name(name: str, repo_root: Path) -> bool:
+    if LEGACY_SLOT_RE.fullmatch(name) or MANAGER_SLOT_RE.fullmatch(name):
+        return True
+    split = split_prefixed_slot(name)
+    if split is None:
+        return False
+    prefix, _slot = split
+    return prefix.lower() == repo_workstation_prefix(repo_root)
 
 
 def revlist_count(repo_path: Path, revspec: str, right_only: bool) -> int:
@@ -740,7 +785,7 @@ def main() -> int:
 
     managed_slots: dict[str, WorktreeEntry] = {}
     for entry in all_worktrees:
-        slot = slot_name_for_path(entry.path)
+        slot = slot_name_for_path(entry.path, repo_root=repo_root)
         if not slot:
             continue
         if slot in managed_slots:
@@ -923,13 +968,13 @@ def main() -> int:
         )
 
     if args.worktree_name:
-        if not (LEGACY_SLOT_RE.fullmatch(args.worktree_name) or MANAGER_SLOT_RE.fullmatch(args.worktree_name)):
+        if not is_valid_worktree_name(args.worktree_name, repo_root):
             return fail(WORKTREE_NAME_ERROR, args.output, context_common)
         worktree_name = args.worktree_name
     else:
         worktree_name = ""
         for index in range(1, MAX_WORKSTATIONS + 1):
-            candidate = f"workstation-{index}"
+            candidate = prefixed_slot_name(repo_root, f"workstation-{index}")
             if candidate not in managed_slots:
                 worktree_name = candidate
                 break

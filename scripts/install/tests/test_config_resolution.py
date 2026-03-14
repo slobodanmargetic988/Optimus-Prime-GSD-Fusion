@@ -77,6 +77,7 @@ def test_config_precedence_cli_over_project_over_global_over_defaults():
             assert effective["workflow"]["sleep_minutes"] == 2.0
             assert effective["workflow"]["enable_artifact_fan_in"] is False
             assert effective["workflow"]["max_parallel_workers"] == 8
+            assert effective["workflow"]["worktrees_parent"] == "/Users/slobodan/Forest"
             assert effective["workflow"]["boss_model"] == "gpt-5.3-codex"
             assert effective["workflow"]["boss_reasoning_effort"] == "xhigh"
         finally:
@@ -100,6 +101,7 @@ def test_config_validation_reports_fix_guidance():
                         "strict_validation": "bad",
                         "sleep_minutes": 0,
                         "enable_artifact_fan_in": "bad",
+                        "worktrees_parent": "",
                         "boss_model": "",
                         "boss_reasoning_effort": "",
                     },
@@ -115,6 +117,7 @@ def test_config_validation_reports_fix_guidance():
         assert "workflow.strict_validation" in fields
         assert "workflow.sleep_minutes" in fields
         assert "workflow.enable_artifact_fan_in" in fields
+        assert "workflow.worktrees_parent" in fields
         assert "workflow.boss_model" in fields
         assert "workflow.boss_reasoning_effort" in fields
         assert "rate_gate.max_wait_hours" in fields
@@ -164,6 +167,21 @@ def test_cli_max_parallel_workers_override_wins():
         resolved = CONFIG.resolve_effective_config(payload, ctx)
         assert resolved["errors"] == []
         assert resolved["effective_config"]["workflow"]["max_parallel_workers"] == 12
+
+
+def test_cli_worktrees_parent_override_wins():
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp) / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "mode": "global",
+            "home_override": str(home),
+            "worktrees_parent": "/tmp/custom-worktrees",
+        }
+        ctx = COMMON.resolve_context(payload)
+        resolved = CONFIG.resolve_effective_config(payload, ctx)
+        assert resolved["errors"] == []
+        assert resolved["effective_config"]["workflow"]["worktrees_parent"] == "/tmp/custom-worktrees"
 
 
 def test_cli_boss_model_override_wins():

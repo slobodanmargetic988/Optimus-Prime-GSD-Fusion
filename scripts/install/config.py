@@ -19,6 +19,7 @@ PROFILES = {
             "sleep_minutes": 2.0,
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 8,
+            "worktrees_parent": "/Users/slobodan/Forest",
             "boss_model": "gpt-5.3-codex",
             "boss_reasoning_effort": "xhigh",
         },
@@ -31,6 +32,7 @@ PROFILES = {
             "sleep_minutes": 2.0,
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 8,
+            "worktrees_parent": "/Users/slobodan/Forest",
             "boss_model": "gpt-5.3-codex",
             "boss_reasoning_effort": "xhigh",
         },
@@ -43,6 +45,7 @@ PROFILES = {
             "sleep_minutes": 2.0,
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 8,
+            "worktrees_parent": "/Users/slobodan/Forest",
             "boss_model": "gpt-5.3-codex",
             "boss_reasoning_effort": "xhigh",
         },
@@ -58,6 +61,7 @@ DEFAULT_CONFIG = {
         "sleep_minutes": 2.0,
         "enable_artifact_fan_in": False,
         "max_parallel_workers": 8,
+        "worktrees_parent": "/Users/slobodan/Forest",
         "boss_model": "gpt-5.3-codex",
         "boss_reasoning_effort": "xhigh",
     },
@@ -176,6 +180,16 @@ def _validate_config(config: dict[str, Any]) -> list[dict[str, Any]]:
                     "field": "workflow.max_parallel_workers",
                     "message": "workflow.max_parallel_workers must be a positive integer",
                     "fix": "Set workflow.max_parallel_workers to a positive integer.",
+                }
+            )
+        worktrees_parent = as_str(workflow.get("worktrees_parent"))
+        if not worktrees_parent:
+            errors.append(
+                {
+                    "code": "config_validation_error",
+                    "field": "workflow.worktrees_parent",
+                    "message": "workflow.worktrees_parent must be a non-empty string path",
+                    "fix": "Set workflow.worktrees_parent to an absolute directory path (for example /Users/slobodan/Forest).",
                 }
             )
         boss_model = as_str(workflow.get("boss_model"))
@@ -298,6 +312,13 @@ def resolve_effective_config(payload: dict[str, Any], ctx: InstallContext) -> di
         workflow["max_parallel_workers"] = int(cli_parallel_workers)
         effective["workflow"] = workflow
         sources.append({"source": "cli_max_parallel_workers", "path": None})
+
+    cli_worktrees_parent = as_str(payload.get("worktrees_parent"))
+    if cli_worktrees_parent:
+        workflow = effective.get("workflow") if isinstance(effective.get("workflow"), dict) else {}
+        workflow["worktrees_parent"] = cli_worktrees_parent
+        effective["workflow"] = workflow
+        sources.append({"source": "cli_worktrees_parent", "path": None})
 
     cli_boss_model = as_str(payload.get("boss_model"))
     if cli_boss_model:

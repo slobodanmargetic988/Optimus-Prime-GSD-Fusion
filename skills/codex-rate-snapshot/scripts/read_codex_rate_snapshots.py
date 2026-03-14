@@ -392,9 +392,16 @@ def reset_window_to_full(window: WindowSnapshot) -> WindowSnapshot:
     )
 
 
+def auth_json_candidate_paths(codex_home: Path) -> list[Path]:
+    return [codex_home / "auth.json", codex_home / "config" / "auth.json"]
+
+
+def profile_has_auth_json(codex_home: Path) -> bool:
+    return any(path.is_file() for path in auth_json_candidate_paths(codex_home))
+
+
 def maybe_read_auth_identity(codex_home: Path) -> tuple[str | None, str | None]:
-    candidates = [codex_home / "auth.json", codex_home / "config" / "auth.json"]
-    for path in candidates:
+    for path in auth_json_candidate_paths(codex_home):
         if not path.is_file():
             continue
         try:
@@ -414,8 +421,7 @@ def maybe_read_auth_identity(codex_home: Path) -> tuple[str | None, str | None]:
 
 
 def maybe_read_auth_json(codex_home: Path) -> tuple[dict[str, Any] | None, Path | None]:
-    candidates = [codex_home / "auth.json", codex_home / "config" / "auth.json"]
-    for path in candidates:
+    for path in auth_json_candidate_paths(codex_home):
         if not path.is_file():
             continue
         try:
@@ -541,6 +547,29 @@ def build_profile_snapshot(
     max_snapshot_age_hours: float = 24.0,
 ) -> ProfileSnapshot:
     errors: list[str] = []
+
+    if not profile_has_auth_json(codex_home):
+        errors.append("profile_deactivated_missing_auth_json")
+        five = WindowSnapshot(None, None, None, None, True)
+        weekly = WindowSnapshot(None, None, None, None, True)
+        return ProfileSnapshot(
+            alias=alias,
+            codex_home=str(codex_home),
+            account_identity=None,
+            account_source=None,
+            session_file=None,
+            rate_limits_source=None,
+            rate_limits_event_at=None,
+            rate_snapshot_age_minutes=None,
+            token_count_event_found=False,
+            five_hour=five,
+            weekly=weekly,
+            recommended_action="wind_down",
+            soft_concurrency_gated=True,
+            wait_until_reset_candidate=False,
+            wait_seconds=None,
+            errors=errors,
+        )
     session_file = newest_session_jsonl(codex_home)
     session_files = recent_session_jsonl(codex_home, max_session_files)
     account_identity, account_source = maybe_read_auth_identity(codex_home)
@@ -820,6 +849,16 @@ def to_json_obj(profile: ProfileSnapshot) -> dict[str, Any]:
             "gated": w.gated,
         }
 
+    deactivated = "profile_deactivated_missing_auth_json" in profile.errors
+    if deactivated:
+        decision = "hard_gated"
+    elif profile.recommended_action != "continue":
+        decision = "hard_gated"
+    elif profile.soft_concurrency_gated:
+        decision = "soft_gated"
+    else:
+        decision = "eligible"
+
     return {
         "alias": profile.alias,
         "codex_home": profile.codex_home,
@@ -837,6 +876,8 @@ def to_json_obj(profile: ProfileSnapshot) -> dict[str, Any]:
         "wait_until_reset_candidate": profile.wait_until_reset_candidate,
         "wait_seconds": profile.wait_seconds,
         "eligible_for_new_work": profile.recommended_action == "continue",
+        "deactivated": deactivated,
+        "decision": decision,
         "errors": profile.errors,
     }
 

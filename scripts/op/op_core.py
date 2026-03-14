@@ -294,6 +294,8 @@ class OpRequest:
     max_parallel_workers: int
     sleep_minutes: float
     enable_artifact_fan_in: bool
+    worktrees_parent: Path | None
+    selected_aliases: list[str] | None
     dry_run: bool
     reset_exhausted_retries: bool
     run_base_source_branch: str | None = None
@@ -322,6 +324,16 @@ def _as_str(value: Any) -> str | None:
         return text or None
     text = str(value).strip()
     return text or None
+
+
+def _default_worktrees_parent(repo_root: Path) -> Path:
+    return (repo_root.parent / f".{repo_root.name}-workstations").resolve()
+
+
+def _effective_worktrees_parent(repo_root: Path, configured_parent: Path | None) -> Path:
+    if isinstance(configured_parent, Path):
+        return configured_parent
+    return _default_worktrees_parent(repo_root)
 
 
 def _as_bool(value: Any, *, default: bool) -> bool:
@@ -373,6 +385,36 @@ def _as_str_list(value: Any) -> list[str]:
         if text:
             out.append(text)
     return out
+
+
+def _as_alias_list(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    raw_items: list[str] = []
+    if isinstance(value, str):
+        raw_items.extend(value.split(","))
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                raw_items.extend(item.split(","))
+            else:
+                text = _as_str(item)
+                if text:
+                    raw_items.extend(text.split(","))
+    else:
+        text = _as_str(value)
+        if text:
+            raw_items.extend(text.split(","))
+
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_items:
+        alias = str(raw or "").strip().lower()
+        if not alias or alias in seen:
+            continue
+        seen.add(alias)
+        aliases.append(alias)
+    return aliases or None
 
 
 def _default_verification_contract(*, mode: str = "implementation_green") -> dict[str, Any]:
@@ -1874,11 +1916,16 @@ def _expected_slot_worktree_name(slot: str) -> str | None:
     return None
 
 
-def _expected_slot_worktree_path(repo_root: Path, slot: str) -> Path | None:
+def _expected_slot_worktree_path(
+    repo_root: Path,
+    slot: str,
+    worktrees_parent: Path | None = None,
+) -> Path | None:
     worktree_name = _expected_slot_worktree_name(slot)
     if not worktree_name:
         return None
-    return (repo_root.parent / f".{repo_root.name}-workstations" / worktree_name).resolve()
+    parent = _effective_worktrees_parent(repo_root, worktrees_parent)
+    return (parent / worktree_name).resolve()
 
 
 def _ensure_worktree_artifact_root_symlink(repo_root: Path, worktree_root: Path) -> dict[str, Any]:
@@ -6227,6 +6274,41 @@ def _ensure_command_flag(command_text: str, flag: str) -> str:
     if flag in tokens or any(token.startswith(f"{flag}=") for token in tokens):
         return text
     tokens.append(flag)
+    return shlex.join(tokens)
+
+
+def _ensure_command_option_value(command_text: str, option: str, value: str) -> str:
+    text = (command_text or "").strip()
+    if not text:
+        return text
+    wrapped = _unwrap_bash_lc(text)
+    if wrapped is not None:
+        updated = _ensure_command_option_value(wrapped, option, value)
+        if updated == wrapped:
+            return text
+        return f"bash -lc {shlex.quote(updated)}"
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        return f"{text} {option} {shlex.quote(value)}".strip()
+    if not tokens:
+        return text
+
+    idx = 0
+    while idx < len(tokens):
+        token = tokens[idx]
+        if token == option:
+            if idx + 1 < len(tokens):
+                tokens[idx + 1] = value
+                return shlex.join(tokens)
+            tokens.append(value)
+            return shlex.join(tokens)
+        if token.startswith(f"{option}="):
+            tokens[idx] = f"{option}={value}"
+            return shlex.join(tokens)
+        idx += 1
+
+    tokens.extend([option, value])
     return shlex.join(tokens)
 
 
@@ -11720,6 +11802,12 @@ def _manager_workstation_cycle(
             }
 
         effective_prepare_command = _ensure_command_flag(prepare_command, "--force-reset-existing")
+        expected_worktrees_parent = _effective_worktrees_parent(req.repo_root, req.worktrees_parent)
+        effective_prepare_command = _ensure_command_option_value(
+            effective_prepare_command,
+            "--worktrees-parent",
+            str(expected_worktrees_parent),
+        )
         prepare_result = _run_manager_command(
             effective_prepare_command,
             cwd=req.repo_root,
@@ -12112,7 +12200,11 @@ def _manager_workstation_cycle(
         expected_worktree_name = _expected_slot_worktree_name(slot) or (
             current_worktree_path.name if current_worktree_path else None
         )
-        expected_worktree_path = _expected_slot_worktree_path(req.repo_root, slot)
+        expected_worktree_path = _expected_slot_worktree_path(
+            req.repo_root,
+            slot,
+            req.worktrees_parent,
+        )
         current_worktree_matches_slot = bool(
             current_worktree_ok
             and expected_worktree_path
@@ -15338,6 +15430,11 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
     if max_parallel_workers <= 0:
         max_parallel_workers = 8
     enable_artifact_fan_in = _as_bool(payload.get("enable_artifact_fan_in"), default=False)
+    worktrees_parent_raw = _as_str(payload.get("worktrees_parent"))
+    worktrees_parent = (
+        Path(worktrees_parent_raw).expanduser().resolve() if worktrees_parent_raw else None
+    )
+    selected_aliases = _as_alias_list(payload.get("selected_aliases"))
     run_base_source_branch = _as_str(payload.get("run_base_source_branch"))
     boss_model = _as_str(payload.get("boss_model")) or "gpt-5.3-codex"
     boss_reasoning_effort = _as_str(payload.get("boss_reasoning_effort")) or "xhigh"
@@ -15396,6 +15493,8 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         max_parallel_workers=max_parallel_workers,
         sleep_minutes=max(0.0, sleep_val),
         enable_artifact_fan_in=enable_artifact_fan_in,
+        worktrees_parent=worktrees_parent,
+        selected_aliases=selected_aliases,
         dry_run=_as_bool(payload.get("dry_run"), default=False),
         reset_exhausted_retries=_as_bool(payload.get("reset_exhausted_retries"), default=False),
         run_base_source_branch=run_base_source_branch,

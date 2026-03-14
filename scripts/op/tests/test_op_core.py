@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -1131,6 +1132,89 @@ def test_op_simple_build_accepts_executor_overrides_and_profile_alias():
         assert req.executor_model == "blackboxai/minimax/minimax-m2.5"
         assert req.blackbox_lane == "api_key"
         assert req.allow_worker_executor_override is True
+
+
+def test_op_simple_build_accepts_selected_aliases_csv():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-simple-build",
+                "repo_root": str(root),
+                "selected_aliases": "six, seven, Eight, six",
+            }
+        )
+        assert req.selected_aliases == ["six", "seven", "eight"]
+
+
+def test_op_build_accepts_selected_aliases_list():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "selected_aliases": ["six", " seven ", "SIX", "ten"],
+            }
+        )
+        assert req.selected_aliases == ["six", "seven", "ten"]
+
+
+def test_command_build_passes_selected_aliases_to_op_simple_build(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "selected_aliases": "six, seven, eight",
+            }
+        )
+        captured: dict[str, object] = {}
+
+        fake_module = types.ModuleType("op_simple_build")
+
+        def fake_run_op_simple_build(simple_req):
+            captured["selected_aliases"] = list(simple_req.selected_aliases or [])
+            captured["command"] = simple_req.command
+            return {
+                "ok": True,
+                "status": "completed",
+                "summary": "ok",
+                "warnings": [],
+                "errors": [],
+                "artifacts": [],
+                "next_action": None,
+                "state_ref": None,
+                "data": {},
+            }
+
+        fake_module.run_op_simple_build = fake_run_op_simple_build
+        monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+        monkeypatch.setattr(
+            MODULE,
+            "command_initialize",
+            lambda _req: {
+                "ok": True,
+                "status": "completed",
+                "summary": "init ok",
+                "warnings": [],
+                "errors": [],
+                "artifacts": [],
+                "next_action": None,
+                "state_ref": None,
+                "data": {},
+            },
+        )
+
+        out = MODULE.command_build(req)
+
+        assert out["ok"] is True
+        assert captured["command"] == "op-simple-build"
+        assert captured["selected_aliases"] == ["six", "seven", "eight"]
 
 
 def test_parse_request_rejects_invalid_executor_provider():
@@ -7348,6 +7432,7 @@ def test_workstation_manager_auto_adds_force_reset_existing(monkeypatch: pytest.
         out = MODULE._manager_workstation_cycle(req, task_state=task_state, build_state=build_state)
         assert out.get("fatal") is False
         assert "--force-reset-existing" in seen_prepare_command["value"]
+        assert "--worktrees-parent" in seen_prepare_command["value"]
 
 
 def test_workstation_manager_test_slot_uses_slot_prefix_and_dev_base_ref(
@@ -9134,4 +9219,3 @@ def test_summarize_branch_merge_decision_with_reasons_only():
         ]
     )
     assert summary == "branch-merge decision: candidates=0 reasons=open_task_gap:2,task_evidence_invalid:1"
-

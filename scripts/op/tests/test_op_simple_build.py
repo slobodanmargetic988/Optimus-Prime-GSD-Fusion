@@ -393,6 +393,10 @@ def test_boss_failure_skips_cycle_and_writes_conservative_summary(tmp_path: Path
     assert summary["manager_statuses"]["work-dispatcher"]["status"] == "skipped"
     assert summary["manager_statuses"]["summary"]["status"] == "ok"
     assert (tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"]).exists()
+    capsule = json.loads((tmp_path / MODULE.ARTIFACT_FILES["terminal_capsule"]).read_text(encoding="utf-8"))
+    assert capsule["reason_code"] == "manager_non_zero_exit"
+    assert capsule["stop_reason"] == ""
+    assert capsule["manager_status"] == "failed"
 
 
 def test_worker_state_signature_and_counts_helpers(tmp_path: Path, monkeypatch) -> None:
@@ -610,6 +614,192 @@ def test_build_mergeability_report_marks_pending_lane_as_blocked_for_merge(tmp_p
     assert any(item.get("reason_code") == "lane_pending_tasks" for item in report["merge_blockers"])
 
 
+def test_merge_progression_engine_releases_done_workers_for_ready_lane(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 7,
+            "tasks": [{"task_id": "TASK-1", "lane_id": "phase-1/lane-a", "status": "done"}],
+            "blockers": [],
+            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
+            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 7,
+            "workers": [
+                {
+                    "worker_id": "worker-1",
+                    "status": "done",
+                    "current_task_id": "TASK-1",
+                    "current_packet_id": "packet-1",
+                    "branch": "main",
+                }
+            ],
+        },
+    )
+    mergeability = MODULE._build_mergeability_report(cfg, cycle_number=7, cycle_mode="merge_recovery")
+
+    progression = MODULE._run_merge_progression_engine(
+        cfg,
+        cycle_number=7,
+        cycle_mode="merge_recovery",
+        mergeability_report=mergeability,
+    )
+
+    assert progression["state_changed"] is True
+    assert progression["workers_released_count"] == 1
+    assert progression["lane_merge_completed_count"] == 1
+    worker_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["worker_registry"]).read_text(encoding="utf-8"))
+    worker_row = worker_state["workers"][0]
+    assert worker_row["status"] == "idle"
+    assert worker_row["current_task_id"] is None
+    task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
+    task_row = task_state["tasks"][0]
+    assert isinstance(task_row.get("lane_fan_in_accepted_at"), str)
+    assert isinstance(task_row.get("lane_to_run_merged_at"), str)
+    report_after = MODULE._build_mergeability_report(cfg, cycle_number=8, cycle_mode="merge_recovery")
+    assert report_after["unmerged_commit_count"] == 0
+    assert "unscoped" not in report_after["lane_shas"]
+
+
+def test_merge_progression_engine_opens_blocker_when_lane_ready_but_commit_not_in_run_base(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    subprocess.run(["git", "checkout", "-b", "feature-merge-test"], cwd=tmp_path, check=True)
+    feature_file = tmp_path / "feature.txt"
+    feature_file.write_text("feature branch content\n", encoding="utf-8")
+    subprocess.run(["git", "add", "feature.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "feature commit"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "checkout", "main"], cwd=tmp_path, check=True)
+
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 8,
+            "tasks": [{"task_id": "TASK-2", "lane_id": "phase-2/lane-b", "status": "done"}],
+            "blockers": [],
+            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
+            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 8,
+            "workers": [
+                {
+                    "worker_id": "worker-2",
+                    "status": "done",
+                    "current_task_id": "TASK-2",
+                    "branch": "feature-merge-test",
+                }
+            ],
+        },
+    )
+    mergeability = MODULE._build_mergeability_report(cfg, cycle_number=8, cycle_mode="merge_recovery")
+
+    progression = MODULE._run_merge_progression_engine(
+        cfg,
+        cycle_number=8,
+        cycle_mode="merge_recovery",
+        mergeability_report=mergeability,
+    )
+
+    assert progression["state_changed"] is True
+    assert progression["lane_merge_blocked_count"] == 1
+    task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
+    blockers = task_state.get("blockers") if isinstance(task_state, dict) else []
+    assert isinstance(blockers, list)
+    blocker_row = next((row for row in blockers if isinstance(row, dict) and row.get("lane_id") == "phase-2/lane-b"), None)
+    assert isinstance(blocker_row, dict)
+    assert blocker_row.get("reason_code") == "lane_run_merge_pending_commit_not_in_run_base"
+    assert blocker_row.get("status") == "open"
+
+
+def test_build_mergeability_report_skips_already_merged_ancestor_commits(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    subprocess.run(["git", "checkout", "-b", "feature-ancestor-merged"], cwd=tmp_path, check=True)
+    feature_file = tmp_path / "feature_ancestor.txt"
+    feature_file.write_text("ancestor merge content\n", encoding="utf-8")
+    subprocess.run(["git", "add", "feature_ancestor.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "feature ancestor commit"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "checkout", "main"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "merge", "--no-ff", "feature-ancestor-merged", "-m", "merge feature ancestor"], cwd=tmp_path, check=True)
+
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 9,
+            "tasks": [{"task_id": "TASK-9", "lane_id": "phase-9/lane-a", "status": "done"}],
+            "blockers": [],
+            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
+            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 9,
+            "workers": [
+                {
+                    "worker_id": "worker-9",
+                    "status": "done",
+                    "current_task_id": "TASK-9",
+                    "branch": "feature-ancestor-merged",
+                }
+            ],
+        },
+    )
+
+    report = MODULE._build_mergeability_report(cfg, cycle_number=9, cycle_mode="merge_recovery")
+    lane_row = report["lane_status"]["phase-9/lane-a"]
+    assert report["unmerged_commit_count"] == 0
+    assert lane_row["lane_unmerged_commit_count"] == 0
+    assert report["lane_shas"] == {}
+
+
 def test_apply_restart_determinism_hooks_supports_watchdog_resume_idempotency(tmp_path: Path) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -640,6 +830,91 @@ def test_apply_restart_determinism_hooks_supports_watchdog_resume_idempotency(tm
     assert second["idempotent_continuation"] is True
 
 
+def test_apply_restart_determinism_hooks_supports_process_kill_resume_with_prior_lock(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    monkeypatch.setattr(MODULE, "_is_pid_running", lambda _pid: False)
+
+    out = MODULE._apply_restart_determinism_hooks(
+        cfg,
+        cycle_number=3,
+        resume_mode=True,
+        prior_run_lock={"pid": 424242, "started_at": "2026-03-13T00:00:00Z"},
+    )
+
+    assert out["scenario"] == "process_kill_resume"
+    log_row = out["continuation_log"][-1]
+    assert log_row["prior_run_lock_pid"] == 424242
+    assert log_row["prior_run_lock_present"] is True
+
+
+def test_run_resume_detects_process_kill_resume_from_preexisting_lock(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    stale_pid = 424242
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.RUN_LOCK_FILE,
+        {
+            "schema_version": "1.0",
+            "lock_id": "stale-lock",
+            "pid": stale_pid,
+            "started_at": "2026-03-13T00:00:00Z",
+            "command": "op-simple-build",
+        },
+    )
+    monkeypatch.setattr(MODULE, "_is_pid_running", lambda _pid: False)
+    monkeypatch.setattr(
+        MODULE,
+        "_load_resume_run_base_meta",
+        lambda _cfg: {
+            "run_base_branch": "main",
+            "run_base_from_branch": "main",
+            "run_base_from_commit": git(tmp_path, "rev-parse", "HEAD"),
+            "created_new": False,
+        },
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_ensure_workstation_prep",
+        lambda _cfg, initialize_state=None, force_refresh=False: {
+            "schema_version": "1.0",
+            "worktrees_parent": str((tmp_path / "forest").resolve()),
+            "workstations": [],
+        },
+    )
+    monkeypatch.setattr(MODULE, "_watchdog_tick", lambda _cfg, _cycle, *, force_reset_target=False: (False, {"message": ""}))
+    monkeypatch.setattr(MODULE, "_run_rate_gate_wait", lambda _cfg, _cycle, _warnings: None)
+    monkeypatch.setattr(
+        MODULE,
+        "_dispatch_packets",
+        lambda _cfg, _cycle, *, reserved_slots=0: {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+    )
+
+    out = MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            command="op-resume",
+            dry_run=True,
+            max_build_cycles=1,
+            sleep_minutes=0,
+            ground_sync_enabled=False,
+            worktrees_parent=str(tmp_path / "forest"),
+        )
+    )
+
+    assert out["ok"] is True
+    restart_state = MODULE._read_json(tmp_path / MODULE.ARTIFACT_FILES["restart_determinism_state"], default={})
+    assert restart_state.get("scenario") == "process_kill_resume"
+
+
 def test_packet4_gate_closure_scaffold_writer_builds_expected_artifacts(tmp_path: Path, monkeypatch) -> None:
     json_path = tmp_path / "packet4_gate_evidence_bundle_2026-03-13.json"
     md_path = tmp_path / "packet4_gate_evidence_bundle_2026-03-13.md"
@@ -662,6 +937,47 @@ def test_packet4_gate_closure_scaffold_writer_builds_expected_artifacts(tmp_path
     assert payload["status"] == "warn"
     md_text = md_path.read_text(encoding="utf-8")
     assert "Packet 4 Gate Evidence Bundle (Scaffold)" in md_text
+    assert "Decision: `hold`" in md_text
+
+
+def test_packet4_kpi_trend_scaffold_writer_builds_expected_artifacts(tmp_path: Path, monkeypatch) -> None:
+    json_path = tmp_path / "packet4_kpi_trend_summary_2026-03-13.json"
+    md_path = tmp_path / "packet4_kpi_trend_summary_2026-03-13.md"
+    monkeypatch.setattr(
+        MODULE,
+        "_packet4_kpi_trend_paths",
+        lambda *, date_text: {"json": json_path, "md": md_path},
+    )
+
+    out = MODULE._write_packet4_kpi_trend_scaffold(
+        date_text="2026-03-13",
+        generated_at_utc="2026-03-13T12:00:00Z",
+        repo="earth-root",
+    )
+
+    assert out["json"] == str(json_path)
+    assert out["md"] == str(md_path)
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload["packet"] == "Packet 4"
+    assert payload["status"] == "warn"
+    md_text = md_path.read_text(encoding="utf-8")
+    assert "Packet 4 KPI Trend Summary (Scaffold)" in md_text
+    assert "non_actionable_cycle_ratio" in md_text
+
+
+def test_packet4_gate_recommendation_scaffold_writer_builds_expected_artifact(tmp_path: Path, monkeypatch) -> None:
+    md_path = tmp_path / "packet4_gate_recommendation_2026-03-13.md"
+    monkeypatch.setattr(MODULE, "_packet4_gate_recommendation_path", lambda *, date_text: md_path)
+
+    out = MODULE._write_packet4_gate_recommendation_scaffold(
+        date_text="2026-03-13",
+        generated_at_utc="2026-03-13T12:00:00Z",
+        repo="earth-root",
+    )
+
+    assert out == str(md_path)
+    md_text = md_path.read_text(encoding="utf-8")
+    assert "Packet 4 Gate Recommendation (Scaffold)" in md_text
     assert "Decision: `hold`" in md_text
 
 
@@ -1062,6 +1378,22 @@ def test_invoke_manager_boss_fails_when_required_artifact_missing(tmp_path: Path
         dry_run=False,
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    codex_home = tmp_path / ".codex-second"
+    codex_home.mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-second",
+                    "codex_home": str(codex_home.resolve()),
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 90.0,
+                }
+            ],
+        },
+    )
 
     monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
 
@@ -1106,6 +1438,22 @@ def test_invoke_manager_boss_fails_when_required_artifact_cycle_number_is_stale(
         dry_run=False,
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    codex_home = tmp_path / ".codex-second"
+    codex_home.mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-second",
+                    "codex_home": str(codex_home.resolve()),
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 90.0,
+                }
+            ],
+        },
+    )
 
     monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
 
@@ -1731,6 +2079,63 @@ def test_watchdog_force_reset_target_avoids_immediate_stale_stop(tmp_path: Path,
     assert state["stale"] is False
     assert float(state["watchdog_age_minutes"] or 0.0) <= 0.001
     assert float(state["watchdog_age_offset_minutes"]) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
+
+
+def test_watchdog_resets_target_when_mergeability_progress_changes(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_initialize_state(cfg)
+    MODULE._ensure_default_artifacts(cfg)
+
+    stale_epoch = int((datetime.now(timezone.utc) - timedelta(minutes=MODULE.WATCHDOG_STALE_COMMIT_MINUTES + 5)).timestamp())
+    monkeypatch.setattr(MODULE, "_git_commit_epoch_seconds", lambda _repo_root, _ref: stale_epoch)
+    current_sha = git(tmp_path, "rev-parse", "main")
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 4,
+            "monitored_branch": "main",
+            "last_commit_sha": current_sha,
+            "commit_ref": "main",
+            "last_commit_at_utc": "",
+            "last_commit_age_minutes": None,
+            "watchdog_age_offset_minutes": 0.0,
+            "watchdog_age_minutes": 155.0,
+            "watchdog_target_reset_at_utc": "2026-01-01T00:00:00Z",
+            "stale_after_minutes": MODULE.WATCHDOG_STALE_COMMIT_MINUTES,
+            "stale": True,
+            "progress_signal": "previous-progress-signal",
+            "progress_changed": False,
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["mergeability_report"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 5,
+            "progress_fingerprint": "new-progress-signal",
+            "unmerged_commit_count": 1,
+            "merge_blockers": [{"reason_code": "lane_pending_tasks"}],
+        },
+    )
+
+    stop, signal = MODULE._watchdog_tick(cfg, cycle_number=5)
+
+    assert stop is False
+    assert signal["reason_code"] == "stale_base_branch_commit"
+    assert signal["progress_changed"] is True
+    state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"]).read_text(encoding="utf-8"))
+    assert state["progress_changed"] is True
+    assert float(state["watchdog_age_minutes"] or 0.0) <= 0.001
 
 
 def test_run_resume_passes_watchdog_target_reset_once(tmp_path: Path, monkeypatch) -> None:
@@ -2436,7 +2841,7 @@ def test_run_persists_watchdog_terminal_stop_reason_to_cycle_summary(tmp_path: P
                     "updated_at": "2026-01-01T00:00:00Z",
                     "cycle_number": cycle_number,
                     "status": "ok",
-                    "stop_reason": "watchdog_idle_stop",
+                    "stop_reason": "stale_base_branch_commit",
                     "summary": "watchdog wrapup",
                 },
             )
@@ -2494,15 +2899,15 @@ def test_run_persists_watchdog_terminal_stop_reason_to_cycle_summary(tmp_path: P
     )
 
     assert out["ok"] is True
-    assert out["data"]["stop_reason"] == "watchdog_idle_stop"
+    assert out["data"]["stop_reason"] == "stale_base_branch_commit"
 
     summary_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_summary"]).read_text(encoding="utf-8"))
-    assert summary_payload["stop_reason"] == "watchdog_idle_stop"
-    assert (summary_payload.get("termination") or {}).get("reason_code") == "watchdog_idle_stop"
+    assert summary_payload["stop_reason"] == "stale_base_branch_commit"
+    assert (summary_payload.get("termination") or {}).get("reason_code") == "stale_base_branch_commit"
 
     capsule_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["terminal_capsule"]).read_text(encoding="utf-8"))
-    assert capsule_payload["stop_reason"] == "watchdog_idle_stop"
-    assert capsule_payload["reason_code"] == "watchdog_idle_stop"
+    assert capsule_payload["stop_reason"] == "stale_base_branch_commit"
+    assert capsule_payload["reason_code"] == "stale_base_branch_commit"
     assert dispatch_calls["count"] == 0
 
 
@@ -2719,7 +3124,7 @@ def test_run_invokes_wrapup_manager_on_watchdog_terminal_stop(tmp_path: Path, mo
     )
 
     assert out["ok"] is True
-    assert out["data"]["stop_reason"] == "watchdog_idle_stop"
+    assert out["data"]["stop_reason"] == "stale_base_branch_commit"
     assert calls.count("BOSS") == 1
     assert calls.count("wrapup-manager") == 1
 
@@ -3987,6 +4392,111 @@ def test_invoke_manager_boss_fails_closed_when_runtime_context_invalid(tmp_path:
     checks = timeout_state.get("last_boss_runtime_checks") if isinstance(timeout_state, dict) else {}
     assert checks.get("runtime_context_valid") is False
     assert "codex_binary_missing" in (checks.get("invalid_reasons") or [])
+
+
+def test_invoke_manager_boss_fails_closed_when_no_eligible_profile_in_snapshot(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-hg",
+                    "codex_home": "/tmp/codex-hg",
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 90.0,
+                    "hard_gated": True,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+    monkeypatch.setattr(MODULE.shutil, "which", lambda _binary: "/usr/bin/codex")
+    monkeypatch.setattr(
+        MODULE,
+        "_codex_exec_prompt",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not call codex exec when no profile is eligible")),
+    )
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=5,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "failed"
+    assert out.reason_code == "boss_runtime_context_invalid"
+    assert "no_eligible_profile_in_snapshot" in str(out.message)
+    timeout_state = MODULE._read_json(tmp_path / MODULE.ARTIFACT_FILES["timeout_adaptation_state"], default={})
+    checks = timeout_state.get("last_boss_runtime_checks") if isinstance(timeout_state, dict) else {}
+    assert checks.get("runtime_context_valid") is False
+    assert "no_eligible_profile_in_snapshot" in (checks.get("invalid_reasons") or [])
+
+
+def test_invoke_manager_boss_fails_closed_when_selected_codex_home_missing_on_disk(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    missing_home = tmp_path / ".codex-missing-profile-home"
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-missing-profile-home",
+                    "codex_home": str(missing_home.resolve()),
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 90.0,
+                    "hard_gated": False,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+    monkeypatch.setattr(MODULE.shutil, "which", lambda _binary: "/usr/bin/codex")
+    monkeypatch.setattr(
+        MODULE,
+        "_codex_exec_prompt",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("should not call codex exec when selected codex home is missing")
+        ),
+    )
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=5,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "failed"
+    assert out.reason_code == "boss_runtime_context_invalid"
+    assert "selected_codex_home_missing_on_disk" in str(out.message)
+    timeout_state = MODULE._read_json(tmp_path / MODULE.ARTIFACT_FILES["timeout_adaptation_state"], default={})
+    checks = timeout_state.get("last_boss_runtime_checks") if isinstance(timeout_state, dict) else {}
+    assert checks.get("runtime_context_valid") is False
+    assert "selected_codex_home_missing_on_disk" in (checks.get("invalid_reasons") or [])
 
 
 def test_invoke_manager_wrapup_uses_selected_profile_home_and_boss_model_reasoning(tmp_path: Path, monkeypatch) -> None:

@@ -83,10 +83,13 @@ Each profile entry includes:
 - `five_hour` and `weekly` windows (`used_percent`, `remaining_percent`, `reset_at`, `gated`)
 - `recommended_action` (`continue`, `wait_until_reset`, `wind_down`)
 - `soft_concurrency_gated` (true when 5h/weekly remaining is under soft throttle thresholds)
+- `deactivated` (true when profile is treated as inactive)
+- `decision` (`eligible`, `soft_gated`, `hard_gated`)
 - `wait_until_reset_candidate` and `wait_seconds` when applicable
 
 ## Notes
 
+- If a profile is missing `auth.json` (in the profile root or `config/auth.json`), it is marked `deactivated=true` and `decision=hard_gated`.
 - If a profile has no readable session JSONL or no parsable `token_count` event, the profile is marked ineligible (`recommended_action=wind_down`).
 - If newest session data has null rate limits, the script falls back to older recent sessions and records `rate_limits_fallback_session_used`.
 - If newest session has null rate limits and `auth.json` access token is already expired, the profile is hard-gated (`recommended_action=wind_down`) with `auth_access_token_expired`.

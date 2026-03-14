@@ -45,6 +45,10 @@ class CodexRateSnapshotTests(unittest.TestCase):
         }
         session_file.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
+    def _write_auth_json(self, codex_home: Path) -> None:
+        codex_home.mkdir(parents=True, exist_ok=True)
+        (codex_home / "auth.json").write_text(json.dumps({"tokens": {"access_token": ""}}), encoding="utf-8")
+
     def test_newest_session_jsonl_uses_last_modified_time(self):
         with TemporaryDirectory() as tmp:
             home = Path(tmp) / ".codex-test"
@@ -78,9 +82,41 @@ class CodexRateSnapshotTests(unittest.TestCase):
         parsed = MODULE.parse_iso_datetime(iso)
         self.assertIsNotNone(parsed)
 
+    def test_missing_auth_json_deactivates_profile_and_hard_gates(self):
+        with TemporaryDirectory() as tmp:
+            home = Path(tmp) / ".codex-test"
+            session_dir = home / "sessions" / "2026" / "03" / "06"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            session_file = session_dir / "rollout.jsonl"
+            now = MODULE.now_utc()
+            self._write_token_count_event(
+                session_file,
+                event_ts=now,
+                primary_used=1.0,
+                primary_reset=now + timedelta(hours=1),
+                weekly_used=1.0,
+                weekly_reset=now + timedelta(days=2),
+            )
+
+            profile = MODULE.build_profile_snapshot(
+                alias="test",
+                codex_home=home,
+                gate_5h=15.0,
+                gate_weekly=10.0,
+                soft_gate_5h=40.0,
+                soft_gate_weekly=25.0,
+                wait_max_hours=4.0,
+            )
+            self.assertEqual(profile.recommended_action, "wind_down")
+            self.assertIn("profile_deactivated_missing_auth_json", profile.errors)
+            as_json = MODULE.to_json_obj(profile)
+            self.assertTrue(as_json["deactivated"])
+            self.assertEqual(as_json["decision"], "hard_gated")
+
     def test_missing_rate_limits_does_not_hard_gate_profile(self):
         with TemporaryDirectory() as tmp:
             home = Path(tmp) / ".codex-test"
+            self._write_auth_json(home)
             session_dir = home / "sessions" / "2026" / "03" / "05"
             session_dir.mkdir(parents=True, exist_ok=True)
             session_file = session_dir / "rollout.jsonl"
@@ -114,6 +150,7 @@ class CodexRateSnapshotTests(unittest.TestCase):
     def test_auth_markers_force_wind_down(self):
         with TemporaryDirectory() as tmp:
             home = Path(tmp) / ".codex-test"
+            self._write_auth_json(home)
             session_dir = home / "sessions" / "2026" / "03" / "05"
             session_dir.mkdir(parents=True, exist_ok=True)
             session_file = session_dir / "rollout.jsonl"
@@ -146,6 +183,7 @@ class CodexRateSnapshotTests(unittest.TestCase):
     def test_auth_error_then_token_count_recovery_clears_auth_gate(self):
         with TemporaryDirectory() as tmp:
             home = Path(tmp) / ".codex-test"
+            self._write_auth_json(home)
             session_dir = home / "sessions" / "2026" / "03" / "05"
             session_dir.mkdir(parents=True, exist_ok=True)
             session_file = session_dir / "rollout.jsonl"
@@ -193,6 +231,7 @@ class CodexRateSnapshotTests(unittest.TestCase):
     def test_older_auth_failed_file_does_not_gate_when_newest_file_is_clean(self):
         with TemporaryDirectory() as tmp:
             home = Path(tmp) / ".codex-test"
+            self._write_auth_json(home)
             old_dir = home / "sessions" / "2026" / "03" / "05"
             new_dir = home / "sessions" / "2026" / "03" / "06"
             old_dir.mkdir(parents=True, exist_ok=True)
@@ -237,6 +276,7 @@ class CodexRateSnapshotTests(unittest.TestCase):
     def test_function_call_output_auth_string_does_not_trigger_auth_gate(self):
         with TemporaryDirectory() as tmp:
             home = Path(tmp) / ".codex-test"
+            self._write_auth_json(home)
             session_dir = home / "sessions" / "2026" / "03" / "05"
             session_dir.mkdir(parents=True, exist_ok=True)
             session_file = session_dir / "rollout.jsonl"
@@ -282,6 +322,7 @@ class CodexRateSnapshotTests(unittest.TestCase):
     def test_stale_over_5h_resets_5h_window_to_full(self):
         with TemporaryDirectory() as tmp:
             home = Path(tmp) / ".codex-test"
+            self._write_auth_json(home)
             session_dir = home / "sessions" / "2026" / "03" / "06"
             session_dir.mkdir(parents=True, exist_ok=True)
             session_file = session_dir / "rollout.jsonl"
@@ -311,6 +352,7 @@ class CodexRateSnapshotTests(unittest.TestCase):
     def test_stale_weekly_below_gate_with_future_reset_stays_gated(self):
         with TemporaryDirectory() as tmp:
             home = Path(tmp) / ".codex-test"
+            self._write_auth_json(home)
             session_dir = home / "sessions" / "2026" / "03" / "06"
             session_dir.mkdir(parents=True, exist_ok=True)
             session_file = session_dir / "rollout.jsonl"
@@ -342,6 +384,7 @@ class CodexRateSnapshotTests(unittest.TestCase):
     def test_stale_weekly_below_gate_with_past_reset_resets_to_full(self):
         with TemporaryDirectory() as tmp:
             home = Path(tmp) / ".codex-test"
+            self._write_auth_json(home)
             session_dir = home / "sessions" / "2026" / "03" / "06"
             session_dir.mkdir(parents=True, exist_ok=True)
             session_file = session_dir / "rollout.jsonl"

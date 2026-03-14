@@ -142,6 +142,7 @@ def test_merge_payload_applies_configured_parallel_for_simple_build(monkeypatch:
             "sleep_minutes": 5.0,
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 13,
+            "worktrees_parent": "/Users/slobodan/Forest",
             "boss_model": "gpt-5.3-codex",
             "boss_reasoning_effort": "xhigh",
         },
@@ -156,8 +157,27 @@ def test_merge_payload_applies_configured_parallel_for_simple_build(monkeypatch:
     assert payload.get("sleep_minutes") == 5.0
     assert payload.get("max_parallel_workers") == 13
     assert payload.get("enable_artifact_fan_in") is False
+    assert payload.get("worktrees_parent") == "/Users/slobodan/Forest"
     assert payload.get("boss_model") == "gpt-5.3-codex"
     assert payload.get("boss_reasoning_effort") == "xhigh"
+
+
+def test_merge_payload_applies_configured_worktrees_parent_for_initialize(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {
+            "worktrees_parent": "/Users/slobodan/Forest",
+        },
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["opctl.py", "--command", "/op-initialize", "--repo-root", "/tmp/repo"],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("worktrees_parent") == "/Users/slobodan/Forest"
 
 
 def test_merge_payload_preserves_explicit_boss_model_and_reasoning_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -215,6 +235,54 @@ def test_merge_payload_includes_run_base_source_branch_for_simple_build(monkeypa
     parsed = MODULE.parse_args()
     payload = MODULE.merge_payload(parsed)
     assert payload.get("run_base_source_branch") == "op-simple-canary-prev"
+
+
+def test_merge_payload_includes_selected_aliases_for_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-build",
+            "--repo-root",
+            "/tmp/repo",
+            "--selected-aliases",
+            "six, seven, eight, nine, ten",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("selected_aliases") == "six, seven, eight, nine, ten"
+
+
+def test_merge_payload_includes_selected_aliases_for_simple_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-simple-build",
+            "--repo-root",
+            "/tmp/repo",
+            "--selected-aliases",
+            "six, seven, eight, nine, ten",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("selected_aliases") == "six, seven, eight, nine, ten"
 
 
 def test_merge_payload_loads_global_boss_config_even_when_other_workflow_fields_are_present(

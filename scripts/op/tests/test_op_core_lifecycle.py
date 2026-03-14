@@ -28,6 +28,8 @@ def make_req(repo_root: Path, **overrides: object):
         "max_parallel_workers": 5,
         "sleep_minutes": 0.0,
         "enable_artifact_fan_in": False,
+        "worktrees_parent": None,
+        "selected_aliases": None,
         "dry_run": True,
         "reset_exhausted_retries": False,
         "run_base_source_branch": "main",

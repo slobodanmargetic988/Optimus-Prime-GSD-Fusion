@@ -372,31 +372,53 @@ Runtime propagation note:
 ## 10) watchdog_state.json + watchdog_exit_signal.json
 
 ### watchdog_state.json fields
-- `schema_version`, `cycle_number`, `monitored_branch`, `last_commit_sha`, `last_commit_seen_cycle`, `idle_cycles`, `threshold_cycles`
+- `schema_version`, `cycle_number`, `monitored_branch`, `commit_ref`, `last_commit_sha`, `last_commit_at_utc`
+- `last_commit_age_minutes`, `watchdog_age_offset_minutes`, `watchdog_age_minutes`
+- `watchdog_target_reset_at_utc`, `stale_after_minutes`, `near_stale_threshold_minutes`, `stale`, `near_stale`
+- `progress_signal`, `progress_changed`, `progress_components`
 
 ```json
 {
   "schema_version": "1.0",
   "cycle_number": 7,
   "monitored_branch": "main",
+  "commit_ref": "main",
   "last_commit_sha": "abcdef1234567890",
-  "last_commit_seen_cycle": 6,
-  "idle_cycles": 1,
-  "threshold_cycles": 10
+  "last_commit_at_utc": "2026-03-13T10:00:00Z",
+  "last_commit_age_minutes": 121.3,
+  "watchdog_age_offset_minutes": 5.0,
+  "watchdog_age_minutes": 116.3,
+  "watchdog_target_reset_at_utc": "2026-03-13T11:55:00Z",
+  "stale_after_minutes": 150,
+  "near_stale_threshold_minutes": 140,
+  "stale": false,
+  "near_stale": false,
+  "progress_signal": "3e8b0f...",
+  "progress_changed": true
 }
 ```
 
 ### watchdog_exit_signal.json fields
-- `schema_version`, `cycle_number`, `reason_code`, `message`, `monitored_branch`, `idle_cycles`
+- `schema_version`, `cycle_number`, `reason_code`, `message`, `monitored_branch`, `commit_ref`
+- `last_commit_sha`, `last_commit_at_utc`, `watchdog_age_minutes`, `commit_age_minutes`
+- `stale_after_minutes`, `near_stale_threshold_minutes`, `near_stale`
+- `progress_signal`, `progress_changed`
 
 ```json
 {
   "schema_version": "1.0",
   "cycle_number": 16,
-  "reason_code": "no_new_commits",
-  "message": "no new commits detected for 20 cycles",
+  "reason_code": "stale_base_branch_commit",
+  "message": "no new commit observed on 'main' for 151.0 minutes; watchdog limit is 150 minutes",
   "monitored_branch": "main",
-  "idle_cycles": 10
+  "commit_ref": "main",
+  "watchdog_age_minutes": 151.0,
+  "commit_age_minutes": 176.0,
+  "stale_after_minutes": 150,
+  "near_stale_threshold_minutes": 140,
+  "near_stale": false,
+  "progress_signal": "3e8b0f...",
+  "progress_changed": false
 }
 ```
 
@@ -468,7 +490,32 @@ Optional telemetry extension:
 - `boss_runtime_context_evidence` object (binary/profile context checks)
 
 Invariant:
-- When a terminal stop reason is resolved (`project_done`, `insurmountable_blocker`, `watchdog_idle_stop`), `cycle_summary.stop_reason` must be persisted and non-empty for that cycle.
+- When a terminal stop reason is resolved (`project_done`, `insurmountable_blocker`, watchdog reason such as `stale_base_branch_commit`), `cycle_summary.stop_reason` must be persisted and non-empty for that cycle.
+
+### task_execution_state.json additions (merge progression engine)
+
+- Optional task fields written by deterministic merge progression:
+  - `lane_fan_in_accepted_at`
+  - `lane_fan_in_cycle`
+  - `lane_to_run_merged_at`
+  - `lane_to_run_merge_cycle`
+- `blockers[]` may contain deterministic merge blockers with:
+  - `blocker_id`
+  - `lane_id`
+  - `reason_code` (for example `lane_run_merge_pending_commit_not_in_run_base`)
+  - `status` (`open|resolved`)
+  - `owner`
+  - `message`
+  - `details`
+
+### worker_registry.json additions (merge progression engine)
+
+- Optional worker fields written by deterministic merge progression:
+  - `fan_in_status` (`accepted`)
+  - `fan_in_cycle`
+  - `fan_in_accepted_at`
+  - `merge_lane_last_merged_at`
+  - `merge_lane_last_merged_cycle`
 
 ## 14) mergeability_report.json
 
@@ -518,6 +565,7 @@ Invariant:
 
 Invariant:
 - Timeout cycles must still emit `terminal_capsule.json`, `cycle_summary.json`, and `cycle_manager_decision.json`.
+- Non-timeout fail-closed BOSS cycles must also emit `terminal_capsule.json` with `stop_reason=""` and failure `reason_code`.
 
 ## 16) timeout_adaptation_state.json
 
@@ -535,6 +583,11 @@ Invariant:
 | eligible_profile_aliases | array<string> (optional) | Eligible aliases seen during timeout update |
 | last_rotation_decision | object | Alias selection evidence (selected alias, rejected reason, candidate eligibility) |
 | last_boss_runtime_checks | object | Binary/profile-context validity evidence |
+| last_boss_runtime_checks.eligible_profile_count | integer | Number of eligible snapshot profiles at runtime check time |
+| last_boss_runtime_checks.selected_profile_found_in_snapshot | boolean | Whether selected alias resolved to a snapshot row |
+| last_boss_runtime_checks.selected_profile_eligible | boolean\|null | Eligibility of selected profile row |
+| last_boss_runtime_checks.selected_profile_ineligible_reason | string\|null | Why selected profile is ineligible |
+| last_boss_runtime_checks.selected_profile_hard_gated | boolean\|null | Hard-gate marker for selected profile |
 
 Invariant:
 - After two consecutive BOSS timeouts, adaptation must activate (`adaptation_active=true`).
@@ -556,3 +609,16 @@ Invariant:
 
 Invariant:
 - Repeated resume with identical checkpoint fingerprint and scenario should set `idempotent_continuation=true`.
+- `process_kill_resume` classification must use pre-lock run-lock evidence so stale PID context is not lost during lock acquisition.
+
+## 18) Packet 4 scaffold writers (runtime internals)
+
+Runtime includes scaffold writers (not auto-executed in this implementation pass) for:
+
+- `packet4_gate_evidence_bundle_<YYYY-MM-DD>.json/.md`
+- `packet4_kpi_trend_summary_<YYYY-MM-DD>.json/.md`
+- `packet4_gate_recommendation_<YYYY-MM-DD>.md`
+
+Naming aligns with:
+
+- `/Users/slobodan/projects/Earth/PHASE2_ARTIFACT_NAMING_CONTRACT_V1.md`
