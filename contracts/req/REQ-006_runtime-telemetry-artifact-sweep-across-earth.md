@@ -53,6 +53,8 @@ The script prints JSON with:
 - effective thresholds/policy: `stale_after_seconds`, `decision_policy`
 - per-project source evaluations under `projects[].artifacts`
 - flattened citation-ready references under `source_references`
+- deterministic cross-project telemetry rollup under `broad_sweep_context`
+- deterministic recommendation payload under `recommendation`
 - aggregate counts under `totals`
 
 Per-source output row:
@@ -83,6 +85,12 @@ Freshness and decision mapping:
 - `stale` => `decision_policy.stale`
 - `missing` => `decision_policy.missing`
 
+Recommendation guardrails:
+- `recommendation.evidence_refs` must point to citation ids present in `source_references`.
+- `recommendation.obligations[].evidence_refs` must be non-empty.
+- `recommendation.cross_project_context` mirrors the top-level `broad_sweep_context`.
+- If cross-project reasoning cannot be completed from Earth sweep evidence, record an entry in `recommendation.open_risks` rather than emitting an evidence-free obligation.
+
 ## Deterministic Fixtures and Samples
 - Input fixture: `examples/fixtures/runtime-telemetry-artifact-sweep-across-earth.json`
 - Output sample: `strategy/current/samples/REQ-006_runtime-telemetry-artifact-sweep-across-earth.sample.json`
@@ -90,4 +98,6 @@ Freshness and decision mapping:
 The sample file is the documented REQ-006 structure baseline. It includes:
 - top-level `source_references[]` citation records (`citation_id`, source identity, freshness decision),
 - project-local source rows with embedded `source_reference`,
+- top-level `broad_sweep_context` plus mirrored recommendation context,
+- recommendation evidence refs/obligations/open risks with deterministic fields,
 - bounded totals for projects and runtime telemetry sources.

@@ -1,7 +1,7 @@
 {
   "ok": true,
   "tool": "strategy-context-sweep",
-  "tool_version": "1.0.0",
+  "tool_version": "1.1.0",
   "checked_at_utc": "2026-03-14T21:00:00Z",
   "decision_policy": {
     "stale": "downgrade",
@@ -245,6 +245,116 @@
       "decision": "downgrade"
     }
   ],
+  "broad_sweep_context": {
+    "cross_project": true,
+    "projects_considered": [
+      "earth-north",
+      "earth-south"
+    ],
+    "projects_with_includable_sources": [
+      "earth-north",
+      "earth-south"
+    ],
+    "projects_with_missing_sources": [
+      "earth-south"
+    ],
+    "projects_with_stale_sources": [
+      "earth-north",
+      "earth-south"
+    ],
+    "artifact_coverage_by_project": {
+      "earth-north": {
+        "runtime_traces": 2,
+        "cycle_summaries": 1
+      },
+      "earth-south": {
+        "runtime_traces": 1,
+        "cycle_summaries": 2
+      }
+    },
+    "evidence_refs_by_project": {
+      "earth-north": [
+        "SRC-0001",
+        "SRC-0002",
+        "SRC-0003"
+      ],
+      "earth-south": [
+        "SRC-0004",
+        "SRC-0005",
+        "SRC-0006"
+      ]
+    }
+  },
+  "recommendation": {
+    "decision": "proceed_with_caution",
+    "rationale": "Telemetry sweep across 2 project(s) produced 2 include, 3 downgrade, and 1 exclude decisions.",
+    "evidence_refs": [
+      "SRC-0001",
+      "SRC-0002",
+      "SRC-0003",
+      "SRC-0005",
+      "SRC-0006"
+    ],
+    "cross_project_context": {
+      "cross_project": true,
+      "projects_considered": [
+        "earth-north",
+        "earth-south"
+      ],
+      "projects_with_includable_sources": [
+        "earth-north",
+        "earth-south"
+      ],
+      "projects_with_missing_sources": [
+        "earth-south"
+      ],
+      "projects_with_stale_sources": [
+        "earth-north",
+        "earth-south"
+      ],
+      "artifact_coverage_by_project": {
+        "earth-north": {
+          "runtime_traces": 2,
+          "cycle_summaries": 1
+        },
+        "earth-south": {
+          "runtime_traces": 1,
+          "cycle_summaries": 2
+        }
+      },
+      "evidence_refs_by_project": {
+        "earth-north": [
+          "SRC-0001",
+          "SRC-0002",
+          "SRC-0003"
+        ],
+        "earth-south": [
+          "SRC-0004",
+          "SRC-0005",
+          "SRC-0006"
+        ]
+      }
+    },
+    "obligations": [
+      {
+        "obligation_id": "OBL-0001",
+        "summary": "Refresh stale runtime telemetry sources before throughput/blocker trend calls.",
+        "evidence_refs": [
+          "SRC-0002",
+          "SRC-0005",
+          "SRC-0006"
+        ]
+      },
+      {
+        "obligation_id": "OBL-0002",
+        "summary": "Restore missing runtime telemetry sources to reduce failure-pattern blind spots.",
+        "evidence_refs": [
+          "SRC-0004"
+        ]
+      }
+    ],
+    "open_risks": []
+  },
   "totals": {
     "projects": 2,
     "sources": 6,

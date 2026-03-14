@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 TOOL = "strategy-context-sweep"
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.1.0"
 ARTIFACT_KEYS = ("runtime_traces", "cycle_summaries")
 ANALYSIS_ANCHORS = ("throughput", "blockers", "failure_patterns")
 DEFAULT_STALE_AFTER_SECONDS = {
@@ -146,6 +146,10 @@ def _resolve_artifact_path(project_root: Path, source_path: str) -> Path:
     return candidate.resolve()
 
 
+def _sorted_citation_refs(rows: list[dict[str, Any]]) -> list[str]:
+    return [str(row["citation_id"]) for row in rows if isinstance(row.get("citation_id"), str)]
+
+
 def _validate_project_row(row: Any, index: int) -> tuple[str, Path, dict[str, list[dict[str, str]]]]:
     if not isinstance(row, dict):
         raise SweepError("input_error", f"projects[{index}] must be an object", stage="input")
@@ -174,6 +178,174 @@ def _validate_project_row(row: Any, index: int) -> tuple[str, Path, dict[str, li
             parsed_rows.append({"source_id": source_id, "path": source_path})
         out[key] = parsed_rows
     return project_id, root_path, out
+
+
+def _build_broad_sweep_context(
+    *,
+    projects_out: list[dict[str, Any]],
+    source_references: list[dict[str, Any]],
+) -> dict[str, Any]:
+    projects_considered = [str(row["project_id"]) for row in projects_out]
+    artifact_coverage_by_project: dict[str, dict[str, int]] = {}
+    projects_with_missing_sources: list[str] = []
+    projects_with_stale_sources: list[str] = []
+    projects_with_includable_sources: list[str] = []
+
+    for project_row in projects_out:
+        project_id = str(project_row["project_id"])
+        counts = project_row["counts"]
+        artifact_coverage_by_project[project_id] = {
+            artifact_key: len(project_row["artifacts"][artifact_key]) for artifact_key in ARTIFACT_KEYS
+        }
+        if counts["missing"] > 0:
+            projects_with_missing_sources.append(project_id)
+        if counts["stale"] > 0:
+            projects_with_stale_sources.append(project_id)
+        if (counts["include"] + counts["downgrade"]) > 0:
+            projects_with_includable_sources.append(project_id)
+
+    evidence_refs_by_project: dict[str, list[str]] = {}
+    for project_id in projects_considered:
+        refs = [
+            str(ref["citation_id"])
+            for ref in source_references
+            if ref.get("project_id") == project_id and isinstance(ref.get("citation_id"), str)
+        ]
+        evidence_refs_by_project[project_id] = refs
+
+    return {
+        "cross_project": len(projects_considered) > 1,
+        "projects_considered": projects_considered,
+        "projects_with_includable_sources": projects_with_includable_sources,
+        "projects_with_missing_sources": projects_with_missing_sources,
+        "projects_with_stale_sources": projects_with_stale_sources,
+        "artifact_coverage_by_project": artifact_coverage_by_project,
+        "evidence_refs_by_project": evidence_refs_by_project,
+    }
+
+
+def _append_obligation_or_open_risk(
+    *,
+    obligations: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+    obligation_id: str,
+    summary: str,
+    evidence_refs: list[str],
+    risk_id: str,
+    risk_summary: str,
+) -> None:
+    if evidence_refs:
+        obligations.append(
+            {
+                "obligation_id": obligation_id,
+                "summary": summary,
+                "evidence_refs": evidence_refs,
+            }
+        )
+        return
+    open_risks.append(
+        {
+            "risk_id": risk_id,
+            "summary": risk_summary,
+            "evidence_refs": [],
+        }
+    )
+
+
+def _build_recommendation(
+    *,
+    totals: dict[str, int],
+    projects_out: list[dict[str, Any]],
+    source_references: list[dict[str, Any]],
+    broad_sweep_context: dict[str, Any],
+) -> dict[str, Any]:
+    usable_refs = [ref for ref in source_references if ref.get("exists") is True]
+    all_evidence_refs = _sorted_citation_refs(usable_refs)
+    stale_refs = _sorted_citation_refs([ref for ref in source_references if ref.get("freshness") == "stale"])
+    missing_refs = _sorted_citation_refs([ref for ref in source_references if ref.get("freshness") == "missing"])
+    projects_considered = [str(row["project_id"]) for row in projects_out]
+
+    if totals["include"] == 0 and totals["downgrade"] == 0:
+        decision = "hold"
+    elif totals["missing"] > 0 or totals["stale"] > 0:
+        decision = "proceed_with_caution"
+    else:
+        decision = "proceed"
+
+    rationale = (
+        f"Telemetry sweep across {totals['projects']} project(s) produced "
+        f"{totals['include']} include, {totals['downgrade']} downgrade, and {totals['exclude']} exclude decisions."
+    )
+
+    obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    if stale_refs:
+        _append_obligation_or_open_risk(
+            obligations=obligations,
+            open_risks=open_risks,
+            obligation_id="OBL-0001",
+            summary="Refresh stale runtime telemetry sources before throughput/blocker trend calls.",
+            evidence_refs=stale_refs,
+            risk_id="RISK-0001",
+            risk_summary="Stale telemetry exists, but no evidence refs were available for follow-up obligations.",
+        )
+    if missing_refs:
+        _append_obligation_or_open_risk(
+            obligations=obligations,
+            open_risks=open_risks,
+            obligation_id="OBL-0002",
+            summary="Restore missing runtime telemetry sources to reduce failure-pattern blind spots.",
+            evidence_refs=missing_refs,
+            risk_id="RISK-0002",
+            risk_summary="Missing telemetry exists, but no evidence refs were available for follow-up obligations.",
+        )
+
+    if len(projects_considered) > 1:
+        under_observed_projects = [
+            str(project_row["project_id"])
+            for project_row in projects_out
+            if (project_row["counts"]["include"] + project_row["counts"]["downgrade"]) == 0
+        ]
+        if under_observed_projects:
+            cross_project_refs = _sorted_citation_refs(
+                [
+                    ref
+                    for ref in source_references
+                    if ref.get("project_id") in under_observed_projects and isinstance(ref.get("citation_id"), str)
+                ]
+            )
+            _append_obligation_or_open_risk(
+                obligations=obligations,
+                open_risks=open_risks,
+                obligation_id="OBL-0003",
+                summary=(
+                    "Close cross-project telemetry coverage gaps before committing Earth-wide throughput conclusions."
+                ),
+                evidence_refs=cross_project_refs,
+                risk_id="RISK-0003",
+                risk_summary=(
+                    "Cross-project coverage imbalance was detected but had no Earth-sweep evidence refs."
+                ),
+            )
+    else:
+        open_risks.append(
+            {
+                "risk_id": "RISK-0004",
+                "summary": (
+                    "Cross-project inference is unresolved because sweep input contains fewer than two projects."
+                ),
+                "evidence_refs": [],
+            }
+        )
+
+    return {
+        "decision": decision,
+        "rationale": rationale,
+        "evidence_refs": all_evidence_refs,
+        "cross_project_context": broad_sweep_context,
+        "obligations": obligations,
+        "open_risks": open_risks,
+    }
 
 
 def sweep_runtime_telemetry_artifacts(payload: dict[str, Any]) -> dict[str, Any]:
@@ -279,6 +451,17 @@ def sweep_runtime_telemetry_artifacts(payload: dict[str, Any]) -> dict[str, Any]
             }
         )
 
+    broad_sweep_context = _build_broad_sweep_context(
+        projects_out=projects_out,
+        source_references=source_references,
+    )
+    recommendation = _build_recommendation(
+        totals=totals,
+        projects_out=projects_out,
+        source_references=source_references,
+        broad_sweep_context=broad_sweep_context,
+    )
+
     return {
         "ok": True,
         "tool": TOOL,
@@ -288,6 +471,8 @@ def sweep_runtime_telemetry_artifacts(payload: dict[str, Any]) -> dict[str, Any]
         "stale_after_seconds": thresholds,
         "projects": projects_out,
         "source_references": source_references,
+        "broad_sweep_context": broad_sweep_context,
+        "recommendation": recommendation,
         "totals": totals,
     }
 
