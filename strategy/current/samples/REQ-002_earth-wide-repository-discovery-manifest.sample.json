@@ -1,0 +1,70 @@
+{
+  "schema_version": "req-002.earth-wide-repository-discovery-manifest.v1",
+  "policy": {
+    "include_rule": "direct_child_repository_roots_only",
+    "owner_rule": {
+      "owner_username": "slobodan",
+      "required_path_prefix": "/Users/slobodan/projects/Earth"
+    },
+    "exclude_rules": [
+      {
+        "rule_id": "exclude_non_directory",
+        "description": "Ignore non-directory entries under Earth root."
+      },
+      {
+        "rule_id": "exclude_hidden_path",
+        "description": "Ignore hidden directories under Earth root."
+      },
+      {
+        "rule_id": "exclude_archived_path",
+        "description": "Ignore archived/archive/archives named directories."
+      },
+      {
+        "rule_id": "exclude_non_owner_path",
+        "description": "Ignore directories resolving outside owner Earth root prefix."
+      },
+      {
+        "rule_id": "exclude_non_repository_path",
+        "description": "Ignore directories that do not look like repository roots (.git missing)."
+      }
+    ]
+  },
+  "earth_root": "/Users/slobodan/projects/Earth",
+  "projects": [
+    {
+      "project_id": "prj.optimus-prime-gsd-fusion",
+      "project_name": "Optimus-Prime-GSD-Fusion",
+      "repo_relpath": "Optimus-Prime-GSD-Fusion",
+      "repo_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion",
+      "source_refs": {
+        "mission": "mission.md",
+        "scope": "scope.md"
+      }
+    },
+    {
+      "project_id": "prj.tetris",
+      "project_name": "Tetris",
+      "repo_relpath": "Tetris",
+      "repo_root": "/Users/slobodan/projects/Earth/Tetris",
+      "source_refs": {
+        "mission": "mission.md",
+        "scope": "scope.md"
+      }
+    }
+  ],
+  "excluded_paths": [
+    {
+      "path": "archives",
+      "reason_code": "exclude_archived_path"
+    },
+    {
+      "path": "external-link",
+      "reason_code": "exclude_non_owner_path"
+    }
+  ],
+  "stats": {
+    "project_count": 2,
+    "excluded_path_count": 2
+  },
+  "discovery_fingerprint": "a22f68d200db941f7375306307bb81c17202f20e873bebb36d57a259c882962e"
+}
