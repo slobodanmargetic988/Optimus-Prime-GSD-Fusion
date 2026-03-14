@@ -1,0 +1,126 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-canary-001",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-021",
+  "requirement_ids": [
+    "REQ-007"
+  ],
+  "updated_at": "2026-03-14T23:51:55Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contract_ground_graph_snapshot_ingestion_run_1",
+        "command": "python3 -m pytest tests/contracts/test_ground-graph-snapshot-ingestion.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.01s"
+      },
+      {
+        "name": "integration_ground_graph_snapshot_ingestion_run_1",
+        "command": "python3 -m pytest tests/integration/test_ground-graph-snapshot-ingestion.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s"
+      },
+      {
+        "name": "hardening_ground_graph_snapshot_ingestion_run_1",
+        "command": "python3 -m pytest tests/hardening/test_ground-graph-snapshot-ingestion_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s"
+      },
+      {
+        "name": "contract_ground_graph_snapshot_ingestion_run_2",
+        "command": "python3 -m pytest tests/contracts/test_ground-graph-snapshot-ingestion.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.01s"
+      },
+      {
+        "name": "integration_ground_graph_snapshot_ingestion_run_2",
+        "command": "python3 -m pytest tests/integration/test_ground-graph-snapshot-ingestion.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s"
+      },
+      {
+        "name": "hardening_ground_graph_snapshot_ingestion_run_2",
+        "command": "python3 -m pytest tests/hardening/test_ground-graph-snapshot-ingestion_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-007",
+        "edge_case": "stale_source_artifact_detected_during_earth_sweep",
+        "status": "pass",
+        "reason_code": "source_artifact_stale_during_earth_sweep",
+        "evidence_refs": [
+          "examples/fixtures/ground-graph-snapshot-ingestion.json",
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "details": "Hardening test emits deterministic stale-artifact reason code with stable evidence refs."
+      },
+      {
+        "requirement_id": "REQ-007",
+        "edge_case": "missing_mission_scope_or_peer_project_doc",
+        "status": "pass",
+        "reason_code": "active_project_missing_mission_or_scope_doc",
+        "secondary_reason_code": "linked_project_missing_peer_doc",
+        "evidence_refs": [
+          "examples/fixtures/ground-graph-snapshot-ingestion.json",
+          "projects/optimus-prime-gsd-fusion/scope.md",
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "details": "Hardening test reports explicit missing-doc reason codes for active and linked projects."
+      },
+      {
+        "requirement_id": "REQ-007",
+        "edge_case": "replay_stability_of_context_bundle_serialization",
+        "status": "pass",
+        "reason_code": "context_bundle_serialization_replay_stable",
+        "evidence_refs": [
+          "tests/hardening/test_ground-graph-snapshot-ingestion_hardening.py"
+        ],
+        "details": "Repeated runs produce identical canonical context-bundle payload and checksum."
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/hardening/test_ground-graph-snapshot-ingestion_hardening.py"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_007_hardening_green",
+      "source_artifact_stale_reason_code_deterministic",
+      "missing_docs_reason_codes_deterministic",
+      "context_bundle_serialization_replay_stable"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

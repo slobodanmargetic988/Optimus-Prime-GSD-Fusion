@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 
 REQ_007_SCHEMA_VERSION = "req-007.ground-graph-snapshot-ingestion.v1"
+REQ_007_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-007.ground-graph-context-bundle.v1"
 
 
 def _utc_now_iso() -> str:
@@ -47,6 +48,26 @@ def _normalize_string_list(value: Any, *, label: str) -> list[str]:
         out.append(item_str)
     out.sort()
     return out
+
+
+def _parse_iso8601_utc(value: Any, *, label: str) -> datetime:
+    text = _require_nonempty_str(value, label=label)
+    normalized = f"{text[:-1]}+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{label} must include timezone information")
+    return parsed.astimezone(timezone.utc)
+
+
+def _require_nonnegative_int(value: Any, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{label} must be a non-negative integer")
+    if value < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+    return value
 
 
 def _checksum_sha256(payload: Mapping[str, Any]) -> str:
@@ -205,6 +226,107 @@ def _candidate_actions_from_context(broad_sweep_context: Mapping[str, Any]) -> l
     return []
 
 
+def _hardening_open_risks(
+    *,
+    canonical_ingestion: Mapping[str, Any],
+    broad_sweep_context: Mapping[str, Any],
+    earth_sweep_evidence_refs: list[str],
+    linked_project_ids: set[str],
+    active_project_id: str,
+) -> list[dict[str, Any]]:
+    risks: list[dict[str, Any]] = []
+    context = _require_mapping(broad_sweep_context, label="broad_sweep_context")
+    source_artifact = _require_mapping(canonical_ingestion.get("source_artifact"), label="source_artifact")
+    source_path = _require_nonempty_str(source_artifact.get("path"), label="source_artifact.path")
+    source_graph_id = _require_nonempty_str(source_artifact.get("graph_id"), label="source_artifact.graph_id")
+
+    source_artifact_max_age_seconds_raw = context.get("source_artifact_max_age_seconds")
+    earth_sweep_started_at_raw = context.get("earth_sweep_started_at")
+    if source_artifact_max_age_seconds_raw is not None:
+        source_artifact_max_age_seconds = _require_nonnegative_int(
+            source_artifact_max_age_seconds_raw,
+            label="broad_sweep_context.source_artifact_max_age_seconds",
+        )
+        if earth_sweep_started_at_raw is None:
+            raise ValueError(
+                "broad_sweep_context.earth_sweep_started_at is required when "
+                "broad_sweep_context.source_artifact_max_age_seconds is set"
+            )
+        earth_sweep_started_at = _parse_iso8601_utc(
+            earth_sweep_started_at_raw,
+            label="broad_sweep_context.earth_sweep_started_at",
+        )
+        captured_at = _parse_iso8601_utc(
+            source_artifact.get("captured_at"),
+            label="source_artifact.captured_at",
+        )
+        source_age_seconds = max(0, int((earth_sweep_started_at - captured_at).total_seconds()))
+        if source_age_seconds > source_artifact_max_age_seconds:
+            risks.append(
+                {
+                    "risk_id": f"source_artifact::{source_graph_id}::stale_during_earth_sweep",
+                    "reason": "source_artifact_stale_during_earth_sweep",
+                    "reason_code": "source_artifact_stale_during_earth_sweep",
+                    "source_artifact_path": source_path,
+                    "source_artifact_captured_at": source_artifact.get("captured_at"),
+                    "earth_sweep_started_at": earth_sweep_started_at_raw,
+                    "source_age_seconds": source_age_seconds,
+                    "max_source_age_seconds": source_artifact_max_age_seconds,
+                    "evidence_refs": sorted({source_path, *earth_sweep_evidence_refs}),
+                }
+            )
+
+    active_project_docs_raw = context.get("active_project_docs")
+    if active_project_docs_raw is not None:
+        active_project_docs = _require_mapping(
+            active_project_docs_raw,
+            label="broad_sweep_context.active_project_docs",
+        )
+        missing_doc_fields: list[str] = []
+        present_doc_refs: list[str] = []
+        for field in ("mission", "scope"):
+            value = active_project_docs.get(field)
+            if isinstance(value, str) and value.strip():
+                present_doc_refs.append(value.strip())
+            else:
+                missing_doc_fields.append(field)
+        if missing_doc_fields:
+            risks.append(
+                {
+                    "risk_id": (
+                        f"{active_project_id}::active_project_docs_missing::"
+                        + "-".join(sorted(missing_doc_fields))
+                    ),
+                    "reason": "active_project_missing_mission_or_scope_doc",
+                    "reason_code": "active_project_missing_mission_or_scope_doc",
+                    "active_project_id": active_project_id,
+                    "missing_docs": sorted(missing_doc_fields),
+                    "evidence_refs": sorted({source_path, *earth_sweep_evidence_refs, *present_doc_refs}),
+                }
+            )
+
+    peer_project_docs_raw = context.get("peer_project_docs")
+    if peer_project_docs_raw is not None:
+        peer_project_docs = _require_mapping(
+            peer_project_docs_raw,
+            label="broad_sweep_context.peer_project_docs",
+        )
+        for linked_project_id in sorted(linked_project_ids):
+            doc_ref = peer_project_docs.get(linked_project_id)
+            if isinstance(doc_ref, str) and doc_ref.strip():
+                continue
+            risks.append(
+                {
+                    "risk_id": f"{linked_project_id}::peer_project_doc_missing",
+                    "reason": "linked_project_missing_peer_doc",
+                    "reason_code": "linked_project_missing_peer_doc",
+                    "linked_project_id": linked_project_id,
+                    "evidence_refs": sorted({source_path, *earth_sweep_evidence_refs}),
+                }
+            )
+    return risks
+
+
 def process_ground_graph_snapshot(
     snapshot: Mapping[str, Any],
     *,
@@ -281,6 +403,16 @@ def process_ground_graph_snapshot(
             recommendation_row["out_of_scope_evidence_refs"] = missing_evidence_refs
         supported_actions.append(recommendation_row)
 
+    open_risks.extend(
+        _hardening_open_risks(
+            canonical_ingestion=canonical_ingestion,
+            broad_sweep_context=context,
+            earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+            linked_project_ids=linked_project_ids,
+            active_project_id=active_project_id,
+        )
+    )
+
     for row in supported_actions:
         if row.get("out_of_scope_evidence_refs"):
             deferred_actions.append(
@@ -330,6 +462,24 @@ def process_ground_graph_snapshot(
             "recommendation": recommendation_evidence_ref_list,
         },
         "recommendation": recommendation,
+    }
+
+
+def serialize_ground_graph_context_bundle(payload: Mapping[str, Any]) -> dict[str, str]:
+    context_bundle = _require_mapping(payload, label="ground_graph_context_bundle")
+    serialized_payload = json.dumps(
+        context_bundle,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "requirement_id": "REQ-007",
+        "surface": "ground_graph_context_bundle",
+        "schema_version": REQ_007_CONTEXT_BUNDLE_SCHEMA_VERSION,
+        "serialization_format": "json-canonical-v1",
+        "checksum_sha256": hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest(),
+        "serialized_payload": serialized_payload,
     }
 
 
