@@ -1,0 +1,37 @@
+{
+  "input": {
+    "target_project": {
+      "mission": {
+        "text": "Deliver deterministic strategy recommendations for Optimus project planning.",
+        "source": "mission.md"
+      },
+      "scope": {
+        "text": "Only include constraints required to guide recommendation generation.",
+        "source": "scope.md"
+      }
+    }
+  },
+  "ingestion_result": {
+    "ok": true,
+    "reason_codes": [],
+    "target_project_constraints": {
+      "mission": {
+        "text": "Deliver deterministic strategy recommendations for Optimus project planning.",
+        "source": "mission.md",
+        "authoritative": true
+      },
+      "scope": {
+        "text": "Only include constraints required to guide recommendation generation.",
+        "source": "scope.md",
+        "authoritative": true
+      }
+    },
+    "recommendation_generation": {
+      "base_constraints_source": "target_project_mission_scope",
+      "authoritative_fields": [
+        "mission",
+        "scope"
+      ]
+    }
+  }
+}
