@@ -141,28 +141,32 @@ Execution continues with strict gates until:
 
 Executor routing flags:
 - `--executor-provider codex|openrouter|blackbox` (default: `codex`)
+- `--selected-aliases "alias1,alias2,..."` (Codex account/home alias pool for rate/dispatch profile selection)
+- `--profile <codex_config_profile_name>` (optional Codex config profile inside selected `CODEX_HOME`; not a provider selector and not an alias selector)
 - `--executor-model <model-id>` (optional)
 - `--blackbox-lane free|api_key` (default: `free`)
 - `--allow-worker-executor-override` (default off)
-- `--profile <alias>` (Codex/OpenRouter profile selection)
+
+Alias vs profile quick rule:
+1. Use `--executor-provider` to choose backend (`codex`, `openrouter`, `blackbox`).
+2. Use `--selected-aliases` to choose Codex alias homes (for example `nine,ten`).
+3. Use `--profile` only when you need a specific Codex config profile name inside those alias homes.
+4. Do not pass alias names to `--profile`.
 
 Blackbox canary docs:
 - [docs/runbooks/BLACKBOX_CANARY_RUNBOOK.md](docs/runbooks/BLACKBOX_CANARY_RUNBOOK.md)
 - [docs/runbooks/BLACKBOX_CANARY_VALIDATION_TEMPLATE.md](docs/runbooks/BLACKBOX_CANARY_VALIDATION_TEMPLATE.md)
 
-Build cycle manager order:
-1. `profile-manager`
-2. `production-line-manager`
-3. `gap-consumption-manager`
-4. `branch-merge-manager`
-5. `workstation-manager`
-6. controller tick
-7. `production-line-manager` (post-directive reconcile)
-8. `gap-consumption-manager` (post-directive reconcile)
-9. `work-dispatcher`
+Build cycle manager order (OP Simple runtime):
+1. `BOSS`
+2. `watchdog` (pre-dispatch stale/near-stale evaluation)
+3. `rate-gate` (only when BOSS is healthy and watchdog is non-terminal)
+4. `work-dispatcher` (uses reserved slots in `merge_recovery` mode)
+5. `merge-engine` (deterministic fan-in/lane/run merge progression)
+6. `summary` (+ `wrapup-manager` on terminal/project-done exits)
 
 Canonical runtime task statuses:
-- `pending`, `dev_working`, `dev_done`, `testing`, `tests_done`, `reviewing`, `review_done`, `blocked`
+- `pending`, `in_progress`, `done`, `blocked`
 
 ### Monitor / Recover
 
@@ -180,17 +184,22 @@ Use these file-based controls when a run is active:
 |---|---|---|---|
 | `/op-simple-build` | `terminate_run.json` | Immediate loop stop signal (presence-only; content ignored for stop check) | runtime code |
 | `/op-simple-build` | `recovery_instructions.md` | Operator recovery nudge for next BOSS cycle; BOSS should apply or explain and rename to `recovery_instructions_CONSUMED.md` | BOSS manager prompt |
-| `/op-build` | `reports/optimus-prime/control/OPERATOR_STOP.json` | Stop active autonomous `/op-build` workers and exit loop safely | runtime code |
 
 Related runtime state files:
-- `/op-build`: `reports/optimus-prime/control/OPERATOR_STOP_STATE.json` (written by runtime after operator stop; reconciled by `/op-resume`).
 - `/op-simple-build`: `.op-simple/current/watchdog_exit_signal.json` (written when watchdog stop condition triggers).
+- `/op-simple-build`: `.op-simple/current/terminal_capsule.json` (terminal-stop forensic summary).
+- `/op-simple-build`: `.op-simple/current/mergeability_report.json` (lane/run mergeability state).
 
 Resume after stop:
 
 ```bash
 opctl /op-resume --repo-root /absolute/path/to/project --json-pretty
 ```
+
+`/op-resume` preflight requirement:
+- `.op-simple/current/initialize_state.json` must exist.
+- If missing, runtime returns `op_simple_resume_unavailable` and you must run `/op-build` first.
+- Legacy `/op-resume` fallback to old non-`.op-simple` state is removed.
 
 ### Multi-Profile Codex Setup
 
@@ -207,38 +216,24 @@ python3 "$CODEX_HOME/skills/create-codex-profile/scripts/create_codex_profile.py
 Behavior:
 - copies per-profile items: `auth.json`, `sessions/`
 - symlinks all other top-level `.codex` items (shared skills/agents/state backend)
+- Note: `create_codex_profile.py --profile <name>` defines alias/home suffix (`~/.codex-<name>`). It is different from `opctl --profile`, which sets Codex config profile name inside a selected alias home.
 
 Runtime reliability notes:
-- Runtime decisions are now based on task-embedded gaps (`tasks[].gaps_that_need_patching`); external `GAPS.json` / `GAP_CLOSURE_PLAN_PACKETS.json` are not decision inputs.
-- Planner/runtime use an explicit per-task `verification_contract` (`tdd_red|implementation_green|hardening`) and evidence summary expectation fields (`expectation`, `expectation_met`, `failure_class`).
-- For TDD red stages, `expect_fail` with `failure_class=expected_red` is treated as progress (not false blocking).
-- Handoff is non-authoritative for task blocking; evidence sync is authoritative for state transitions.
-- Strict completion requires merge evidence: `review_done` tasks must be merged into `RAB-BASE` with verification pass data.
-- Branch manager merge completion now also requires explicit merge proof (`source_branch` ancestor of `RAB-BASE` HEAD) before a task is marked merged.
-- On post-merge verification failure, branch manager now rolls back deterministically to captured pre-merge HEAD (never `HEAD~1`).
-- Branch manager retries are eligibility-aware and stop early when merge eligibility is lost (`merge_candidate_lost_eligibility`) or when verification contract mismatch is non-retriable (`merge_verification_contract_invalid`).
-- Dispatcher is assignment-driven from `WORK_DISPATCH_PLAN.json`; tasks not present in assignments are not dispatched in that cycle.
-- Empty-assignment cycles are reported deterministically as `dispatch_plan_no_assignments`.
-- Controller `dispatch_filter` is enforced per assignment alias (hard-gated aliases are skipped, non-hard-gated aliases can still dispatch in the same cycle).
-- Dispatch packets use workstation-prepared slot context (`worktree_root`, `branch`) from `WORKER_REGISTRY.json`.
-- `/op-build` response data now includes current-cycle `assignment_observations` (same signal persisted to `DISPATCH_ASSIGNMENT_OBSERVATIONS.jsonl`).
-- Dispatcher supports same-lane thread continuation (`codex resume`) with deterministic fallback to fresh dispatch on resume failure.
-- Worker branch templates are run-aware in active build loops: `codex/<run_id>/<slot>/<task_slug>` (test/review suffixes still apply).
-- Branch/workstation managers run LLM-first action loops with strict validators and bounded retries (max 10); retry exhaustion blocks only the affected task/lane.
-- Workstation manager accepts only `prepare_command` values that resolve to the bundled `skills/workstation-preparation/scripts/prepare_workstation.py` path.
-- Workstation manager enforces slot-specific worktree names (`workstation-dev-*`, `workstation-test-*`, `workstation-review-*`), requires prepared `target_path` to match exact deterministic slot path, and skips destructive prep only for same-lane in-progress slots with valid slot-prefixed branches (`codex/<slot>/...`).
-- Artifact fan-in is config-gated (`workflow.enable_artifact_fan_in`) and defaults to `false`; when disabled OP emits `artifact_fan_in_disabled` and skips worktree fan-in.
-- Workstation manager deterministically enforces `<worktree>/reports/optimus-prime -> <repo>/reports/optimus-prime` symlink after validation (delete-and-replace if a non-symlink path exists), so worker artifacts land in canonical reports without fan-in.
-- Embedded gaps close only when explicit closure conditions pass with evidence refs and can reopen on regression.
-- Dead running worker PIDs are normalized before dispatch gating, so stale registry entries do not block dispatch capacity.
-- Dead PID recovery is evidence-first: if no new progress is ingested, OP queues immediate same-cycle same-slot redispatch and tracks retry metadata.
-- `/op-resume --reset-exhausted-retries` clears continuation-limiting counters (gap/dead-pid/resume-fail/task-attempt/task-watchdog/global-watchdog) before resume.
-- If `WORKER_REGISTRY.json` is unreadable, OP attempts auto-recovery; if recovery fails, it emits `worker_registry_recovery_failed_dispatch_allowed` and continues dispatch by policy.
+- `/op-build` and `/op-resume` both execute the OP Simple runtime (`/op-simple-build`).
+- Legacy op-core autonomous build paths and legacy `/op-resume` fallback behavior are removed from active execution.
+- Watchdog runs pre-dispatch and sets `cycle_mode` as `normal`, `merge_recovery`, or `terminal_stale`.
+- In `merge_recovery`, dispatcher reserves exactly 2 worker slots for merge/fan-in work while allowing other active workers to continue.
+- BOSS timeout handling is fail-closed per cycle with forensic evidence and timeout streak tracking (`timeout_adaptation_state.json`).
+- After 2 consecutive BOSS timeouts, next-cycle profile rotation is required when eligible candidates exist, with explicit rotation evidence in cycle artifacts.
+- Merge progression is deterministic: done-worker commit ingestion -> lane fan-in -> full-lane gate -> lane-to-run merge.
+- Runtime emits minimal per-cycle artifacts even on unhappy paths (for example `cycle_summary.json`, `cycle_manager_decision.json`, `terminal_capsule.json`).
+- Wrapup runs for `project_done` and watchdog-terminal stop reasons, with merge/fan-in snapshot evidence.
 
 Operator stop behavior:
 - See `Operator Controls (Stop / Recovery Files)` above.
-- `/op-build` applies stop to active worker PIDs (`SIGTERM` then `SIGKILL` fallback), writes `OPERATOR_STOP_STATE.json`, archives the marker, and exits with `stopped_operator`.
-- `/op-resume` auto-reconciles stop-affected in-progress tasks (continue when worker/evidence is valid, requeue otherwise).
+- Create `terminate_run.json` at repo root to stop the active OP Simple loop on the next cycle boundary.
+- Runtime persists terminal evidence into `.op-simple/current` and per-cycle snapshots in `.op-simple/history/cycle-*`.
+- `/op-resume` continues from `.op-simple/current` state when preflight markers are present.
 
 ## Command Reference
 
@@ -247,10 +242,10 @@ Workflow commands:
 - `/op-new-project` — initialize baseline project artifacts
 - `/op-plan` — generate plan artifacts via strict LLM bundle + validation loop
 - `/op-initialize` — map + new-project + plan chain
-- `/op-build` — autonomous execution loop
+- `/op-build` — initialize-if-needed + OP Simple execution loop
 - `/op-status` — deterministic status snapshot
 - `/op-health` — strict readiness/integrity check
-- `/op-resume` — resume build state safely
+- `/op-resume` — resume OP Simple state safely (requires `.op-simple/current/initialize_state.json`)
 
 Lifecycle commands:
 - `opctl doctor`
