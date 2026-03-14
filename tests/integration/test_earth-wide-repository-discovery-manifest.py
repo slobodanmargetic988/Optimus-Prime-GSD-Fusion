@@ -46,7 +46,17 @@ def test_req002_integration_enforces_evidence_backed_reasoning_fields():
         recommendation = manifest["recommendation"]
         assert recommendation["decision"] == "needs_evidence_backfill"
         assert recommendation["rationale"]
+        assert sorted(recommendation.keys()) == [
+            "action_items",
+            "context_project_ids",
+            "decision",
+            "evidence_refs",
+            "proposed_cross_project_obligations",
+            "rationale",
+        ]
+        assert recommendation["context_project_ids"] == [row["project_id"] for row in manifest["projects"]]
         assert recommendation["evidence_refs"]
+        assert recommendation["evidence_refs"] == manifest["evidence_refs"]
         assert recommendation["action_items"]
         assert recommendation["proposed_cross_project_obligations"] == []
 
@@ -55,6 +65,8 @@ def test_req002_integration_enforces_evidence_backed_reasoning_fields():
         assert cross_project_context["prj.tetris"]["context_status"] == "partial"
         for row in cross_project_context.values():
             assert row["evidence_refs"]
+            for ref in row["evidence_refs"]:
+                assert ref in recommendation["evidence_refs"]
 
         open_risks = manifest["open_risks"]
         risk_ids = {row["risk_id"] for row in open_risks}
@@ -78,9 +90,15 @@ def test_req002_integration_cross_project_obligations_require_evidence_refs():
 
         recommendation = manifest["recommendation"]
         assert recommendation["decision"] == "ready_for_cross_project_planning"
+        assert recommendation["context_project_ids"] == [row["project_id"] for row in manifest["projects"]]
+        assert recommendation["evidence_refs"] == manifest["evidence_refs"]
         obligations = recommendation["proposed_cross_project_obligations"]
         assert obligations
+        context_refs = {
+            ref for row in manifest["cross_project_context"] for ref in [row["mission_ref"], row["scope_ref"]] if ref
+        }
         for obligation in obligations:
             assert obligation["evidence_refs"]
             for ref in obligation["evidence_refs"]:
                 assert ref in manifest["evidence_refs"]
+                assert ref in context_refs

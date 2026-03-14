@@ -292,11 +292,18 @@ def _build_recommendation_and_open_risks(
         )
         action_items = ["Proceed with cross-project planning using the manifest evidence refs and obligations."]
 
+    recommendation_evidence_refs = _sorted_unique_strings(
+        evidence_refs
+        + [ref for row in cross_project_context for ref in row.get("evidence_refs", [])]
+        + [ref for row in obligations for ref in row.get("evidence_refs", [])]
+        + [ref for row in open_risks for ref in row.get("evidence_refs", [])]
+    )
+
     recommendation = {
         "decision": decision,
         "rationale": rationale,
         "context_project_ids": project_ids,
-        "evidence_refs": evidence_refs[:10] if evidence_refs else [],
+        "evidence_refs": recommendation_evidence_refs,
         "action_items": action_items,
         "proposed_cross_project_obligations": obligations,
     }
