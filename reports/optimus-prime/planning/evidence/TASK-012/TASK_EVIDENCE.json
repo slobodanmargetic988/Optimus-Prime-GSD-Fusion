@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-unknown",
+  "phase_id": "phase-1",
+  "task_id": "TASK-012",
+  "requirement_ids": [
+    "REQ-004"
+  ],
+  "updated_at": "2026-03-14T23:35:21Z",
+  "dev": {
+    "status": "done",
+    "checks": [
+      {
+        "name": "req004_hardening_edge_cases",
+        "passed": true,
+        "details": "Added deterministic hardening coverage for stale Earth-sweep source artifacts, missing mission/scope or peer documents, and replay-stable context bundle serialization."
+      },
+      {
+        "name": "req004_reason_code_determinism",
+        "passed": true,
+        "details": "Unhappy-path rows now emit deterministic reason_code values and evidence_refs for replay diagnostics."
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_peer-project-mission-and-scope-ingestion.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_peer-project-mission-and-scope-ingestion.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_peer-project-mission-and-scope-ingestion_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_peer-project-mission-and-scope-ingestion.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_peer-project-mission-and-scope-ingestion.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_peer-project-mission-and-scope-ingestion_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/hardening/test_peer-project-mission-and-scope-ingestion_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-012/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": []
+  }
+}

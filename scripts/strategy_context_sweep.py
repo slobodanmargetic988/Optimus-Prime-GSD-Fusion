@@ -14,6 +14,12 @@ REQ004_SCHEMA_VERSION = "REQ-004-peer-project-mission-and-scope-ingestion.v1"
 SUPPORTED_DOCUMENT_TYPES = {"mission", "scope"}
 OBLIGATION_PATTERN = re.compile(r"\b(must|shall|required|needs?\s+to)\b", re.IGNORECASE)
 REUSE_PATTERN = re.compile(r"\b(reuse|shared|common|template|library|leverage|integrate)\b", re.IGNORECASE)
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+REASON_CODE_MISSING_EARTH_SWEEP_EVIDENCE = "missing_earth_sweep_evidence_refs"
+REASON_CODE_STALE_EARTH_SWEEP_SOURCE_ARTIFACT = "stale_earth_sweep_source_artifact_detected"
+REASON_CODE_MISSING_PEER_PROJECT_DOCUMENTS = "missing_peer_project_documents"
+REASON_CODE_MISSING_MISSION_OR_SCOPE_DOCUMENT = "missing_peer_mission_or_scope_document"
 
 
 def _utc_now_iso() -> str:
@@ -64,14 +70,29 @@ def _provenance_match_key_string(*, peer_project_id: str, source_path: str, line
     return f"{peer_project_id}:{source_path}:{line_number}"
 
 
-def _index_earth_sweep_evidence_refs(payload_obj: dict[str, Any]) -> tuple[dict[tuple[str, str, int], list[str]], int]:
+def _normalize_optional_sha256(value: Any, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string when present.")
+    normalized = value.strip().lower()
+    if not normalized:
+        raise ValueError(f"{field_name} must be a non-empty SHA256 string when present.")
+    if not SHA256_PATTERN.fullmatch(normalized):
+        raise ValueError(f"{field_name} must be a lowercase 64-char SHA256 hex value.")
+    return normalized
+
+
+def _index_earth_sweep_evidence_refs(
+    payload_obj: dict[str, Any],
+) -> tuple[dict[tuple[str, str, int], list[dict[str, Any]]], int]:
     raw_context = payload_obj.get("earth_sweep_context")
     if raw_context is None:
         return {}, 0
 
     context_obj = _require_mapping(raw_context, field_name="earth_sweep_context")
     raw_evidence_refs = _require_list(context_obj.get("evidence_refs"), field_name="earth_sweep_context.evidence_refs")
-    evidence_index: dict[tuple[str, str, int], set[str]] = {}
+    evidence_index: dict[tuple[str, str, int], set[tuple[str, str | None]]] = {}
 
     for idx, raw_item in enumerate(raw_evidence_refs):
         item = _require_mapping(raw_item, field_name=f"earth_sweep_context.evidence_refs[{idx}]")
@@ -91,15 +112,25 @@ def _index_earth_sweep_evidence_refs(payload_obj: dict[str, Any]) -> tuple[dict[
             item.get("evidence_ref"),
             field_name=f"earth_sweep_context.evidence_refs[{idx}].evidence_ref",
         )
+        source_sha256 = _normalize_optional_sha256(
+            item.get("source_sha256"),
+            field_name=f"earth_sweep_context.evidence_refs[{idx}].source_sha256",
+        )
         key = _provenance_match_key(
             peer_project_id=peer_project_id,
             source_path=source_path,
             line_number=line_number,
         )
-        evidence_index.setdefault(key, set()).add(evidence_ref)
+        evidence_index.setdefault(key, set()).add((evidence_ref, source_sha256))
 
     normalized_index = {
-        key: sorted(refs)
+        key: [
+            {
+                "evidence_ref": evidence_ref,
+                "source_sha256": source_sha256,
+            }
+            for evidence_ref, source_sha256 in sorted(refs, key=lambda item: (item[0], item[1] or ""))
+        ]
         for key, refs in sorted(
             evidence_index.items(),
             key=lambda item: (item[0][0], item[0][1], item[0][2]),
@@ -112,17 +143,21 @@ def _collect_evidence_refs_for_provenance(
     *,
     peer_project_id: str,
     source_provenance: list[dict[str, Any]],
-    earth_sweep_evidence_index: dict[tuple[str, str, int], list[str]],
-) -> tuple[list[str], list[str]]:
+    earth_sweep_evidence_index: dict[tuple[str, str, int], list[dict[str, Any]]],
+) -> tuple[list[str], list[str], list[str]]:
     recommendation_refs: set[str] = set()
+    stale_refs: set[str] = set()
     match_keys: list[str] = []
     for provenance in source_provenance:
         source_path = provenance.get("source_path")
         line_number = provenance.get("line_number")
+        source_sha256 = provenance.get("source_sha256")
         if not isinstance(source_path, str) or not source_path:
             continue
         if not isinstance(line_number, int) or line_number <= 0:
             continue
+        if not isinstance(source_sha256, str) or not source_sha256:
+            source_sha256 = None
         key = _provenance_match_key(
             peer_project_id=peer_project_id,
             source_path=source_path,
@@ -134,9 +169,79 @@ def _collect_evidence_refs_for_provenance(
             line_number=line_number,
         )
         match_keys.append(key_string)
-        for evidence_ref in earth_sweep_evidence_index.get(key, []):
+        for entry in earth_sweep_evidence_index.get(key, []):
+            evidence_ref = entry.get("evidence_ref")
+            expected_sha256 = entry.get("source_sha256")
+            if not isinstance(evidence_ref, str) or not evidence_ref:
+                continue
+            if (
+                isinstance(expected_sha256, str)
+                and expected_sha256
+                and isinstance(source_sha256, str)
+                and source_sha256
+                and expected_sha256 != source_sha256
+            ):
+                stale_refs.add(evidence_ref)
+                continue
             recommendation_refs.add(evidence_ref)
-    return sorted(recommendation_refs), sorted(set(match_keys))
+    return sorted(recommendation_refs), sorted(stale_refs), sorted(set(match_keys))
+
+
+def _canonical_json(data: Any) -> str:
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _context_evidence_ref(peer_project_id: str, surface: str) -> str:
+    return f"peer-project/{peer_project_id}/{surface}"
+
+
+def _build_context_bundle(
+    *,
+    current_project_id: str,
+    peer_models: list[dict[str, Any]],
+    cross_project_recommendations: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+    earth_sweep_evidence_index: dict[tuple[str, str, int], list[dict[str, Any]]],
+) -> dict[str, Any]:
+    earth_sweep_index_rows = []
+    for key, refs in sorted(earth_sweep_evidence_index.items(), key=lambda item: (item[0][0], item[0][1], item[0][2])):
+        peer_project_id, source_path, line_number = key
+        earth_sweep_index_rows.append(
+            {
+                "peer_project_id": peer_project_id,
+                "source_path": source_path,
+                "line_number": line_number,
+                "evidence_refs": [str(item.get("evidence_ref")) for item in refs if isinstance(item, dict)],
+                "source_sha256": sorted(
+                    {
+                        str(item.get("source_sha256"))
+                        for item in refs
+                        if isinstance(item, dict) and isinstance(item.get("source_sha256"), str) and item.get("source_sha256")
+                    }
+                ),
+            }
+        )
+
+    payload = {
+        "current_project_id": current_project_id,
+        "peer_project_models": peer_models,
+        "cross_project_recommendations": cross_project_recommendations,
+        "open_risks": open_risks,
+        "earth_sweep_index": earth_sweep_index_rows,
+    }
+    serialized = _canonical_json(payload)
+    return {
+        "bundle_version": "REQ-004-context-bundle.v1",
+        "serialization_format": "json-canonical-sort-keys",
+        "serialization_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+        "serialization": serialized,
+        "entry_counts": {
+            "peer_project_model_count": len(peer_models),
+            "recommendation_count": len(cross_project_recommendations),
+            "open_risk_count": len(open_risks),
+            "earth_sweep_index_count": len(earth_sweep_index_rows),
+        },
+    }
 
 
 def _extract_signals_from_document(
@@ -207,13 +312,34 @@ def ingest_peer_project_mission_and_scope(
     for peer in peer_projects:
         peer_obj = _require_mapping(peer, field_name="peer_projects[]")
         peer_project_id = _require_non_empty_string(peer_obj.get("project_id"), field_name="peer_projects[].project_id")
-        documents = _require_list(peer_obj.get("documents"), field_name=f"peer_projects[{peer_project_id}].documents")
+        raw_documents = peer_obj.get("documents")
+        documents_missing = not isinstance(raw_documents, list)
+        documents = raw_documents if isinstance(raw_documents, list) else []
 
         ingested_documents: list[dict[str, Any]] = []
         interaction_obligations: list[dict[str, Any]] = []
         reuse_opportunities: list[dict[str, Any]] = []
         obligation_counter = 0
         reuse_counter = 0
+
+        if documents_missing:
+            risk_index += 1
+            open_risks.append(
+                {
+                    "risk_id": f"RISK-{risk_index:04d}",
+                    "risk_type": "missing_peer_project_documents",
+                    "reason_code": REASON_CODE_MISSING_PEER_PROJECT_DOCUMENTS,
+                    "recommendation_type": "peer_project_documents",
+                    "source_project_id": peer_project_id,
+                    "target_project_id": current_project_id,
+                    "summary": (
+                        "Peer project documents are missing or invalid; mission/scope ingestion cannot evaluate this peer."
+                    ),
+                    "required_context_match_keys": [f"{peer_project_id}:documents"],
+                    "source_provenance": [],
+                    "evidence_refs": [_context_evidence_ref(peer_project_id, "documents#missing")],
+                }
+            )
 
         for document in documents:
             document_obj = _require_mapping(document, field_name=f"peer_projects[{peer_project_id}].documents[]")
@@ -255,6 +381,67 @@ def ingest_peer_project_mission_and_scope(
             interaction_obligations.extend(extracted_obligations)
             reuse_opportunities.extend(extracted_reuse)
 
+        if not documents_missing:
+            ingested_document_types = {row["document_type"] for row in ingested_documents if isinstance(row, dict)}
+            missing_document_types = sorted(SUPPORTED_DOCUMENT_TYPES - ingested_document_types)
+            if missing_document_types:
+                signal_provenance: list[dict[str, Any]] = []
+                seen_keys: set[tuple[str, str, int]] = set()
+                for signal_row in interaction_obligations + reuse_opportunities:
+                    source_rows = signal_row.get("source_provenance")
+                    if not isinstance(source_rows, list):
+                        continue
+                    for item in source_rows:
+                        if not isinstance(item, dict):
+                            continue
+                        source_path = item.get("source_path")
+                        line_number = item.get("line_number")
+                        if not isinstance(source_path, str) or not source_path:
+                            continue
+                        if not isinstance(line_number, int) or line_number <= 0:
+                            continue
+                        key = (peer_project_id, source_path, line_number)
+                        if key in seen_keys:
+                            continue
+                        seen_keys.add(key)
+                        signal_provenance.append(item)
+
+                evidence_refs = sorted(
+                    {
+                        _context_evidence_ref(peer_project_id, f"{doc['document_type']}#{doc['source_path']}")
+                        for doc in ingested_documents
+                        if isinstance(doc, dict)
+                        and isinstance(doc.get("document_type"), str)
+                        and doc.get("document_type")
+                        and isinstance(doc.get("source_path"), str)
+                        and doc.get("source_path")
+                    }
+                )
+                if not evidence_refs:
+                    evidence_refs = [_context_evidence_ref(peer_project_id, "mission-scope#missing")]
+
+                risk_index += 1
+                open_risks.append(
+                    {
+                        "risk_id": f"RISK-{risk_index:04d}",
+                        "risk_type": "missing_mission_or_scope_document",
+                        "reason_code": REASON_CODE_MISSING_MISSION_OR_SCOPE_DOCUMENT,
+                        "recommendation_type": "peer_project_documents",
+                        "source_project_id": peer_project_id,
+                        "target_project_id": current_project_id,
+                        "summary": (
+                            "Peer project mission/scope coverage is incomplete; "
+                            f"missing document types: {', '.join(missing_document_types)}."
+                        ),
+                        "missing_document_types": missing_document_types,
+                        "required_context_match_keys": [
+                            f"{peer_project_id}:{document_type}" for document_type in missing_document_types
+                        ],
+                        "source_provenance": signal_provenance,
+                        "evidence_refs": evidence_refs,
+                    }
+                )
+
         if interaction_obligations or reuse_opportunities:
             peer_projects_with_signals += 1
 
@@ -267,7 +454,7 @@ def ingest_peer_project_mission_and_scope(
         peer_models.append(peer_model)
 
         for obligation in interaction_obligations:
-            recommendation_refs, context_keys = _collect_evidence_refs_for_provenance(
+            recommendation_refs, stale_refs, context_keys = _collect_evidence_refs_for_provenance(
                 peer_project_id=peer_project_id,
                 source_provenance=obligation["source_provenance"],
                 earth_sweep_evidence_index=earth_sweep_evidence_index,
@@ -292,12 +479,32 @@ def ingest_peer_project_mission_and_scope(
                         },
                     }
                 )
+            elif stale_refs:
+                risk_index += 1
+                open_risks.append(
+                    {
+                        "risk_id": f"RISK-{risk_index:04d}",
+                        "risk_type": "stale_earth_sweep_source_artifact",
+                        "reason_code": REASON_CODE_STALE_EARTH_SWEEP_SOURCE_ARTIFACT,
+                        "recommendation_type": "interaction_obligation",
+                        "source_project_id": peer_project_id,
+                        "target_project_id": current_project_id,
+                        "summary": (
+                            "Inferred interaction obligation matched stale Earth-sweep source artifacts; "
+                            f"kept as open risk: {obligation['statement']}"
+                        ),
+                        "required_context_match_keys": context_keys,
+                        "source_provenance": obligation["source_provenance"],
+                        "evidence_refs": stale_refs,
+                    }
+                )
             else:
                 risk_index += 1
                 open_risks.append(
                     {
                         "risk_id": f"RISK-{risk_index:04d}",
                         "risk_type": "missing_earth_sweep_evidence",
+                        "reason_code": REASON_CODE_MISSING_EARTH_SWEEP_EVIDENCE,
                         "recommendation_type": "interaction_obligation",
                         "source_project_id": peer_project_id,
                         "target_project_id": current_project_id,
@@ -307,10 +514,11 @@ def ingest_peer_project_mission_and_scope(
                         ),
                         "required_context_match_keys": context_keys,
                         "source_provenance": obligation["source_provenance"],
+                        "evidence_refs": [],
                     }
                 )
         for opportunity in reuse_opportunities:
-            recommendation_refs, context_keys = _collect_evidence_refs_for_provenance(
+            recommendation_refs, stale_refs, context_keys = _collect_evidence_refs_for_provenance(
                 peer_project_id=peer_project_id,
                 source_provenance=opportunity["source_provenance"],
                 earth_sweep_evidence_index=earth_sweep_evidence_index,
@@ -335,12 +543,32 @@ def ingest_peer_project_mission_and_scope(
                         },
                     }
                 )
+            elif stale_refs:
+                risk_index += 1
+                open_risks.append(
+                    {
+                        "risk_id": f"RISK-{risk_index:04d}",
+                        "risk_type": "stale_earth_sweep_source_artifact",
+                        "reason_code": REASON_CODE_STALE_EARTH_SWEEP_SOURCE_ARTIFACT,
+                        "recommendation_type": "reuse_opportunity",
+                        "source_project_id": peer_project_id,
+                        "target_project_id": current_project_id,
+                        "summary": (
+                            "Inferred reuse opportunity matched stale Earth-sweep source artifacts; "
+                            f"kept as open risk: {opportunity['statement']}"
+                        ),
+                        "required_context_match_keys": context_keys,
+                        "source_provenance": opportunity["source_provenance"],
+                        "evidence_refs": stale_refs,
+                    }
+                )
             else:
                 risk_index += 1
                 open_risks.append(
                     {
                         "risk_id": f"RISK-{risk_index:04d}",
                         "risk_type": "missing_earth_sweep_evidence",
+                        "reason_code": REASON_CODE_MISSING_EARTH_SWEEP_EVIDENCE,
                         "recommendation_type": "reuse_opportunity",
                         "source_project_id": peer_project_id,
                         "target_project_id": current_project_id,
@@ -350,8 +578,17 @@ def ingest_peer_project_mission_and_scope(
                         ),
                         "required_context_match_keys": context_keys,
                         "source_provenance": opportunity["source_provenance"],
+                        "evidence_refs": [],
                     }
                 )
+
+    context_bundle = _build_context_bundle(
+        current_project_id=current_project_id,
+        peer_models=peer_models,
+        cross_project_recommendations=cross_project_recommendations,
+        open_risks=open_risks,
+        earth_sweep_evidence_index=earth_sweep_evidence_index,
+    )
 
     return {
         "schema_version": REQ004_SCHEMA_VERSION,
@@ -360,6 +597,7 @@ def ingest_peer_project_mission_and_scope(
         "peer_project_models": peer_models,
         "cross_project_recommendations": cross_project_recommendations,
         "open_risks": open_risks,
+        "context_bundle": context_bundle,
         "summary": {
             "peer_projects_evaluated": len(peer_projects),
             "peer_projects_with_signals": peer_projects_with_signals,
