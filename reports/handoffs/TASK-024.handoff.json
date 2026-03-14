@@ -1,0 +1,22 @@
+{
+  "task_identifier": "TASK-024",
+  "decision": "ready_for_test",
+  "checks": [
+    {
+      "name": "acceptance_pytest",
+      "command": "python3 -m pytest tests/integration/test_research-packet-ingestion-and-normalization.py -q",
+      "status": "passed",
+      "exit_code": 0,
+      "output": "... [100%] 3 passed in 0.01s"
+    },
+    {
+      "name": "task_evidence_blockers",
+      "status": "passed",
+      "details": "reports/optimus-prime/planning/evidence/TASK-024/TASK_EVIDENCE.json exists with dev/test/review blockers arrays empty and gate.ready_for_test=true"
+    }
+  ],
+  "artifacts": [
+    "reports/optimus-prime/planning/evidence/TASK-024/TASK_EVIDENCE.json"
+  ],
+  "findings": []
+}

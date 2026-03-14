@@ -34,6 +34,9 @@ def test_req_008_integration_keeps_evidence_and_recommendation_fields_complete()
         row["recommendation_id"]: row for row in payload["recommendation_rationale_provenance"]
     }
     for recommendation_id, row in by_recommendation.items():
+        assert row["provenance_refs"]
+        assert {ref["artifact_id"] for ref in row["provenance_refs"]} == packet_evidence_ids
+
         fields = row["recommendation_fields"]
         assert set(fields.keys()) == {"summary", "rationale", "expected_impact", "risk_level"}
         assert fields["summary"]
@@ -92,4 +95,3 @@ def test_req_008_integration_requires_obligation_level_earth_evidence():
     assert [row["open_risk_id"] for row in payload["strategy_context"]["open_risks"]] == [
         "open-risk.001.prj-example-without-local-evidence"
     ]
-
