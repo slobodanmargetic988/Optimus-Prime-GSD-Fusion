@@ -42,7 +42,7 @@ PAYLOAD_PATHS = [
 
 # Runtime skills that /op-* execution depends on.
 REQUIRED_RUNTIME_SKILL_DIRS = [
-    "skills/codex-rate-snapshot",
+    "skills/minimal-rate-snapshot",
     "skills/dispatch-worker-packet",
     "skills/optimus-cycle-controller",
     "skills/runtime-coordinator",

@@ -5579,9 +5579,8 @@ def test_invoke_manager_boss_resume_failure_retries_fresh_session_and_persists_n
 def test_boss_prompt_mentions_cycle_number_and_runtime_skip_correction() -> None:
     prompt = BOSS_PROMPT_PATH.read_text(encoding="utf-8")
 
-    assert "cycle_manager_decision.json" in prompt
-    assert "current cycle's top-level `cycle_number`" in prompt
-    assert "runtime will correct the cycle to a deterministic `skip_cycle` outcome" in prompt
+    assert "cycle_counter.json" in prompt
+    assert "canonical cycle number" in prompt
     assert "recovery_instructions.md" in prompt
     assert "3 Consecutive Missing-Ingestion Cycles" in prompt
     assert "reviewer_decision" in prompt

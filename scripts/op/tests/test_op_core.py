@@ -39,36 +39,18 @@ def build_repo(root: Path) -> None:
     controller_target = root / "skills" / "optimus-cycle-controller" / "scripts" / "optimus_cycle_controller.py"
     controller_target.parent.mkdir(parents=True, exist_ok=True)
     controller_target.write_text(CONTROLLER_SOURCE.read_text(encoding="utf-8"), encoding="utf-8")
-    snapshot_script = root / "skills" / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
+    snapshot_script = root / "skills" / "minimal-rate-snapshot" / "scripts" / "minimal_rate_snapshot.py"
     snapshot_script.parent.mkdir(parents=True, exist_ok=True)
     snapshot_script.write_text(
         "\n".join(
             [
                 "#!/usr/bin/env python3",
-                "import argparse",
                 "import json",
-                "",
-                "parser = argparse.ArgumentParser()",
-                "parser.add_argument('--profile', action='append', default=[])",
-                "parser.add_argument('--json-pretty', action='store_true')",
-                "args = parser.parse_args()",
-                "profiles = {}",
-                "for item in args.profile:",
-                "    alias = item.split('=', 1)[0].strip()",
-                "    if not alias:",
-                "        continue",
-                "    profiles[alias] = {",
-                "        'recommended_action': 'continue',",
-                "        'five_hour': {'remaining_percent': 80},",
-                "        'weekly': {'remaining_percent': 80},",
-                "    }",
-                "if not profiles:",
-                "    profiles = {'codex': {'recommended_action': 'continue', 'five_hour': {'remaining_percent': 80}, 'weekly': {'remaining_percent': 80}}}",
-                "payload = {'profiles': profiles}",
-                "if args.json_pretty:",
-                "    print(json.dumps(payload, indent=2))",
-                "else:",
-                "    print(json.dumps(payload))",
+                "payload = [",
+                "  {'alias': 'codex', 'codex_home': '/tmp/.codex', 'gated': False, 'primary_window': {'used_percent': 20, 'reset_at': 1773529474}, 'secondary_window': {'used_percent': 20, 'reset_at': 1774002467}},",
+                "  {'alias': 'codex-second', 'codex_home': '/tmp/.codex-second', 'gated': False, 'primary_window': {'used_percent': 20, 'reset_at': 1773529474}, 'secondary_window': {'used_percent': 20, 'reset_at': 1774002467}},",
+                "]",
+                "print(json.dumps(payload, indent=2))",
             ]
         )
         + "\n",
@@ -1593,12 +1575,22 @@ def test_seed_rate_registry_uses_selected_aliases(monkeypatch: pytest.MonkeyPatc
 
         def fake_run(cmd, *, cwd, stdin_text=None):
             captured["cmd"] = cmd
-            payload = {
-                "profiles": {
-                    "codex": {"recommended_action": "continue"},
-                    "codex-second": {"recommended_action": "continue"},
+            payload = [
+                {
+                    "alias": "codex",
+                    "codex_home": str((root.parent / ".codex").resolve()),
+                    "gated": False,
+                    "primary_window": {"used_percent": 20.0, "reset_at": 1773529474},
+                    "secondary_window": {"used_percent": 20.0, "reset_at": 1774002467},
                 },
-            }
+                {
+                    "alias": "codex-second",
+                    "codex_home": str(second.resolve()),
+                    "gated": False,
+                    "primary_window": {"used_percent": 20.0, "reset_at": 1773529474},
+                    "secondary_window": {"used_percent": 20.0, "reset_at": 1774002467},
+                },
+            ]
             return 0, json.dumps(payload), ""
 
         monkeypatch.setattr(MODULE, "_run", fake_run)
@@ -1611,9 +1603,9 @@ def test_seed_rate_registry_uses_selected_aliases(monkeypatch: pytest.MonkeyPatc
         assert warnings == []
         cmd = captured["cmd"]
         assert isinstance(cmd, list)
-        assert "--profile" in cmd
-        assert "codex=default" in cmd
-        assert any(str(item).startswith("codex-second=") for item in cmd)
+        assert "--profile" not in cmd
+        assert cmd[:2] == [sys.executable, str(script_path)]
+        assert "--json-pretty" in cmd
 
 
 def test_select_profile_alias_prefers_unassigned_when_extra_profiles():

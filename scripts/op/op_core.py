@@ -86,7 +86,7 @@ OPERATOR_STOP_JSON = CONTROL_REL / "OPERATOR_STOP.json"
 OPERATOR_STOP_STATE_JSON = CONTROL_REL / "OPERATOR_STOP_STATE.json"
 PROFILE_RATE_REGISTRY_JSON = Path("reports") / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
 APP_LIFECYCLE_JSON = Path("app_lifecycle.json")
-RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
+RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "minimal-rate-snapshot" / "scripts" / "minimal_rate_snapshot.py"
 PLANNER_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "llm_plan_prompt.md"
 PLANNER_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_plan_bundle.py"
 PLANNER_EXAMPLE_ROOT_PATH = SCRIPT_DIR / "llm" / "examples" / "op-plan" / "reports" / "optimus-prime" / "planning"
@@ -907,6 +907,152 @@ def _resolve_rate_snapshot_script(repo_root: Path) -> Path | None:
     return None
 
 
+def _canonical_codex_alias(alias: Any, codex_home: Any) -> str:
+    alias_text = (_as_str(alias) or "").lower()
+    home_name = Path(_as_str(codex_home) or "").name.lower()
+    if home_name == ".codex":
+        return "codex"
+    if home_name.startswith(".codex-") and len(home_name) > len(".codex-"):
+        return f"codex-{home_name[len('.codex-'):]}"
+    if alias_text == "codex":
+        return "codex"
+    if alias_text.startswith("codex-"):
+        return alias_text
+    if alias_text:
+        return f"codex-{alias_text}"
+    return ""
+
+
+def _remaining_percent_from_used_percent(value: Any) -> float | None:
+    try:
+        used = float(value)
+    except (TypeError, ValueError):
+        return None
+    remaining = 100.0 - used
+    if remaining < 0.0:
+        return 0.0
+    if remaining > 100.0:
+        return 100.0
+    return round(remaining, 3)
+
+
+def _normalize_rate_snapshot_reset_iso(value: Any) -> str | None:
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+    else:
+        text = _as_str(value) or ""
+        if not text:
+            return None
+        try:
+            timestamp = float(text)
+        except (TypeError, ValueError):
+            dt = _parse_iso_utc(text)
+            if dt is None:
+                return None
+            return dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    if timestamp > 10_000_000_000:
+        timestamp = timestamp / 1000.0
+    try:
+        dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _normalize_minimal_rate_snapshot_payload(
+    payload: Any,
+    *,
+    selected_aliases: list[str] | None = None,
+) -> dict[str, Any] | None:
+    rows: list[dict[str, Any]] = []
+    if isinstance(payload, list):
+        rows = [row for row in payload if isinstance(row, dict)]
+    elif isinstance(payload, dict):
+        profiles = payload.get("profiles")
+        if isinstance(profiles, dict):
+            # Backward-safe fallback when output already matches legacy registry.
+            return payload
+        if isinstance(profiles, list):
+            rows = [row for row in profiles if isinstance(row, dict)]
+        else:
+            return None
+    else:
+        return None
+
+    requested_aliases = [(_as_str(alias) or "").lower() for alias in (selected_aliases or []) if _as_str(alias)]
+    profiles: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        codex_home = _as_str(row.get("codex_home")) or _as_str(row.get("home"))
+        alias = _canonical_codex_alias(row.get("alias"), codex_home)
+        if not alias or not codex_home:
+            continue
+        if requested_aliases and alias not in requested_aliases:
+            continue
+
+        primary = row.get("primary_window") if isinstance(row.get("primary_window"), dict) else {}
+        secondary = row.get("secondary_window") if isinstance(row.get("secondary_window"), dict) else {}
+        five_remaining = _remaining_percent_from_used_percent(primary.get("used_percent"))
+        week_remaining = _remaining_percent_from_used_percent(secondary.get("used_percent"))
+        gated_text = (_as_str(row.get("gated")) or "").lower()
+        hard_gated = gated_text in {"hard-gated", "not-available"} or bool(row.get("hard_gated"))
+        soft_gated = gated_text == "soft-gated" or bool(row.get("soft_concurrency_gated"))
+        if not hard_gated and ((five_remaining is not None and five_remaining <= 1.0) or (week_remaining is not None and week_remaining <= 1.0)):
+            hard_gated = True
+            soft_gated = False
+        elif not soft_gated and ((five_remaining is not None and five_remaining <= 5.0) or (week_remaining is not None and week_remaining <= 5.0)):
+            soft_gated = True
+
+        five_reset = _normalize_rate_snapshot_reset_iso(primary.get("reset_at"))
+        weekly_reset = _normalize_rate_snapshot_reset_iso(secondary.get("reset_at"))
+        reset_candidates = [item for item in [five_reset, weekly_reset] if item]
+        reset_at: str | None = None
+        if reset_candidates:
+            parsed = [(item, _parse_iso_utc(item)) for item in reset_candidates]
+            parsed = [(item, dt) for item, dt in parsed if dt is not None]
+            if parsed:
+                parsed.sort(key=lambda item: item[1])
+                reset_at = parsed[0][0]
+        if hard_gated:
+            recommended_action = "wait_until_reset" if reset_at else "wind_down"
+        else:
+            recommended_action = "continue"
+
+        entry = {
+            "alias": alias,
+            "codex_home": codex_home,
+            "recommended_action": recommended_action,
+            "eligible_for_new_work": not hard_gated,
+            "hard_gated": hard_gated,
+            "soft_concurrency_gated": soft_gated,
+            "window_5h_remaining_pct": five_remaining,
+            "window_week_remaining_pct": week_remaining,
+            "gated": hard_gated,
+            "reset_at": reset_at,
+            "five_hour": {
+                "remaining_percent": five_remaining,
+                "used_percent": primary.get("used_percent"),
+                "reset_at": five_reset,
+                "gated": hard_gated if five_remaining is None else bool(five_remaining <= 1.0),
+            },
+            "weekly": {
+                "remaining_percent": week_remaining,
+                "used_percent": secondary.get("used_percent"),
+                "reset_at": weekly_reset,
+                "gated": hard_gated if week_remaining is None else bool(week_remaining <= 1.0),
+            },
+        }
+        if gated_text == "not-available":
+            entry["errors"] = ["not_available"]
+        profiles[alias] = entry
+
+    normalized_payload = {
+        "generated_at": utc_now_iso(),
+        "source": "minimal-rate-snapshot",
+        "profiles": profiles,
+    }
+    return normalized_payload
+
+
 def _seed_rate_registry_if_missing(
     repo_root: Path,
     *,
@@ -925,7 +1071,7 @@ def _seed_rate_registry_if_missing(
         warnings.append(
             {
                 "code": "rate_registry_seed_unavailable",
-                "message": "codex-rate-snapshot script not found; PROFILE_RATE_REGISTRY.json was not generated",
+                "message": "minimal-rate-snapshot script not found; PROFILE_RATE_REGISTRY.json was not generated",
                 "stage": stage,
             }
         )
@@ -937,7 +1083,6 @@ def _seed_rate_registry_if_missing(
             if profile_selection is not None
             else _load_profile_selection_required(repo_root, stage=stage)
         )
-        profile_args = _profile_args_from_selection(resolved_selection, stage=stage)
     except OpError as exc:
         warnings.append(
             {
@@ -948,10 +1093,7 @@ def _seed_rate_registry_if_missing(
         )
         return warnings
 
-    cmd = [sys.executable, str(script_path)]
-    for arg in profile_args:
-        cmd.extend(["--profile", arg])
-    cmd.append("--json-pretty")
+    cmd = [sys.executable, str(script_path), "--json-pretty"]
     code, out, err = _run(cmd, cwd=repo_root)
     if code != 0:
         stderr = (err or "").strip()
@@ -959,7 +1101,7 @@ def _seed_rate_registry_if_missing(
             {
                 "code": "rate_registry_seed_failed",
                 "message": (
-                    "failed to generate PROFILE_RATE_REGISTRY.json via codex-rate-snapshot"
+                    "failed to generate PROFILE_RATE_REGISTRY.json via minimal-rate-snapshot"
                     + (f": {stderr}" if stderr else "")
                 ),
                 "stage": stage,
@@ -973,17 +1115,23 @@ def _seed_rate_registry_if_missing(
         warnings.append(
             {
                 "code": "rate_registry_seed_failed",
-                "message": f"codex-rate-snapshot emitted invalid JSON: {exc}",
+                "message": f"minimal-rate-snapshot emitted invalid JSON: {exc}",
                 "stage": stage,
             }
         )
         return warnings
 
+    selected_aliases = [
+        alias
+        for alias in (_as_str(item) for item in resolved_selection.get("selected_aliases", []))
+        if alias
+    ]
+    payload = _normalize_minimal_rate_snapshot_payload(payload, selected_aliases=selected_aliases)
     if not isinstance(payload, dict):
         warnings.append(
             {
                 "code": "rate_registry_seed_failed",
-                "message": "codex-rate-snapshot output must be a JSON object",
+                "message": "minimal-rate-snapshot output must be a JSON array of profile rows",
                 "stage": stage,
             }
         )
@@ -994,7 +1142,7 @@ def _seed_rate_registry_if_missing(
         warnings.append(
             {
                 "code": "rate_registry_seed_failed",
-                "message": "codex-rate-snapshot output missing valid 'profiles' object",
+                "message": "minimal-rate-snapshot output normalization produced no valid profiles map",
                 "stage": stage,
             }
         )
@@ -1026,7 +1174,7 @@ def _seed_rate_registry_if_missing(
         warnings.append(
             {
                 "code": "rate_registry_seeded",
-                "message": "generated PROFILE_RATE_REGISTRY.json via codex-rate-snapshot",
+                "message": "generated PROFILE_RATE_REGISTRY.json via minimal-rate-snapshot",
                 "stage": stage,
             }
         )

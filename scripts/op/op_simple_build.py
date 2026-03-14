@@ -84,7 +84,7 @@ THREAD_LIVENESS_MAX_AGE_SECONDS = 1200
 MERGE_RECOVERY_RESERVED_SLOTS = 2
 LLM_PROFILE_PER_MINUTE_LIMIT = 20
 LLM_PROFILE_PER_DAY_LIMIT = 1000
-RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
+RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "minimal-rate-snapshot" / "scripts" / "minimal_rate_snapshot.py"
 RECOVERY_INSTRUCTIONS_FILE = Path("recovery_instructions.md")
 TERMINAL_WARNING_INSTRUCTIONS_FILE = Path("recovery_instructions_terminal_warning.md")
 WATCHDOG_RECOVERY_NUDGE_BODY_TEMPLATE_FILE = SCRIPT_DIR / "templates" / "watchdog_recovery_nudge_body.md"
@@ -308,6 +308,22 @@ def _alias_candidates(alias: str) -> list[str]:
         return out
     out.append(f"codex-{text}")
     return out
+
+
+def _canonical_codex_alias(alias: Any, codex_home: Any) -> str:
+    alias_text = str(alias or "").strip().lower()
+    home_name = Path(str(codex_home or "").strip()).name.lower()
+    if home_name == ".codex":
+        return "codex"
+    if home_name.startswith(".codex-") and len(home_name) > len(".codex-"):
+        return f"codex-{home_name[len('.codex-'):]}"
+    if alias_text == "codex":
+        return "codex"
+    if alias_text.startswith("codex-"):
+        return alias_text
+    if alias_text:
+        return f"codex-{alias_text}"
+    return ""
 
 
 def _atomic_write_json(path: Path, payload: Any) -> None:
@@ -3441,7 +3457,7 @@ def _invoke_manager(
             note = (
                 "Operator note: LLM profile mode is active. "
                 f"Use llm_profile='{profile_name}' rate registry artifacts from the runtime packet. "
-                "Do not run codex-rate-snapshot in this mode."
+                "Do not run minimal-rate-snapshot in this mode."
             )
             prompt_text = f"{note}\n\n{prompt_text}" if prompt_text else note
         if prompt_text:
@@ -4162,65 +4178,131 @@ def _rate_snapshot_profile_args(cfg: RunConfig) -> tuple[list[str], list[str]]:
     return args, missing
 
 
-def _profile_rows_from_rate_snapshot_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    profiles = payload.get("profiles")
-    profile_rows: list[tuple[str, dict[str, Any]]] = []
-    if isinstance(profiles, dict):
-        for alias, row in profiles.items():
-            if isinstance(row, dict):
-                profile_rows.append((str(alias), row))
-    elif isinstance(profiles, list):
-        for idx, row in enumerate(profiles):
-            if not isinstance(row, dict):
-                continue
-            alias = str(row.get("alias") or f"profile-{idx + 1}")
-            profile_rows.append((alias, row))
+def _remaining_percent_from_used(used_percent: Any) -> float | None:
+    try:
+        used = float(used_percent)
+    except (TypeError, ValueError):
+        return None
+    remaining = 100.0 - used
+    if remaining < 0.0:
+        return 0.0
+    if remaining > 100.0:
+        return 100.0
+    return round(remaining, 3)
+
+
+def _normalize_rate_snapshot_reset_at(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        timestamp = float(raw)
+    elif isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            timestamp = float(text)
+        except ValueError:
+            dt = _parse_iso_datetime(text)
+            if dt is None:
+                return None
+            return _utc_iso_from_datetime(dt)
+    else:
+        return None
+    if timestamp > 10_000_000_000:
+        timestamp = timestamp / 1000.0
+    try:
+        dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return _utc_iso_from_datetime(dt)
+
+
+def _normalize_rate_snapshot_gated_value(raw: Any) -> str:
+    if isinstance(raw, bool):
+        return "hard-gated" if raw else "false"
+    text = str(raw or "").strip().lower()
+    if text in {"", "false", "ungated", "not_gated", "open"}:
+        return "false"
+    if text == "soft-gated":
+        return "soft-gated"
+    if text in {"hard-gated", "not-available"}:
+        return text
+    return "hard-gated"
+
+
+def _profile_rows_from_rate_snapshot_payload(payload: Any) -> list[dict[str, Any]]:
+    profile_rows: list[dict[str, Any]] = []
+    if isinstance(payload, list):
+        profile_rows = [row for row in payload if isinstance(row, dict)]
+    elif isinstance(payload, dict):
+        profiles = payload.get("profiles")
+        if isinstance(profiles, list):
+            profile_rows = [row for row in profiles if isinstance(row, dict)]
+        elif isinstance(profiles, dict):
+            for alias, row in profiles.items():
+                if not isinstance(row, dict):
+                    continue
+                copied = dict(row)
+                copied.setdefault("alias", str(alias))
+                profile_rows.append(copied)
 
     out: list[dict[str, Any]] = []
-    for alias, row in profile_rows:
-        alias_text = (alias or "").strip() or str(row.get("alias") or "").strip()
-        if not alias_text:
+    for row in profile_rows:
+        codex_home = str(row.get("codex_home") or row.get("home") or "").strip()
+        alias_text = _canonical_codex_alias(row.get("alias"), codex_home)
+        if not alias_text or not codex_home:
             continue
-        five = row.get("five_hour") if isinstance(row.get("five_hour"), dict) else {}
-        weekly = row.get("weekly") if isinstance(row.get("weekly"), dict) else {}
-        five_remaining = _extract_remaining_percent(five)
-        week_remaining = _extract_remaining_percent(weekly)
-        recommended = str(row.get("recommended_action") or "").strip().lower()
-        hard_gated = bool(
-            row.get("hard_gated")
-            or row.get("gated")
-            or five.get("gated")
-            or weekly.get("gated")
-        )
-        if recommended in {"wait_until_reset", "wind_down"}:
+
+        primary = row.get("primary_window") if isinstance(row.get("primary_window"), dict) else {}
+        secondary = row.get("secondary_window") if isinstance(row.get("secondary_window"), dict) else {}
+        five_remaining = _remaining_percent_from_used(primary.get("used_percent"))
+        week_remaining = _remaining_percent_from_used(secondary.get("used_percent"))
+        gated_text = _normalize_rate_snapshot_gated_value(row.get("gated"))
+        soft_gated = gated_text == "soft-gated"
+        hard_gated = gated_text in {"hard-gated", "not-available"}
+        if not hard_gated and ((five_remaining is not None and five_remaining <= 1.0) or (week_remaining is not None and week_remaining <= 1.0)):
             hard_gated = True
-        if row.get("eligible_for_new_work") is False:
-            hard_gated = True
-        if (five_remaining is not None and five_remaining <= 1.0) or (week_remaining is not None and week_remaining <= 1.0):
-            hard_gated = True
-        soft_gated = bool(row.get("soft_concurrency_gated"))
-        if (five_remaining is not None and five_remaining <= 5.0) or (week_remaining is not None and week_remaining <= 5.0):
+            soft_gated = False
+        elif not soft_gated and ((five_remaining is not None and five_remaining <= 5.0) or (week_remaining is not None and week_remaining <= 5.0)):
             soft_gated = True
 
-        reset_at = (
-            str(row.get("reset_at") or "").strip()
-            or str(row.get("next_reset_at") or "").strip()
-            or str(five.get("reset_at") or five.get("resets_at") or five.get("resetAt") or "").strip()
-            or str(weekly.get("reset_at") or weekly.get("resets_at") or weekly.get("resetAt") or "").strip()
-        )
-        if not reset_at:
-            reset_at = None
+        reset_candidates: list[str] = []
+        for value in (
+            primary.get("reset_at"),
+            secondary.get("reset_at"),
+            row.get("reset_at"),
+            row.get("next_reset_at"),
+        ):
+            normalized = _normalize_rate_snapshot_reset_at(value)
+            if normalized:
+                reset_candidates.append(normalized)
+        reset_at: str | None = None
+        if reset_candidates:
+            parsed = [
+                (candidate, _parse_iso_datetime(candidate))
+                for candidate in reset_candidates
+            ]
+            parsed = [(candidate, dt) for candidate, dt in parsed if dt is not None]
+            if parsed:
+                parsed.sort(key=lambda item: item[1])
+                reset_at = parsed[0][0]
+
+        if hard_gated:
+            recommended = "wait_until_reset" if reset_at else "wind_down"
+        else:
+            recommended = "continue"
 
         out.append(
             {
                 "alias": alias_text,
-                "codex_home": str(row.get("codex_home") or "").strip(),
+                "codex_home": codex_home,
                 "window_5h_remaining_pct": five_remaining,
                 "window_week_remaining_pct": week_remaining,
                 "hard_gated": hard_gated,
                 "soft_gated": soft_gated,
                 "reset_at": reset_at,
-                "recommended_action": recommended or None,
+                "recommended_action": recommended,
             }
         )
     return out
@@ -4232,24 +4314,9 @@ def _refresh_profile_snapshot_via_skill(cfg: RunConfig, cycle_number: int) -> tu
 
     script = _resolve_rate_snapshot_script(cfg)
     if script is None:
-        return False, "codex-rate-snapshot script not found"
+        return False, "minimal-rate-snapshot script not found"
 
-    cmd: list[str] = ["python3", str(script)]
-    profile_args, missing_aliases = _rate_snapshot_profile_args(cfg)
-    if missing_aliases:
-        print(
-            "[op-simple-build] "
-            f"[{utc_now_iso()}] "
-            "selected_aliases requested but not discovered under ~/.codex*: "
-            f"{', '.join(missing_aliases)}",
-            flush=True,
-        )
-    if not profile_args:
-        selected_text = ", ".join(cfg.selected_aliases or [])
-        return False, f"selected_aliases filter resolved to zero discovered profiles: {selected_text}"
-    for arg in profile_args:
-        cmd.extend(["--profile", arg])
-    cmd.append("--json-pretty")
+    cmd: list[str] = ["python3", str(script), "--json-pretty"]
 
     try:
         proc = subprocess.run(
@@ -4257,37 +4324,56 @@ def _refresh_profile_snapshot_via_skill(cfg: RunConfig, cycle_number: int) -> tu
             cwd=str(cfg.repo_root),
             capture_output=True,
             text=True,
-            timeout=45,
+            timeout=300,
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return False, "codex-rate-snapshot timed out"
+        return False, "minimal-rate-snapshot timed out"
 
     if proc.returncode != 0:
         err = (proc.stderr or "").strip() or (proc.stdout or "").strip() or "unknown error"
-        return False, f"codex-rate-snapshot failed: {err}"
+        return False, f"minimal-rate-snapshot failed: {err}"
 
     try:
-        payload = json.loads(proc.stdout or "{}")
+        payload = json.loads(proc.stdout or "[]")
     except json.JSONDecodeError as exc:
-        return False, f"codex-rate-snapshot emitted invalid JSON: {exc}"
-    if not isinstance(payload, dict):
-        return False, "codex-rate-snapshot output must be a JSON object"
+        return False, f"minimal-rate-snapshot emitted invalid JSON: {exc}"
+    if not isinstance(payload, list):
+        return False, "minimal-rate-snapshot output must be a JSON array"
 
     rows = _profile_rows_from_rate_snapshot_payload(payload)
+    if cfg.selected_aliases:
+        requested = [str(alias or "").strip().lower() for alias in cfg.selected_aliases if str(alias or "").strip()]
+        filtered: list[dict[str, Any]] = []
+        for requested_alias in requested:
+            for candidate in _alias_candidates(requested_alias):
+                matched = next(
+                    (
+                        row
+                        for row in rows
+                        if str(row.get("alias") or "").strip().lower() == candidate
+                    ),
+                    None,
+                )
+                if matched and matched not in filtered:
+                    filtered.append(matched)
+                    break
+        rows = filtered
+        if not rows:
+            selected_text = ", ".join(cfg.selected_aliases or [])
+            return False, f"minimal-rate-snapshot selected_aliases filter resolved to zero profiles: {selected_text}"
     if not rows:
-        return False, "codex-rate-snapshot returned no usable profile rows"
+        return False, "minimal-rate-snapshot returned no usable profile rows"
 
     snapshot_payload = {
         "schema_version": SCHEMA_VERSION,
         "updated_at": utc_now_iso(),
         "cycle_number": cycle_number,
-        "source": "codex-rate-snapshot",
-        "generated_at": str(payload.get("generated_at") or ""),
+        "source": "minimal-rate-snapshot",
         "profiles": rows,
     }
     _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], snapshot_payload)
-    return True, f"profile snapshot refreshed via codex-rate-snapshot ({len(rows)} profiles)"
+    return True, f"profile snapshot refreshed via minimal-rate-snapshot ({len(rows)} profiles)"
 
 
 def _profile_snapshot_row_count(cfg: RunConfig) -> int:

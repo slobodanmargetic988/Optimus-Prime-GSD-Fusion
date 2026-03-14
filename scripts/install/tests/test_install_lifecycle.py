@@ -63,7 +63,7 @@ def test_global_install_and_uninstall_flow():
             "optimus-cycle-controller",
             "runtime-coordinator",
             "test-train-manager",
-            "codex-rate-snapshot",
+            "minimal-rate-snapshot",
             "create-codex-profile",
             "thread-dispatch",
             "workstation-preparation",
