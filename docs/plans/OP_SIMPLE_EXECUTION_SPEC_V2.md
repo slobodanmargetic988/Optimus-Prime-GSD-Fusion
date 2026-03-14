@@ -143,7 +143,7 @@
   - runtime writes deterministic `skip_cycle` decisions when BOSS fails safety checks
   - BOSS should refresh it each cycle for proceed/skip visibility
 - `profile_snapshot.json`:
-  - refreshed by pure code rate-gate stage via `codex-rate-snapshot`
+  - refreshed by pure code rate-gate stage via `minimal-rate-snapshot`
   - may also be updated by BOSS behavior, but code refresh remains authoritative for gating checks
 
 ## Artifact Field Locks (Current)

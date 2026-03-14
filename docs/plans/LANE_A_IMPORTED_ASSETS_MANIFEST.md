@@ -8,7 +8,7 @@ Copied from /Users/slobodan/projects/Agents:
 - `skills/dispatch-worker-packet`
 - `skills/linear-handoff-sync`
 - `skills/blocker-escalate-to-agents`
-- `skills/codex-rate-snapshot`
+- `skills/minimal-rate-snapshot`
 - `skills/thread-dispatch`
 - `skills/sleep`
 - `skills/workstation-preparation`

@@ -27,7 +27,7 @@ This file locks decisions approved in chat so they are not lost across sessions.
 - Canary target: 5 successful consecutive cycles with no manual intervention.
 - Check-in cadence for coding work: every 5 completed tasks.
 - Rate-gate stage runs after BOSS and before dispatcher.
-- Rate-gate wait is pure-code owned and refreshes snapshot via `codex-rate-snapshot`.
+- Rate-gate wait is pure-code owned and refreshes snapshot via `minimal-rate-snapshot`.
 - One canonical output file per manager under `.op-simple/current/`.
 - Dispatcher writes deterministic launch receipts to `dispatch_launch_log.jsonl`.
 - Dispatcher does not write deterministic failure artifacts for reassignment.

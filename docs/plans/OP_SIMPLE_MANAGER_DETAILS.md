@@ -82,7 +82,7 @@ Define the new OP Simple managers based on current decisions, map them to old OP
 ### 4) rate-gate wait/continue gate
 - Type: Pure code gate (not LLM manager).
 - Job:
-  - Refresh `profile_snapshot.json` via `codex-rate-snapshot`.
+  - Refresh `profile_snapshot.json` via `minimal-rate-snapshot`.
   - Always auto-wait while rate-gated.
 - Must ensure:
   - heartbeat every 5 minutes while waiting.

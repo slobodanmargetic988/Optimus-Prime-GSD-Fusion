@@ -80,7 +80,7 @@ That is reliable, but inefficient for related work streams where continuing the 
 1. `dispatch-worker-packet` contract extension for continuation metadata.
 2. `thread-dispatch` capability to target existing session/thread.
 3. `/op-build` policy wiring + tests for continue-vs-new decisions.
-4. Codex profile detector wiring (`codex-rate-snapshot`-based discovery) integrated into `/op-initialize`.
+4. Codex profile detector wiring (`minimal-rate-snapshot`-based discovery) integrated into `/op-initialize`.
 
 ## Next Planning Step
 Convert this core idea into a decision-complete implementation batch with:

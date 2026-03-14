@@ -127,7 +127,7 @@ If required env var missing:
   - `scripts/op/tests/test_op_simple_build.py`
 
 ### D) Skills and Snapshot Tooling
-- `skills/codex-rate-snapshot`
+- `skills/minimal-rate-snapshot`
   - remove hard dependency on local `auth.json` identity parsing for eligibility
   - support profile rows that are API-env-backed
   - keep identity read best-effort only

@@ -161,7 +161,7 @@ Delivery target model:
   3. rate-gate/snapshot wait stage (pure code)
   4. `work-dispatcher` (pure code)
   5. watchdog + summary (pure code)
-- Rate snapshot refresh is code-owned and run every cycle via `codex-rate-snapshot`.
+- Rate snapshot refresh is code-owned and run every cycle via `minimal-rate-snapshot`.
 - Multi-profile policy now excludes default `.codex` when multiple `.codex*` profiles exist.
 - BOSS profile selection is pure code:
   - select highest weekly budget profile that is not 5h hard-gated

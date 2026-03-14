@@ -92,7 +92,7 @@ Diagram reference:
   - writes canonical profile artifact `reports/optimus-prime/planning/PROFILE_SELECTION.json`
   - persists `profile_aliases[]` + `profile_selection_ref` in `STATE.json`
 - `/op-build` now enforces profile artifact preflight and uses selected aliases end-to-end:
-  - rate registry seeding (`codex-rate-snapshot`) runs with all selected aliases (no single-profile hardcode)
+  - rate registry seeding (`minimal-rate-snapshot`) runs with all selected aliases (no single-profile hardcode)
   - controller cycles receive `profile_aliases` payload for rate-gate decisions
   - dispatch selects `codex_profile_alias` per slot with gate-driven reassignment and deterministic warnings
 - Added shared command core:

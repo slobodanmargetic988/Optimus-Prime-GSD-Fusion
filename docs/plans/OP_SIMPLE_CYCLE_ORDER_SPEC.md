@@ -31,7 +31,7 @@ Out of scope:
    - plan-packet updates as source of truth
    - cycle summary payload generation
 4. Run rate-gate wait/continue gate (pure code wait loop):
-   - refresh profile snapshot via `codex-rate-snapshot` at wait entry
+   - refresh profile snapshot via `minimal-rate-snapshot` at wait entry
    - always auto-wait when rate-gated
    - emit heartbeat every 5 minutes while waiting
    - re-run profile snapshot and profile re-scan every 15 minutes while waiting
