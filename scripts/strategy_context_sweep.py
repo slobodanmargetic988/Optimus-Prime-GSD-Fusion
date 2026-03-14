@@ -20,14 +20,27 @@ DEFAULT_STALE_AFTER_SECONDS = {
 }
 DEFAULT_DECISION_POLICY = {"stale": "downgrade", "missing": "exclude"}
 ALLOWED_DECISIONS = {"include", "downgrade", "exclude"}
+REASON_CODE_BY_FRESHNESS = {
+    "fresh": "source_fresh",
+    "stale": "stale_source_artifact_detected",
+    "missing": "source_artifact_missing",
+}
 
 
 class SweepError(Exception):
-    def __init__(self, code: str, message: str, *, stage: str = "runtime") -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        stage: str = "runtime",
+        evidence_refs: list[str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.stage = stage
+        self.evidence_refs = list(evidence_refs or [])
 
 
 def _as_str(value: Any) -> str:
@@ -146,6 +159,108 @@ def _resolve_artifact_path(project_root: Path, source_path: str) -> Path:
     return candidate.resolve()
 
 
+def _resolve_context_doc_path(raw_path: str, *, base_dir: Path) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = base_dir / candidate
+    return candidate.resolve()
+
+
+def _doc_evidence_ref(kind: str, path: Path, *, project_id: str | None = None) -> str:
+    if project_id:
+        return f"DOCREF:{kind}:{project_id}:{path}"
+    return f"DOCREF:{kind}:{path}"
+
+
+def _validate_context_bundle_docs(payload: dict[str, Any]) -> dict[str, Any] | None:
+    raw = payload.get("context_bundle_docs")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise SweepError("input_error", "context_bundle_docs must be an object", stage="input")
+
+    base_dir_raw = _as_str(raw.get("base_dir"))
+    base_dir = Path(base_dir_raw).expanduser() if base_dir_raw else Path.cwd()
+    if not base_dir.is_absolute():
+        base_dir = (Path.cwd() / base_dir).resolve()
+    else:
+        base_dir = base_dir.resolve()
+
+    mission_raw = _as_str(raw.get("mission_path"))
+    scope_raw = _as_str(raw.get("scope_path"))
+    if not mission_raw or not scope_raw:
+        raise SweepError(
+            "input_error",
+            "context_bundle_docs.mission_path and context_bundle_docs.scope_path are required",
+            stage="input",
+        )
+
+    mission_path = _resolve_context_doc_path(mission_raw, base_dir=base_dir)
+    scope_path = _resolve_context_doc_path(scope_raw, base_dir=base_dir)
+    missing_mission_scope_refs: list[str] = []
+    if not mission_path.is_file():
+        missing_mission_scope_refs.append(_doc_evidence_ref("mission", mission_path))
+    if not scope_path.is_file():
+        missing_mission_scope_refs.append(_doc_evidence_ref("scope", scope_path))
+    if missing_mission_scope_refs:
+        raise SweepError(
+            "mission_scope_doc_missing",
+            "mission/scope context docs must exist for context bundle serialization",
+            stage="input",
+            evidence_refs=missing_mission_scope_refs,
+        )
+
+    peer_docs_raw = raw.get("peer_project_docs")
+    if peer_docs_raw is None:
+        peer_docs_raw = []
+    if not isinstance(peer_docs_raw, list):
+        raise SweepError("input_error", "context_bundle_docs.peer_project_docs must be a list", stage="input")
+    peer_docs: list[dict[str, str]] = []
+    for idx, peer_row in enumerate(peer_docs_raw):
+        if not isinstance(peer_row, dict):
+            raise SweepError(
+                "input_error",
+                f"context_bundle_docs.peer_project_docs[{idx}] must be an object",
+                stage="input",
+            )
+        project_id = _as_str(peer_row.get("project_id"))
+        peer_path_raw = _as_str(peer_row.get("path"))
+        if not project_id or not peer_path_raw:
+            raise SweepError(
+                "input_error",
+                f"context_bundle_docs.peer_project_docs[{idx}] requires project_id and path",
+                stage="input",
+            )
+        peer_path = _resolve_context_doc_path(peer_path_raw, base_dir=base_dir)
+        peer_evidence_ref = _doc_evidence_ref("peer", peer_path, project_id=project_id)
+        if not peer_path.is_file():
+            raise SweepError(
+                "peer_project_doc_missing",
+                f"peer-project context doc missing for {project_id}: {peer_path}",
+                stage="input",
+                evidence_refs=[peer_evidence_ref],
+            )
+        peer_docs.append(
+            {
+                "project_id": project_id,
+                "path": str(peer_path),
+                "evidence_ref": peer_evidence_ref,
+            }
+        )
+
+    return {
+        "mission": {
+            "path": str(mission_path),
+            "evidence_ref": _doc_evidence_ref("mission", mission_path),
+        },
+        "scope": {
+            "path": str(scope_path),
+            "evidence_ref": _doc_evidence_ref("scope", scope_path),
+        },
+        "peer_project_docs": peer_docs,
+    }
+
+
 def _sorted_citation_refs(rows: list[dict[str, Any]]) -> list[str]:
     return [str(row["citation_id"]) for row in rows if isinstance(row.get("citation_id"), str)]
 
@@ -252,6 +367,50 @@ def _append_obligation_or_open_risk(
     )
 
 
+def _build_unhappy_path_rows(source_references: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in source_references:
+        freshness = _as_str(row.get("freshness"))
+        if freshness == "fresh":
+            continue
+        citation_id = _as_str(row.get("citation_id"))
+        reason_code = REASON_CODE_BY_FRESHNESS.get(freshness) or "source_state_unknown"
+        out.append(
+            {
+                "reason_code": reason_code,
+                "project_id": _as_str(row.get("project_id")),
+                "artifact_type": _as_str(row.get("artifact_type")),
+                "source_id": _as_str(row.get("source_id")),
+                "evidence_refs": [citation_id] if citation_id else [],
+            }
+        )
+    return out
+
+
+def _build_context_bundle(
+    *,
+    checked_at_utc: str,
+    broad_sweep_context: dict[str, Any],
+    recommendation: dict[str, Any],
+    source_references: list[dict[str, Any]],
+    unhappy_paths: list[dict[str, Any]],
+    context_docs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "checked_at_utc": checked_at_utc,
+        "analysis_anchors": list(ANALYSIS_ANCHORS),
+        "broad_sweep_context": broad_sweep_context,
+        "recommendation_evidence_refs": list(recommendation.get("evidence_refs") or []),
+        "source_reference_ids": _sorted_citation_refs(source_references),
+        "unhappy_paths": unhappy_paths,
+        "context_docs": context_docs,
+    }
+
+
+def _serialize_context_bundle(bundle: dict[str, Any]) -> str:
+    return json.dumps(bundle, sort_keys=True, separators=(",", ":"))
+
+
 def _build_recommendation(
     *,
     totals: dict[str, int],
@@ -352,6 +511,7 @@ def sweep_runtime_telemetry_artifacts(payload: dict[str, Any]) -> dict[str, Any]
     now_utc = _parse_now(payload)
     thresholds = _coerce_threshold_map(payload)
     decision_policy = _coerce_decision_policy(payload)
+    context_docs = _validate_context_bundle_docs(payload)
     projects_in = _required_list(payload, "projects")
 
     projects_out: list[dict[str, Any]] = []
@@ -400,6 +560,7 @@ def sweep_runtime_telemetry_artifacts(payload: dict[str, Any]) -> dict[str, Any]
                 decision = _decision_for_freshness(freshness, decision_policy)
                 citation_counter += 1
                 citation_id = f"SRC-{citation_counter:04d}"
+                reason_code = REASON_CODE_BY_FRESHNESS.get(freshness) or "source_state_unknown"
                 source_reference = {
                     "citation_id": citation_id,
                     "project_id": project_id,
@@ -407,6 +568,7 @@ def sweep_runtime_telemetry_artifacts(payload: dict[str, Any]) -> dict[str, Any]
                     "source_id": source_id,
                     "path": str(resolved_path),
                     "analysis_anchors": list(ANALYSIS_ANCHORS),
+                    "reason_code": reason_code,
                 }
                 rows_out.append(
                     {
@@ -418,6 +580,8 @@ def sweep_runtime_telemetry_artifacts(payload: dict[str, Any]) -> dict[str, Any]
                         "stale_after_seconds": threshold,
                         "freshness": freshness,
                         "decision": decision,
+                        "reason_code": reason_code,
+                        "evidence_refs": [citation_id],
                         "source_reference": source_reference,
                     }
                 )
@@ -431,6 +595,7 @@ def sweep_runtime_telemetry_artifacts(payload: dict[str, Any]) -> dict[str, Any]
                         "exists": exists,
                         "freshness": freshness,
                         "decision": decision,
+                        "reason_code": reason_code,
                     }
                 )
                 project_counts["sources"] += 1
@@ -461,17 +626,31 @@ def sweep_runtime_telemetry_artifacts(payload: dict[str, Any]) -> dict[str, Any]
         source_references=source_references,
         broad_sweep_context=broad_sweep_context,
     )
+    unhappy_paths = _build_unhappy_path_rows(source_references)
+    checked_at_utc = _to_iso_utc(now_utc)
+    context_bundle = _build_context_bundle(
+        checked_at_utc=checked_at_utc,
+        broad_sweep_context=broad_sweep_context,
+        recommendation=recommendation,
+        source_references=source_references,
+        unhappy_paths=unhappy_paths,
+        context_docs=context_docs,
+    )
+    context_bundle_serialized = _serialize_context_bundle(context_bundle)
 
     return {
         "ok": True,
         "tool": TOOL,
         "tool_version": TOOL_VERSION,
-        "checked_at_utc": _to_iso_utc(now_utc),
+        "checked_at_utc": checked_at_utc,
         "decision_policy": decision_policy,
         "stale_after_seconds": thresholds,
         "projects": projects_out,
         "source_references": source_references,
         "broad_sweep_context": broad_sweep_context,
+        "unhappy_paths": unhappy_paths,
+        "context_bundle": context_bundle,
+        "context_bundle_serialized": context_bundle_serialized,
         "recommendation": recommendation,
         "totals": totals,
     }
@@ -508,6 +687,7 @@ def main() -> int:
             "tool": TOOL,
             "tool_version": TOOL_VERSION,
             "reason_code": exc.code,
+            "evidence_refs": exc.evidence_refs,
             "error": {"code": exc.code, "message": exc.message, "stage": exc.stage},
         }
         _print(out, args.json_pretty)
@@ -518,6 +698,7 @@ def main() -> int:
             "tool": TOOL,
             "tool_version": TOOL_VERSION,
             "reason_code": "input_error",
+            "evidence_refs": [],
             "error": {"code": "input_error", "message": f"invalid JSON input: {exc}", "stage": "input"},
         }
         _print(out, args.json_pretty)

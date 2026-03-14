@@ -88,6 +88,8 @@ def test_integration_runtime_sweep_populates_recommendation_with_evidence_and_cr
     evidence_refs = recommendation["evidence_refs"]
     assert evidence_refs
     assert all(citation_id in source_ref_map for citation_id in evidence_refs)
+    assert source_ref_map["SRC-0002"]["reason_code"] == "stale_source_artifact_detected"
+    assert source_ref_map["SRC-0004"]["reason_code"] == "source_artifact_missing"
 
     evidence_projects = {source_ref_map[citation_id]["project_id"] for citation_id in evidence_refs}
     assert evidence_projects == {"earth-north", "earth-south"}
@@ -108,6 +110,14 @@ def test_integration_runtime_sweep_populates_recommendation_with_evidence_and_cr
         assert row["summary"]
         assert row["evidence_refs"]
         assert all(citation_id in source_ref_map for citation_id in row["evidence_refs"])
+
+    unhappy_paths = out["unhappy_paths"]
+    stale_unhappy_refs = [
+        row["evidence_refs"][0]
+        for row in unhappy_paths
+        if row["reason_code"] == "stale_source_artifact_detected" and row["evidence_refs"]
+    ]
+    assert stale_unhappy_refs == ["SRC-0002", "SRC-0005", "SRC-0006"]
 
 
 def test_integration_runtime_sweep_records_open_risk_when_cross_project_context_is_unavailable(
