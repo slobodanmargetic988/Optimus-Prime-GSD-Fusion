@@ -45,6 +45,7 @@ ARTIFACT_FILES = {
     "plan_packets": CURRENT_DIR / "plan_packets.json",
     "task_execution_state": CURRENT_DIR / "task_execution_state.json",
     "worker_registry": CURRENT_DIR / "worker_registry.json",
+    "lane_base_watchdog_registry": CURRENT_DIR / "lane_base_watchdog_registry.json",
     "dispatch_registry": CURRENT_DIR / "dispatch_registry.json",
     "cycle_summary": CURRENT_DIR / "cycle_summary.json",
     "mergeability_report": CURRENT_DIR / "mergeability_report.json",
@@ -74,6 +75,9 @@ QUIET_CYCLE_FORCE_FULL_EVERY = 5
 WATCHDOG_STALE_COMMIT_MINUTES = 150
 WATCHDOG_NEAR_STALE_MARGIN_MINUTES = 10
 WATCHDOG_RECOVERY_NUDGE_MINUTES = 30
+WATCHDOG_RUN_BASE_HARD_LIMIT_MULTIPLIER = 2
+WATCHDOG_TERMINAL_WARNING_LEAD_MINUTES = 20
+WATCHDOG_TERMINAL_WARNING_COOLDOWN_CYCLES = 4
 WAIT_HEARTBEAT_SECONDS = 300
 WAIT_RESCAN_SECONDS = 900
 THREAD_LIVENESS_MAX_AGE_SECONDS = 1200
@@ -82,7 +86,9 @@ LLM_PROFILE_PER_MINUTE_LIMIT = 20
 LLM_PROFILE_PER_DAY_LIMIT = 1000
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
 RECOVERY_INSTRUCTIONS_FILE = Path("recovery_instructions.md")
+TERMINAL_WARNING_INSTRUCTIONS_FILE = Path("recovery_instructions_terminal_warning.md")
 WATCHDOG_RECOVERY_NUDGE_BODY_TEMPLATE_FILE = SCRIPT_DIR / "templates" / "watchdog_recovery_nudge_body.md"
+WATCHDOG_TERMINAL_WARNING_NUDGE_BODY_TEMPLATE_FILE = SCRIPT_DIR / "templates" / "watchdog_terminal_warning_nudge_body.md"
 WATCHDOG_RECOVERY_NUDGE_BODY_FALLBACK = """This nudge is broad by design. Run a full diagnostics sweep before deciding to skip repeatedly.
 
 ## Broad diagnostics checklist (not limited to one failure mode)
@@ -99,6 +105,12 @@ WATCHDOG_RECOVERY_NUDGE_BODY_FALLBACK = """This nudge is broad by design. Run a 
 9. If evidence is still missing, create explicit remediation tasks instead of repeating passive skips.
 
 After applying this nudge, rename this file to `recovery_instructions_CONSUMED.md`."""
+WATCHDOG_TERMINAL_WARNING_NUDGE_BODY_FALLBACK = """This is a terminal-warning nudge for run-base inactivity.
+
+The run-base branch is nearing the hard watchdog stop window.
+Prioritize merge/fan-in recovery now so run-base receives fresh commits before hard-limit stop.
+
+After applying this warning, rename this file to `recovery_instructions_terminal_warning_CONSUMED.md`."""
 NON_TERMINAL_STOP_REASONS = {
     "skip_cycle",
     "active_workers_in_progress_no_safe_new_dispatch",
@@ -110,6 +122,7 @@ TERMINAL_STOP_REASONS = {
 WATCHDOG_TERMINAL_STOP_REASONS = {
     "watchdog_idle_stop",
     "stale_base_branch_commit",
+    "stale_run_base_hard_limit",
 }
 
 PLANNER_PLAN_PACKETS_FILE = Path("reports/optimus-prime/planning/PLAN_PACKETS.json")
@@ -2257,6 +2270,7 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "phases": [],
             "requirements": [],
             "tasks": [],
+            "lane_base_branches": {},
         },
         "task_execution_state": _task_execution_state_payload(0),
         "worker_registry": {
@@ -2264,6 +2278,26 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "updated_at": utc_now_iso(),
             "cycle_number": 0,
             "workers": [],
+        },
+        "lane_base_watchdog_registry": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "cycle_number": 0,
+            "plan_cycle_number": 0,
+            "lane_base_branches": {},
+            "lanes": [],
+            "aggregate": {
+                "seen_lane_count": 0,
+                "missing_lane_count": 0,
+                "latest_seen_commit_sha": "",
+                "latest_seen_commit_at_utc": "",
+                "latest_seen_commit_age_minutes": None,
+                "watchdog_age_offset_minutes": None,
+                "watchdog_age_minutes": None,
+                "watchdog_target_reset_at_utc": "",
+                "progress_signal": "",
+                "progress_changed": False,
+            },
         },
         "dispatch_registry": {
             "schema_version": SCHEMA_VERSION,
@@ -2337,6 +2371,15 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "watchdog_age_offset_minutes": None,
             "watchdog_age_minutes": None,
             "watchdog_target_reset_at_utc": "",
+            "run_base_hard_age_offset_minutes": None,
+            "run_base_hard_age_minutes": None,
+            "run_base_hard_target_reset_at_utc": "",
+            "terminal_warning_last_emitted_cycle": None,
+            "terminal_warning_last_emitted_at_utc": "",
+            "terminal_warning_cooldown_cycles": WATCHDOG_TERMINAL_WARNING_COOLDOWN_CYCLES,
+            "lane_aggregate_watchdog_age_minutes": None,
+            "lane_seen_branch_count": 0,
+            "lane_missing_branch_count": 0,
             "stale_after_minutes": WATCHDOG_STALE_COMMIT_MINUTES,
             "stale": False,
         },
@@ -2414,6 +2457,7 @@ def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
         "plan_packets",
         "task_execution_state",
         "worker_registry",
+        "lane_base_watchdog_registry",
         "dispatch_registry",
         "cycle_summary",
         "mergeability_report",
@@ -2465,6 +2509,123 @@ def _seed_plan_artifacts_from_planner(cfg: RunConfig) -> bool:
         )
         _atomic_write_json(task_state_path, task_payload)
     return True
+
+
+def _normalize_lane_base_branches(value: Any) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    if not isinstance(value, dict):
+        return {}, [{"code": "lane_base_branches_missing", "message": "lane_base_branches must be an object map"}]
+    normalized: dict[str, str] = {}
+    errors: list[dict[str, Any]] = []
+    for raw_lane_id, raw_branch in value.items():
+        lane_id = str(raw_lane_id or "").strip()
+        branch = str(raw_branch or "").strip()
+        if not lane_id:
+            errors.append(
+                {
+                    "code": "lane_base_branches_invalid_key",
+                    "message": "lane_base_branches contains empty lane_id key",
+                    "lane_id": lane_id,
+                }
+            )
+            continue
+        if not branch:
+            errors.append(
+                {
+                    "code": "lane_base_branches_invalid_value",
+                    "message": f"lane_base_branches[{lane_id}] must be non-empty branch name",
+                    "lane_id": lane_id,
+                }
+            )
+            continue
+        normalized[lane_id] = branch
+    return normalized, errors
+
+
+def _plan_lane_base_branches_contract(cfg: RunConfig) -> tuple[bool, dict[str, Any]]:
+    plan_path = cfg.repo_root / ARTIFACT_FILES["plan_packets"]
+    payload = _read_json(plan_path, default={})
+    if not isinstance(payload, dict):
+        return False, {
+            "code": "lane_base_branches_missing",
+            "message": "plan_packets must be a JSON object with lane_base_branches map",
+            "details": {"plan_packets_path": str(plan_path.resolve())},
+        }
+    lane_map_raw = payload.get("lane_base_branches")
+    lane_map, lane_errors = _normalize_lane_base_branches(lane_map_raw)
+    if lane_errors:
+        return False, {
+            "code": "lane_base_branches_invalid",
+            "message": "plan_packets lane_base_branches is malformed",
+            "details": {
+                "plan_packets_path": str(plan_path.resolve()),
+                "errors": lane_errors,
+            },
+        }
+    tasks_raw = payload.get("tasks")
+    task_rows = [row for row in tasks_raw if isinstance(row, dict)] if isinstance(tasks_raw, list) else []
+    lane_ids = sorted({str(row.get("lane_id") or "").strip() for row in task_rows if str(row.get("lane_id") or "").strip()})
+    missing_lane_ids = [lane_id for lane_id in lane_ids if lane_id not in lane_map]
+    if missing_lane_ids:
+        return False, {
+            "code": "lane_base_branches_incomplete",
+            "message": (
+                "plan_packets lane_base_branches must include every tasks[].lane_id before /op-simple-build can start"
+            ),
+            "details": {
+                "plan_packets_path": str(plan_path.resolve()),
+                "missing_lane_ids": missing_lane_ids,
+            },
+        }
+    return True, {
+        "lane_base_branches": lane_map,
+        "lane_ids": lane_ids,
+        "plan_packets_path": str(plan_path.resolve()),
+        "plan_cycle_number": int(payload.get("cycle_number") or 0),
+    }
+
+
+def _write_lane_base_watchdog_registry(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    lane_base_branches: dict[str, str],
+    plan_cycle_number: int | None = None,
+) -> None:
+    rows = [
+        {
+            "lane_id": lane_id,
+            "lane_base_branch": branch,
+            "exists": False,
+            "ever_seen": False,
+            "first_seen_at": None,
+            "first_seen_cycle": None,
+            "last_seen_commit_sha": "",
+            "last_seen_commit_at_utc": "",
+            "last_seen_cycle": None,
+        }
+        for lane_id, branch in sorted(lane_base_branches.items(), key=lambda item: item[0])
+    ]
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": int(cycle_number),
+        "plan_cycle_number": int(plan_cycle_number or 0),
+        "lane_base_branches": dict(sorted(lane_base_branches.items(), key=lambda item: item[0])),
+        "lanes": rows,
+        "aggregate": {
+            "seen_lane_count": 0,
+            "missing_lane_count": len(rows),
+            "latest_seen_commit_sha": "",
+            "latest_seen_commit_at_utc": "",
+            "latest_seen_commit_age_minutes": None,
+            "watchdog_age_offset_minutes": None,
+            "watchdog_age_minutes": None,
+            "watchdog_target_reset_at_utc": "",
+            "progress_signal": "",
+            "progress_changed": False,
+        },
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["lane_base_watchdog_registry"], payload)
 
 
 def _artifact_path_map(cfg: RunConfig) -> dict[str, str]:
@@ -2923,6 +3084,7 @@ def _write_boss_stub(cfg: RunConfig, cycle_number: int) -> None:
             "phases": [],
             "requirements": [],
             "tasks": [],
+            "lane_base_branches": {},
         },
         "task_execution_state": {
             "schema_version": SCHEMA_VERSION,
@@ -4737,6 +4899,72 @@ Watchdog stop threshold: {stale_after_minutes} minutes"""
     )
 
 
+def _load_watchdog_terminal_warning_nudge_body() -> str:
+    try:
+        body = WATCHDOG_TERMINAL_WARNING_NUDGE_BODY_TEMPLATE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        body = ""
+    if body:
+        return body
+    print(
+        "[op-simple-build] "
+        f"[{utc_now_iso()}] "
+        "watchdog terminal-warning nudge template missing or empty; using embedded fallback body",
+        flush=True,
+    )
+    return WATCHDOG_TERMINAL_WARNING_NUDGE_BODY_FALLBACK
+
+
+def _write_watchdog_terminal_warning_nudge(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    monitored_branch: str,
+    commit_ref: str,
+    last_commit_sha: str,
+    last_commit_at_utc: str,
+    run_base_hard_age_minutes: float,
+    run_base_hard_limit_minutes: int,
+    warning_lead_minutes: int,
+) -> bool:
+    nudge_path = cfg.repo_root / TERMINAL_WARNING_INSTRUCTIONS_FILE
+    if nudge_path.exists():
+        return False
+
+    generated_at = utc_now_iso()
+    hard_age_minutes = round(float(run_base_hard_age_minutes), 3)
+    threshold_minutes = max(0, int(run_base_hard_limit_minutes))
+    lead_minutes = max(0, int(warning_lead_minutes))
+    body_header = f"""# Recovery Nudge: Terminal Warning
+
+Generated at: {generated_at}
+Cycle: {cycle_number}
+Reason: Watchdog hard-limit terminal stop is approaching.
+Branch: {monitored_branch}
+Commit ref: {commit_ref}
+Last observed commit sha: {last_commit_sha}
+Last observed commit timestamp: {last_commit_at_utc}
+Run-base hard-limit age: {hard_age_minutes} minutes
+Run-base hard-limit threshold: {threshold_minutes} minutes
+Warning lead window: {lead_minutes} minutes"""
+    narrative = _load_watchdog_terminal_warning_nudge_body()
+    body = f"{body_header}\n\n{narrative}\n"
+
+    try:
+        nudge_path.write_text(body, encoding="utf-8")
+    except OSError:
+        return False
+
+    print(
+        "[op-simple-build] "
+        f"[{utc_now_iso()}] "
+        f"cycle={cycle_number} watchdog emitted terminal-warning nudge "
+        f"path={TERMINAL_WARNING_INSTRUCTIONS_FILE} run_base_hard_age_minutes={hard_age_minutes}",
+        flush=True,
+    )
+    return True
+
+
 def _resolve_worker_dispatch_executor(cfg: RunConfig, worker_row: dict[str, Any] | None) -> tuple[str, str | None, str | None]:
     provider = _normalize_executor_provider(cfg.executor_provider)
     model = _resolve_executor_model(cfg, provider=provider) if provider == "blackbox" else str(cfg.executor_model or "").strip() or None
@@ -5002,6 +5230,168 @@ def _dispatch_packets(
     return counters
 
 
+def _lane_base_watchdog_branch_map(cfg: RunConfig) -> tuple[dict[str, str], int]:
+    plan_cycle_number = 0
+    plan_lane_map: dict[str, str] | None = None
+    plan_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["plan_packets"], default={})
+    if isinstance(plan_payload, dict):
+        lane_map, lane_errors = _normalize_lane_base_branches(plan_payload.get("lane_base_branches"))
+        if not lane_errors:
+            plan_cycle_number = int(plan_payload.get("cycle_number") or 0)
+            plan_lane_map = lane_map
+            if lane_map:
+                return lane_map, plan_cycle_number
+    registry_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["lane_base_watchdog_registry"], default={})
+    if isinstance(registry_payload, dict):
+        existing_map, existing_errors = _normalize_lane_base_branches(registry_payload.get("lane_base_branches"))
+        if not existing_errors and existing_map:
+            return existing_map, int(registry_payload.get("plan_cycle_number") or 0)
+    if plan_lane_map is not None:
+        return plan_lane_map, plan_cycle_number
+    return {}, 0
+
+
+def _refresh_lane_base_watchdog_registry(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    now_utc: datetime,
+    force_reset_target: bool = False,
+) -> dict[str, Any]:
+    branch_map, plan_cycle_number = _lane_base_watchdog_branch_map(cfg)
+    registry_path = cfg.repo_root / ARTIFACT_FILES["lane_base_watchdog_registry"]
+    previous_payload = _read_json(registry_path, default={})
+    if not isinstance(previous_payload, dict):
+        previous_payload = {}
+    previous_rows = previous_payload.get("lanes")
+    previous_lanes = [row for row in previous_rows if isinstance(row, dict)] if isinstance(previous_rows, list) else []
+    previous_by_lane: dict[str, dict[str, Any]] = {}
+    for row in previous_lanes:
+        lane_id = str(row.get("lane_id") or "").strip()
+        if lane_id:
+            previous_by_lane[lane_id] = row
+
+    aggregate_prev = previous_payload.get("aggregate") if isinstance(previous_payload.get("aggregate"), dict) else {}
+    previous_signal = str(aggregate_prev.get("progress_signal") or "").strip()
+    previous_offset_raw = aggregate_prev.get("watchdog_age_offset_minutes")
+    try:
+        previous_offset = float(previous_offset_raw) if previous_offset_raw is not None else None
+    except (TypeError, ValueError):
+        previous_offset = None
+    if previous_offset is not None and previous_offset < 0:
+        previous_offset = 0.0
+    previous_reset_at_text = str(aggregate_prev.get("watchdog_target_reset_at_utc") or "").strip()
+    previous_reset_at = _parse_iso_datetime(previous_reset_at_text)
+    reset_at_utc = previous_reset_at_text
+
+    lane_rows: list[dict[str, Any]] = []
+    seen_lane_count = 0
+    missing_lane_count = 0
+    latest_seen_sha = ""
+    latest_seen_at_utc = ""
+    latest_seen_age_minutes: float | None = None
+    lane_progress_components: dict[str, str] = {}
+
+    for lane_id, branch_name in sorted(branch_map.items(), key=lambda item: item[0]):
+        prev = previous_by_lane.get(lane_id, {})
+        prev_ever_seen = bool(prev.get("ever_seen"))
+        prev_first_seen_at = prev.get("first_seen_at")
+        prev_first_seen_cycle = prev.get("first_seen_cycle")
+        prev_last_sha = str(prev.get("last_seen_commit_sha") or "").strip()
+        current_sha = _git_text(cfg.repo_root, "rev-parse", branch_name) or ""
+        exists = bool(current_sha)
+        ever_seen = bool(prev_ever_seen or exists)
+        first_seen_at = prev_first_seen_at
+        first_seen_cycle = prev_first_seen_cycle
+        if exists and not prev_ever_seen:
+            first_seen_at = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+            first_seen_cycle = int(cycle_number)
+        commit_epoch = _git_commit_epoch_seconds(cfg.repo_root, branch_name) if exists else None
+        commit_at_utc = ""
+        commit_age_minutes: float | None = None
+        if commit_epoch is not None:
+            commit_at = datetime.fromtimestamp(commit_epoch, timezone.utc)
+            commit_at_utc = commit_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+            commit_age_minutes = max(0.0, (now_utc.timestamp() - float(commit_epoch)) / 60.0)
+
+        if ever_seen and exists and commit_age_minutes is not None:
+            seen_lane_count += 1
+            lane_progress_components[lane_id] = current_sha
+            if latest_seen_age_minutes is None or commit_age_minutes < latest_seen_age_minutes:
+                latest_seen_age_minutes = commit_age_minutes
+                latest_seen_sha = current_sha
+                latest_seen_at_utc = commit_at_utc
+        else:
+            missing_lane_count += 1
+
+        lane_rows.append(
+            {
+                "lane_id": lane_id,
+                "lane_base_branch": branch_name,
+                "exists": exists,
+                "ever_seen": ever_seen,
+                "first_seen_at": first_seen_at,
+                "first_seen_cycle": first_seen_cycle,
+                "last_seen_commit_sha": current_sha if exists else prev_last_sha,
+                "last_seen_commit_at_utc": commit_at_utc if exists else str(prev.get("last_seen_commit_at_utc") or ""),
+                "last_seen_cycle": int(cycle_number) if exists else prev.get("last_seen_cycle"),
+            }
+        )
+
+    signal_seed = {"lane_commits": lane_progress_components}
+    progress_signal = hashlib.sha256(
+        json.dumps(signal_seed, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    progress_changed = bool(previous_signal and progress_signal and previous_signal != progress_signal)
+    reset_target = bool(force_reset_target or previous_offset is None or progress_changed)
+    if previous_reset_at is not None and previous_reset_at > now_utc:
+        reset_target = True
+
+    lane_watchdog_age_minutes: float | None = None
+    offset_minutes = previous_offset
+    if latest_seen_age_minutes is not None:
+        if reset_target:
+            offset_minutes = latest_seen_age_minutes
+            reset_at_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        lane_watchdog_age_minutes = max(0.0, latest_seen_age_minutes - float(offset_minutes or 0.0))
+    else:
+        offset_minutes = None
+        reset_at_utc = ""
+
+    aggregate_payload = {
+        "seen_lane_count": int(seen_lane_count),
+        "missing_lane_count": int(missing_lane_count),
+        "latest_seen_commit_sha": latest_seen_sha,
+        "latest_seen_commit_at_utc": latest_seen_at_utc,
+        "latest_seen_commit_age_minutes": round(latest_seen_age_minutes, 3) if latest_seen_age_minutes is not None else None,
+        "watchdog_age_offset_minutes": round(offset_minutes, 3) if offset_minutes is not None else None,
+        "watchdog_age_minutes": round(lane_watchdog_age_minutes, 3) if lane_watchdog_age_minutes is not None else None,
+        "watchdog_target_reset_at_utc": reset_at_utc,
+        "progress_signal": progress_signal,
+        "progress_changed": bool(progress_changed),
+        "progress_components": lane_progress_components,
+    }
+    next_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": int(cycle_number),
+        "plan_cycle_number": int(plan_cycle_number),
+        "lane_base_branches": dict(sorted(branch_map.items(), key=lambda item: item[0])),
+        "lanes": lane_rows,
+        "aggregate": aggregate_payload,
+    }
+    _atomic_write_json(registry_path, next_payload)
+    return {
+        "lane_base_branches": branch_map,
+        "seen_lane_count": int(seen_lane_count),
+        "missing_lane_count": int(missing_lane_count),
+        "lane_watchdog_age_minutes": lane_watchdog_age_minutes,
+        "lane_progress_signal": progress_signal,
+        "lane_progress_changed": bool(progress_changed),
+        "registry_path": str(registry_path.resolve()),
+    }
+
+
 def _watchdog_progress_signal(cfg: RunConfig) -> dict[str, Any]:
     mergeability_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["mergeability_report"], default={})
     if not isinstance(mergeability_payload, dict):
@@ -5093,16 +5483,26 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
         state = {}
 
     stale_after_minutes = WATCHDOG_STALE_COMMIT_MINUTES
+    run_base_hard_limit_minutes = int(stale_after_minutes) * int(WATCHDOG_RUN_BASE_HARD_LIMIT_MULTIPLIER)
+    run_base_hard_warning_minutes = max(0, int(run_base_hard_limit_minutes) - int(WATCHDOG_TERMINAL_WARNING_LEAD_MINUTES))
     previous_sha = str(state.get("last_commit_sha") or "").strip()
     offset_minutes_raw = state.get("watchdog_age_offset_minutes")
+    hard_offset_minutes_raw = state.get("run_base_hard_age_offset_minutes")
     try:
         offset_minutes = float(offset_minutes_raw) if offset_minutes_raw is not None else None
     except (TypeError, ValueError):
         offset_minutes = None
+    try:
+        hard_offset_minutes = float(hard_offset_minutes_raw) if hard_offset_minutes_raw is not None else None
+    except (TypeError, ValueError):
+        hard_offset_minutes = None
     if offset_minutes is not None and offset_minutes < 0:
         offset_minutes = 0.0
+    if hard_offset_minutes is not None and hard_offset_minutes < 0:
+        hard_offset_minutes = 0.0
 
     reset_at_utc = str(state.get("watchdog_target_reset_at_utc") or "").strip()
+    hard_reset_at_utc = str(state.get("run_base_hard_target_reset_at_utc") or "").strip()
     progress_row = _watchdog_progress_signal(cfg)
     progress_signal = str(progress_row.get("signal") or "").strip()
     previous_progress_signal = str(state.get("progress_signal") or "").strip()
@@ -5114,31 +5514,97 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
         or offset_minutes is None
         or progress_changed
     )
+    hard_reset_target = (
+        force_reset_target
+        or not previous_sha
+        or previous_sha != current_sha
+        or hard_offset_minutes is None
+    )
     run_lock = _read_json(cfg.repo_root / RUN_LOCK_FILE, default={})
     run_started_at_utc = ""
     if isinstance(run_lock, dict):
         run_started_at_utc = str(run_lock.get("started_at") or "").strip()
     run_started_at = _parse_iso_datetime(run_started_at_utc)
     previous_target_reset = _parse_iso_datetime(reset_at_utc)
+    previous_hard_target_reset = _parse_iso_datetime(hard_reset_at_utc)
     if run_started_at is not None and (
         previous_target_reset is None or run_started_at > previous_target_reset
     ):
         reset_target = True
+    if run_started_at is not None and (
+        previous_hard_target_reset is None or run_started_at > previous_hard_target_reset
+    ):
+        hard_reset_target = True
     watchdog_age_minutes: float | None = None
+    run_base_hard_age_minutes: float | None = None
     near_stale_threshold_minutes = max(0, int(stale_after_minutes) - int(WATCHDOG_NEAR_STALE_MARGIN_MINUTES))
     near_stale = False
     if commit_age_minutes is None:
         is_stale = False
+        run_base_hard_stale = False
     else:
         if reset_target:
             offset_minutes = commit_age_minutes
             reset_at_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if hard_reset_target:
+            hard_offset_minutes = commit_age_minutes
+            hard_reset_at_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         watchdog_age_minutes = max(0.0, commit_age_minutes - float(offset_minutes or 0.0))
+        run_base_hard_age_minutes = max(0.0, commit_age_minutes - float(hard_offset_minutes or 0.0))
         is_stale = watchdog_age_minutes > float(stale_after_minutes)
+        run_base_hard_stale = run_base_hard_age_minutes > float(run_base_hard_limit_minutes)
         near_stale = bool(
             not is_stale and watchdog_age_minutes is not None and watchdog_age_minutes >= float(near_stale_threshold_minutes)
         )
 
+    lane_watchdog = _refresh_lane_base_watchdog_registry(
+        cfg,
+        cycle_number=cycle_number,
+        now_utc=now_utc,
+        force_reset_target=force_reset_target,
+    )
+    lane_seen_branch_count = int(lane_watchdog.get("seen_lane_count") or 0)
+    lane_missing_branch_count = int(lane_watchdog.get("missing_lane_count") or 0)
+    lane_watchdog_age_minutes = lane_watchdog.get("lane_watchdog_age_minutes")
+    lane_is_stale = bool(
+        lane_watchdog_age_minutes is not None and float(lane_watchdog_age_minutes) > float(stale_after_minutes)
+    )
+    all_monitored_branches_idle_stale = bool(is_stale and (lane_is_stale if lane_seen_branch_count > 0 else True))
+
+    last_warning_cycle_raw = state.get("terminal_warning_last_emitted_cycle")
+    try:
+        last_warning_cycle = int(last_warning_cycle_raw) if last_warning_cycle_raw is not None else None
+    except (TypeError, ValueError):
+        last_warning_cycle = None
+    warning_cooldown_cycles = max(1, int(WATCHDOG_TERMINAL_WARNING_COOLDOWN_CYCLES))
+    warning_cooldown_active = bool(
+        last_warning_cycle is not None and int(cycle_number) - int(last_warning_cycle) <= warning_cooldown_cycles
+    )
+    near_terminal_hard_limit = bool(
+        run_base_hard_age_minutes is not None
+        and run_base_hard_age_minutes >= float(run_base_hard_warning_minutes)
+        and run_base_hard_age_minutes < float(run_base_hard_limit_minutes)
+    )
+    emitted_terminal_warning = False
+    terminal_warning_last_emitted_cycle = last_warning_cycle
+    terminal_warning_last_emitted_at_utc = str(state.get("terminal_warning_last_emitted_at_utc") or "").strip()
+    if near_terminal_hard_limit and not warning_cooldown_active and commit_age_minutes is not None:
+        emitted_terminal_warning = _write_watchdog_terminal_warning_nudge(
+            cfg,
+            cycle_number=cycle_number,
+            monitored_branch=monitored_branch,
+            commit_ref=commit_ref,
+            last_commit_sha=str(current_sha or ""),
+            last_commit_at_utc=last_commit_at_utc,
+            run_base_hard_age_minutes=float(run_base_hard_age_minutes or 0.0),
+            run_base_hard_limit_minutes=int(run_base_hard_limit_minutes),
+            warning_lead_minutes=int(WATCHDOG_TERMINAL_WARNING_LEAD_MINUTES),
+        )
+        if emitted_terminal_warning:
+            terminal_warning_last_emitted_cycle = int(cycle_number)
+            terminal_warning_last_emitted_at_utc = utc_now_iso()
+
+    should_stop = bool(run_base_hard_stale or all_monitored_branches_idle_stale)
     next_state = {
         "schema_version": SCHEMA_VERSION,
         "cycle_number": cycle_number,
@@ -5150,13 +5616,33 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
         "watchdog_age_offset_minutes": round(offset_minutes, 3) if offset_minutes is not None else None,
         "watchdog_age_minutes": round(watchdog_age_minutes, 3) if watchdog_age_minutes is not None else None,
         "watchdog_target_reset_at_utc": reset_at_utc,
+        "run_base_hard_age_offset_minutes": round(hard_offset_minutes, 3) if hard_offset_minutes is not None else None,
+        "run_base_hard_age_minutes": round(run_base_hard_age_minutes, 3) if run_base_hard_age_minutes is not None else None,
+        "run_base_hard_target_reset_at_utc": hard_reset_at_utc,
+        "run_base_hard_limit_minutes": int(run_base_hard_limit_minutes),
+        "run_base_hard_warning_minutes": int(run_base_hard_warning_minutes),
+        "terminal_warning_last_emitted_cycle": terminal_warning_last_emitted_cycle,
+        "terminal_warning_last_emitted_at_utc": terminal_warning_last_emitted_at_utc,
+        "terminal_warning_cooldown_cycles": int(warning_cooldown_cycles),
+        "near_terminal_hard_limit": bool(near_terminal_hard_limit),
+        "terminal_warning_emitted_this_cycle": bool(emitted_terminal_warning),
+        "lane_aggregate_watchdog_age_minutes": (
+            round(float(lane_watchdog_age_minutes), 3) if lane_watchdog_age_minutes is not None else None
+        ),
+        "lane_seen_branch_count": int(lane_seen_branch_count),
+        "lane_missing_branch_count": int(lane_missing_branch_count),
         "stale_after_minutes": stale_after_minutes,
-        "stale": is_stale,
+        "stale": bool(should_stop),
+        "all_monitored_branches_idle_stale": bool(all_monitored_branches_idle_stale),
+        "run_base_hard_stale": bool(run_base_hard_stale),
         "near_stale_threshold_minutes": int(near_stale_threshold_minutes),
         "near_stale": bool(near_stale),
         "progress_signal": progress_signal,
         "progress_changed": bool(progress_changed),
         "progress_components": progress_row.get("components") if isinstance(progress_row.get("components"), dict) else {},
+        "lane_progress_signal": str(lane_watchdog.get("lane_progress_signal") or "").strip(),
+        "lane_progress_changed": bool(lane_watchdog.get("lane_progress_changed")),
+        "lane_base_watchdog_registry_ref": str(lane_watchdog.get("registry_path") or ""),
     }
     _atomic_write_json(state_path, next_state)
 
@@ -5183,20 +5669,46 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
             "stale_after_minutes": stale_after_minutes,
             "watchdog_age_minutes": None,
             "commit_age_minutes": None,
+            "run_base_hard_limit_minutes": int(run_base_hard_limit_minutes),
+            "run_base_hard_warning_minutes": int(run_base_hard_warning_minutes),
+            "run_base_hard_age_minutes": None,
+            "lane_aggregate_watchdog_age_minutes": (
+                round(float(lane_watchdog_age_minutes), 3) if lane_watchdog_age_minutes is not None else None
+            ),
+            "lane_seen_branch_count": int(lane_seen_branch_count),
+            "lane_missing_branch_count": int(lane_missing_branch_count),
             "near_stale_threshold_minutes": int(near_stale_threshold_minutes),
             "near_stale": False,
+            "near_terminal_hard_limit": False,
             "progress_signal": progress_signal,
             "progress_changed": bool(progress_changed),
         }
     else:
+        if run_base_hard_stale:
+            reason_code = "stale_run_base_hard_limit"
+            message = (
+                f"run-base branch '{monitored_branch}' showed no commit movement for "
+                f"{float(run_base_hard_age_minutes or 0.0):.1f} minutes; hard limit is "
+                f"{run_base_hard_limit_minutes} minutes"
+            )
+        else:
+            reason_code = "stale_base_branch_commit"
+            if lane_seen_branch_count > 0:
+                message = (
+                    f"no new commit observed across monitored run/lane branches for base threshold "
+                    f"{stale_after_minutes} minutes; run-base age={float(watchdog_age_minutes or 0.0):.1f}m "
+                    f"lane-aggregate age={float(lane_watchdog_age_minutes or 0.0):.1f}m"
+                )
+            else:
+                message = (
+                    f"no new commit observed on '{monitored_branch}' for {float(watchdog_age_minutes or 0.0):.1f} minutes; "
+                    f"watchdog limit is {stale_after_minutes} minutes"
+                )
         exit_signal = {
             "schema_version": SCHEMA_VERSION,
             "cycle_number": cycle_number,
-            "reason_code": "stale_base_branch_commit",
-            "message": (
-                f"no new commit observed on '{monitored_branch}' for {float(watchdog_age_minutes or 0.0):.1f} minutes; "
-                f"watchdog limit is {stale_after_minutes} minutes"
-            ),
+            "reason_code": reason_code,
+            "message": message,
             "monitored_branch": monitored_branch,
             "commit_ref": commit_ref,
             "last_commit_sha": current_sha,
@@ -5205,13 +5717,23 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
             "watchdog_target_reset_at_utc": reset_at_utc,
             "stale_after_minutes": stale_after_minutes,
             "commit_age_minutes": round(commit_age_minutes, 3),
+            "run_base_hard_limit_minutes": int(run_base_hard_limit_minutes),
+            "run_base_hard_warning_minutes": int(run_base_hard_warning_minutes),
+            "run_base_hard_age_minutes": round(run_base_hard_age_minutes, 3) if run_base_hard_age_minutes is not None else None,
+            "lane_aggregate_watchdog_age_minutes": (
+                round(float(lane_watchdog_age_minutes), 3) if lane_watchdog_age_minutes is not None else None
+            ),
+            "lane_seen_branch_count": int(lane_seen_branch_count),
+            "lane_missing_branch_count": int(lane_missing_branch_count),
+            "all_monitored_branches_idle_stale": bool(all_monitored_branches_idle_stale),
+            "run_base_hard_stale": bool(run_base_hard_stale),
             "near_stale_threshold_minutes": int(near_stale_threshold_minutes),
             "near_stale": bool(near_stale),
+            "near_terminal_hard_limit": bool(near_terminal_hard_limit),
             "progress_signal": progress_signal,
             "progress_changed": bool(progress_changed),
         }
 
-    should_stop = is_stale
     exit_path = cfg.repo_root / ARTIFACT_FILES["watchdog_exit_signal"]
     if should_stop:
         _atomic_write_json(exit_path, exit_signal)
@@ -6434,6 +6956,38 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 },
             )
         _seed_plan_artifacts_from_planner(cfg)
+        lane_contract_ok, lane_contract = _plan_lane_base_branches_contract(cfg)
+        if not lane_contract_ok:
+            return {
+                "ok": False,
+                "status": "blocked_preflight",
+                "summary": "Build blocked: plan_packets lane-base contract is invalid.",
+                "errors": [
+                    {
+                        "code": str(lane_contract.get("code") or "lane_base_branches_invalid"),
+                        "message": str(lane_contract.get("message") or "lane_base_branches contract validation failed"),
+                        "stage": "build_preflight",
+                        "details": lane_contract.get("details") if isinstance(lane_contract.get("details"), dict) else {},
+                    }
+                ],
+                "warnings": warnings,
+                "artifacts": artifacts,
+                "next_action": (
+                    "Regenerate plan packets so they include top-level lane_base_branches map with full tasks[].lane_id "
+                    "coverage, then rerun /op-build or /op-resume."
+                ),
+                "state_ref": str((cfg.repo_root / ARTIFACT_FILES["plan_packets"]).resolve()),
+                "data": {
+                    "lane_base_branches_required": True,
+                    "plan_packets_ref": str((cfg.repo_root / ARTIFACT_FILES["plan_packets"]).resolve()),
+                },
+            }
+        _refresh_lane_base_watchdog_registry(
+            cfg,
+            cycle_number=_load_cycle_counter(cfg),
+            now_utc=datetime.now(timezone.utc),
+            force_reset_target=False,
+        )
 
         cycle_number = _load_cycle_counter(cfg)
         _apply_restart_determinism_hooks(

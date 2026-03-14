@@ -191,6 +191,7 @@ def write_boss_artifacts(root: Path, cycle_number: int, *, overrides: dict[str, 
             "phases": [],
             "requirements": [],
             "tasks": [],
+            "lane_base_branches": {},
         },
         "task_execution_state": {
             "schema_version": "1.0",
@@ -2207,6 +2208,242 @@ def test_watchdog_resets_target_when_mergeability_progress_changes(tmp_path: Pat
     assert float(state["watchdog_age_minutes"] or 0.0) <= 0.001
 
 
+def test_watchdog_hard_limit_stops_even_when_lane_branch_is_active(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_initialize_state(cfg)
+    MODULE._ensure_default_artifacts(cfg)
+    git(tmp_path, "checkout", "-b", "lane-phase-1-a")
+    git(tmp_path, "checkout", "main")
+    MODULE._write_lane_base_watchdog_registry(
+        cfg,
+        cycle_number=0,
+        lane_base_branches={"phase-1/lane-a": "lane-phase-1-a"},
+        plan_cycle_number=1,
+    )
+    main_sha = git(tmp_path, "rev-parse", "main")
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 6,
+            "monitored_branch": "main",
+            "last_commit_sha": main_sha,
+            "watchdog_age_offset_minutes": 0.0,
+            "watchdog_target_reset_at_utc": "2026-01-01T00:00:00Z",
+            "run_base_hard_age_offset_minutes": 0.0,
+            "run_base_hard_target_reset_at_utc": "2026-01-01T00:00:00Z",
+            "progress_signal": "stable-progress-signal",
+        },
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_watchdog_progress_signal",
+        lambda _cfg: {"signal": "stable-progress-signal", "components": {}},
+    )
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+
+    def fake_commit_epoch(_repo_root: Path, ref: str) -> int:
+        if ref == "main":
+            return now_epoch - int((MODULE.WATCHDOG_STALE_COMMIT_MINUTES * 2 + 1) * 60)
+        if ref == "lane-phase-1-a":
+            return now_epoch - int(2 * 60)
+        return now_epoch
+
+    monkeypatch.setattr(MODULE, "_git_commit_epoch_seconds", fake_commit_epoch)
+
+    stop, signal = MODULE._watchdog_tick(cfg, cycle_number=7)
+
+    assert stop is True
+    assert signal["reason_code"] == "stale_run_base_hard_limit"
+    assert float(signal["run_base_hard_age_minutes"] or 0.0) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES * 2)
+    assert float(signal["lane_aggregate_watchdog_age_minutes"] or 0.0) < float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
+
+
+def test_watchdog_all_branches_idle_rule_prevents_stop_when_lane_is_active(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_initialize_state(cfg)
+    MODULE._ensure_default_artifacts(cfg)
+    git(tmp_path, "checkout", "-b", "lane-phase-2-b")
+    git(tmp_path, "checkout", "main")
+    MODULE._write_lane_base_watchdog_registry(
+        cfg,
+        cycle_number=0,
+        lane_base_branches={"phase-2/lane-b": "lane-phase-2-b"},
+        plan_cycle_number=1,
+    )
+    main_sha = git(tmp_path, "rev-parse", "main")
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 10,
+            "monitored_branch": "main",
+            "last_commit_sha": main_sha,
+            "watchdog_age_offset_minutes": 0.0,
+            "watchdog_target_reset_at_utc": "2026-01-01T00:00:00Z",
+            "run_base_hard_age_offset_minutes": 0.0,
+            "run_base_hard_target_reset_at_utc": "2026-01-01T00:00:00Z",
+            "progress_signal": "stable-progress-signal",
+        },
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_watchdog_progress_signal",
+        lambda _cfg: {"signal": "stable-progress-signal", "components": {}},
+    )
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+
+    def fake_commit_epoch(_repo_root: Path, ref: str) -> int:
+        if ref == "main":
+            return now_epoch - int((MODULE.WATCHDOG_STALE_COMMIT_MINUTES + 5) * 60)
+        if ref == "lane-phase-2-b":
+            return now_epoch - int(1 * 60)
+        return now_epoch
+
+    monkeypatch.setattr(MODULE, "_git_commit_epoch_seconds", fake_commit_epoch)
+
+    stop, signal = MODULE._watchdog_tick(cfg, cycle_number=11)
+
+    assert stop is False
+    assert signal["reason_code"] == "stale_base_branch_commit"
+    assert signal["all_monitored_branches_idle_stale"] is False
+    assert float(signal["watchdog_age_minutes"] or 0.0) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
+    assert float(signal["lane_aggregate_watchdog_age_minutes"] or 0.0) < float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
+
+
+def test_watchdog_terminal_warning_nudge_has_cycle_cooldown(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_initialize_state(cfg)
+    MODULE._ensure_default_artifacts(cfg)
+    git(tmp_path, "checkout", "-b", "lane-phase-3-c")
+    git(tmp_path, "checkout", "main")
+    MODULE._write_lane_base_watchdog_registry(
+        cfg,
+        cycle_number=0,
+        lane_base_branches={"phase-3/lane-c": "lane-phase-3-c"},
+        plan_cycle_number=1,
+    )
+    main_sha = git(tmp_path, "rev-parse", "main")
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"],
+        {
+            "schema_version": "1.0",
+            "cycle_number": 9,
+            "monitored_branch": "main",
+            "last_commit_sha": main_sha,
+            "watchdog_age_offset_minutes": 0.0,
+            "watchdog_target_reset_at_utc": "2026-01-01T00:00:00Z",
+            "run_base_hard_age_offset_minutes": 0.0,
+            "run_base_hard_target_reset_at_utc": "2026-01-01T00:00:00Z",
+            "progress_signal": "stable-progress-signal",
+            "terminal_warning_last_emitted_cycle": None,
+        },
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_watchdog_progress_signal",
+        lambda _cfg: {"signal": "stable-progress-signal", "components": {}},
+    )
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    hard_warning_age = int((MODULE.WATCHDOG_STALE_COMMIT_MINUTES * 2) - MODULE.WATCHDOG_TERMINAL_WARNING_LEAD_MINUTES + 1)
+
+    def fake_commit_epoch(_repo_root: Path, ref: str) -> int:
+        if ref == "main":
+            return now_epoch - int(hard_warning_age * 60)
+        if ref == "lane-phase-3-c":
+            return now_epoch - int(1 * 60)
+        return now_epoch
+
+    monkeypatch.setattr(MODULE, "_git_commit_epoch_seconds", fake_commit_epoch)
+
+    stop_first, _signal_first = MODULE._watchdog_tick(cfg, cycle_number=10)
+
+    assert stop_first is False
+    warning_path = tmp_path / MODULE.TERMINAL_WARNING_INSTRUCTIONS_FILE
+    assert warning_path.exists()
+    warning_path.unlink()
+
+    stop_second, _signal_second = MODULE._watchdog_tick(cfg, cycle_number=12)
+
+    assert stop_second is False
+    assert not warning_path.exists()
+    state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["watchdog_state"]).read_text(encoding="utf-8"))
+    assert state["terminal_warning_last_emitted_cycle"] == 10
+    assert state["terminal_warning_emitted_this_cycle"] is False
+
+
+def test_lane_watchdog_registry_refresh_prefers_plan_lane_map(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_initialize_state(cfg)
+    MODULE._ensure_default_artifacts(cfg)
+    git(tmp_path, "checkout", "-b", "lane-phase-legacy-a")
+    git(tmp_path, "checkout", "main")
+    git(tmp_path, "checkout", "-b", "lane-phase-fresh-b")
+    git(tmp_path, "checkout", "main")
+
+    MODULE._write_lane_base_watchdog_registry(
+        cfg,
+        cycle_number=2,
+        lane_base_branches={"phase-legacy/lane-a": "lane-phase-legacy-a"},
+        plan_cycle_number=3,
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["plan_packets"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 9,
+            "lane_base_branches": {"phase-fresh/lane-b": "lane-phase-fresh-b"},
+            "tasks": [],
+        },
+    )
+
+    MODULE._refresh_lane_base_watchdog_registry(
+        cfg,
+        cycle_number=4,
+        now_utc=datetime.now(timezone.utc),
+        force_reset_target=False,
+    )
+
+    registry = json.loads((tmp_path / MODULE.ARTIFACT_FILES["lane_base_watchdog_registry"]).read_text(encoding="utf-8"))
+    assert registry["lane_base_branches"] == {"phase-fresh/lane-b": "lane-phase-fresh-b"}
+    assert int(registry["plan_cycle_number"] or 0) == 9
+    lane_ids = sorted(str(row.get("lane_id") or "") for row in registry.get("lanes", []) if isinstance(row, dict))
+    assert lane_ids == ["phase-fresh/lane-b"]
+
+
 def test_run_resume_passes_watchdog_target_reset_once(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
@@ -2706,6 +2943,7 @@ def test_seed_plan_artifacts_from_planner_when_current_plan_empty(tmp_path: Path
     (tmp_path / "reports" / "optimus-prime" / "planning").mkdir(parents=True, exist_ok=True)
     planner_payload = {
         "schema_version": "1.0",
+        "lane_base_branches": {"phase-1/lane-a": "lane-phase-1-a"},
         "tasks": [
             {
                 "task_id": "TASK-001",
@@ -2733,6 +2971,7 @@ def test_seed_plan_artifacts_from_planner_when_current_plan_empty(tmp_path: Path
     assert seeded is True
     current_plan = json.loads((tmp_path / MODULE.ARTIFACT_FILES["plan_packets"]).read_text(encoding="utf-8"))
     assert len(current_plan["tasks"]) == 1
+    assert current_plan["lane_base_branches"] == {"phase-1/lane-a": "lane-phase-1-a"}
     task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
     assert len(task_state["tasks"]) == 1
     assert task_state["blockers"] == []
@@ -2758,6 +2997,97 @@ def test_ensure_default_artifacts_write_task_execution_state_sections(tmp_path: 
     assert task_state["blockers"] == []
     assert set(task_state["attempts"]) == set(MODULE.TASK_ATTEMPT_STAGES)
     assert task_state["last_handoff_outcome"]["status"] == "unknown"
+
+
+def test_run_blocks_preflight_when_lane_base_branches_contract_missing(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["plan_packets"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 1,
+            "tasks": [
+                {
+                    "task_id": "TASK-001",
+                    "lane_id": "phase-1/lane-a",
+                    "status": "pending",
+                }
+            ],
+        },
+    )
+
+    out = MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            dry_run=True,
+            max_build_cycles=1,
+            sleep_minutes=0,
+            ground_sync_enabled=False,
+        )
+    )
+
+    assert out["ok"] is False
+    assert out["status"] == "blocked_preflight"
+    errors = out["errors"] if isinstance(out.get("errors"), list) else []
+    assert errors
+    assert str(errors[0].get("code") or "").strip() in {"lane_base_branches_invalid", "lane_base_branches_missing"}
+
+
+def test_run_resume_blocks_preflight_when_lane_base_branches_missing_lane_mapping(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.INITIALIZE_STATE_FILE,
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "monitored_branch": "main",
+            "workflow": {"max_parallel_workers": 8},
+            "run_context": {
+                "run_base_branch": "main",
+                "run_base_from_branch": "main",
+                "run_base_from_commit": git(tmp_path, "rev-parse", "main"),
+                "run_base_created_at": "2026-01-01T00:00:00Z",
+                "created_new": False,
+                "dry_run": True,
+            },
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["plan_packets"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 2,
+            "lane_base_branches": {},
+            "tasks": [
+                {
+                    "task_id": "TASK-002",
+                    "lane_id": "phase-2/lane-b",
+                    "status": "pending",
+                }
+            ],
+        },
+    )
+
+    out = MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            command="op-resume",
+            dry_run=True,
+            max_build_cycles=1,
+            sleep_minutes=0,
+            ground_sync_enabled=False,
+        )
+    )
+
+    assert out["ok"] is False
+    assert out["status"] == "blocked_preflight"
+    errors = out["errors"] if isinstance(out.get("errors"), list) else []
+    assert errors
+    assert str(errors[0].get("code") or "").strip() == "lane_base_branches_incomplete"
 
 
 def test_installed_fallback_paths_for_prompts_and_schema(tmp_path: Path, monkeypatch) -> None:
@@ -4255,6 +4585,8 @@ def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypa
         dry_run=False,
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    codex_second_home = tmp_path / ".codex-second"
+    codex_second_home.mkdir(parents=True, exist_ok=True)
     MODULE._atomic_write_json(
         tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
         {
@@ -4262,7 +4594,7 @@ def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypa
             "profiles": [
                 {
                     "alias": "codex-second",
-                    "codex_home": "/tmp/codex-second",
+                    "codex_home": str(codex_second_home),
                     "window_5h_remaining_pct": 80.0,
                     "window_week_remaining_pct": 90.0,
                 }
@@ -4305,14 +4637,14 @@ def test_invoke_manager_boss_uses_selected_profile_home(tmp_path: Path, monkeypa
     )
 
     assert out.status == "ok"
-    assert captured["codex_home"] == "/tmp/codex-second"
+    assert captured["codex_home"] == str(codex_second_home)
     assert captured["resume_session_id"] is None
     assert captured["model"] == "gpt-5.3-codex"
     assert captured["reasoning_effort"] == "xhigh"
     assert out.message == "manager_profile_alias=codex-second"
     session_state = MODULE._read_json(tmp_path / MODULE.BOSS_SESSION_STATE_FILE, default={})
     assert session_state["session_id"] == "123e4567-e89b-12d3-a456-426614174000"
-    assert session_state["codex_home"] == "/tmp/codex-second"
+    assert session_state["codex_home"] == str(codex_second_home)
 
 
 def test_invoke_manager_boss_rotates_profile_after_timeout_requirement(tmp_path: Path, monkeypatch) -> None:
@@ -4326,6 +4658,10 @@ def test_invoke_manager_boss_rotates_profile_after_timeout_requirement(tmp_path:
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
     MODULE._ensure_default_artifacts(cfg)
+    codex_old_home = tmp_path / ".codex-old"
+    codex_new_home = tmp_path / ".codex-new"
+    codex_old_home.mkdir(parents=True, exist_ok=True)
+    codex_new_home.mkdir(parents=True, exist_ok=True)
     MODULE._atomic_write_json(
         tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
         {
@@ -4333,14 +4669,14 @@ def test_invoke_manager_boss_rotates_profile_after_timeout_requirement(tmp_path:
             "profiles": [
                 {
                     "alias": "codex-old",
-                    "codex_home": "/tmp/codex-old",
+                    "codex_home": str(codex_old_home),
                     "window_5h_remaining_pct": 80.0,
                     "window_week_remaining_pct": 90.0,
                     "hard_gated": False,
                 },
                 {
                     "alias": "codex-new",
-                    "codex_home": "/tmp/codex-new",
+                    "codex_home": str(codex_new_home),
                     "window_5h_remaining_pct": 70.0,
                     "window_week_remaining_pct": 85.0,
                     "hard_gated": False,
@@ -4354,7 +4690,7 @@ def test_invoke_manager_boss_rotates_profile_after_timeout_requirement(tmp_path:
             "schema_version": "1.0",
             "updated_at": "2026-01-01T00:00:00Z",
             "session_id": "123e4567-e89b-12d3-a456-426614174111",
-            "codex_home": "/tmp/codex-old",
+            "codex_home": str(codex_old_home),
             "profile_alias": "codex-old",
             "previous_profile_alias": "codex-old",
         },
@@ -4402,7 +4738,7 @@ def test_invoke_manager_boss_rotates_profile_after_timeout_requirement(tmp_path:
     )
 
     assert out.status == "ok"
-    assert captured["codex_home"] == "/tmp/codex-new"
+    assert captured["codex_home"] == str(codex_new_home)
     assert out.message == "manager_profile_alias=codex-new"
 
     timeout_state = MODULE._read_json(tmp_path / MODULE.ARTIFACT_FILES["timeout_adaptation_state"], default={})
@@ -4654,13 +4990,15 @@ def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatc
         dry_run=False,
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    codex_third_home = tmp_path / ".codex-third"
+    codex_third_home.mkdir(parents=True, exist_ok=True)
     MODULE._atomic_write_json(
         tmp_path / MODULE.BOSS_SESSION_STATE_FILE,
         {
             "schema_version": "1.0",
             "updated_at": "2026-01-01T00:00:00Z",
             "session_id": "123e4567-e89b-12d3-a456-426614174001",
-            "codex_home": "/tmp/codex-third",
+            "codex_home": str(codex_third_home),
             "profile_alias": "codex-third",
             "previous_profile_alias": "codex-third",
         },
@@ -4672,7 +5010,7 @@ def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatc
             "profiles": [
                 {
                     "alias": "codex-third",
-                    "codex_home": "/tmp/codex-third",
+                    "codex_home": str(codex_third_home),
                     "window_5h_remaining_pct": 70.0,
                     "window_week_remaining_pct": 80.0,
                 }
@@ -4715,7 +5053,7 @@ def test_invoke_manager_boss_resumes_existing_session(tmp_path: Path, monkeypatc
     )
 
     assert out.status == "ok"
-    assert captured["codex_home"] == "/tmp/codex-third"
+    assert captured["codex_home"] == str(codex_third_home)
     assert captured["resume_session_id"] == "123e4567-e89b-12d3-a456-426614174001"
     assert captured["model"] == "gpt-5.3-codex"
     assert captured["reasoning_effort"] == "xhigh"
@@ -4732,13 +5070,17 @@ def test_invoke_manager_boss_switches_profile_and_starts_new_thread(tmp_path: Pa
         dry_run=False,
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    codex_old_home = tmp_path / ".codex-old"
+    codex_new_home = tmp_path / ".codex-new"
+    codex_old_home.mkdir(parents=True, exist_ok=True)
+    codex_new_home.mkdir(parents=True, exist_ok=True)
     MODULE._atomic_write_json(
         tmp_path / MODULE.BOSS_SESSION_STATE_FILE,
         {
             "schema_version": "1.0",
             "updated_at": "2026-01-01T00:00:00Z",
             "session_id": "123e4567-e89b-12d3-a456-426614174010",
-            "codex_home": "/tmp/codex-old",
+            "codex_home": str(codex_old_home),
             "profile_alias": "codex-old",
             "previous_profile_alias": "codex-old",
         },
@@ -4750,13 +5092,13 @@ def test_invoke_manager_boss_switches_profile_and_starts_new_thread(tmp_path: Pa
             "profiles": [
                 {
                     "alias": "codex-old",
-                    "codex_home": "/tmp/codex-old",
+                    "codex_home": str(codex_old_home),
                     "window_5h_remaining_pct": 70.0,
                     "window_week_remaining_pct": 49.0,
                 },
                 {
                     "alias": "codex-new",
-                    "codex_home": "/tmp/codex-new",
+                    "codex_home": str(codex_new_home),
                     "window_5h_remaining_pct": 90.0,
                     "window_week_remaining_pct": 95.0,
                 },
@@ -4793,7 +5135,7 @@ def test_invoke_manager_boss_switches_profile_and_starts_new_thread(tmp_path: Pa
 
     assert out.status == "ok"
     assert captured["resume_session_id"] is None
-    assert captured["codex_home"] == "/tmp/codex-new"
+    assert captured["codex_home"] == str(codex_new_home)
     assert out.message == "manager_profile_alias=codex-new"
     session_state = MODULE._read_json(tmp_path / MODULE.BOSS_SESSION_STATE_FILE, default={})
     assert session_state["profile_alias"] == "codex-new"
@@ -4813,13 +5155,15 @@ def test_invoke_manager_boss_resume_failure_retries_fresh_session_and_persists_n
         dry_run=False,
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    codex_resume_home = tmp_path / ".codex-resume"
+    codex_resume_home.mkdir(parents=True, exist_ok=True)
     MODULE._atomic_write_json(
         tmp_path / MODULE.BOSS_SESSION_STATE_FILE,
         {
             "schema_version": "1.0",
             "updated_at": "2026-01-01T00:00:00Z",
             "session_id": "123e4567-e89b-12d3-a456-426614174020",
-            "codex_home": "/tmp/codex-resume",
+            "codex_home": str(codex_resume_home),
             "profile_alias": "codex-resume",
             "previous_profile_alias": "codex-resume",
         },
@@ -4831,7 +5175,7 @@ def test_invoke_manager_boss_resume_failure_retries_fresh_session_and_persists_n
             "profiles": [
                 {
                     "alias": "codex-resume",
-                    "codex_home": "/tmp/codex-resume",
+                    "codex_home": str(codex_resume_home),
                     "window_5h_remaining_pct": 70.0,
                     "window_week_remaining_pct": 80.0,
                 }

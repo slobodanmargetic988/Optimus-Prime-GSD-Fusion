@@ -232,6 +232,7 @@ Runtime propagation note:
 | phase | string | Multi-phase mode marker |
 | phases | array | Phase DAG |
 | requirements | array | Requirement inventory |
+| lane_base_branches | object<string,string> | Lane-id to lane-base-branch map used by watchdog lane monitoring |
 | tasks | array | Task planning rows |
 | tasks[].task_id | string | Task identity |
 | tasks[].phase_id | string | Phase membership |
@@ -260,6 +261,9 @@ Runtime propagation note:
       "title": "Core flow"
     }
   ],
+  "lane_base_branches": {
+    "phase-1/lane-a": "lane-phase-1-a"
+  },
   "tasks": [
     {
       "task_id": "TASK-123",
@@ -280,6 +284,9 @@ Runtime propagation note:
   ]
 }
 ```
+
+Invariant:
+- Before `/op-simple-build` starts, `lane_base_branches` must include every non-empty `tasks[].lane_id`.
 
 ## 8) task_execution_state.json
 
@@ -375,7 +382,12 @@ Runtime propagation note:
 - `schema_version`, `cycle_number`, `monitored_branch`, `commit_ref`, `last_commit_sha`, `last_commit_at_utc`
 - `last_commit_age_minutes`, `watchdog_age_offset_minutes`, `watchdog_age_minutes`
 - `watchdog_target_reset_at_utc`, `stale_after_minutes`, `near_stale_threshold_minutes`, `stale`, `near_stale`
+- `run_base_hard_age_offset_minutes`, `run_base_hard_age_minutes`, `run_base_hard_target_reset_at_utc`
+- `run_base_hard_limit_minutes`, `run_base_hard_warning_minutes`, `run_base_hard_stale`, `near_terminal_hard_limit`
+- `terminal_warning_last_emitted_cycle`, `terminal_warning_last_emitted_at_utc`, `terminal_warning_cooldown_cycles`, `terminal_warning_emitted_this_cycle`
+- `lane_aggregate_watchdog_age_minutes`, `lane_seen_branch_count`, `lane_missing_branch_count`, `all_monitored_branches_idle_stale`
 - `progress_signal`, `progress_changed`, `progress_components`
+- `lane_progress_signal`, `lane_progress_changed`, `lane_base_watchdog_registry_ref`
 
 ```json
 {
@@ -389,12 +401,30 @@ Runtime propagation note:
   "watchdog_age_offset_minutes": 5.0,
   "watchdog_age_minutes": 116.3,
   "watchdog_target_reset_at_utc": "2026-03-13T11:55:00Z",
+  "run_base_hard_age_offset_minutes": 5.0,
+  "run_base_hard_age_minutes": 116.3,
+  "run_base_hard_target_reset_at_utc": "2026-03-13T11:55:00Z",
+  "run_base_hard_limit_minutes": 300,
+  "run_base_hard_warning_minutes": 280,
+  "terminal_warning_last_emitted_cycle": 0,
+  "terminal_warning_last_emitted_at_utc": "",
+  "terminal_warning_cooldown_cycles": 4,
+  "near_terminal_hard_limit": false,
+  "terminal_warning_emitted_this_cycle": false,
+  "lane_aggregate_watchdog_age_minutes": 20.0,
+  "lane_seen_branch_count": 2,
+  "lane_missing_branch_count": 0,
   "stale_after_minutes": 150,
+  "all_monitored_branches_idle_stale": false,
+  "run_base_hard_stale": false,
   "near_stale_threshold_minutes": 140,
   "stale": false,
   "near_stale": false,
   "progress_signal": "3e8b0f...",
-  "progress_changed": true
+  "progress_changed": true,
+  "lane_progress_signal": "a901d8...",
+  "lane_progress_changed": false,
+  "lane_base_watchdog_registry_ref": "/abs/path/.op-simple/current/lane_base_watchdog_registry.json"
 }
 ```
 
@@ -402,6 +432,9 @@ Runtime propagation note:
 - `schema_version`, `cycle_number`, `reason_code`, `message`, `monitored_branch`, `commit_ref`
 - `last_commit_sha`, `last_commit_at_utc`, `watchdog_age_minutes`, `commit_age_minutes`
 - `stale_after_minutes`, `near_stale_threshold_minutes`, `near_stale`
+- `run_base_hard_limit_minutes`, `run_base_hard_warning_minutes`, `run_base_hard_age_minutes`, `run_base_hard_stale`
+- `lane_aggregate_watchdog_age_minutes`, `lane_seen_branch_count`, `lane_missing_branch_count`, `all_monitored_branches_idle_stale`
+- `near_terminal_hard_limit`
 - `progress_signal`, `progress_changed`
 
 ```json
@@ -409,16 +442,84 @@ Runtime propagation note:
   "schema_version": "1.0",
   "cycle_number": 16,
   "reason_code": "stale_base_branch_commit",
-  "message": "no new commit observed on 'main' for 151.0 minutes; watchdog limit is 150 minutes",
+  "message": "no new commit observed across monitored run/lane branches for base threshold 150 minutes; run-base age=151.0m lane-aggregate age=150.8m",
   "monitored_branch": "main",
   "commit_ref": "main",
   "watchdog_age_minutes": 151.0,
   "commit_age_minutes": 176.0,
+  "run_base_hard_limit_minutes": 300,
+  "run_base_hard_warning_minutes": 280,
+  "run_base_hard_age_minutes": 151.0,
+  "run_base_hard_stale": false,
+  "lane_aggregate_watchdog_age_minutes": 150.8,
+  "lane_seen_branch_count": 2,
+  "lane_missing_branch_count": 0,
+  "all_monitored_branches_idle_stale": true,
   "stale_after_minutes": 150,
   "near_stale_threshold_minutes": 140,
   "near_stale": false,
+  "near_terminal_hard_limit": false,
   "progress_signal": "3e8b0f...",
   "progress_changed": false
+}
+```
+
+Terminal reason codes emitted by watchdog:
+- `stale_base_branch_commit`
+- `stale_run_base_hard_limit`
+
+### lane_base_watchdog_registry.json fields
+- `schema_version`, `updated_at`, `cycle_number`, `plan_cycle_number`
+- `lane_base_branches` (lane-id to branch map)
+- `lanes[]`:
+  - `lane_id`, `lane_base_branch`, `exists`, `ever_seen`
+  - `first_seen_at`, `first_seen_cycle`
+  - `last_seen_commit_sha`, `last_seen_commit_at_utc`, `last_seen_cycle`
+- `aggregate`:
+  - `seen_lane_count`, `missing_lane_count`
+  - `latest_seen_commit_sha`, `latest_seen_commit_at_utc`, `latest_seen_commit_age_minutes`
+  - `watchdog_age_offset_minutes`, `watchdog_age_minutes`, `watchdog_target_reset_at_utc`
+  - `progress_signal`, `progress_changed`, `progress_components`
+
+```json
+{
+  "schema_version": "1.0",
+  "updated_at": "2026-03-14T08:00:00Z",
+  "cycle_number": 12,
+  "plan_cycle_number": 12,
+  "lane_base_branches": {
+    "phase-1/lane-a": "lane-phase-1-a",
+    "phase-2/lane-b": "lane-phase-2-b"
+  },
+  "lanes": [
+    {
+      "lane_id": "phase-1/lane-a",
+      "lane_base_branch": "lane-phase-1-a",
+      "exists": true,
+      "ever_seen": true,
+      "first_seen_at": "2026-03-14T07:10:00Z",
+      "first_seen_cycle": 9,
+      "last_seen_commit_sha": "abcdef1234",
+      "last_seen_commit_at_utc": "2026-03-14T07:58:00Z",
+      "last_seen_cycle": 12
+    }
+  ],
+  "aggregate": {
+    "seen_lane_count": 2,
+    "missing_lane_count": 0,
+    "latest_seen_commit_sha": "abcdef1234",
+    "latest_seen_commit_at_utc": "2026-03-14T07:58:00Z",
+    "latest_seen_commit_age_minutes": 2.0,
+    "watchdog_age_offset_minutes": 2.0,
+    "watchdog_age_minutes": 0.0,
+    "watchdog_target_reset_at_utc": "2026-03-14T08:00:00Z",
+    "progress_signal": "a901d8...",
+    "progress_changed": true,
+    "progress_components": {
+      "phase-1/lane-a": "abcdef1234",
+      "phase-2/lane-b": "0123456789"
+    }
+  }
 }
 ```
 
@@ -490,7 +591,7 @@ Optional telemetry extension:
 - `boss_runtime_context_evidence` object (binary/profile context checks)
 
 Invariant:
-- When a terminal stop reason is resolved (`project_done`, `insurmountable_blocker`, watchdog reason such as `stale_base_branch_commit`), `cycle_summary.stop_reason` must be persisted and non-empty for that cycle.
+- When a terminal stop reason is resolved (`project_done`, `insurmountable_blocker`, watchdog reason such as `stale_base_branch_commit` or `stale_run_base_hard_limit`), `cycle_summary.stop_reason` must be persisted and non-empty for that cycle.
 
 ### task_execution_state.json additions (merge progression engine)
 
