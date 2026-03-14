@@ -9173,5 +9173,16 @@
       ],
       "gaps_that_need_patching": []
     }
-  ]
+  ],
+  "lane_base_branches": {
+    "phase-1/lane-a": "lane-phase-1-lane-a",
+    "phase-1/lane-b": "lane-phase-1-lane-b",
+    "phase-1/lane-c": "lane-phase-1-lane-c",
+    "phase-2/lane-c": "lane-phase-2-lane-c",
+    "phase-2/lane-a": "lane-phase-2-lane-a",
+    "phase-2/lane-b": "lane-phase-2-lane-b",
+    "phase-3/lane-b": "lane-phase-3-lane-b",
+    "phase-3/lane-c": "lane-phase-3-lane-c",
+    "phase-3/lane-a": "lane-phase-3-lane-a"
+  }
 }

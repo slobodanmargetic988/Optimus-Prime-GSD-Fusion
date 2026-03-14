@@ -368,6 +368,23 @@ def test_termination_from_summary_ignores_unrecognized_stop_reason_text() -> Non
 
 def test_boss_failure_skips_cycle_and_writes_conservative_summary(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 0,
+            "tasks": [
+                {"task_id": "task-1", "status": "pending"},
+                {"task_id": "task-2", "status": "in_progress"},
+                {"task_id": "task-3", "status": "done"},
+            ],
+            "blockers": [],
+            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
+            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
+        },
+    )
 
     def fake_invoke_manager(*_args, **kwargs):
         return MODULE.ManagerResult(
@@ -401,6 +418,7 @@ def test_boss_failure_skips_cycle_and_writes_conservative_summary(tmp_path: Path
     assert decision["worker_registry_ready"] is True
 
     summary = json.loads((tmp_path / MODULE.ARTIFACT_FILES["cycle_summary"]).read_text(encoding="utf-8"))
+    assert summary["task_counts"] == {"pending": 1, "in_progress": 1, "done": 1, "blocked": 0}
     assert summary["dispatch_counts"] == {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
     assert "cycle skipped by runtime safety rules" in summary["notes"]
     assert summary["manager_statuses"]["work-dispatcher"]["status"] == "skipped"
@@ -410,6 +428,40 @@ def test_boss_failure_skips_cycle_and_writes_conservative_summary(tmp_path: Path
     assert capsule["reason_code"] == "manager_non_zero_exit"
     assert capsule["stop_reason"] == ""
     assert capsule["manager_status"] == "failed"
+
+
+def test_render_cycle_summary_logs_boss_failed_message_without_task_counter_banner(tmp_path: Path, capsys) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    MODULE._render_cycle_summary(
+        cfg,
+        cycle_number=6,
+        manager_statuses={"BOSS": {"status": "failed", "note": "codex profile temporarily gated"}},
+        dispatch_counts={"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+        base_summary={
+            "schema_version": "1.0",
+            "cycle_number": 6,
+            "task_counts": {"pending": 9, "in_progress": 2, "done": 5, "blocked": 1},
+            "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+            "project_done": False,
+            "insurmountable_blocker": False,
+            "termination": {},
+            "stop_reason": "",
+            "notes": "cycle skipped by runtime safety rules",
+        },
+    )
+    out = capsys.readouterr().out
+    assert "summary=boss_failed" in out
+    assert "message=codex profile temporarily gated" in out
+    assert "pending=" not in out
 
 
 def test_worker_state_signature_and_counts_helpers(tmp_path: Path, monkeypatch) -> None:
@@ -4944,6 +4996,105 @@ def test_invoke_manager_boss_rotates_profile_after_timeout_requirement(tmp_path:
     evidence = decision.get("selection_evidence") if isinstance(decision, dict) else {}
     assert isinstance(evidence, dict)
     assert evidence.get("prior_alias_rejected_reason") == "excluded_for_timeout_rotation"
+
+
+def test_invoke_manager_boss_rotates_after_non_timeout_failure(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    codex_old_home = tmp_path / ".codex-old"
+    codex_new_home = tmp_path / ".codex-new"
+    codex_old_home.mkdir(parents=True, exist_ok=True)
+    codex_new_home.mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "profiles": [
+                {
+                    "alias": "codex-old",
+                    "codex_home": str(codex_old_home),
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 90.0,
+                    "hard_gated": False,
+                },
+                {
+                    "alias": "codex-new",
+                    "codex_home": str(codex_new_home),
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 85.0,
+                    "hard_gated": False,
+                },
+            ],
+        },
+    )
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.BOSS_SESSION_STATE_FILE,
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "session_id": "123e4567-e89b-12d3-a456-426614174333",
+            "codex_home": str(codex_old_home),
+            "profile_alias": "codex-old",
+            "previous_profile_alias": "codex-old",
+        },
+    )
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+
+    used_homes: list[str] = []
+
+    def fake_codex_exec_prompt(*_args, **kwargs):
+        used_homes.append(str(kwargs.get("codex_home") or ""))
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="failed",
+            timeout=False,
+            returncode=1,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            message="codex exec returned non-zero",
+            reason_code="manager_non_zero_exit",
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    first = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=11,
+        context={},
+        expected_artifacts=[],
+    )
+    MODULE._record_boss_non_timeout_state(cfg, cycle_number=11, status=first.status, result=first)
+
+    second = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=12,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert first.status == "failed"
+    assert second.status == "failed"
+    assert used_homes[0] == str(codex_old_home)
+    assert used_homes[-1] == str(codex_new_home)
+    assert len(used_homes) >= 2
+    assert "manager_profile_alias=codex-new" in str(second.message)
+
+    timeout_state = MODULE._read_json(tmp_path / MODULE.ARTIFACT_FILES["timeout_adaptation_state"], default={})
+    decision = timeout_state.get("last_rotation_decision") if isinstance(timeout_state, dict) else {}
+    evidence = decision.get("selection_evidence") if isinstance(decision, dict) else {}
+    assert isinstance(evidence, dict)
+    assert evidence.get("non_timeout_failed_excluded_alias") == "codex-old"
 
 
 def test_invoke_manager_boss_fails_closed_when_runtime_context_invalid(tmp_path: Path, monkeypatch) -> None:

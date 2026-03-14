@@ -876,6 +876,9 @@ def _default_timeout_adaptation_state() -> dict[str, Any]:
         "last_timeout_cycle": None,
         "last_timeout_profile_alias": "",
         "last_timeout_reason": "",
+        "last_non_timeout_failed_profile_alias": "",
+        "last_non_timeout_failed_cycle": None,
+        "last_non_timeout_failed_reason": "",
         "last_rotation_decision": {},
         "last_boss_runtime_checks": {},
     }
@@ -899,6 +902,13 @@ def _load_timeout_adaptation_state(cfg: RunConfig) -> dict[str, Any]:
     out["rotation_required"] = bool(out.get("rotation_required"))
     out["last_timeout_profile_alias"] = str(out.get("last_timeout_profile_alias") or "").strip()
     out["last_timeout_reason"] = str(out.get("last_timeout_reason") or "").strip()
+    out["last_non_timeout_failed_profile_alias"] = str(out.get("last_non_timeout_failed_profile_alias") or "").strip()
+    try:
+        last_non_timeout_failed_cycle = out.get("last_non_timeout_failed_cycle")
+        out["last_non_timeout_failed_cycle"] = int(last_non_timeout_failed_cycle) if last_non_timeout_failed_cycle is not None else None
+    except (TypeError, ValueError):
+        out["last_non_timeout_failed_cycle"] = None
+    out["last_non_timeout_failed_reason"] = str(out.get("last_non_timeout_failed_reason") or "").strip()
     if not isinstance(out.get("last_rotation_decision"), dict):
         out["last_rotation_decision"] = {}
     if not isinstance(out.get("last_boss_runtime_checks"), dict):
@@ -959,21 +969,94 @@ def _record_boss_timeout_state(
     return updated
 
 
-def _record_boss_non_timeout_state(cfg: RunConfig, *, cycle_number: int, status: str) -> dict[str, Any]:
+def _record_boss_non_timeout_state(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    status: str,
+    result: ManagerResult | None = None,
+) -> dict[str, Any]:
     state = _load_timeout_adaptation_state(cfg)
-    if int(state.get("consecutive_boss_timeouts") or 0) == 0 and not bool(state.get("rotation_required")):
+    normalized_status = str(status or "").strip()
+    has_timeout_adaptation_state = int(state.get("consecutive_boss_timeouts") or 0) > 0 or bool(state.get("rotation_required"))
+    prior_non_timeout_failed_alias = str(state.get("last_non_timeout_failed_profile_alias") or "").strip()
+    should_track_non_timeout_failure = normalized_status != "ok"
+    if not has_timeout_adaptation_state and not should_track_non_timeout_failure and not prior_non_timeout_failed_alias:
         return state
-    return _write_timeout_adaptation_state(
-        cfg,
-        {
-            "consecutive_boss_timeouts": 0,
-            "adaptation_active": False,
-            "rotation_required": False,
-            "last_timeout_cycle": state.get("last_timeout_cycle"),
-            "last_boss_status_after_timeout": str(status or "").strip(),
-            "last_boss_status_cycle": int(cycle_number),
-        },
-    )
+
+    selected_alias = _profile_alias_from_manager_result(result)
+    if not selected_alias:
+        last_rotation_decision = state.get("last_rotation_decision")
+        if isinstance(last_rotation_decision, dict):
+            selected_alias = str(last_rotation_decision.get("selected_alias") or "").strip() or None
+    failure_reason = ""
+    if isinstance(result, ManagerResult):
+        failure_reason = str(result.reason_code or "").strip()
+
+    payload: dict[str, Any] = {
+        "last_boss_status_after_timeout": normalized_status,
+        "last_boss_status_cycle": int(cycle_number),
+    }
+    if has_timeout_adaptation_state:
+        payload.update(
+            {
+                "consecutive_boss_timeouts": 0,
+                "adaptation_active": False,
+                "rotation_required": False,
+                "last_timeout_cycle": state.get("last_timeout_cycle"),
+            }
+        )
+    if should_track_non_timeout_failure:
+        payload.update(
+            {
+                "last_non_timeout_failed_profile_alias": str(selected_alias or "").strip(),
+                "last_non_timeout_failed_cycle": int(cycle_number),
+                "last_non_timeout_failed_reason": failure_reason or normalized_status or "failed",
+            }
+        )
+    else:
+        payload.update(
+            {
+                "last_non_timeout_failed_profile_alias": "",
+                "last_non_timeout_failed_cycle": None,
+                "last_non_timeout_failed_reason": "",
+            }
+        )
+    return _write_timeout_adaptation_state(cfg, payload)
+
+
+def _boss_non_timeout_excluded_alias(timeout_state: dict[str, Any]) -> str:
+    if not isinstance(timeout_state, dict):
+        return ""
+    failed_alias = str(timeout_state.get("last_non_timeout_failed_profile_alias") or "").strip()
+    return failed_alias
+
+
+def _record_boss_non_timeout_exclusion_evidence(
+    rotation_selection_evidence: dict[str, Any],
+    excluded_aliases: set[str],
+    *,
+    timed_out_alias: str,
+    non_timeout_failed_alias: str,
+) -> None:
+    if timed_out_alias:
+        rotation_selection_evidence["timeout_excluded_alias"] = timed_out_alias
+    if non_timeout_failed_alias:
+        rotation_selection_evidence["non_timeout_failed_excluded_alias"] = non_timeout_failed_alias
+    if excluded_aliases:
+        rotation_selection_evidence["excluded_aliases"] = sorted(excluded_aliases)
+
+
+def _is_boss_failed_cycle(manager_statuses: dict[str, dict[str, str]]) -> bool:
+    boss_status = str((manager_statuses.get("BOSS") or {}).get("status") or "").strip().lower()
+    return boss_status == "failed"
+
+
+def _boss_failed_note(manager_statuses: dict[str, dict[str, str]], summary_notes: str) -> str:
+    text = str((manager_statuses.get("BOSS") or {}).get("note") or summary_notes or "BOSS failed").strip()
+    if len(text) <= 240:
+        return text
+    return f"{text[:237]}..."
 
 
 def _record_boss_rotation_decision(cfg: RunConfig, *, decision: dict[str, Any]) -> dict[str, Any]:
@@ -2419,6 +2502,9 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
             "last_timeout_cycle": None,
             "last_timeout_profile_alias": "",
             "last_timeout_reason": "",
+            "last_non_timeout_failed_profile_alias": "",
+            "last_non_timeout_failed_cycle": None,
+            "last_non_timeout_failed_reason": "",
             "last_rotation_decision": {},
             "last_boss_runtime_checks": {},
         },
@@ -3269,16 +3355,28 @@ def _invoke_manager(
             prior_profile_alias = str(boss_session_state.get("profile_alias") or "").strip() or None
             prior_previous_profile_alias = str(boss_session_state.get("previous_profile_alias") or "").strip() or None
             excluded_aliases: set[str] = set()
+            timed_out_alias = ""
+            non_timeout_failed_alias = ""
             if manager_name == "BOSS" and bool(timeout_state.get("rotation_required")):
                 timed_out_alias = str(timeout_state.get("last_timeout_profile_alias") or "").strip()
                 if timed_out_alias:
                     excluded_aliases.add(timed_out_alias)
+            if manager_name == "BOSS":
+                non_timeout_failed_alias = _boss_non_timeout_excluded_alias(timeout_state)
+                if non_timeout_failed_alias:
+                    excluded_aliases.add(non_timeout_failed_alias)
             selected_manager_alias, selected_manager_home, rotation_selection_evidence = (
                 _select_boss_profile_from_snapshot_with_evidence(
                     cfg,
                     preferred_alias=prior_profile_alias,
                     excluded_aliases=excluded_aliases,
                 )
+            )
+            _record_boss_non_timeout_exclusion_evidence(
+                rotation_selection_evidence,
+                excluded_aliases,
+                timed_out_alias=timed_out_alias,
+                non_timeout_failed_alias=non_timeout_failed_alias,
             )
             if manager_name == "BOSS" and selected_manager_alias is None and excluded_aliases:
                 # Fallback preserves continuity when no alternate eligible alias exists.
@@ -3308,6 +3406,9 @@ def _invoke_manager(
                     "cycle_number": int(cycle_number),
                     "rotation_required": bool(timeout_state.get("rotation_required")),
                     "last_timeout_profile_alias": str(timeout_state.get("last_timeout_profile_alias") or "").strip(),
+                    "last_non_timeout_failed_profile_alias": str(
+                        timeout_state.get("last_non_timeout_failed_profile_alias") or ""
+                    ).strip(),
                     "preferred_alias": prior_profile_alias,
                     "selected_alias": selected_manager_alias,
                     "selected_home": selected_manager_home,
@@ -6878,14 +6979,23 @@ def _render_cycle_summary(
 
     _atomic_write_json(summary_path, out)
 
-    print(
-        "[op-simple-build] "
-        f"[{utc_now_iso()}] "
-        f"cycle={cycle_number} pending={merged_counts['pending']} in_progress={merged_counts['in_progress']} "
-        f"done={merged_counts['done']} blocked={merged_counts['blocked']} "
-        f"dispatch={{attempted:{out['dispatch_counts']['attempted']},launched:{out['dispatch_counts']['launched']},failed:{out['dispatch_counts']['launch_failed']},unknown:{out['dispatch_counts']['unknown']}}}",
-        flush=True,
-    )
+    if _is_boss_failed_cycle(manager_statuses):
+        print(
+            "[op-simple-build] "
+            f"[{utc_now_iso()}] "
+            f"cycle={cycle_number} summary=boss_failed "
+            f"message={_boss_failed_note(manager_statuses, out.get('notes') or '')}",
+            flush=True,
+        )
+    else:
+        print(
+            "[op-simple-build] "
+            f"[{utc_now_iso()}] "
+            f"cycle={cycle_number} pending={merged_counts['pending']} in_progress={merged_counts['in_progress']} "
+            f"done={merged_counts['done']} blocked={merged_counts['blocked']} "
+            f"dispatch={{attempted:{out['dispatch_counts']['attempted']},launched:{out['dispatch_counts']['launched']},failed:{out['dispatch_counts']['launch_failed']},unknown:{out['dispatch_counts']['unknown']}}}",
+            flush=True,
+        )
     return out
 
 
@@ -7503,7 +7613,12 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             if boss_result is not None:
                 _safe_unlink(cfg.repo_root / BOSS_EVIDENCE_FILE)
                 if not boss_result.timeout:
-                    _record_boss_non_timeout_state(cfg, cycle_number=cycle_number, status=boss_result.status)
+                    _record_boss_non_timeout_state(
+                        cfg,
+                        cycle_number=cycle_number,
+                        status=boss_result.status,
+                        result=boss_result,
+                    )
 
             if boss_result is not None and boss_result.status != "ok":
                 warnings.append(
@@ -7656,7 +7771,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "cycle_number": cycle_number,
                     "cycle_mode": cycle_mode,
                     "manager_statuses": {},
-                    "task_counts": {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0},
+                    "task_counts": task_counts_snapshot,
                     "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
                     "project_done": False,
                     "insurmountable_blocker": False,

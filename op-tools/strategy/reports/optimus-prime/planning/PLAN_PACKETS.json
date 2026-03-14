@@ -10961,5 +10961,16 @@
     "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
     "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json",
     "python3 -m pytest tests -q"
-  ]
+  ],
+  "lane_base_branches": {
+    "phase-1/lane-a": "lane-phase-1-lane-a",
+    "phase-2/lane-a": "lane-phase-2-lane-a",
+    "phase-3/lane-a": "lane-phase-3-lane-a",
+    "phase-1/lane-b": "lane-phase-1-lane-b",
+    "phase-2/lane-b": "lane-phase-2-lane-b",
+    "phase-3/lane-b": "lane-phase-3-lane-b",
+    "phase-1/lane-c": "lane-phase-1-lane-c",
+    "phase-2/lane-c": "lane-phase-2-lane-c",
+    "phase-3/lane-c": "lane-phase-3-lane-c"
+  }
 }
