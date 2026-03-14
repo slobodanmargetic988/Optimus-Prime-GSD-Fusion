@@ -39,5 +39,51 @@
         }
       ]
     }
-  ]
+  ],
+  "earth_sweep_context": {
+    "evidence_refs": [
+      {
+        "peer_project_id": "op-tools-strategy",
+        "source_path": "op-tools/strategy/mission.md",
+        "line_number": 2,
+        "evidence_ref": "earth-sweep/op-tools-strategy/mission#L2"
+      },
+      {
+        "peer_project_id": "op-tools-strategy",
+        "source_path": "op-tools/strategy/mission.md",
+        "line_number": 3,
+        "evidence_ref": "earth-sweep/op-tools-strategy/mission#L3"
+      },
+      {
+        "peer_project_id": "op-tools-strategy",
+        "source_path": "op-tools/strategy/scope.md",
+        "line_number": 1,
+        "evidence_ref": "earth-sweep/op-tools-strategy/scope#L1"
+      },
+      {
+        "peer_project_id": "op-tools-strategy",
+        "source_path": "op-tools/strategy/scope.md",
+        "line_number": 2,
+        "evidence_ref": "earth-sweep/op-tools-strategy/scope#L2"
+      },
+      {
+        "peer_project_id": "op-tools-research",
+        "source_path": "op-tools/research/mission.md",
+        "line_number": 2,
+        "evidence_ref": "earth-sweep/op-tools-research/mission#L2"
+      },
+      {
+        "peer_project_id": "op-tools-research",
+        "source_path": "op-tools/research/scope.md",
+        "line_number": 1,
+        "evidence_ref": "earth-sweep/op-tools-research/scope#L1"
+      },
+      {
+        "peer_project_id": "op-tools-research",
+        "source_path": "op-tools/research/scope.md",
+        "line_number": 2,
+        "evidence_ref": "earth-sweep/op-tools-research/scope#L2"
+      }
+    ]
+  }
 }

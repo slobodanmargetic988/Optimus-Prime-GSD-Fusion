@@ -34,7 +34,17 @@ This contract is intentionally scoped to REQ-004 only.
         }
       ]
     }
-  ]
+  ],
+  "earth_sweep_context": {
+    "evidence_refs": [
+      {
+        "peer_project_id": "string",
+        "source_path": "string",
+        "line_number": 1,
+        "evidence_ref": "string"
+      }
+    ]
+  }
 }
 ```
 
@@ -42,6 +52,8 @@ Notes:
 
 - Only `mission` and `scope` documents are ingested for REQ-004 signal extraction.
 - Non-mission/scope document types are ignored.
+- Cross-project recommendations are emitted only when matching Earth-sweep evidence refs exist.
+- Missing Earth-sweep coverage is represented in `open_risks` instead of silently inventing obligations/reuse actions.
 
 ## Output Contract
 
@@ -102,6 +114,33 @@ Notes:
       "source_project_id": "string",
       "target_project_id": "string",
       "summary": "string",
+      "rationale": "string",
+      "source_provenance": [
+        {
+          "document_type": "mission|scope",
+          "source_path": "string",
+          "source_sha256": "hex",
+          "line_number": 0,
+          "excerpt": "string"
+        }
+      ],
+      "evidence_refs": ["string"],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": ["peer_project_id:source_path:line_number"],
+        "evidence_ref_count": 0
+      }
+    }
+  ],
+  "open_risks": [
+    {
+      "risk_id": "string",
+      "risk_type": "missing_earth_sweep_evidence",
+      "recommendation_type": "interaction_obligation|reuse_opportunity",
+      "source_project_id": "string",
+      "target_project_id": "string",
+      "summary": "string",
+      "required_context_match_keys": ["peer_project_id:source_path:line_number"],
       "source_provenance": [
         {
           "document_type": "mission|scope",
@@ -118,7 +157,10 @@ Notes:
     "peer_projects_with_signals": 0,
     "interaction_obligation_count": 0,
     "reuse_opportunity_count": 0,
-    "recommendation_count": 0
+    "recommendation_count": 0,
+    "open_risk_count": 0,
+    "earth_sweep_context_entry_count": 0,
+    "earth_sweep_evidence_refs_used_count": 0
   }
 }
 ```
@@ -126,6 +168,8 @@ Notes:
 ## Provenance Rule
 
 Every item in `cross_project_recommendations` must include a non-empty `source_provenance` array, preserving the originating peer mission/scope source.
+
+Every emitted recommendation must include non-empty `evidence_refs` tied to Earth-sweep context matching its source provenance.
 
 ## Sample Artifact
 

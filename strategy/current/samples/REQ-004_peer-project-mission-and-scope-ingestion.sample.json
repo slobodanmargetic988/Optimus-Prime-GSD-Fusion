@@ -157,6 +157,7 @@
       "source_project_id": "op-tools-strategy",
       "target_project_id": "optimus-prime-gsd-fusion",
       "summary": "Honor peer interaction obligation: Strategy MUST publish recommendation IDs for planner traceability.",
+      "rationale": "Mission/scope obligation backed by Earth-sweep evidence.",
       "source_provenance": [
         {
           "document_type": "mission",
@@ -165,7 +166,17 @@
           "line_number": 2,
           "excerpt": "Strategy MUST publish recommendation IDs for planner traceability."
         }
-      ]
+      ],
+      "evidence_refs": [
+        "earth-sweep/op-tools-strategy/mission#L2"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "op-tools-strategy:op-tools/strategy/mission.md:2"
+        ],
+        "evidence_ref_count": 1
+      }
     },
     {
       "recommendation_id": "REC-0002",
@@ -173,6 +184,7 @@
       "source_project_id": "op-tools-strategy",
       "target_project_id": "optimus-prime-gsd-fusion",
       "summary": "Honor peer interaction obligation: Planner SHALL ingest strategy outputs as first-class context.",
+      "rationale": "Mission/scope obligation backed by Earth-sweep evidence.",
       "source_provenance": [
         {
           "document_type": "scope",
@@ -181,7 +193,17 @@
           "line_number": 1,
           "excerpt": "Planner SHALL ingest strategy outputs as first-class context."
         }
-      ]
+      ],
+      "evidence_refs": [
+        "earth-sweep/op-tools-strategy/scope#L1"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "op-tools-strategy:op-tools/strategy/scope.md:1"
+        ],
+        "evidence_ref_count": 1
+      }
     },
     {
       "recommendation_id": "REC-0003",
@@ -189,6 +211,7 @@
       "source_project_id": "op-tools-strategy",
       "target_project_id": "optimus-prime-gsd-fusion",
       "summary": "Reuse peer capability or artifact: Strategy should reuse shared packet schema templates across projects.",
+      "rationale": "Mission/scope reuse signal backed by Earth-sweep evidence.",
       "source_provenance": [
         {
           "document_type": "mission",
@@ -197,7 +220,17 @@
           "line_number": 3,
           "excerpt": "Strategy should reuse shared packet schema templates across projects."
         }
-      ]
+      ],
+      "evidence_refs": [
+        "earth-sweep/op-tools-strategy/mission#L3"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "op-tools-strategy:op-tools/strategy/mission.md:3"
+        ],
+        "evidence_ref_count": 1
+      }
     },
     {
       "recommendation_id": "REC-0004",
@@ -205,6 +238,7 @@
       "source_project_id": "op-tools-strategy",
       "target_project_id": "optimus-prime-gsd-fusion",
       "summary": "Reuse peer capability or artifact: Teams can leverage common strategy packet validators to reduce drift.",
+      "rationale": "Mission/scope reuse signal backed by Earth-sweep evidence.",
       "source_provenance": [
         {
           "document_type": "scope",
@@ -213,7 +247,17 @@
           "line_number": 2,
           "excerpt": "Teams can leverage common strategy packet validators to reduce drift."
         }
-      ]
+      ],
+      "evidence_refs": [
+        "earth-sweep/op-tools-strategy/scope#L2"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "op-tools-strategy:op-tools/strategy/scope.md:2"
+        ],
+        "evidence_ref_count": 1
+      }
     },
     {
       "recommendation_id": "REC-0005",
@@ -221,6 +265,7 @@
       "source_project_id": "op-tools-research",
       "target_project_id": "optimus-prime-gsd-fusion",
       "summary": "Honor peer interaction obligation: Research MUST capture provenance for each external reference.",
+      "rationale": "Mission/scope obligation backed by Earth-sweep evidence.",
       "source_provenance": [
         {
           "document_type": "mission",
@@ -229,7 +274,17 @@
           "line_number": 2,
           "excerpt": "Research MUST capture provenance for each external reference."
         }
-      ]
+      ],
+      "evidence_refs": [
+        "earth-sweep/op-tools-research/mission#L2"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "op-tools-research:op-tools/research/mission.md:2"
+        ],
+        "evidence_ref_count": 1
+      }
     },
     {
       "recommendation_id": "REC-0006",
@@ -237,6 +292,7 @@
       "source_project_id": "op-tools-research",
       "target_project_id": "optimus-prime-gsd-fusion",
       "summary": "Honor peer interaction obligation: Research outputs need to integrate with planner context ingestion.",
+      "rationale": "Mission/scope obligation backed by Earth-sweep evidence.",
       "source_provenance": [
         {
           "document_type": "scope",
@@ -245,7 +301,17 @@
           "line_number": 2,
           "excerpt": "Research outputs need to integrate with planner context ingestion."
         }
-      ]
+      ],
+      "evidence_refs": [
+        "earth-sweep/op-tools-research/scope#L2"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "op-tools-research:op-tools/research/scope.md:2"
+        ],
+        "evidence_ref_count": 1
+      }
     },
     {
       "recommendation_id": "REC-0007",
@@ -253,6 +319,7 @@
       "source_project_id": "op-tools-research",
       "target_project_id": "optimus-prime-gsd-fusion",
       "summary": "Reuse peer capability or artifact: Planner should reuse shared research topic templates.",
+      "rationale": "Mission/scope reuse signal backed by Earth-sweep evidence.",
       "source_provenance": [
         {
           "document_type": "scope",
@@ -261,7 +328,17 @@
           "line_number": 1,
           "excerpt": "Planner should reuse shared research topic templates."
         }
-      ]
+      ],
+      "evidence_refs": [
+        "earth-sweep/op-tools-research/scope#L1"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "op-tools-research:op-tools/research/scope.md:1"
+        ],
+        "evidence_ref_count": 1
+      }
     },
     {
       "recommendation_id": "REC-0008",
@@ -269,6 +346,7 @@
       "source_project_id": "op-tools-research",
       "target_project_id": "optimus-prime-gsd-fusion",
       "summary": "Reuse peer capability or artifact: Research outputs need to integrate with planner context ingestion.",
+      "rationale": "Mission/scope reuse signal backed by Earth-sweep evidence.",
       "source_provenance": [
         {
           "document_type": "scope",
@@ -277,14 +355,28 @@
           "line_number": 2,
           "excerpt": "Research outputs need to integrate with planner context ingestion."
         }
-      ]
+      ],
+      "evidence_refs": [
+        "earth-sweep/op-tools-research/scope#L2"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "op-tools-research:op-tools/research/scope.md:2"
+        ],
+        "evidence_ref_count": 1
+      }
     }
   ],
+  "open_risks": [],
   "summary": {
     "peer_projects_evaluated": 2,
     "peer_projects_with_signals": 2,
     "interaction_obligation_count": 4,
     "reuse_opportunity_count": 4,
-    "recommendation_count": 8
+    "recommendation_count": 8,
+    "open_risk_count": 0,
+    "earth_sweep_context_entry_count": 7,
+    "earth_sweep_evidence_refs_used_count": 7
   }
 }

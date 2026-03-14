@@ -50,6 +50,95 @@ def _require_list(value: Any, *, field_name: str) -> list[Any]:
     return value
 
 
+def _require_positive_int(value: Any, *, field_name: str) -> int:
+    if not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer.")
+    return value
+
+
+def _provenance_match_key(*, peer_project_id: str, source_path: str, line_number: int) -> tuple[str, str, int]:
+    return peer_project_id, source_path, line_number
+
+
+def _provenance_match_key_string(*, peer_project_id: str, source_path: str, line_number: int) -> str:
+    return f"{peer_project_id}:{source_path}:{line_number}"
+
+
+def _index_earth_sweep_evidence_refs(payload_obj: dict[str, Any]) -> tuple[dict[tuple[str, str, int], list[str]], int]:
+    raw_context = payload_obj.get("earth_sweep_context")
+    if raw_context is None:
+        return {}, 0
+
+    context_obj = _require_mapping(raw_context, field_name="earth_sweep_context")
+    raw_evidence_refs = _require_list(context_obj.get("evidence_refs"), field_name="earth_sweep_context.evidence_refs")
+    evidence_index: dict[tuple[str, str, int], set[str]] = {}
+
+    for idx, raw_item in enumerate(raw_evidence_refs):
+        item = _require_mapping(raw_item, field_name=f"earth_sweep_context.evidence_refs[{idx}]")
+        peer_project_id = _require_non_empty_string(
+            item.get("peer_project_id"),
+            field_name=f"earth_sweep_context.evidence_refs[{idx}].peer_project_id",
+        )
+        source_path = _require_non_empty_string(
+            item.get("source_path"),
+            field_name=f"earth_sweep_context.evidence_refs[{idx}].source_path",
+        )
+        line_number = _require_positive_int(
+            item.get("line_number"),
+            field_name=f"earth_sweep_context.evidence_refs[{idx}].line_number",
+        )
+        evidence_ref = _require_non_empty_string(
+            item.get("evidence_ref"),
+            field_name=f"earth_sweep_context.evidence_refs[{idx}].evidence_ref",
+        )
+        key = _provenance_match_key(
+            peer_project_id=peer_project_id,
+            source_path=source_path,
+            line_number=line_number,
+        )
+        evidence_index.setdefault(key, set()).add(evidence_ref)
+
+    normalized_index = {
+        key: sorted(refs)
+        for key, refs in sorted(
+            evidence_index.items(),
+            key=lambda item: (item[0][0], item[0][1], item[0][2]),
+        )
+    }
+    return normalized_index, len(raw_evidence_refs)
+
+
+def _collect_evidence_refs_for_provenance(
+    *,
+    peer_project_id: str,
+    source_provenance: list[dict[str, Any]],
+    earth_sweep_evidence_index: dict[tuple[str, str, int], list[str]],
+) -> tuple[list[str], list[str]]:
+    recommendation_refs: set[str] = set()
+    match_keys: list[str] = []
+    for provenance in source_provenance:
+        source_path = provenance.get("source_path")
+        line_number = provenance.get("line_number")
+        if not isinstance(source_path, str) or not source_path:
+            continue
+        if not isinstance(line_number, int) or line_number <= 0:
+            continue
+        key = _provenance_match_key(
+            peer_project_id=peer_project_id,
+            source_path=source_path,
+            line_number=line_number,
+        )
+        key_string = _provenance_match_key_string(
+            peer_project_id=peer_project_id,
+            source_path=source_path,
+            line_number=line_number,
+        )
+        match_keys.append(key_string)
+        for evidence_ref in earth_sweep_evidence_index.get(key, []):
+            recommendation_refs.add(evidence_ref)
+    return sorted(recommendation_refs), sorted(set(match_keys))
+
+
 def _extract_signals_from_document(
     *,
     peer_project_id: str,
@@ -105,10 +194,14 @@ def ingest_peer_project_mission_and_scope(
         current_project.get("project_id"), field_name="current_project.project_id"
     )
     peer_projects = _require_list(payload_obj.get("peer_projects"), field_name="peer_projects")
+    earth_sweep_evidence_index, earth_sweep_evidence_entry_count = _index_earth_sweep_evidence_refs(payload_obj)
 
     peer_models: list[dict[str, Any]] = []
     cross_project_recommendations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    used_earth_sweep_refs: set[str] = set()
     recommendation_index = 0
+    risk_index = 0
     peer_projects_with_signals = 0
 
     for peer in peer_projects:
@@ -174,29 +267,91 @@ def ingest_peer_project_mission_and_scope(
         peer_models.append(peer_model)
 
         for obligation in interaction_obligations:
-            recommendation_index += 1
-            cross_project_recommendations.append(
-                {
-                    "recommendation_id": f"REC-{recommendation_index:04d}",
-                    "recommendation_type": "interaction_obligation",
-                    "source_project_id": peer_project_id,
-                    "target_project_id": current_project_id,
-                    "summary": f"Honor peer interaction obligation: {obligation['statement']}",
-                    "source_provenance": obligation["source_provenance"],
-                }
+            recommendation_refs, context_keys = _collect_evidence_refs_for_provenance(
+                peer_project_id=peer_project_id,
+                source_provenance=obligation["source_provenance"],
+                earth_sweep_evidence_index=earth_sweep_evidence_index,
             )
+            if recommendation_refs:
+                recommendation_index += 1
+                used_earth_sweep_refs.update(recommendation_refs)
+                cross_project_recommendations.append(
+                    {
+                        "recommendation_id": f"REC-{recommendation_index:04d}",
+                        "recommendation_type": "interaction_obligation",
+                        "source_project_id": peer_project_id,
+                        "target_project_id": current_project_id,
+                        "summary": f"Honor peer interaction obligation: {obligation['statement']}",
+                        "rationale": "Mission/scope obligation backed by Earth-sweep evidence.",
+                        "source_provenance": obligation["source_provenance"],
+                        "evidence_refs": recommendation_refs,
+                        "cross_project_context": {
+                            "context_type": "earth_sweep",
+                            "match_keys": context_keys,
+                            "evidence_ref_count": len(recommendation_refs),
+                        },
+                    }
+                )
+            else:
+                risk_index += 1
+                open_risks.append(
+                    {
+                        "risk_id": f"RISK-{risk_index:04d}",
+                        "risk_type": "missing_earth_sweep_evidence",
+                        "recommendation_type": "interaction_obligation",
+                        "source_project_id": peer_project_id,
+                        "target_project_id": current_project_id,
+                        "summary": (
+                            "Inferred interaction obligation lacks Earth-sweep evidence refs; "
+                            f"kept as open risk: {obligation['statement']}"
+                        ),
+                        "required_context_match_keys": context_keys,
+                        "source_provenance": obligation["source_provenance"],
+                    }
+                )
         for opportunity in reuse_opportunities:
-            recommendation_index += 1
-            cross_project_recommendations.append(
-                {
-                    "recommendation_id": f"REC-{recommendation_index:04d}",
-                    "recommendation_type": "reuse_opportunity",
-                    "source_project_id": peer_project_id,
-                    "target_project_id": current_project_id,
-                    "summary": f"Reuse peer capability or artifact: {opportunity['statement']}",
-                    "source_provenance": opportunity["source_provenance"],
-                }
+            recommendation_refs, context_keys = _collect_evidence_refs_for_provenance(
+                peer_project_id=peer_project_id,
+                source_provenance=opportunity["source_provenance"],
+                earth_sweep_evidence_index=earth_sweep_evidence_index,
             )
+            if recommendation_refs:
+                recommendation_index += 1
+                used_earth_sweep_refs.update(recommendation_refs)
+                cross_project_recommendations.append(
+                    {
+                        "recommendation_id": f"REC-{recommendation_index:04d}",
+                        "recommendation_type": "reuse_opportunity",
+                        "source_project_id": peer_project_id,
+                        "target_project_id": current_project_id,
+                        "summary": f"Reuse peer capability or artifact: {opportunity['statement']}",
+                        "rationale": "Mission/scope reuse signal backed by Earth-sweep evidence.",
+                        "source_provenance": opportunity["source_provenance"],
+                        "evidence_refs": recommendation_refs,
+                        "cross_project_context": {
+                            "context_type": "earth_sweep",
+                            "match_keys": context_keys,
+                            "evidence_ref_count": len(recommendation_refs),
+                        },
+                    }
+                )
+            else:
+                risk_index += 1
+                open_risks.append(
+                    {
+                        "risk_id": f"RISK-{risk_index:04d}",
+                        "risk_type": "missing_earth_sweep_evidence",
+                        "recommendation_type": "reuse_opportunity",
+                        "source_project_id": peer_project_id,
+                        "target_project_id": current_project_id,
+                        "summary": (
+                            "Inferred reuse opportunity lacks Earth-sweep evidence refs; "
+                            f"kept as open risk: {opportunity['statement']}"
+                        ),
+                        "required_context_match_keys": context_keys,
+                        "source_provenance": opportunity["source_provenance"],
+                    }
+                )
 
     return {
         "schema_version": REQ004_SCHEMA_VERSION,
@@ -204,12 +359,16 @@ def ingest_peer_project_mission_and_scope(
         "current_project_id": current_project_id,
         "peer_project_models": peer_models,
         "cross_project_recommendations": cross_project_recommendations,
+        "open_risks": open_risks,
         "summary": {
             "peer_projects_evaluated": len(peer_projects),
             "peer_projects_with_signals": peer_projects_with_signals,
             "interaction_obligation_count": sum(len(peer["interaction_obligations"]) for peer in peer_models),
             "reuse_opportunity_count": sum(len(peer["reuse_opportunities"]) for peer in peer_models),
             "recommendation_count": len(cross_project_recommendations),
+            "open_risk_count": len(open_risks),
+            "earth_sweep_context_entry_count": earth_sweep_evidence_entry_count,
+            "earth_sweep_evidence_refs_used_count": len(used_earth_sweep_refs),
         },
     }
 
