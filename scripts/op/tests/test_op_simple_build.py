@@ -177,7 +177,7 @@ def test_build_config_defaults_selected_aliases_to_discovered_profiles(tmp_path:
 
     cfg = MODULE._build_config(make_req(tmp_path))
 
-    assert cfg.selected_aliases == ["codex", "codex-second"]
+    assert cfg.selected_aliases == ["codex-second"]
 
 
 def write_boss_artifacts(root: Path, cycle_number: int, *, overrides: dict[str, dict[str, object]] | None = None) -> None:
@@ -4142,7 +4142,7 @@ def test_max_build_cycles_applies_to_current_run_not_global_counter(tmp_path: Pa
     assert out["data"]["cycle_number"] == 11
 
 
-def test_profile_rows_from_disk_keeps_default_when_multiple_profiles(tmp_path: Path, monkeypatch) -> None:
+def test_profile_rows_from_disk_excludes_default_when_multiple_profiles(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     default_profile = tmp_path / ".codex"
     secondary_profile = tmp_path / ".codex-second"
@@ -4154,7 +4154,7 @@ def test_profile_rows_from_disk_keeps_default_when_multiple_profiles(tmp_path: P
     rows = MODULE._profile_rows_from_disk()
     aliases = {str(row.get("alias")) for row in rows if isinstance(row, dict)}
 
-    assert "codex" in aliases
+    assert "codex" not in aliases
     assert "codex-second" in aliases
 
 
@@ -4240,10 +4240,7 @@ def test_rate_snapshot_profile_args_autodiscovers_when_selected_aliases_not_set(
 
     args, missing = MODULE._rate_snapshot_profile_args(cfg)
 
-    assert args == [
-        "codex=default",
-        f"codex-second={(tmp_path / '.codex-second').resolve()}",
-    ]
+    assert args == [f"codex-second={(tmp_path / '.codex-second').resolve()}"]
     assert missing == []
 
 
@@ -4287,7 +4284,7 @@ def test_bootstrap_profile_snapshot_before_first_boss_seeds_from_discovery(tmp_p
     assert "filesystem discovery" in message
     payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"]).read_text(encoding="utf-8"))
     aliases = [str(row.get("alias")) for row in payload.get("profiles", []) if isinstance(row, dict)]
-    assert aliases == ["codex", "codex-second"]
+    assert aliases == ["codex-second"]
 
 
 def test_run_bootstraps_profile_snapshot_before_first_boss(tmp_path: Path, monkeypatch) -> None:

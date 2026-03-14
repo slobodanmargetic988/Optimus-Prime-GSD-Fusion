@@ -3052,6 +3052,10 @@ def _profile_rows_from_disk(*, selected_aliases: list[str] | None = None) -> lis
                 break
         return filtered
 
+    # Default autodiscovery excludes the fallback ".codex" alias when multiple
+    # profile homes exist. Keep it only when it is the sole discovered profile.
+    if len(rows) > 1:
+        rows = [row for row in rows if str(row.get("alias") or "").strip() != "codex"]
     return rows
 
 
