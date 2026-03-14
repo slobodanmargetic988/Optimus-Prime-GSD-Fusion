@@ -1,0 +1,43 @@
+{
+  "schema_version": "ground-graph-snapshot.v1",
+  "captured_at": "2026-03-14T21:30:00Z",
+  "graph_id": "ground-graph-2026-03-14T213000Z",
+  "lineage_links": [
+    {
+      "project_id": "optimus-prime-gsd-fusion",
+      "era_id": "era-2026-q1",
+      "plan_id": "plan-canary-001",
+      "phase_id": "phase-implementation",
+      "run_id": "run-042",
+      "linked_project_id": "earth-core-runtime",
+      "relationship": "depends_on"
+    },
+    {
+      "project_id": "earth-core-runtime",
+      "era_id": "era-2026-q1",
+      "plan_id": "plan-runtime-014",
+      "phase_id": "phase-stabilization",
+      "run_id": "run-131",
+      "linked_project_id": "shared-observability",
+      "relationship": "shares_signals_with"
+    },
+    {
+      "project_id": "optimus-prime-gsd-fusion",
+      "era_id": "era-2026-q1",
+      "plan_id": "plan-canary-001",
+      "phase_id": "phase-verification",
+      "run_id": "run-043",
+      "linked_project_id": "shared-observability",
+      "relationship": "publishes_to"
+    },
+    {
+      "project_id": "optimus-prime-gsd-fusion",
+      "era_id": "era-2026-q1",
+      "plan_id": "plan-canary-001",
+      "phase_id": "phase-implementation",
+      "run_id": "run-042",
+      "linked_project_id": "earth-core-runtime",
+      "relationship": "depends_on"
+    }
+  ]
+}
