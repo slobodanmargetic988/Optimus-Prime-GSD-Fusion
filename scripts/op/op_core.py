@@ -241,6 +241,7 @@ OPTIMUS_GITIGNORE_BEGIN = "# BEGIN OPTIMUS-PRIME MANAGED REPORT IGNORES"
 OPTIMUS_GITIGNORE_END = "# END OPTIMUS-PRIME MANAGED REPORT IGNORES"
 OPTIMUS_GITIGNORE_LINES = [
     OPTIMUS_GITIGNORE_BEGIN,
+    "/.op-simple/",
     "/reports/optimus-prime/**",
     "/reports/optimus-prime/runtime/**",
     "/reports/optimus-prime/controller/**",
@@ -13234,6 +13235,8 @@ def _preflight_build(
 
 def command_build(req: OpRequest) -> dict[str, Any]:
     from op_simple_build import run_op_simple_build
+
+    _ensure_managed_gitignore_block(req.repo_root)
 
     # /op-build is the one-command entrypoint: optional initialize refresh + OP Simple runtime.
     mission_scope_supplied = bool(req.mission or req.mission_file or req.scope or req.scope_file)

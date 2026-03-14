@@ -76,7 +76,7 @@ Planning requirements:
 6. Per phase, use at most 3 distinct lanes.
 7. TDD-first: each requirement and task must include verification intent.
    - phase-1 seed TDD tasks MUST use verification_contract.mode=tdd_red and expect_fail for dev/test/review.
-8. For each functionality tree with more than 2 tasks, include at least 2 terminal hardening/review tasks.
+8. For each functionality tree with more than 3 tasks, include at least 2 terminal hardening/review tasks and 1 task to merge the entire functionality intu current run base as the final task. Merge tasks should only be verified with the existance of a commit.
 9. PLAN_CHECK.passed must be true.
 10. Keep plan quality high enough for autonomous op-build execution.
 11. Plan quality bar (hard, internal self-check before finalizing):

@@ -1217,6 +1217,51 @@ def test_command_build_passes_selected_aliases_to_op_simple_build(monkeypatch: p
         assert captured["selected_aliases"] == ["six", "seven", "eight"]
 
 
+def test_command_build_enforces_managed_gitignore_before_runtime(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+            }
+        )
+        calls: list[Path] = []
+        captured: dict[str, object] = {}
+
+        fake_module = types.ModuleType("op_simple_build")
+
+        def fake_run_op_simple_build(simple_req):
+            captured["command"] = simple_req.command
+            return {
+                "ok": True,
+                "status": "completed",
+                "summary": "ok",
+                "warnings": [],
+                "errors": [],
+                "artifacts": [],
+                "next_action": None,
+                "state_ref": None,
+                "data": {},
+            }
+
+        def record_gitignore(repo_root: Path) -> None:
+            calls.append(repo_root)
+
+        fake_module.run_op_simple_build = fake_run_op_simple_build
+        monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+        monkeypatch.setattr(MODULE, "_ensure_managed_gitignore_block", record_gitignore)
+        monkeypatch.setattr(MODULE, "MANDATORY_BUILD_BASELINE", [])
+
+        out = MODULE.command_build(req)
+
+        assert out["ok"] is True
+        assert captured["command"] == "op-simple-build"
+        assert len(calls) == 1
+        assert calls[0].resolve() == root.resolve()
+
+
 def test_parse_request_rejects_invalid_executor_provider():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
