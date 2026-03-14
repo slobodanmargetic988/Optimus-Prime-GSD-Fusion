@@ -209,7 +209,7 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
     _strict_keys(
         payload,
         label="PLAN_PACKETS.json",
-        required={"schema_version", "generated_at", "plan_id", "phases", "requirements", "tasks"},
+        required={"schema_version", "generated_at", "plan_id", "phases", "requirements", "tasks", "lane_base_branches"},
         optional={"phase", "depends_on", "must_haves", "verify_commands"},
         errors=errors,
     )
@@ -223,6 +223,30 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
     phases_raw = payload.get("phases")
     tasks_raw = payload.get("tasks")
     reqs_raw = payload.get("requirements")
+    lane_base_raw = payload.get("lane_base_branches")
+    lane_base_branches: dict[str, str] = {}
+    if not isinstance(lane_base_raw, dict):
+        _err(errors, "planner_bundle_schema_error", "PLAN_PACKETS.lane_base_branches must be object map")
+    else:
+        for raw_lane_id, raw_branch_name in lane_base_raw.items():
+            lane_id = str(raw_lane_id or "").strip()
+            branch_name = str(raw_branch_name or "").strip()
+            if not lane_id:
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    "PLAN_PACKETS.lane_base_branches contains empty lane_id key",
+                )
+                continue
+            if not branch_name:
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    "PLAN_PACKETS.lane_base_branches contains empty branch name",
+                    lane_id=lane_id,
+                )
+                continue
+            lane_base_branches[lane_id] = branch_name
 
     phase_ids: list[str] = []
     phase_deps: dict[str, list[str]] = {}
@@ -280,6 +304,7 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
     covered: set[str] = set()
     task_dep_map: dict[str, list[str]] = {}
     lane_members: dict[str, set[str]] = {}
+    task_lane_ids: set[str] = set()
     if isinstance(tasks_raw, list) and tasks_raw:
         for idx, row in enumerate(tasks_raw):
             if not isinstance(row, dict):
@@ -312,6 +337,8 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
             if phase_id and phase_ids and phase_id not in phase_ids:
                 _err(errors, "planner_bundle_schema_error", f"task {task_id or idx} references unknown phase_id", phase_id=phase_id)
             lane_id = _require_nonempty_str(row.get("lane_id"), label=f"PLAN_PACKETS.tasks[{idx}].lane_id", errors=errors)
+            if lane_id:
+                task_lane_ids.add(lane_id)
             if lane_id and phase_id:
                 expected_prefix = f"{phase_id}/lane-"
                 if not lane_id.startswith(expected_prefix):
@@ -401,6 +428,15 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
                     )
     else:
         _err(errors, "planner_bundle_schema_error", "PLAN_PACKETS.tasks must be non-empty list")
+
+    missing_lane_base_entries = sorted(task_lane_ids - set(lane_base_branches.keys()))
+    if missing_lane_base_entries:
+        _err(
+            errors,
+            "planner_bundle_schema_error",
+            "PLAN_PACKETS.lane_base_branches must include every tasks[].lane_id",
+            missing_lane_ids=missing_lane_base_entries,
+        )
 
     seen_tasks = set()
     for tid in task_ids:

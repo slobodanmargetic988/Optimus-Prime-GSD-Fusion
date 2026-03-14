@@ -136,6 +136,7 @@ def build_repo(root: Path) -> None:
                 "    'phase': 'multi-phase',",
                 "    'phases': [{'phase_id': 'phase-1', 'task_ids': ['TASK-001', 'TASK-002', 'TASK-003'], 'depends_on_phase_ids': [], 'entry_criteria': ['phase_dependencies_done'], 'exit_criteria': ['all_tasks_review_done', 'verify_commands_passed', 'uat_matrix_passed', 'zero_open_gaps']}],",
                 "    'requirements': requirements,",
+                "    'lane_base_branches': {'phase-1/lane-a': 'lane-phase-1-a', 'phase-1/lane-b': 'lane-phase-1-b', 'phase-1/lane-c': 'lane-phase-1-c'},",
                 "    'tasks': tasks,",
                 "    'depends_on': [],",
                 "    'must_haves': ['core path', 'quality path', 'ops path'],",
@@ -3807,13 +3808,18 @@ def test_planner_bundled_example_contract_is_schema_current():
         assert isinstance(bundle, dict)
         plan_packets = bundle["PLAN_PACKETS.json"].content
         assert isinstance(plan_packets, dict)
+        lane_base_branches = plan_packets.get("lane_base_branches")
+        assert isinstance(lane_base_branches, dict)
         tasks = plan_packets.get("tasks")
         assert isinstance(tasks, list) and tasks
+        task_lane_ids: set[str] = set()
         for task in tasks:
             assert isinstance(task, dict)
             assert isinstance(task.get("lane_id"), str) and task.get("lane_id")
+            task_lane_ids.add(str(task.get("lane_id")))
             assert task.get("status") == "pending"
             assert isinstance(task.get("gaps_that_need_patching"), list)
+        assert task_lane_ids.issubset(set(str(item) for item in lane_base_branches.keys()))
 
 
 def test_git_bootstrap_prompt_references_shared_validator_script():
@@ -3978,6 +3984,78 @@ def test_planner_validator_rejects_non_string_task_fields():
         assert payload is None
     assert any(item.get("code") == "planner_bundle_schema_error" for item in errors)
     assert any("task_id must be string" in str(item.get("message")) for item in errors)
+
+
+def test_planner_validator_rejects_missing_lane_base_branches():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        rows = [json.loads(line) for line in bundle_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        for row in rows:
+            if row.get("artifact_path") == "PLAN_PACKETS.json":
+                row["content"].pop("lane_base_branches", None)
+                row["checksum_sha256"] = planner_checksum("json", row["content"])
+                break
+
+        write_planner_bundle(bundle_path, rows)
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any("lane_base_branches" in str(item.get("message")) for item in errors)
+
+
+def test_planner_validator_rejects_incomplete_lane_base_branches():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        rows = [json.loads(line) for line in bundle_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+        for row in rows:
+            if row.get("artifact_path") == "PLAN_PACKETS.json":
+                row["content"]["lane_base_branches"] = {}
+                row["checksum_sha256"] = planner_checksum("json", row["content"])
+                break
+
+        write_planner_bundle(bundle_path, rows)
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any("must include every tasks[].lane_id" in str(item.get("message")) for item in errors)
 
 
 def test_planner_validator_rejects_missing_task_verification_contract():
@@ -5750,5 +5828,3 @@ def test_dispatch_resume_startup_failure_sets_exec_only_slot_policy(monkeypatch:
         assert "dispatch_resume_temporarily_disabled_slot" in warning_codes
         assert build_state.get("slot_resume_policy", {}).get("dev-1") == "exec_only"
         assert build_state.get("resume_fail_counts_by_slot", {}).get("dev-1") == 1
-
-

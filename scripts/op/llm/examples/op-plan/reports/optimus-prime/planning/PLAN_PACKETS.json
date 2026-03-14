@@ -92,6 +92,11 @@
       ]
     }
   ],
+  "lane_base_branches": {
+    "phase-1/lane-a": "lane-phase-1-a",
+    "phase-2/lane-a": "lane-phase-2-a",
+    "phase-3/lane-a": "lane-phase-3-a"
+  },
   "tasks": [
     {
       "task_id": "TASK-001",
