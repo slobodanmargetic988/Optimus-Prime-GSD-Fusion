@@ -189,6 +189,10 @@ def auth_json_candidates(codex_home: Path) -> list[Path]:
     return [codex_home / "auth.json", codex_home / "config" / "auth.json"]
 
 
+def has_profile_auth_json(codex_home: Path) -> bool:
+    return (codex_home / "auth.json").is_file()
+
+
 def read_access_token(codex_home: Path) -> tuple[str | None, Path | None]:
     for candidate in auth_json_candidates(codex_home):
         if not candidate.is_file():
@@ -398,6 +402,9 @@ def main() -> int:
     snapshots: list[dict[str, Any]] = []
     for alias, codex_home in mapped_profiles:
         logger.log(f"[{alias}] Processing profile at '{codex_home}'.")
+        if not has_profile_auth_json(codex_home):
+            logger.log(f"[{alias}] Skipping profile because '/auth.json' is missing.")
+            continue
         access_token, auth_path = read_access_token(codex_home)
         if not access_token:
             logger.log(f"[{alias}] Missing readable access token in auth.json; marking as hard-gated.")

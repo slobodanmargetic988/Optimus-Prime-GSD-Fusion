@@ -44,6 +44,14 @@ class MinimalRateSnapshotTests(unittest.TestCase):
 
             self.assertEqual(aliases, ["codex"])
 
+    def test_has_profile_auth_json(self):
+        with TemporaryDirectory() as tmp:
+            codex_home = Path(tmp) / ".codex-first"
+            codex_home.mkdir()
+            self.assertFalse(MODULE.has_profile_auth_json(codex_home))
+            (codex_home / "auth.json").write_text("{}", encoding="utf-8")
+            self.assertTrue(MODULE.has_profile_auth_json(codex_home))
+
     def test_classify_gate_rules(self):
         self.assertFalse(MODULE.classify_gate(59.9, 79.9))
         self.assertEqual(MODULE.classify_gate(60.0, 20.0), "soft-gated")

@@ -14,6 +14,7 @@ Use this skill to quickly inspect all local Codex profiles and produce a compact
 The bundled script:
 - discovers profile folders (`.codex` and `.codex-*`) from the local machine
 - excludes default `.codex` when multiple profiles exist
+- skips any profile that does not contain a root `auth.json` file
 - reads `auth.json` (or `config/auth.json`) to get access tokens
 - calls `https://chatgpt.com/backend-api/wham/usage` with Python HTTP requests for each discovered profile
 - retries failed usage calls up to 2 additional times (3 total attempts)
