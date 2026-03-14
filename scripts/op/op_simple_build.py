@@ -82,6 +82,23 @@ LLM_PROFILE_PER_MINUTE_LIMIT = 20
 LLM_PROFILE_PER_DAY_LIMIT = 1000
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "codex-rate-snapshot" / "scripts" / "read_codex_rate_snapshots.py"
 RECOVERY_INSTRUCTIONS_FILE = Path("recovery_instructions.md")
+WATCHDOG_RECOVERY_NUDGE_BODY_TEMPLATE_FILE = SCRIPT_DIR / "templates" / "watchdog_recovery_nudge_body.md"
+WATCHDOG_RECOVERY_NUDGE_BODY_FALLBACK = """This nudge is broad by design. Run a full diagnostics sweep before deciding to skip repeatedly.
+
+## Broad diagnostics checklist (not limited to one failure mode)
+1. Inspect repeated cycle-gate skip reasons in `.op-simple/current/cycle_manager_decision.json` and recent `.op-simple/history/cycle-*/cycle_manager_decision.json`.
+2. Reconcile all in-progress workers with `pid=null` by scanning canonical and non-obvious evidence locations.
+3. Ingest reviewer outcomes from:
+   - `<worker_worktree>/reports/handoffs/<task_identifier>.handoff.json`
+   - `<worker_worktree>/.codex-dispatch/dispatch-*.log`
+4. Normalize decision aliases during ingestion when needed (`reviewer_decision` -> `decision`) and update canonical artifacts.
+5. Verify `task_execution_state.json`, `worker_registry.json`, and `production_line_register.json` are aligned after reconciliation.
+6. Validate worker packet/worktree integrity (`worker_packets.json` entries map to valid worker rows and existing worktrees).
+7. Validate profile gating posture (`profile_snapshot.json`) so dispatch is not starved by hard/soft gate mistakes.
+8. Check for dispatch launch failures/timeouts in `.op-simple/current/dispatch_launch_log.jsonl`.
+9. If evidence is still missing, create explicit remediation tasks instead of repeating passive skips.
+
+After applying this nudge, rename this file to `recovery_instructions_CONSUMED.md`."""
 NON_TERMINAL_STOP_REASONS = {
     "skip_cycle",
     "active_workers_in_progress_no_safe_new_dispatch",
@@ -4660,6 +4677,22 @@ def _await_cycle_release_signal(
         }
 
 
+def _load_watchdog_recovery_nudge_body() -> str:
+    try:
+        body = WATCHDOG_RECOVERY_NUDGE_BODY_TEMPLATE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        body = ""
+    if body:
+        return body
+    print(
+        "[op-simple-build] "
+        f"[{utc_now_iso()}] "
+        "watchdog recovery nudge template missing or empty; using embedded fallback body",
+        flush=True,
+    )
+    return WATCHDOG_RECOVERY_NUDGE_BODY_FALLBACK
+
+
 def _write_watchdog_recovery_nudge(
     cfg: RunConfig,
     *,
@@ -4677,7 +4710,7 @@ def _write_watchdog_recovery_nudge(
 
     generated_at = utc_now_iso()
     age_minutes = round(float(watchdog_age_minutes), 3)
-    body = f"""# Recovery Nudge: Broad Runtime Sweep
+    body_header = f"""# Recovery Nudge: Broad Runtime Sweep
 
 Generated at: {generated_at}
 Cycle: {cycle_number}
@@ -4686,25 +4719,9 @@ Branch: {monitored_branch}
 Commit ref: {commit_ref}
 Last observed commit sha: {last_commit_sha}
 Last observed commit timestamp: {last_commit_at_utc}
-Watchdog stop threshold: {stale_after_minutes} minutes
-
-This nudge is broad by design. Run a full diagnostics sweep before deciding to skip repeatedly.
-
-## Broad diagnostics checklist (not limited to one failure mode)
-1. Inspect repeated cycle-gate skip reasons in `.op-simple/current/cycle_manager_decision.json` and recent `.op-simple/history/cycle-*/cycle_manager_decision.json`.
-2. Reconcile all in-progress workers with `pid=null` by scanning canonical and non-obvious evidence locations.
-3. Ingest reviewer outcomes from:
-   - `<worker_worktree>/reports/handoffs/<task_identifier>.handoff.json`
-   - `<worker_worktree>/.codex-dispatch/dispatch-*.log`
-4. Normalize decision aliases during ingestion when needed (`reviewer_decision` -> `decision`) and update canonical artifacts.
-5. Verify `task_execution_state.json`, `worker_registry.json`, and `production_line_register.json` are aligned after reconciliation.
-6. Validate worker packet/worktree integrity (`worker_packets.json` entries map to valid worker rows and existing worktrees).
-7. Validate profile gating posture (`profile_snapshot.json`) so dispatch is not starved by hard/soft gate mistakes.
-8. Check for dispatch launch failures/timeouts in `.op-simple/current/dispatch_launch_log.jsonl`.
-9. If evidence is still missing, create explicit remediation tasks instead of repeating passive skips.
-
-After applying this nudge, rename this file to `recovery_instructions_CONSUMED.md`.
-"""
+Watchdog stop threshold: {stale_after_minutes} minutes"""
+    narrative = _load_watchdog_recovery_nudge_body()
+    body = f"{body_header}\n\n{narrative}\n"
 
     try:
         nudge_path.write_text(body, encoding="utf-8")

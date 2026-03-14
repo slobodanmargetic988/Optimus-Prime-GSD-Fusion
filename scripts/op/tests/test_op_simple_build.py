@@ -1989,6 +1989,75 @@ def test_watchdog_emits_exit_signal_after_idle_threshold(tmp_path: Path, monkeyp
     assert not nudge_path.exists()
 
 
+def test_write_watchdog_recovery_nudge_appends_loaded_narrative(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    template_path = tmp_path / "watchdog_nudge_body_template.md"
+    template_text = (
+        "This is a custom narrative body.\n\n"
+        "## Custom checklist\n"
+        "1. Confirm profile posture.\n"
+    )
+    template_path.write_text(template_text, encoding="utf-8")
+    monkeypatch.setattr(MODULE, "WATCHDOG_RECOVERY_NUDGE_BODY_TEMPLATE_FILE", template_path)
+
+    MODULE._write_watchdog_recovery_nudge(
+        cfg,
+        cycle_number=17,
+        monitored_branch="op-simple-canary-test",
+        commit_ref="op-simple-canary-test",
+        last_commit_sha="abc123",
+        last_commit_at_utc="2026-03-14T00:00:00Z",
+        watchdog_age_minutes=31.23456,
+        stale_after_minutes=150,
+    )
+
+    nudge_text = (tmp_path / MODULE.RECOVERY_INSTRUCTIONS_FILE).read_text(encoding="utf-8")
+    assert "Cycle: 17" in nudge_text
+    assert "Reason: Watchdog observed no repository movement for 31.235 minutes." in nudge_text
+    assert "Watchdog stop threshold: 150 minutes" in nudge_text
+    assert "This is a custom narrative body." in nudge_text
+    assert "## Custom checklist" in nudge_text
+    assert nudge_text.index("Watchdog stop threshold: 150 minutes") < nudge_text.index("This is a custom narrative body.")
+
+
+def test_write_watchdog_recovery_nudge_uses_fallback_when_template_missing(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "WATCHDOG_RECOVERY_NUDGE_BODY_TEMPLATE_FILE",
+        tmp_path / "missing-watchdog-recovery-nudge-body-template.md",
+    )
+
+    MODULE._write_watchdog_recovery_nudge(
+        cfg,
+        cycle_number=5,
+        monitored_branch="main",
+        commit_ref="main",
+        last_commit_sha="abc123",
+        last_commit_at_utc="2026-03-14T00:00:00Z",
+        watchdog_age_minutes=42.0,
+        stale_after_minutes=150,
+    )
+
+    nudge_text = (tmp_path / MODULE.RECOVERY_INSTRUCTIONS_FILE).read_text(encoding="utf-8")
+    assert "Broad diagnostics checklist" in nudge_text
+    assert "rename this file to `recovery_instructions_CONSUMED.md`" in nudge_text
+
+
 def test_watchdog_emits_recovery_nudge_after_30_minutes_without_stale_stop(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
