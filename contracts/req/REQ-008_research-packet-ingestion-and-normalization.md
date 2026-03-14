@@ -8,11 +8,14 @@ Requirement ID: `REQ-008`
 This requirement surface is limited to:
 
 - Ingesting a research packet payload into strategy context processing.
-- Normalizing exactly these context arrays:
+- Normalizing deterministic strategy context arrays:
   - `assumptions`
   - `unknowns`
   - `risk_evidence`
+  - `cross_project_context`
+  - `open_risks`
 - Preserving research provenance and linking it into recommendation rationale references.
+- Cross-project obligations require Earth-sweep evidence refs; missing evidence is normalized into `open_risks` instead of implied obligations.
 
 No net-new packet sections, managers, or orchestration gates are introduced by this contract.
 
@@ -44,8 +47,10 @@ python3 scripts/strategy_context_sweep.py \
 The builder expects these anchors:
 
 - `research_packet`: object containing research packet identity/topics/open questions/evidence refs.
-- `recommendation_ids`: non-empty array of recommendation IDs whose rationale fields must keep research provenance links.
+- `recommendation_ids` or `recommendations`: recommendation IDs and/or recommendation metadata rows.
+- `recommendations` rows include `recommendation_id`, `summary`, `rationale`, `expected_impact`, `risk_level`.
 - `recommendation_topic_map` (optional): map from recommendation ID to contributing `topic_id` list.
+- `broad_sweep_context` (optional): explicit broad-sweep input for cross-project obligations and unresolved ideas. If omitted, context aliases under `research_packet.context` are consumed.
 - `normalized_at_utc` (optional): ISO-8601 timestamp for deterministic output metadata.
 
 ## Output contract
@@ -80,6 +85,21 @@ Top-level required keys:
   - `evidence_refs[]` (`artifact_id`, `kind`, `uri`, optional `notes`)
   - `provenance.research_event_id`
   - `provenance.source_fields[]`
+- `cross_project_context[]`
+  - `cross_project_context_id`
+  - `target_project_id`
+  - `summary`
+  - `evidence_refs[]` (`artifact_id`, `kind`, `uri`, optional `notes`)
+  - `provenance.research_event_id`
+  - `provenance.source_fields[]`
+- `open_risks[]`
+  - `open_risk_id`
+  - `risk_level`
+  - `risk_statement`
+  - `target_project_id` (optional)
+  - `evidence_refs[]` (`artifact_id`, `kind`, `uri`, optional `notes`)
+  - `provenance.research_event_id`
+  - `provenance.source_fields[]`
 
 `recommendation_rationale_provenance[]` required keys:
 
@@ -88,9 +108,18 @@ Top-level required keys:
 - `linked_assumption_ids[]`
 - `linked_unknown_ids[]`
 - `linked_risk_evidence_ids[]`
+- `linked_cross_project_context_ids[]`
+- `linked_open_risk_ids[]`
+- `recommendation_fields.summary`
+- `recommendation_fields.rationale`
+- `recommendation_fields.expected_impact`
+- `recommendation_fields.risk_level`
 - `research_provenance.research_packet_event_id`
 - `research_provenance.source_schema_version`
 - `research_provenance.linked_topic_ids[]`
+- `research_provenance.context_mission_refs[]`
+- `research_provenance.context_scope_refs[]`
+- `research_provenance.context_strategy_ref` (optional)
 - `provenance_refs[]` (mirrors research evidence refs)
 
 ## Sample structure

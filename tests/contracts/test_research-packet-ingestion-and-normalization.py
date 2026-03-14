@@ -42,6 +42,10 @@ def test_req_008_builder_normalizes_expected_contract_anchors():
     assert [row["assumption_id"] for row in assumptions] == anchors["assumption_ids"]
     assert [row["unknown_id"] for row in unknowns] == anchors["unknown_ids"]
     assert [row["risk_evidence_id"] for row in risks] == anchors["risk_evidence_ids"]
+    assert [row["cross_project_context_id"] for row in payload["strategy_context"]["cross_project_context"]] == anchors[
+        "cross_project_context_ids"
+    ]
+    assert [row["open_risk_id"] for row in payload["strategy_context"]["open_risks"]] == anchors["open_risk_ids"]
 
     by_recommendation = {
         row["recommendation_id"]: row for row in payload["recommendation_rationale_provenance"]
@@ -52,6 +56,9 @@ def test_req_008_builder_normalizes_expected_contract_anchors():
         assert row["linked_assumption_ids"] == expected_row["linked_assumption_ids"]
         assert row["linked_risk_evidence_ids"] == expected_row["linked_risk_evidence_ids"]
         assert row["research_provenance"]["linked_topic_ids"] == expected_row["linked_topic_ids"]
+        assert row["linked_cross_project_context_ids"] == expected_row["linked_cross_project_context_ids"]
+        assert row["linked_open_risk_ids"] == expected_row["linked_open_risk_ids"]
+        assert row["recommendation_fields"] == expected_row["recommendation_fields"]
 
 
 def test_req_008_sample_payload_and_contract_doc_are_aligned():

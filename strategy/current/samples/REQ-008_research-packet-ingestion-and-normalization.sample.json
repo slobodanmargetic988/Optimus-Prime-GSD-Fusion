@@ -104,6 +104,63 @@
           ]
         }
       }
+    ],
+    "cross_project_context": [
+      {
+        "cross_project_context_id": "cross-project-context.001.prj-runtime-core",
+        "target_project_id": "prj.runtime-core",
+        "summary": "Align watcher thresholds with runtime-core lease expiry handling.",
+        "evidence_refs": [
+          {
+            "artifact_id": "artifact.dispatch-cycle-canary-20260314",
+            "kind": "canary_report",
+            "uri": "reports/optimus-prime/planning/VERIFICATION.md",
+            "notes": "Cycle telemetry from canary execution lanes."
+          }
+        ],
+        "provenance": {
+          "research_event_id": "event.20260314t220500z-research-packet",
+          "source_fields": [
+            "context.broad_sweep_context.cross_project_obligations[]",
+            "evidence_refs[]"
+          ]
+        }
+      }
+    ],
+    "open_risks": [
+      {
+        "open_risk_id": "open-risk.001.prj-analytics-hub",
+        "risk_level": "high",
+        "risk_statement": "Cross-project obligation omitted until Earth-sweep evidence is attached: Introduce ecosystem-wide per-cycle latency obligations for budget diagnostics.",
+        "target_project_id": "prj.analytics-hub",
+        "evidence_refs": [],
+        "provenance": {
+          "research_event_id": "event.20260314t220500z-research-packet",
+          "source_fields": [
+            "context.broad_sweep_context.cross_project_obligations[]"
+          ]
+        }
+      },
+      {
+        "open_risk_id": "open-risk.002.prj-runtime-observability",
+        "risk_level": "high",
+        "risk_statement": "Confirm whether shared rate snapshots can drive cross-repo throttling policy without starvation.",
+        "evidence_refs": [
+          {
+            "artifact_id": "artifact.rate-snapshot-20260314",
+            "kind": "rate_snapshot",
+            "uri": "reports/optimus-prime/planning/STATE.md",
+            "notes": "Profile budget observations used for scheduling assumptions."
+          }
+        ],
+        "provenance": {
+          "research_event_id": "event.20260314t220500z-research-packet",
+          "source_fields": [
+            "context.broad_sweep_context.unresolved_ideas[]"
+          ]
+        },
+        "target_project_id": "prj.runtime-observability"
+      }
     ]
   },
   "recommendation_rationale_provenance": [
@@ -120,12 +177,31 @@
       "linked_risk_evidence_ids": [
         "risk-evidence.001.topic-dispatch-cycle-control"
       ],
+      "linked_cross_project_context_ids": [
+        "cross-project-context.001.prj-runtime-core"
+      ],
+      "linked_open_risk_ids": [],
+      "recommendation_fields": {
+        "summary": "Gate cycle release through watcher signals before fallback timeout reset.",
+        "rationale": "This keeps cycle execution deterministic while preserving autonomous worker throughput.",
+        "expected_impact": "Lower idle redispatches and better schedule continuity under variable worker latency.",
+        "risk_level": "medium"
+      },
       "research_provenance": {
         "research_packet_event_id": "event.20260314t220500z-research-packet",
         "source_schema_version": "research-packet.v1",
         "linked_topic_ids": [
           "topic.dispatch-cycle-control"
-        ]
+        ],
+        "context_mission_refs": [
+          "mission.md",
+          "op-tools/strategy/mission.md"
+        ],
+        "context_scope_refs": [
+          "scope.md",
+          "op-tools/strategy/scope.md"
+        ],
+        "context_strategy_ref": "strategy/current/STRATEGY.json"
       },
       "provenance_refs": [
         {
@@ -155,12 +231,32 @@
       "linked_risk_evidence_ids": [
         "risk-evidence.002.topic-rate-limit-protection"
       ],
+      "linked_cross_project_context_ids": [],
+      "linked_open_risk_ids": [
+        "open-risk.001.prj-analytics-hub",
+        "open-risk.002.prj-runtime-observability"
+      ],
+      "recommendation_fields": {
+        "summary": "Reserve budget-aware execution lanes for high-impact fixes when quotas tighten.",
+        "rationale": "This protects critical work while still applying profile-level throttle safety.",
+        "expected_impact": "Reduced starvation of urgent fixes during constrained rate windows.",
+        "risk_level": "high"
+      },
       "research_provenance": {
         "research_packet_event_id": "event.20260314t220500z-research-packet",
         "source_schema_version": "research-packet.v1",
         "linked_topic_ids": [
           "topic.rate-limit-protection"
-        ]
+        ],
+        "context_mission_refs": [
+          "mission.md",
+          "op-tools/strategy/mission.md"
+        ],
+        "context_scope_refs": [
+          "scope.md",
+          "op-tools/strategy/scope.md"
+        ],
+        "context_strategy_ref": "strategy/current/STRATEGY.json"
       },
       "provenance_refs": [
         {
