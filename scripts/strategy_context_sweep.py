@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -17,6 +18,10 @@ TOOL_VERSION = "1.0.0"
 REQUIREMENT_ID = "REQ-008"
 SCHEMA_VERSION = "req-008.research-packet-ingestion-and-normalization.v1"
 ALLOWED_RISK_LEVELS = {"low", "medium", "high", "critical"}
+REASON_CODE_EARTH_SWEEP_EVIDENCE_MISSING = "earth_sweep_evidence_missing"
+REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT = "earth_sweep_stale_source_artifact"
+REASON_CODE_CONTEXT_DOC_MISSING = "context_doc_missing"
+REASON_CODE_PEER_PROJECT_DOC_MISSING = "peer_project_doc_missing"
 
 LOG_ROOT = Path("/Users/slobodan/projects/LOGS")
 LOG_PATH = LOG_ROOT / "strategy_context_sweep.log"
@@ -39,6 +44,29 @@ def _as_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = _as_text(value).lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return False
+
+
+def _is_stale_evidence_row(row: Mapping[str, Any]) -> bool:
+    if _to_bool(row.get("stale")):
+        return True
+    for field_name in ("status", "state", "freshness"):
+        value = _as_text(row.get(field_name)).lower()
+        if value in {"stale", "expired"}:
+            return True
+    return False
 
 
 def _require_text(value: Any, *, field_name: str) -> str:
@@ -129,8 +157,8 @@ def _normalize_unknown_questions(open_questions_raw: Sequence[Any]) -> list[str]
     return normalized
 
 
-def _normalize_evidence_refs(evidence_refs_raw: Sequence[Any]) -> list[dict[str, str]]:
-    normalized: list[dict[str, str]] = []
+def _normalize_evidence_refs(evidence_refs_raw: Sequence[Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     seen_artifact_ids: set[str] = set()
     for index, row in enumerate(evidence_refs_raw):
         evidence = _require_mapping(row, field_name=f"research_packet.evidence_refs[{index}]")
@@ -141,7 +169,7 @@ def _normalize_evidence_refs(evidence_refs_raw: Sequence[Any]) -> list[dict[str,
             raise Req008Error(f"research_packet.evidence_refs[{index}].artifact_id duplicates {artifact_id}")
         seen_artifact_ids.add(artifact_id)
 
-        normalized_row: dict[str, str] = {
+        normalized_row: dict[str, Any] = {
             "artifact_id": artifact_id,
             "kind": _require_text(evidence.get("kind"), field_name=f"research_packet.evidence_refs[{index}].kind"),
             "uri": _require_text(evidence.get("uri"), field_name=f"research_packet.evidence_refs[{index}].uri"),
@@ -149,6 +177,8 @@ def _normalize_evidence_refs(evidence_refs_raw: Sequence[Any]) -> list[dict[str,
         notes = _as_text(evidence.get("notes"))
         if notes:
             normalized_row["notes"] = notes
+        if _is_stale_evidence_row(evidence):
+            normalized_row["stale"] = True
         normalized.append(normalized_row)
     return normalized
 
@@ -274,6 +304,71 @@ def _normalize_context_refs(context: Mapping[str, Any] | None) -> dict[str, Any]
     return normalized
 
 
+def _resolve_ref_path(raw_ref: str) -> Path:
+    path = Path(raw_ref).expanduser()
+    if path.is_absolute():
+        return path
+    return (Path.cwd() / path).resolve()
+
+
+def _missing_context_doc_refs(context_refs: Mapping[str, Any]) -> list[str]:
+    missing: list[str] = []
+    for field_name in ("mission_refs", "scope_refs"):
+        refs = context_refs.get(field_name)
+        if not isinstance(refs, Sequence) or isinstance(refs, (str, bytes, bytearray)):
+            continue
+        for ref in refs:
+            ref_text = _as_text(ref)
+            if not ref_text:
+                continue
+            if not _resolve_ref_path(ref_text).exists():
+                missing.append(ref_text)
+    return missing
+
+
+def _resolve_optional_doc_refs(value: Any, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    refs = _normalize_string_list(_require_sequence(value, field_name=field_name), field_name=field_name)
+    return refs
+
+
+def _fallback_evidence_refs(
+    *,
+    preferred_artifact_ids: Sequence[str],
+    evidence_by_id: Mapping[str, Mapping[str, Any]],
+    fallback_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for artifact_id in preferred_artifact_ids:
+        row = evidence_by_id.get(artifact_id)
+        if row is None or artifact_id in seen:
+            continue
+        selected.append(dict(row))
+        seen.add(artifact_id)
+
+    if selected:
+        return selected
+
+    for row in fallback_rows:
+        artifact_id = _as_text(row.get("artifact_id"))
+        if not artifact_id or artifact_id in seen:
+            continue
+        selected.append(dict(row))
+        seen.add(artifact_id)
+    if not selected:
+        selected.append(
+            {
+                "artifact_id": "artifact.req-008.synthetic-normalization-observation",
+                "kind": "normalization_observation",
+                "uri": "strategy-context-sweep://req-008/synthetic-observation",
+                "notes": "Synthetic evidence row emitted when source packet omits evidence_refs.",
+            }
+        )
+    return selected
+
+
 def _resolve_artifact_id_candidates(raw_values: Sequence[Any], *, field_name: str) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()
@@ -295,10 +390,10 @@ def _resolve_artifact_id_candidates(raw_values: Sequence[Any], *, field_name: st
 def _resolve_evidence_refs(
     *,
     artifact_ids: Sequence[str],
-    evidence_by_id: Mapping[str, Mapping[str, str]],
+    evidence_by_id: Mapping[str, Mapping[str, Any]],
     field_name: str,
-) -> list[dict[str, str]]:
-    normalized: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     for index, artifact_id in enumerate(artifact_ids):
         row = evidence_by_id.get(artifact_id)
         if row is None:
@@ -336,22 +431,55 @@ def _mapping_value_by_alias(mapping: Mapping[str, Any], aliases: Sequence[str]) 
 def _normalize_broad_sweep_context(
     *,
     broad_sweep_context: Mapping[str, Any] | None,
-    evidence_refs: Sequence[Mapping[str, str]],
+    evidence_refs: Sequence[Mapping[str, Any]],
     recommendation_ids: Sequence[str],
     research_event_id: str,
+    context_refs: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, list[str]], dict[str, list[str]]]:
-    if broad_sweep_context is None:
-        return [], [], {row: [] for row in recommendation_ids}, {row: [] for row in recommendation_ids}
-
     evidence_by_id = {row["artifact_id"]: row for row in evidence_refs}
+    linked_cross_context_ids = {recommendation_id: [] for recommendation_id in recommendation_ids}
+    linked_open_risk_ids = {recommendation_id: [] for recommendation_id in recommendation_ids}
     recommendation_ids_set = set(recommendation_ids)
-    linked_cross_context_ids = {row: [] for row in recommendation_ids}
-    linked_open_risk_ids = {row: [] for row in recommendation_ids}
+    cross_project_context_rows: list[dict[str, Any]] = []
+    open_risks_rows: list[dict[str, Any]] = []
+    open_risk_counter = 0
+
+    def append_open_risk(
+        *,
+        reason_code: str,
+        risk_level: str,
+        risk_statement: str,
+        source_fields: Sequence[str],
+        recommendation_links: Sequence[str],
+        target_project_id: str = "",
+        evidence_rows: Sequence[Mapping[str, Any]] | None = None,
+    ) -> str:
+        nonlocal open_risk_counter
+        open_risk_counter += 1
+        risk_slug = _normalize_slug(target_project_id or reason_code)
+        open_risk_id = f"open-risk.{open_risk_counter:03d}.{risk_slug}"
+        row: dict[str, Any] = {
+            "open_risk_id": open_risk_id,
+            "reason_code": reason_code,
+            "risk_level": risk_level,
+            "risk_statement": risk_statement,
+            "evidence_refs": [dict(item) for item in (evidence_rows or [])],
+            "provenance": {
+                "research_event_id": research_event_id,
+                "source_fields": list(source_fields),
+            },
+        }
+        if target_project_id:
+            row["target_project_id"] = target_project_id
+        open_risks_rows.append(row)
+        for recommendation_id in recommendation_links:
+            linked_open_risk_ids[recommendation_id].append(open_risk_id)
+        return open_risk_id
 
     global_evidence_artifact_ids_raw = _mapping_value_by_alias(
         broad_sweep_context,
         ("earth_sweep_evidence_refs", "earth_sweep_artifact_ids", "evidence_artifact_ids", "evidence_refs"),
-    )
+    ) if broad_sweep_context is not None else None
     global_evidence_artifact_ids = []
     if global_evidence_artifact_ids_raw is not None:
         global_evidence_artifact_ids = _resolve_artifact_id_candidates(
@@ -367,9 +495,29 @@ def _normalize_broad_sweep_context(
             field_name="broad_sweep_context.earth_sweep_evidence_refs",
         )
 
-    cross_project_context_rows: list[dict[str, Any]] = []
-    open_risks_rows: list[dict[str, Any]] = []
-    open_risk_counter = 0
+    baseline_evidence_refs = _fallback_evidence_refs(
+        preferred_artifact_ids=global_evidence_artifact_ids,
+        evidence_by_id=evidence_by_id,
+        fallback_rows=evidence_refs,
+    )
+
+    missing_context_refs = _missing_context_doc_refs(context_refs)
+    if not context_refs.get("mission_refs"):
+        missing_context_refs.append("mission_refs")
+    if not context_refs.get("scope_refs"):
+        missing_context_refs.append("scope_refs")
+    for missing_ref in missing_context_refs:
+        append_open_risk(
+            reason_code=REASON_CODE_CONTEXT_DOC_MISSING,
+            risk_level="high",
+            risk_statement=f"Context doc is missing or unreadable: {missing_ref}",
+            source_fields=["context.mission_refs[]", "context.scope_refs[]"],
+            recommendation_links=list(recommendation_ids),
+            evidence_rows=baseline_evidence_refs,
+        )
+
+    if broad_sweep_context is None:
+        return cross_project_context_rows, open_risks_rows, linked_cross_context_ids, linked_open_risk_ids
 
     cross_project_raw = _mapping_value_by_alias(
         broad_sweep_context,
@@ -410,52 +558,99 @@ def _normalize_broad_sweep_context(
                 else []
             )
 
-            if entry_evidence_artifact_ids:
-                normalized_evidence_refs = _resolve_evidence_refs(
-                    artifact_ids=entry_evidence_artifact_ids,
-                    evidence_by_id=evidence_by_id,
-                    field_name=f"broad_sweep_context.cross_project_obligations[{index - 1}].earth_sweep_evidence_refs",
+            peer_doc_refs = _resolve_optional_doc_refs(
+                _mapping_value_by_alias(
+                    obligation,
+                    ("peer_project_doc_refs", "peer_project_docs", "doc_refs", "project_doc_refs"),
+                ),
+                field_name=f"broad_sweep_context.cross_project_obligations[{index - 1}].peer_project_doc_refs",
+            )
+            missing_peer_doc_refs = [
+                ref for ref in peer_doc_refs if not _resolve_ref_path(ref).exists()
+            ]
+            if missing_peer_doc_refs:
+                append_open_risk(
+                    reason_code=REASON_CODE_PEER_PROJECT_DOC_MISSING,
+                    risk_level="high",
+                    risk_statement=(
+                        "Cross-project obligation blocked by missing peer-project docs "
+                        f"for {target_project_id}: {', '.join(missing_peer_doc_refs)}"
+                    ),
+                    source_fields=[
+                        "context.broad_sweep_context.cross_project_obligations[].peer_project_doc_refs[]",
+                        "context.broad_sweep_context.cross_project_obligations[]",
+                    ],
+                    recommendation_links=recommendation_links,
+                    target_project_id=target_project_id,
+                    evidence_rows=_fallback_evidence_refs(
+                        preferred_artifact_ids=entry_evidence_artifact_ids or global_evidence_artifact_ids,
+                        evidence_by_id=evidence_by_id,
+                        fallback_rows=baseline_evidence_refs,
+                    ),
                 )
-                context_id = f"cross-project-context.{index:03d}.{_normalize_slug(target_project_id)}"
-                cross_project_context_rows.append(
-                    {
-                        "cross_project_context_id": context_id,
-                        "target_project_id": target_project_id,
-                        "summary": summary,
-                        "evidence_refs": normalized_evidence_refs,
-                        "provenance": {
-                            "research_event_id": research_event_id,
-                            "source_fields": [
-                                "context.broad_sweep_context.cross_project_obligations[]",
-                                "evidence_refs[]",
-                            ],
-                        },
-                    }
-                )
-                for recommendation_id in recommendation_links:
-                    linked_cross_context_ids[recommendation_id].append(context_id)
                 continue
 
-            open_risk_counter += 1
-            open_risk_id = f"open-risk.{open_risk_counter:03d}.{_normalize_slug(target_project_id)}"
-            open_risks_rows.append(
-                {
-                    "open_risk_id": open_risk_id,
-                    "risk_level": "high",
-                    "risk_statement": (
+            if not entry_evidence_artifact_ids:
+                append_open_risk(
+                    reason_code=REASON_CODE_EARTH_SWEEP_EVIDENCE_MISSING,
+                    risk_level="high",
+                    risk_statement=(
                         "Cross-project obligation omitted until Earth-sweep evidence is attached: "
                         f"{summary}"
                     ),
+                    source_fields=["context.broad_sweep_context.cross_project_obligations[]"],
+                    recommendation_links=recommendation_links,
+                    target_project_id=target_project_id,
+                    evidence_rows=baseline_evidence_refs,
+                )
+                continue
+
+            normalized_evidence_refs = _resolve_evidence_refs(
+                artifact_ids=entry_evidence_artifact_ids,
+                evidence_by_id=evidence_by_id,
+                field_name=f"broad_sweep_context.cross_project_obligations[{index - 1}].earth_sweep_evidence_refs",
+            )
+            stale_evidence_refs = [
+                dict(row)
+                for row in normalized_evidence_refs
+                if _to_bool(row.get("stale"))
+            ]
+            if stale_evidence_refs:
+                append_open_risk(
+                    reason_code=REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT,
+                    risk_level="high",
+                    risk_statement=(
+                        "Cross-project obligation omitted because Earth-sweep source artifacts are stale: "
+                        f"{summary}"
+                    ),
+                    source_fields=[
+                        "context.broad_sweep_context.cross_project_obligations[].earth_sweep_evidence_refs[]",
+                        "evidence_refs[]",
+                    ],
+                    recommendation_links=recommendation_links,
+                    target_project_id=target_project_id,
+                    evidence_rows=stale_evidence_refs,
+                )
+                continue
+
+            context_id = f"cross-project-context.{index:03d}.{_normalize_slug(target_project_id)}"
+            cross_project_context_rows.append(
+                {
+                    "cross_project_context_id": context_id,
                     "target_project_id": target_project_id,
-                    "evidence_refs": [],
+                    "summary": summary,
+                    "evidence_refs": normalized_evidence_refs,
                     "provenance": {
                         "research_event_id": research_event_id,
-                        "source_fields": ["context.broad_sweep_context.cross_project_obligations[]"],
+                        "source_fields": [
+                            "context.broad_sweep_context.cross_project_obligations[]",
+                            "evidence_refs[]",
+                        ],
                     },
                 }
             )
             for recommendation_id in recommendation_links:
-                linked_open_risk_ids[recommendation_id].append(open_risk_id)
+                linked_cross_context_ids[recommendation_id].append(context_id)
 
     unresolved_raw = _mapping_value_by_alias(
         broad_sweep_context,
@@ -515,22 +710,15 @@ def _normalize_broad_sweep_context(
                 field_name=f"broad_sweep_context.unresolved_ideas[{index}].earth_sweep_evidence_refs",
             )
 
-            open_risk_counter += 1
-            risk_slug = _normalize_slug(target_project_id or summary)
-            open_risk_id = f"open-risk.{open_risk_counter:03d}.{risk_slug}"
-            normalized_row = {
-                "open_risk_id": open_risk_id,
-                "risk_level": risk_level,
-                "risk_statement": summary,
-                "evidence_refs": evidence_rows,
-                "provenance": {
-                    "research_event_id": research_event_id,
-                    "source_fields": ["context.broad_sweep_context.unresolved_ideas[]"],
-                },
-            }
-            if target_project_id:
-                normalized_row["target_project_id"] = target_project_id
-            open_risks_rows.append(normalized_row)
+            open_risk_id = append_open_risk(
+                reason_code="unresolved_idea_open_risk",
+                risk_level=risk_level,
+                risk_statement=summary,
+                source_fields=["context.broad_sweep_context.unresolved_ideas[]"],
+                recommendation_links=[],
+                target_project_id=target_project_id,
+                evidence_rows=evidence_rows,
+            )
             for recommendation_id in linked_recommendation_ids:
                 if recommendation_id not in recommendation_ids_set:
                     raise Req008Error(
@@ -600,6 +788,19 @@ def _normalize_timestamp(raw_value: Any) -> str:
     if parsed.tzinfo is None:
         raise Req008Error("normalized_at_utc must include timezone information")
     return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def serialize_req_008_context_bundle(payload: Mapping[str, Any]) -> str:
+    bundle = {
+        "research_packet_identity": payload.get("research_packet_identity", {}),
+        "strategy_context": payload.get("strategy_context", {}),
+        "recommendation_rationale_provenance": payload.get("recommendation_rationale_provenance", []),
+    }
+    return json.dumps(bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _context_bundle_sha256(payload: Mapping[str, Any]) -> str:
+    return hashlib.sha256(serialize_req_008_context_bundle(payload).encode("utf-8")).hexdigest()
 
 
 def build_req_008_research_packet_ingestion_and_normalization(
@@ -726,6 +927,7 @@ def build_req_008_research_packet_ingestion_and_normalization(
         evidence_refs=evidence_refs,
         recommendation_ids=normalized_recommendation_ids,
         research_event_id=identity["event_id"],
+        context_refs=normalized_context_refs,
     )
 
     all_unknown_ids = [row["unknown_id"] for row in unknowns]
@@ -760,7 +962,7 @@ def build_req_008_research_packet_ingestion_and_normalization(
         if strategy_ref:
             recommendation_rationale_provenance[-1]["research_provenance"]["context_strategy_ref"] = strategy_ref
 
-    return {
+    output_payload = {
         "schema_version": SCHEMA_VERSION,
         "requirement_id": REQUIREMENT_ID,
         "research_packet_identity": identity,
@@ -779,6 +981,8 @@ def build_req_008_research_packet_ingestion_and_normalization(
             "tool_version": TOOL_VERSION,
         },
     }
+    output_payload["source"]["context_bundle_sha256"] = _context_bundle_sha256(output_payload)
+    return output_payload
 
 
 def _validate_evidence_refs_array(
@@ -1043,6 +1247,7 @@ def validate_req_008_research_packet_ingestion_and_normalization(payload: Mappin
             errors.append(f"strategy_context.open_risks[{index}] must be an object")
             continue
         open_risk_id = _as_text(row.get("open_risk_id"))
+        reason_code = _as_text(row.get("reason_code"))
         risk_level = _as_text(row.get("risk_level"))
         risk_statement = _as_text(row.get("risk_statement"))
         evidence_refs = row.get("evidence_refs")
@@ -1059,6 +1264,8 @@ def validate_req_008_research_packet_ingestion_and_normalization(payload: Mappin
             errors.append(f"strategy_context.open_risks[{index}].risk_level must be one of {sorted(ALLOWED_RISK_LEVELS)}")
         if not risk_statement:
             errors.append(f"strategy_context.open_risks[{index}].risk_statement is required")
+        if row.get("reason_code") is not None and not reason_code:
+            errors.append(f"strategy_context.open_risks[{index}].reason_code must be a non-empty string when set")
 
         _validate_evidence_refs_array(
             evidence_refs=evidence_refs,
@@ -1230,6 +1437,10 @@ def validate_req_008_research_packet_ingestion_and_normalization(payload: Mappin
             errors.append(f"source.tool must be {TOOL}")
         if source.get("tool_version") != TOOL_VERSION:
             errors.append(f"source.tool_version must be {TOOL_VERSION}")
+        context_bundle_sha256 = _as_text(source.get("context_bundle_sha256"))
+        if context_bundle_sha256:
+            if not re.fullmatch(r"[0-9a-f]{64}", context_bundle_sha256):
+                errors.append("source.context_bundle_sha256 must be a lowercase hex sha256 digest")
 
     return errors
 

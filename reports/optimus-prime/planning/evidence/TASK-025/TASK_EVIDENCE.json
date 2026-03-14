@@ -1,0 +1,184 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-6",
+  "task_id": "TASK-025",
+  "requirement_ids": [
+    "REQ-008"
+  ],
+  "updated_at": "2026-03-14T23:37:22Z",
+  "dev": {
+    "status": "done",
+    "checks": [
+      "Harden REQ-008 Earth-sweep failure-path normalization with deterministic reason-code output and evidence refs",
+      "Add REQ-008 context-bundle serialization fingerprint for replay diagnostics"
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_research-packet-ingestion-and-normalization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.02s",
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_research-packet-ingestion-and-normalization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s",
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_research-packet-ingestion-and-normalization_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s",
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_research-packet-ingestion-and-normalization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s",
+        "run": 2
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_research-packet-ingestion-and-normalization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s",
+        "run": 2
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_research-packet-ingestion-and-normalization_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s",
+        "run": 2
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/hardening/test_research-packet-ingestion-and-normalization_hardening.py"
+    ]
+  },
+  "test": {
+    "status": "done",
+    "checks": [
+      "REQ-008 contract/integration/hardening checks pass in consecutive runs",
+      "REQ-008 hardening edge-cases emit deterministic reason-code and evidence-ref diagnostics"
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_research-packet-ingestion-and-normalization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.02s",
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_research-packet-ingestion-and-normalization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s",
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_research-packet-ingestion-and-normalization_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s",
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_research-packet-ingestion-and-normalization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s",
+        "run": 2
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_research-packet-ingestion-and-normalization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s",
+        "run": 2
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_research-packet-ingestion-and-normalization_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s",
+        "run": 2
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-008",
+        "passed": true,
+        "notes": "Stale Earth-sweep artifacts and missing mission/scope or peer-project docs are normalized into open_risks with deterministic reason_code and evidence_refs."
+      },
+      {
+        "requirement_id": "REQ-008",
+        "passed": true,
+        "notes": "Context bundle serialization and context_bundle_sha256 remain stable across repeated replay builds."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-025/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "edge_case_hardening": [
+    {
+      "edge_case": "stale source artifact detected during Earth sweep",
+      "status": "resolved",
+      "reason_code": "earth_sweep_stale_source_artifact",
+      "evidence_refs": [
+        "artifact.dispatch-cycle-canary-20260314"
+      ]
+    },
+    {
+      "edge_case": "missing mission/scope or peer-project doc",
+      "status": "resolved",
+      "reason_codes": [
+        "context_doc_missing",
+        "peer_project_doc_missing"
+      ],
+      "evidence_refs": [
+        "artifact.dispatch-cycle-canary-20260314",
+        "artifact.rate-snapshot-20260314"
+      ]
+    },
+    {
+      "edge_case": "replay stability of context bundle serialization",
+      "status": "resolved",
+      "reason_code": "context_bundle_replay_stable",
+      "evidence_refs": [
+        "source.context_bundle_sha256"
+      ]
+    }
+  ],
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "acceptance_criteria_met"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}
