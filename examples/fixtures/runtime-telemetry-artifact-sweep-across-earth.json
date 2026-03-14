@@ -1,0 +1,57 @@
+{
+  "now_utc": "2026-03-14T21:00:00Z",
+  "stale_after_seconds": {
+    "runtime_traces": 600,
+    "cycle_summaries": 300
+  },
+  "decision_policy": {
+    "stale": "downgrade",
+    "missing": "exclude"
+  },
+  "projects": [
+    {
+      "project_id": "earth-north",
+      "root_path": "__TMP__/earth-north",
+      "artifacts": {
+        "runtime_traces": [
+          {
+            "source_id": "trace-main",
+            "path": "reports/optimus-prime/runtime/trace.jsonl"
+          },
+          {
+            "source_id": "trace-errors",
+            "path": "reports/optimus-prime/runtime/errors.jsonl"
+          }
+        ],
+        "cycle_summaries": [
+          {
+            "source_id": "summary-current",
+            "path": "reports/optimus-prime/CYCLE_SUMMARY.json"
+          }
+        ]
+      }
+    },
+    {
+      "project_id": "earth-south",
+      "root_path": "__TMP__/earth-south",
+      "artifacts": {
+        "runtime_traces": [
+          {
+            "source_id": "trace-main",
+            "path": "reports/optimus-prime/runtime/trace.jsonl"
+          }
+        ],
+        "cycle_summaries": [
+          {
+            "source_id": "summary-current",
+            "path": "reports/optimus-prime/CYCLE_SUMMARY.json"
+          },
+          {
+            "source_id": "summary-history",
+            "path": "reports/optimus-prime/runtime/cycle-history.json"
+          }
+        ]
+      }
+    }
+  ]
+}
