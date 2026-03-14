@@ -37,6 +37,8 @@ def test_req_001_sample_payload_is_valid_contract_shape():
     assert module.validate_req_001_runtime_entrypoint(sample) == []
     assert sample["strategy_runtime_entrypoint"]["runtime_mode"] == module.RUNTIME_MODE
     assert sample["strategy_runtime_entrypoint"]["execution_mode"] == module.EXECUTION_MODE
+    assert sample["processing_behavior"]["strategy"] == "llm-first-broad-sweep"
+    assert sample["processing_behavior"]["reasoning_mode"] == module.EXECUTION_MODE
     assert sample["requirement_id"] == module.REQUIREMENT_ID
 
 
@@ -60,3 +62,5 @@ def test_req_001_cli_writes_valid_payload(tmp_path: Path):
     payload = _read_json(out_path)
     assert module.validate_req_001_runtime_entrypoint(payload) == []
     assert payload["strategy_runtime_entrypoint"]["execution_mode"] == "long-thinking"
+    assert payload["processing_behavior"]["heuristic_summarization_only"] is False
+    assert payload["processing_behavior"]["recommendation"]["decision"] == "insufficient-context"

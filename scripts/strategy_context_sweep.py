@@ -54,18 +54,290 @@ def _canonical_input_digest(canonical_input: Mapping[str, str]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _normalize_string_list(raw_value: Any, *, field_name: str) -> list[str]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError(f"{field_name} must be a list of strings")
+    normalized: set[str] = set()
+    for index, item in enumerate(raw_value):
+        text = _require_nonempty_text(item, field_name=f"{field_name}[{index}]")
+        normalized.add(text)
+    return sorted(normalized)
+
+
+def _normalize_context_note(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return ""
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string when provided")
+    return raw_value.strip()
+
+
+def _normalize_cross_project_context(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("cross_project_context must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"cross_project_context[{index}] must be an object")
+        project_id = _require_nonempty_text(item.get("project_id"), field_name=f"cross_project_context[{index}].project_id")
+        project_root = _normalize_root(item.get("project_root"), field_name=f"cross_project_context[{index}].project_root")
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"cross_project_context[{index}].evidence_refs",
+        )
+        context_note = _normalize_context_note(item.get("context_note"), field_name=f"cross_project_context[{index}].context_note")
+        normalized.append(
+            {
+                "project_id": project_id,
+                "project_root": project_root,
+                "evidence_refs": evidence_refs,
+                "context_note": context_note,
+            }
+        )
+
+    normalized.sort(key=lambda row: (row["project_id"], row["project_root"]))
+    return normalized
+
+
+def _normalize_action_scope(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return "local"
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string when provided")
+    scope = raw_value.strip().lower()
+    if scope not in {"local", "cross-project"}:
+        raise ValueError(f"{field_name} must be either 'local' or 'cross-project'")
+    return scope
+
+
+def _normalize_candidate_recommendations(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("candidate_recommendations must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"candidate_recommendations[{index}] must be an object")
+        raw_action_id = item.get("action_id")
+        action_id = (
+            _require_nonempty_text(raw_action_id, field_name=f"candidate_recommendations[{index}].action_id")
+            if raw_action_id is not None
+            else f"action-{index + 1:02d}"
+        )
+        summary = _require_nonempty_text(item.get("summary"), field_name=f"candidate_recommendations[{index}].summary")
+        rationale = _require_nonempty_text(
+            item.get("rationale") if item.get("rationale") is not None else "No rationale supplied.",
+            field_name=f"candidate_recommendations[{index}].rationale",
+        )
+        scope = _normalize_action_scope(
+            item.get("action_scope"),
+            field_name=f"candidate_recommendations[{index}].action_scope",
+        )
+        requires_earth_evidence = bool(item.get("requires_earth_evidence", scope == "cross-project"))
+        project_id = _normalize_context_note(item.get("project_id"), field_name=f"candidate_recommendations[{index}].project_id")
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"candidate_recommendations[{index}].evidence_refs",
+        )
+        next_step = _normalize_context_note(item.get("next_step"), field_name=f"candidate_recommendations[{index}].next_step")
+        normalized.append(
+            {
+                "action_id": action_id,
+                "summary": summary,
+                "rationale": rationale,
+                "action_scope": scope,
+                "requires_earth_evidence": requires_earth_evidence,
+                "project_id": project_id,
+                "evidence_refs": evidence_refs,
+                "next_step": next_step or f"Validate '{action_id}' via LLM-first long-thinking execution.",
+            }
+        )
+
+    normalized.sort(key=lambda row: row["action_id"])
+    return normalized
+
+
+def _canonical_processing_input(
+    *,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    candidate_recommendations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "target_project_evidence_refs": target_project_evidence_refs,
+        "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+        "cross_project_context": cross_project_context,
+        "candidate_recommendations": candidate_recommendations,
+    }
+
+
+def _collect_unique_refs(*ref_groups: list[str]) -> list[str]:
+    out: set[str] = set()
+    for refs in ref_groups:
+        out.update(refs)
+    return sorted(out)
+
+
+def _recommendation_decision(*, recommended_actions: list[dict[str, Any]], open_risks: list[dict[str, Any]]) -> str:
+    if recommended_actions and not open_risks:
+        return "proceed"
+    if recommended_actions and open_risks:
+        return "proceed-with-open-risks"
+    if open_risks:
+        return "collect-earth-evidence"
+    return "insufficient-context"
+
+
+def _recommendation_rationale(*, decision: str) -> str:
+    if decision == "proceed":
+        return "Broad-sweep context evidence is sufficient for immediate LLM-first execution."
+    if decision == "proceed-with-open-risks":
+        return "Some actions are evidence-backed, while unresolved cross-project ideas remain open risks."
+    if decision == "collect-earth-evidence":
+        return "Cross-project ideas require Earth-sweep evidence refs before obligations can be committed."
+    return "No actionable evidence-backed strategy actions were found in the provided context sweep."
+
+
+def _recommendation_confidence(*, evidence_refs: list[str], open_risks: list[dict[str, Any]]) -> str:
+    if not evidence_refs:
+        return "low"
+    if open_risks:
+        return "medium"
+    return "high"
+
+
+def _build_processing_behavior(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    candidate_recommendations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+
+    recommended_actions: list[dict[str, Any]] = []
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+
+    for candidate in candidate_recommendations:
+        action = {
+            "action_id": candidate["action_id"],
+            "summary": candidate["summary"],
+            "rationale": candidate["rationale"],
+            "action_scope": candidate["action_scope"],
+            "next_step": candidate["next_step"],
+            "evidence_refs": candidate["evidence_refs"],
+        }
+        if candidate["requires_earth_evidence"]:
+            if earth_sweep_evidence_refs:
+                obligation_project_id = candidate["project_id"] or (
+                    cross_project_context[0]["project_id"] if cross_project_context else "earth"
+                )
+                cross_project_obligations.append(
+                    {
+                        "obligation_id": f"obligation-{candidate['action_id']}",
+                        "project_id": obligation_project_id,
+                        "summary": candidate["summary"],
+                        "evidence_refs": _collect_unique_refs(candidate["evidence_refs"], earth_sweep_evidence_refs),
+                    }
+                )
+                recommended_actions.append(action)
+            else:
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{candidate['action_id']}",
+                        "summary": candidate["summary"],
+                        "reason_code": "missing_earth_sweep_evidence_refs",
+                        "required_evidence_refs": candidate["evidence_refs"],
+                    }
+                )
+        else:
+            recommended_actions.append(action)
+
+    recommendation_refs = _collect_unique_refs(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        *[row["evidence_refs"] for row in recommended_actions],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    decision = _recommendation_decision(recommended_actions=recommended_actions, open_risks=open_risks)
+
+    return {
+        "strategy": "llm-first-broad-sweep",
+        "reasoning_mode": EXECUTION_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": {
+            "target_project": {
+                "project_root": target_project_root,
+                "evidence_refs": target_project_evidence_refs,
+            },
+            "earth_sweep": {
+                "earth_root": earth_root,
+                "evidence_refs": earth_sweep_evidence_refs,
+            },
+            "cross_project_context": cross_project_context,
+            "candidate_recommendations": candidate_recommendations,
+        },
+        "context_usage": {
+            "target_project_context_used": bool(target_project_evidence_refs),
+            "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+            "cross_project_context_used": bool(cross_project_context),
+            "target_project_refs_used": target_project_evidence_refs,
+            "earth_sweep_refs_used": earth_sweep_evidence_refs,
+            "cross_project_refs_used": cross_project_refs,
+            "cross_project_projects_considered": sorted({row["project_id"] for row in cross_project_context}),
+            "evidence_refs_used": recommendation_refs,
+        },
+        "recommendation": {
+            "decision": decision,
+            "rationale": _recommendation_rationale(decision=decision),
+            "confidence": _recommendation_confidence(evidence_refs=recommendation_refs, open_risks=open_risks),
+            "evidence_refs": recommendation_refs,
+            "recommended_actions": recommended_actions,
+            "cross_project_obligations": cross_project_obligations,
+            "open_risks": open_risks,
+        },
+    }
+
+
 def build_req_001_runtime_entrypoint(
     *,
     target_project_root: str,
     earth_root: str,
     output_root: str,
     revision_identity: str,
+    target_project_evidence_refs: list[str] | None = None,
+    earth_sweep_evidence_refs: list[str] | None = None,
+    cross_project_context: list[Mapping[str, Any]] | None = None,
+    candidate_recommendations: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the REQ-001 runtime entrypoint payload."""
     normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
     normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
     normalized_output_root = _normalize_root(output_root, field_name="output_root")
     normalized_revision_identity = _require_nonempty_text(revision_identity, field_name="revision_identity")
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_context = _normalize_cross_project_context(cross_project_context)
+    normalized_candidates = _normalize_candidate_recommendations(candidate_recommendations)
 
     canonical_input = _canonical_call_input(
         target_project_root=normalized_target_root,
@@ -74,6 +346,21 @@ def build_req_001_runtime_entrypoint(
         revision_identity=normalized_revision_identity,
     )
     digest = _canonical_input_digest(canonical_input)
+    canonical_processing_input = _canonical_processing_input(
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+    )
+    processing_digest = _canonical_input_digest(canonical_processing_input)
+    processing_behavior = _build_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+    )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -86,11 +373,15 @@ def build_req_001_runtime_entrypoint(
             "output_root": normalized_output_root,
             "revision_identity": normalized_revision_identity,
         },
+        "processing_behavior": processing_behavior,
         "call_metadata": {
             "reproducibility": "deterministic-input-fingerprint",
             "canonical_input_sha256": digest,
             "reproducible_call_id": f"req001-{digest[:16]}",
             "canonical_input": canonical_input,
+            "processing_input_sha256": processing_digest,
+            "processing_call_id": f"req001-processing-{processing_digest[:16]}",
+            "canonical_processing_input": canonical_processing_input,
         },
     }
 
@@ -102,7 +393,7 @@ def validate_req_001_runtime_entrypoint(payload: Mapping[str, Any]) -> list[str]
         return ["payload must be a JSON object"]
 
     top_keys = set(payload.keys())
-    required_top = {"schema_version", "requirement_id", "strategy_runtime_entrypoint", "call_metadata"}
+    required_top = {"schema_version", "requirement_id", "strategy_runtime_entrypoint", "processing_behavior", "call_metadata"}
     missing_top = sorted(required_top - top_keys)
     if missing_top:
         errors.append(f"missing top-level keys: {missing_top}")
@@ -152,6 +443,130 @@ def validate_req_001_runtime_entrypoint(payload: Mapping[str, Any]) -> list[str]
     if not isinstance(revision_identity, str) or not revision_identity.strip():
         errors.append("revision_identity must be non-empty string")
 
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+
+    required_processing_behavior = {
+        "strategy",
+        "reasoning_mode",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "recommendation",
+    }
+    processing_keys = set(processing_behavior.keys())
+    missing_processing = sorted(required_processing_behavior - processing_keys)
+    if missing_processing:
+        errors.append(f"processing_behavior missing keys: {missing_processing}")
+    unexpected_processing = sorted(processing_keys - required_processing_behavior)
+    if unexpected_processing:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected_processing}")
+
+    if processing_behavior.get("strategy") != "llm-first-broad-sweep":
+        errors.append("processing_behavior.strategy must be llm-first-broad-sweep")
+    if processing_behavior.get("reasoning_mode") != EXECUTION_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+    else:
+        target_project_context = context_inputs.get("target_project")
+        if not isinstance(target_project_context, Mapping):
+            errors.append("processing_behavior.context_inputs.target_project must be an object")
+        else:
+            if target_project_context.get("project_root") != entrypoint.get("target_project_root"):
+                errors.append("target project root mismatch between entrypoint and processing context")
+            target_refs = target_project_context.get("evidence_refs")
+            if not isinstance(target_refs, list):
+                errors.append("processing_behavior.context_inputs.target_project.evidence_refs must be a list")
+
+        earth_context = context_inputs.get("earth_sweep")
+        if not isinstance(earth_context, Mapping):
+            errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+        else:
+            if earth_context.get("earth_root") != entrypoint.get("earth_root"):
+                errors.append("earth root mismatch between entrypoint and processing context")
+            earth_refs = earth_context.get("evidence_refs")
+            if not isinstance(earth_refs, list):
+                errors.append("processing_behavior.context_inputs.earth_sweep.evidence_refs must be a list")
+
+        cross_context = context_inputs.get("cross_project_context")
+        if not isinstance(cross_context, list):
+            errors.append("processing_behavior.context_inputs.cross_project_context must be a list")
+        else:
+            for index, row in enumerate(cross_context):
+                if not isinstance(row, Mapping):
+                    errors.append(f"processing_behavior.context_inputs.cross_project_context[{index}] must be an object")
+                    continue
+                for req_field in ("project_id", "project_root", "evidence_refs", "context_note"):
+                    if req_field not in row:
+                        errors.append(
+                            f"processing_behavior.context_inputs.cross_project_context[{index}] missing {req_field}"
+                        )
+
+        candidates = context_inputs.get("candidate_recommendations")
+        if not isinstance(candidates, list):
+            errors.append("processing_behavior.context_inputs.candidate_recommendations must be a list")
+        else:
+            for index, row in enumerate(candidates):
+                if not isinstance(row, Mapping):
+                    errors.append(
+                        f"processing_behavior.context_inputs.candidate_recommendations[{index}] must be an object"
+                    )
+                    continue
+                for req_field in (
+                    "action_id",
+                    "summary",
+                    "rationale",
+                    "action_scope",
+                    "requires_earth_evidence",
+                    "project_id",
+                    "evidence_refs",
+                    "next_step",
+                ):
+                    if req_field not in row:
+                        errors.append(
+                            f"processing_behavior.context_inputs.candidate_recommendations[{index}] missing {req_field}"
+                        )
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        for required_field in (
+            "target_project_context_used",
+            "earth_sweep_context_used",
+            "cross_project_context_used",
+            "target_project_refs_used",
+            "earth_sweep_refs_used",
+            "cross_project_refs_used",
+            "cross_project_projects_considered",
+            "evidence_refs_used",
+        ):
+            if required_field not in context_usage:
+                errors.append(f"processing_behavior.context_usage missing {required_field}")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        for required_field in (
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "recommended_actions",
+            "cross_project_obligations",
+            "open_risks",
+        ):
+            if required_field not in recommendation:
+                errors.append(f"processing_behavior.recommendation missing {required_field}")
+
     metadata = payload.get("call_metadata")
     if not isinstance(metadata, Mapping):
         errors.append("call_metadata must be an object")
@@ -162,6 +577,9 @@ def validate_req_001_runtime_entrypoint(payload: Mapping[str, Any]) -> list[str]
         "canonical_input_sha256",
         "reproducible_call_id",
         "canonical_input",
+        "processing_input_sha256",
+        "processing_call_id",
+        "canonical_processing_input",
     }
     metadata_keys = set(metadata.keys())
     missing_metadata = sorted(required_metadata - metadata_keys)
@@ -195,6 +613,48 @@ def validate_req_001_runtime_entrypoint(payload: Mapping[str, Any]) -> list[str]
     if metadata.get("reproducible_call_id") != expected_call_id:
         errors.append("call_metadata.reproducible_call_id does not match canonical digest")
 
+    expected_canonical_processing_input = _canonical_processing_input(
+        target_project_evidence_refs=list(
+            processing_behavior.get("context_inputs", {})
+            .get("target_project", {})
+            .get("evidence_refs", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
+        earth_sweep_evidence_refs=list(
+            processing_behavior.get("context_inputs", {})
+            .get("earth_sweep", {})
+            .get("evidence_refs", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
+        cross_project_context=list(
+            processing_behavior.get("context_inputs", {})
+            .get("cross_project_context", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
+        candidate_recommendations=list(
+            processing_behavior.get("context_inputs", {})
+            .get("candidate_recommendations", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
+    )
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+        return errors
+    if dict(canonical_processing_input) != expected_canonical_processing_input:
+        errors.append("call_metadata.canonical_processing_input must mirror normalized processing input")
+
+    expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
+    expected_processing_call_id = f"req001-processing-{expected_processing_digest[:16]}"
+    if metadata.get("processing_input_sha256") != expected_processing_digest:
+        errors.append("call_metadata.processing_input_sha256 does not match processing input")
+    if metadata.get("processing_call_id") != expected_processing_call_id:
+        errors.append("call_metadata.processing_call_id does not match processing digest")
+
     return errors
 
 
@@ -210,6 +670,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--revision-identity", required=True)
     parser.add_argument(
+        "--context-input-path",
+        default=None,
+        help="Optional JSON file containing context sweep inputs for deterministic processing behavior.",
+    )
+    parser.add_argument(
         "--output-path",
         default="-",
         help='Output path for payload JSON. Use "-" for stdout (default).',
@@ -219,11 +684,30 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
+
+    context_input: dict[str, Any] = {}
+    if args.context_input_path:
+        try:
+            context_input = json.loads(Path(args.context_input_path).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            print(f"validation_error: context input path not found: {args.context_input_path}", file=sys.stderr)
+            return 2
+        except json.JSONDecodeError as exc:
+            print(f"validation_error: invalid context input json: {exc}", file=sys.stderr)
+            return 2
+        if not isinstance(context_input, dict):
+            print("validation_error: context input JSON must be an object", file=sys.stderr)
+            return 2
+
     payload = build_req_001_runtime_entrypoint(
         target_project_root=args.target_project_root,
         earth_root=args.earth_root,
         output_root=args.output_root,
         revision_identity=args.revision_identity,
+        target_project_evidence_refs=context_input.get("target_project_evidence_refs"),
+        earth_sweep_evidence_refs=context_input.get("earth_sweep_evidence_refs"),
+        cross_project_context=context_input.get("cross_project_context"),
+        candidate_recommendations=context_input.get("candidate_recommendations"),
     )
     errors = validate_req_001_runtime_entrypoint(payload)
     if errors:

@@ -1,0 +1,52 @@
+{
+  "target_project_evidence_refs": [
+    "reports/optimus-prime/planning/evidence/TASK-002/TASK_EVIDENCE.json"
+  ],
+  "earth_sweep_evidence_refs": [
+    "reports/earth/sweeps/2026-03-14/portfolio.json"
+  ],
+  "cross_project_context": [
+    {
+      "project_id": "ground-control-hub",
+      "project_root": "/workspace/projects/Earth/ground-control-hub",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+      ],
+      "context_note": "Dependencies discovered in Earth-wide sweep."
+    },
+    {
+      "project_id": "runtime-orchestrator",
+      "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json"
+      ],
+      "context_note": "Runtime coordination constraints from Earth sweep."
+    }
+  ],
+  "candidate_recommendations": [
+    {
+      "action_id": "action-target-hardening",
+      "summary": "Harden LLM-first runtime entrypoint for reproducible strategy calls.",
+      "rationale": "Target project evidence confirms REQ-001 scope and entrypoint contract.",
+      "action_scope": "local",
+      "requires_earth_evidence": false,
+      "project_id": "",
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-002/TASK_EVIDENCE.json"
+      ],
+      "next_step": "Implement payload builder and validator updates."
+    },
+    {
+      "action_id": "action-cross-project-obligation",
+      "summary": "Coordinate shared ingestion assumptions with runtime-orchestrator.",
+      "rationale": "Cross-project dependency is backed by Earth sweep evidence refs.",
+      "action_scope": "cross-project",
+      "requires_earth_evidence": true,
+      "project_id": "runtime-orchestrator",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json"
+      ],
+      "next_step": "Open cross-project task with attached Earth evidence refs."
+    }
+  ]
+}

@@ -3,7 +3,49 @@
     "target_project_root": "/opt/optimus-prime/project-root",
     "earth_root": "/opt/optimus-prime/Earth",
     "output_root": "/opt/optimus-prime/project-root/strategy-out",
-    "revision_identity": "rev-req001-fixture-r1"
+    "revision_identity": "rev-req001-fixture-r1",
+    "target_project_evidence_refs": [
+      "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json"
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-14/portfolio.json"
+    ],
+    "cross_project_context": [
+      {
+        "project_id": "ground-control-hub",
+        "project_root": "/opt/optimus-prime/Earth/ground-control-hub",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+        ],
+        "context_note": "Earth sweep for ground ingestion dependencies."
+      }
+    ],
+    "candidate_recommendations": [
+      {
+        "action_id": "action-local-runtime",
+        "summary": "Implement runtime entrypoint contract scaffolding.",
+        "rationale": "Target project requirements already include invocation anchors.",
+        "action_scope": "local",
+        "requires_earth_evidence": false,
+        "project_id": "",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json"
+        ],
+        "next_step": "Wire runtime entrypoint payload generation into strategy pipeline."
+      },
+      {
+        "action_id": "action-cross-project-ingest",
+        "summary": "Coordinate ingestion normalization changes with Ground Control Hub.",
+        "rationale": "Cross-project dependency requires Earth sweep corroboration.",
+        "action_scope": "cross-project",
+        "requires_earth_evidence": true,
+        "project_id": "ground-control-hub",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+        ],
+        "next_step": "Open joint task only after Earth evidence refs are attached."
+      }
+    ]
   },
   "expected_payload": {
     "schema_version": "req-001.llm-first-strategy-runtime-entrypoint.v1",
@@ -16,6 +58,127 @@
       "output_root": "/opt/optimus-prime/project-root/strategy-out",
       "revision_identity": "rev-req001-fixture-r1"
     },
+    "processing_behavior": {
+      "strategy": "llm-first-broad-sweep",
+      "reasoning_mode": "long-thinking",
+      "heuristic_summarization_only": false,
+      "context_inputs": {
+        "target_project": {
+          "project_root": "/opt/optimus-prime/project-root",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json"
+          ]
+        },
+        "earth_sweep": {
+          "earth_root": "/opt/optimus-prime/Earth",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-14/portfolio.json"
+          ]
+        },
+        "cross_project_context": [
+          {
+            "project_id": "ground-control-hub",
+            "project_root": "/opt/optimus-prime/Earth/ground-control-hub",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+            ],
+            "context_note": "Earth sweep for ground ingestion dependencies."
+          }
+        ],
+        "candidate_recommendations": [
+          {
+            "action_id": "action-cross-project-ingest",
+            "summary": "Coordinate ingestion normalization changes with Ground Control Hub.",
+            "rationale": "Cross-project dependency requires Earth sweep corroboration.",
+            "action_scope": "cross-project",
+            "requires_earth_evidence": true,
+            "project_id": "ground-control-hub",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+            ],
+            "next_step": "Open joint task only after Earth evidence refs are attached."
+          },
+          {
+            "action_id": "action-local-runtime",
+            "summary": "Implement runtime entrypoint contract scaffolding.",
+            "rationale": "Target project requirements already include invocation anchors.",
+            "action_scope": "local",
+            "requires_earth_evidence": false,
+            "project_id": "",
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json"
+            ],
+            "next_step": "Wire runtime entrypoint payload generation into strategy pipeline."
+          }
+        ]
+      },
+      "context_usage": {
+        "target_project_context_used": true,
+        "earth_sweep_context_used": true,
+        "cross_project_context_used": true,
+        "target_project_refs_used": [
+          "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json"
+        ],
+        "earth_sweep_refs_used": [
+          "reports/earth/sweeps/2026-03-14/portfolio.json"
+        ],
+        "cross_project_refs_used": [
+          "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+        ],
+        "cross_project_projects_considered": [
+          "ground-control-hub"
+        ],
+        "evidence_refs_used": [
+          "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+          "reports/earth/sweeps/2026-03-14/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json"
+        ]
+      },
+      "recommendation": {
+        "decision": "proceed",
+        "rationale": "Broad-sweep context evidence is sufficient for immediate LLM-first execution.",
+        "confidence": "high",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+          "reports/earth/sweeps/2026-03-14/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json"
+        ],
+        "recommended_actions": [
+          {
+            "action_id": "action-cross-project-ingest",
+            "summary": "Coordinate ingestion normalization changes with Ground Control Hub.",
+            "rationale": "Cross-project dependency requires Earth sweep corroboration.",
+            "action_scope": "cross-project",
+            "next_step": "Open joint task only after Earth evidence refs are attached.",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+            ]
+          },
+          {
+            "action_id": "action-local-runtime",
+            "summary": "Implement runtime entrypoint contract scaffolding.",
+            "rationale": "Target project requirements already include invocation anchors.",
+            "action_scope": "local",
+            "next_step": "Wire runtime entrypoint payload generation into strategy pipeline.",
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json"
+            ]
+          }
+        ],
+        "cross_project_obligations": [
+          {
+            "obligation_id": "obligation-action-cross-project-ingest",
+            "project_id": "ground-control-hub",
+            "summary": "Coordinate ingestion normalization changes with Ground Control Hub.",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+              "reports/earth/sweeps/2026-03-14/portfolio.json"
+            ]
+          }
+        ],
+        "open_risks": []
+      }
+    },
     "call_metadata": {
       "reproducibility": "deterministic-input-fingerprint",
       "canonical_input_sha256": "0bdd662909370ddbe2ae17d691c4e6f775c5bfb28bb85f0275aaf7acc62b6d17",
@@ -27,6 +190,52 @@
         "revision_identity": "rev-req001-fixture-r1",
         "runtime_mode": "llm-first",
         "target_project_root": "/opt/optimus-prime/project-root"
+      },
+      "processing_input_sha256": "a0d580aacf863f8095c86953ead47839498728afaabc2bfd8361867ceb82838b",
+      "processing_call_id": "req001-processing-a0d580aacf863f80",
+      "canonical_processing_input": {
+        "target_project_evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-14/portfolio.json"
+        ],
+        "cross_project_context": [
+          {
+            "project_id": "ground-control-hub",
+            "project_root": "/opt/optimus-prime/Earth/ground-control-hub",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+            ],
+            "context_note": "Earth sweep for ground ingestion dependencies."
+          }
+        ],
+        "candidate_recommendations": [
+          {
+            "action_id": "action-cross-project-ingest",
+            "summary": "Coordinate ingestion normalization changes with Ground Control Hub.",
+            "rationale": "Cross-project dependency requires Earth sweep corroboration.",
+            "action_scope": "cross-project",
+            "requires_earth_evidence": true,
+            "project_id": "ground-control-hub",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+            ],
+            "next_step": "Open joint task only after Earth evidence refs are attached."
+          },
+          {
+            "action_id": "action-local-runtime",
+            "summary": "Implement runtime entrypoint contract scaffolding.",
+            "rationale": "Target project requirements already include invocation anchors.",
+            "action_scope": "local",
+            "requires_earth_evidence": false,
+            "project_id": "",
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json"
+            ],
+            "next_step": "Wire runtime entrypoint payload generation into strategy pipeline."
+          }
+        ]
       }
     }
   }
