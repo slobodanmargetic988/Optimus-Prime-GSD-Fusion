@@ -1,0 +1,35 @@
+{
+  "now_utc": "2026-03-14T21:00:00Z",
+  "stale_after_seconds": {
+    "plan_packets": 600,
+    "state": 300,
+    "roadmap": 86400,
+    "requirements": 604800
+  },
+  "decision_policy": {
+    "stale": "downgrade",
+    "missing": "exclude"
+  },
+  "projects": [
+    {
+      "project_id": "earth-north",
+      "root_path": "__TMP__/earth-north",
+      "artifacts": {
+        "plan_packets": "strategy/current/PLAN_PACKETS.json",
+        "state": "strategy/current/STATE.json",
+        "roadmap": "docs/plans/ROADMAP.md",
+        "requirements": "docs/plans/REQUIREMENTS.md"
+      }
+    },
+    {
+      "project_id": "earth-south",
+      "root_path": "__TMP__/earth-south",
+      "artifacts": {
+        "plan_packets": "strategy/current/PLAN_PACKETS.json",
+        "state": "strategy/current/STATE.json",
+        "roadmap": "docs/plans/ROADMAP.md",
+        "requirements": "docs/plans/REQUIREMENTS.md"
+      }
+    }
+  ]
+}
