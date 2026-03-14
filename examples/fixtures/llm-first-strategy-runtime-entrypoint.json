@@ -1,0 +1,33 @@
+{
+  "input": {
+    "target_project_root": "/opt/optimus-prime/project-root",
+    "earth_root": "/opt/optimus-prime/Earth",
+    "output_root": "/opt/optimus-prime/project-root/strategy-out",
+    "revision_identity": "rev-req001-fixture-r1"
+  },
+  "expected_payload": {
+    "schema_version": "req-001.llm-first-strategy-runtime-entrypoint.v1",
+    "requirement_id": "REQ-001",
+    "strategy_runtime_entrypoint": {
+      "runtime_mode": "llm-first",
+      "execution_mode": "long-thinking",
+      "target_project_root": "/opt/optimus-prime/project-root",
+      "earth_root": "/opt/optimus-prime/Earth",
+      "output_root": "/opt/optimus-prime/project-root/strategy-out",
+      "revision_identity": "rev-req001-fixture-r1"
+    },
+    "call_metadata": {
+      "reproducibility": "deterministic-input-fingerprint",
+      "canonical_input_sha256": "0bdd662909370ddbe2ae17d691c4e6f775c5bfb28bb85f0275aaf7acc62b6d17",
+      "reproducible_call_id": "req001-0bdd662909370ddb",
+      "canonical_input": {
+        "earth_root": "/opt/optimus-prime/Earth",
+        "execution_mode": "long-thinking",
+        "output_root": "/opt/optimus-prime/project-root/strategy-out",
+        "revision_identity": "rev-req001-fixture-r1",
+        "runtime_mode": "llm-first",
+        "target_project_root": "/opt/optimus-prime/project-root"
+      }
+    }
+  }
+}

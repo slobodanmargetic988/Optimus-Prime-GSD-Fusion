@@ -1,0 +1,25 @@
+{
+  "schema_version": "req-001.llm-first-strategy-runtime-entrypoint.v1",
+  "requirement_id": "REQ-001",
+  "strategy_runtime_entrypoint": {
+    "runtime_mode": "llm-first",
+    "execution_mode": "long-thinking",
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/current/out",
+    "revision_identity": "f29cfceb25e813f9bf6eb745c3b14ecbd35f0515"
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "970ef5dcd0d8d83a0e8b3db6f27518b106acae5fe575e86d9a330261867e3dae",
+    "reproducible_call_id": "req001-970ef5dcd0d8d83a",
+    "canonical_input": {
+      "earth_root": "/workspace/projects/Earth",
+      "execution_mode": "long-thinking",
+      "output_root": "/workspace/projects/optimus-prime/strategy/current/out",
+      "revision_identity": "f29cfceb25e813f9bf6eb745c3b14ecbd35f0515",
+      "runtime_mode": "llm-first",
+      "target_project_root": "/workspace/projects/optimus-prime"
+    }
+  }
+}
