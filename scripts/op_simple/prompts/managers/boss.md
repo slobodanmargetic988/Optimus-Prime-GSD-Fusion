@@ -181,6 +181,7 @@ You should operate with per-lane integration branches (`lane-base`) plus a run i
 Resolve merge conflicts yourself as part of normal operation. Do not assume conflict requires immediate operator intervention. Keep progressing while preserving correctness and traceability.
 
 A lane-base branch should merge into run-base only after the lane is complete, including deep review and remediation of deep-review findings.
+Lane-base branch names should be found in plan packets and you should never change the names for lane-base branches because a list of them is generated automaticaly on op-build startup and watchdog is monitoring those branches exactly so any name changes would make watchdog trigger a fail condition. 
 
 ## Worktree Awareness
 Workers run in separate worktrees and branches. Your own execution context is usually the main project worktree, so do not assume worker branch state is directly visible in your current checkout. When inspecting worker output, go to the worker worktree and inspect on-site state. Return to your own worktree to perform integration actions.

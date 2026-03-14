@@ -9,6 +9,12 @@ Hard requirements:
    - checksum_sha256 (sha256 of canonical content)
 3. After writing the bundle, run this validator command:
    {{VALIDATOR_COMMAND}}
+   3A. Lane-base branch mapping contract (hard):
+   - PLAN_PACKETS.json must include top-level `lane_base_branches` as an object map: `{ "<lane_id>": "<lane_base_branch>" }
+   - Every non-empty `tasks[].lane_id` must be present as a key in `lane_base_branches`.
+   - Branch names must be non-empty strings and deterministic/stable for each lane_id.
+   - Do not finalize if this map is missing or incomplete.
+
 4. If validation fails, fix artifacts and rerun validator until it passes.
 5. Do not output prose files outside required artifacts.
 6. The output must match the planner example contract in both folder path shape and per-file structure:
@@ -76,7 +82,22 @@ Planning requirements:
 6. Per phase, use at most 3 distinct lanes.
 7. TDD-first: each requirement and task must include verification intent.
    - phase-1 seed TDD tasks MUST use verification_contract.mode=tdd_red and expect_fail for dev/test/review.
-8. For each functionality tree with more than 3 tasks, include at least 2 terminal hardening/review tasks and 1 task to merge the entire functionality intu current run base as the final task. Merge tasks should only be verified with the existance of a commit.
+8. For each functionality tree with more than 3 tasks, include:
+- at least 2 terminal hardening/review tasks
+- 1 final merge-to-run-base task
+
+Merge-to-run-base task verification contract (required):
+- Must not be verified by "commit exists" alone.
+- Must include evidence of integration into run-base:
+  - run_base_before_sha
+  - run_base_after_sha
+  - merge_commit_sha (or explicit squash/rebase proof)
+  - verification that merge_commit_sha is ancestor of run_base_after_sha
+- Must include post-merge quality evidence:
+  - at least 1 targeted test command result artifact
+  - 1 review/hardening summary artifact with blocker status
+- If merge conflicts occur, route to LLM merge-recovery flow and keep merge task non-done until evidence contract is satisfied.
+
 9. PLAN_CHECK.passed must be true.
 10. Keep plan quality high enough for autonomous op-build execution.
 11. Plan quality bar (hard, internal self-check before finalizing):
@@ -183,6 +204,8 @@ Strict output discipline:
 - For greenfield projects, final task graph clearly reaches a localhost-runnable product outcome (not logic-only completion).
 - For existing projects, final task graph clearly integrates into current architecture without duplicating parallel subsystems.
 - You must generate <repo-root>/reports/optimus-prime/planning/PLAN_PACKETS.json and it must pass the provided validation before stopping.
+- `PLAN_PACKETS.lane_base_branches` exists and fully covers all `tasks[].lane_id`.
+
 
 ## Tech Stack Resolution Policy
 Resolve technology choices in this strict precedence order:
