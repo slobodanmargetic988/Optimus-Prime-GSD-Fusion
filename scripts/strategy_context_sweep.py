@@ -49,7 +49,7 @@ def _canonical_call_input(
     }
 
 
-def _canonical_input_digest(canonical_input: Mapping[str, str]) -> str:
+def _canonical_input_digest(canonical_input: Mapping[str, Any]) -> str:
     raw = json.dumps(canonical_input, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -72,6 +72,11 @@ def _normalize_context_note(raw_value: Any, *, field_name: str) -> str:
     if not isinstance(raw_value, str):
         raise ValueError(f"{field_name} must be a string when provided")
     return raw_value.strip()
+
+
+def _stable_id_fragment(*parts: str) -> str:
+    raw = "|".join(parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
 
 
 def _normalize_cross_project_context(raw_value: Any) -> list[dict[str, Any]]:
@@ -101,6 +106,119 @@ def _normalize_cross_project_context(raw_value: Any) -> list[dict[str, Any]]:
         )
 
     normalized.sort(key=lambda row: (row["project_id"], row["project_root"]))
+    return normalized
+
+
+def _normalize_source_artifact_status(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return "fresh"
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string when provided")
+    status = raw_value.strip().lower()
+    if status not in {"fresh", "stale"}:
+        raise ValueError(f"{field_name} must be either 'fresh' or 'stale'")
+    return status
+
+
+def _normalize_earth_sweep_source_artifacts(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("earth_sweep_source_artifacts must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"earth_sweep_source_artifacts[{index}] must be an object")
+        artifact_ref = _require_nonempty_text(
+            item.get("artifact_ref"),
+            field_name=f"earth_sweep_source_artifacts[{index}].artifact_ref",
+        )
+        status = _normalize_source_artifact_status(
+            item.get("status"),
+            field_name=f"earth_sweep_source_artifacts[{index}].status",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"earth_sweep_source_artifacts[{index}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "artifact_ref": artifact_ref,
+                "status": status,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(key=lambda row: (row["artifact_ref"], row["status"]))
+    return normalized
+
+
+def _normalize_required_doc_kind(raw_value: Any, *, field_name: str) -> str:
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string")
+    doc_kind = raw_value.strip().lower()
+    if doc_kind not in {"mission", "scope", "peer-project"}:
+        raise ValueError(f"{field_name} must be one of: mission, scope, peer-project")
+    return doc_kind
+
+
+def _normalize_required_doc_status(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return "present"
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string when provided")
+    status = raw_value.strip().lower()
+    if status not in {"present", "missing"}:
+        raise ValueError(f"{field_name} must be either 'present' or 'missing'")
+    return status
+
+
+def _normalize_required_context_documents(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("required_context_documents must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"required_context_documents[{index}] must be an object")
+        doc_kind = _normalize_required_doc_kind(
+            item.get("doc_kind"),
+            field_name=f"required_context_documents[{index}].doc_kind",
+        )
+        doc_ref = _require_nonempty_text(
+            item.get("doc_ref"),
+            field_name=f"required_context_documents[{index}].doc_ref",
+        )
+        status = _normalize_required_doc_status(
+            item.get("status"),
+            field_name=f"required_context_documents[{index}].status",
+        )
+        project_id = _normalize_context_note(
+            item.get("project_id"),
+            field_name=f"required_context_documents[{index}].project_id",
+        )
+        if doc_kind == "peer-project" and not project_id:
+            raise ValueError(f"required_context_documents[{index}].project_id must be set for peer-project docs")
+        if doc_kind != "peer-project":
+            project_id = ""
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"required_context_documents[{index}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "doc_kind": doc_kind,
+                "doc_ref": doc_ref,
+                "status": status,
+                "project_id": project_id,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(key=lambda row: (row["doc_kind"], row["project_id"], row["doc_ref"], row["status"]))
     return normalized
 
 
@@ -170,13 +288,20 @@ def _canonical_processing_input(
     earth_sweep_evidence_refs: list[str],
     cross_project_context: list[dict[str, Any]],
     candidate_recommendations: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]] | None = None,
+    required_context_documents: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return {
+    canonical: dict[str, Any] = {
         "target_project_evidence_refs": target_project_evidence_refs,
         "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
         "cross_project_context": cross_project_context,
         "candidate_recommendations": candidate_recommendations,
     }
+    if earth_sweep_source_artifacts:
+        canonical["earth_sweep_source_artifacts"] = earth_sweep_source_artifacts
+    if required_context_documents:
+        canonical["required_context_documents"] = required_context_documents
+    return canonical
 
 
 def _collect_unique_refs(*ref_groups: list[str]) -> list[str]:
@@ -192,6 +317,8 @@ def _recommendation_decision(*, recommended_actions: list[dict[str, Any]], open_
     if recommended_actions and open_risks:
         return "proceed-with-open-risks"
     if open_risks:
+        if any(str(row.get("reason_code")) != "missing_earth_sweep_evidence_refs" for row in open_risks):
+            return "resolve-context-gaps"
         return "collect-earth-evidence"
     return "insufficient-context"
 
@@ -203,6 +330,8 @@ def _recommendation_rationale(*, decision: str) -> str:
         return "Some actions are evidence-backed, while unresolved cross-project ideas remain open risks."
     if decision == "collect-earth-evidence":
         return "Cross-project ideas require Earth-sweep evidence refs before obligations can be committed."
+    if decision == "resolve-context-gaps":
+        return "Stale or missing context artifacts were detected; refresh required evidence before runtime replay."
     return "No actionable evidence-backed strategy actions were found in the provided context sweep."
 
 
@@ -222,12 +351,60 @@ def _build_processing_behavior(
     earth_sweep_evidence_refs: list[str],
     cross_project_context: list[dict[str, Any]],
     candidate_recommendations: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
 ) -> dict[str, Any]:
     cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    source_artifact_refs = _collect_unique_refs(
+        *[_collect_unique_refs([row["artifact_ref"]], row["evidence_refs"]) for row in earth_sweep_source_artifacts]
+    )
+    required_doc_refs = _collect_unique_refs(
+        *[_collect_unique_refs([row["doc_ref"]], row["evidence_refs"]) for row in required_context_documents]
+    )
 
     recommended_actions: list[dict[str, Any]] = []
     cross_project_obligations: list[dict[str, Any]] = []
     open_risks: list[dict[str, Any]] = []
+
+    for source_artifact in earth_sweep_source_artifacts:
+        if source_artifact["status"] != "stale":
+            continue
+        open_risks.append(
+            {
+                "risk_id": f"risk-earth-source-{_stable_id_fragment(source_artifact['artifact_ref'])}",
+                "summary": f"Earth sweep source artifact is stale: {source_artifact['artifact_ref']}",
+                "reason_code": "stale_earth_sweep_source_artifact",
+                "required_evidence_refs": _collect_unique_refs(
+                    [source_artifact["artifact_ref"]],
+                    source_artifact["evidence_refs"],
+                ),
+            }
+        )
+
+    for required_doc in required_context_documents:
+        if required_doc["status"] != "missing":
+            continue
+        reason_code = {
+            "mission": "missing_mission_doc",
+            "scope": "missing_scope_doc",
+            "peer-project": "missing_peer_project_doc",
+        }[required_doc["doc_kind"]]
+        summary = (
+            f"Required peer-project document is missing for '{required_doc['project_id']}': {required_doc['doc_ref']}"
+            if required_doc["doc_kind"] == "peer-project"
+            else f"Required {required_doc['doc_kind']} document is missing: {required_doc['doc_ref']}"
+        )
+        open_risks.append(
+            {
+                "risk_id": f"risk-context-doc-{_stable_id_fragment(required_doc['doc_kind'], required_doc['project_id'], required_doc['doc_ref'])}",
+                "summary": summary,
+                "reason_code": reason_code,
+                "required_evidence_refs": _collect_unique_refs(
+                    [required_doc["doc_ref"]],
+                    required_doc["evidence_refs"],
+                ),
+            }
+        )
 
     for candidate in candidate_recommendations:
         action = {
@@ -268,38 +445,54 @@ def _build_processing_behavior(
         target_project_evidence_refs,
         earth_sweep_evidence_refs,
         cross_project_refs,
+        source_artifact_refs,
+        required_doc_refs,
         *[row["evidence_refs"] for row in recommended_actions],
         *[row["evidence_refs"] for row in cross_project_obligations],
         *[row["required_evidence_refs"] for row in open_risks],
     )
     decision = _recommendation_decision(recommended_actions=recommended_actions, open_risks=open_risks)
 
+    context_inputs: dict[str, Any] = {
+        "target_project": {
+            "project_root": target_project_root,
+            "evidence_refs": target_project_evidence_refs,
+        },
+        "earth_sweep": {
+            "earth_root": earth_root,
+            "evidence_refs": earth_sweep_evidence_refs,
+        },
+        "cross_project_context": cross_project_context,
+        "candidate_recommendations": candidate_recommendations,
+    }
+    if earth_sweep_source_artifacts:
+        context_inputs["earth_sweep_source_artifacts"] = earth_sweep_source_artifacts
+    if required_context_documents:
+        context_inputs["required_context_documents"] = required_context_documents
+
+    context_usage: dict[str, Any] = {
+        "target_project_context_used": bool(target_project_evidence_refs),
+        "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+        "cross_project_context_used": bool(cross_project_context),
+        "target_project_refs_used": target_project_evidence_refs,
+        "earth_sweep_refs_used": earth_sweep_evidence_refs,
+        "cross_project_refs_used": cross_project_refs,
+        "cross_project_projects_considered": sorted({row["project_id"] for row in cross_project_context}),
+        "evidence_refs_used": recommendation_refs,
+    }
+    if earth_sweep_source_artifacts:
+        context_usage["earth_sweep_source_artifacts_used"] = True
+        context_usage["earth_sweep_source_artifact_refs_used"] = source_artifact_refs
+    if required_context_documents:
+        context_usage["required_context_documents_used"] = True
+        context_usage["required_context_document_refs_used"] = required_doc_refs
+
     return {
         "strategy": "llm-first-broad-sweep",
         "reasoning_mode": EXECUTION_MODE,
         "heuristic_summarization_only": False,
-        "context_inputs": {
-            "target_project": {
-                "project_root": target_project_root,
-                "evidence_refs": target_project_evidence_refs,
-            },
-            "earth_sweep": {
-                "earth_root": earth_root,
-                "evidence_refs": earth_sweep_evidence_refs,
-            },
-            "cross_project_context": cross_project_context,
-            "candidate_recommendations": candidate_recommendations,
-        },
-        "context_usage": {
-            "target_project_context_used": bool(target_project_evidence_refs),
-            "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
-            "cross_project_context_used": bool(cross_project_context),
-            "target_project_refs_used": target_project_evidence_refs,
-            "earth_sweep_refs_used": earth_sweep_evidence_refs,
-            "cross_project_refs_used": cross_project_refs,
-            "cross_project_projects_considered": sorted({row["project_id"] for row in cross_project_context}),
-            "evidence_refs_used": recommendation_refs,
-        },
+        "context_inputs": context_inputs,
+        "context_usage": context_usage,
         "recommendation": {
             "decision": decision,
             "rationale": _recommendation_rationale(decision=decision),
@@ -322,6 +515,8 @@ def build_req_001_runtime_entrypoint(
     earth_sweep_evidence_refs: list[str] | None = None,
     cross_project_context: list[Mapping[str, Any]] | None = None,
     candidate_recommendations: list[Mapping[str, Any]] | None = None,
+    earth_sweep_source_artifacts: list[Mapping[str, Any]] | None = None,
+    required_context_documents: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the REQ-001 runtime entrypoint payload."""
     normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
@@ -338,6 +533,8 @@ def build_req_001_runtime_entrypoint(
     )
     normalized_cross_context = _normalize_cross_project_context(cross_project_context)
     normalized_candidates = _normalize_candidate_recommendations(candidate_recommendations)
+    normalized_earth_source_artifacts = _normalize_earth_sweep_source_artifacts(earth_sweep_source_artifacts)
+    normalized_required_documents = _normalize_required_context_documents(required_context_documents)
 
     canonical_input = _canonical_call_input(
         target_project_root=normalized_target_root,
@@ -351,6 +548,8 @@ def build_req_001_runtime_entrypoint(
         earth_sweep_evidence_refs=normalized_earth_refs,
         cross_project_context=normalized_cross_context,
         candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
     )
     processing_digest = _canonical_input_digest(canonical_processing_input)
     processing_behavior = _build_processing_behavior(
@@ -360,6 +559,8 @@ def build_req_001_runtime_entrypoint(
         earth_sweep_evidence_refs=normalized_earth_refs,
         cross_project_context=normalized_cross_context,
         candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
     )
 
     return {
@@ -640,6 +841,18 @@ def validate_req_001_runtime_entrypoint(payload: Mapping[str, Any]) -> list[str]
         )
         if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
         else [],
+        earth_sweep_source_artifacts=list(
+            processing_behavior.get("context_inputs", {})
+            .get("earth_sweep_source_artifacts", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
+        required_context_documents=list(
+            processing_behavior.get("context_inputs", {})
+            .get("required_context_documents", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
     )
     canonical_processing_input = metadata.get("canonical_processing_input")
     if not isinstance(canonical_processing_input, Mapping):
@@ -708,6 +921,8 @@ def main(argv: list[str] | None = None) -> int:
         earth_sweep_evidence_refs=context_input.get("earth_sweep_evidence_refs"),
         cross_project_context=context_input.get("cross_project_context"),
         candidate_recommendations=context_input.get("candidate_recommendations"),
+        earth_sweep_source_artifacts=context_input.get("earth_sweep_source_artifacts"),
+        required_context_documents=context_input.get("required_context_documents"),
     )
     errors = validate_req_001_runtime_entrypoint(payload)
     if errors:
