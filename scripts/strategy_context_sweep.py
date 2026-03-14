@@ -207,6 +207,14 @@ def _recommendation_decision(totals: dict[str, int]) -> str:
     return "proceed_with_caution"
 
 
+def _missing_artifact_reason_code(artifact_key: str) -> str:
+    if artifact_key == "requirements":
+        return "missing_mission_scope_doc"
+    if artifact_key == "roadmap":
+        return "missing_peer_project_doc"
+    return "missing_planning_artifact"
+
+
 def _validate_project_row(row: Any, index: int) -> tuple[str, Path, dict[str, str]]:
     if not isinstance(row, dict):
         raise SweepError("input_error", f"projects[{index}] must be an object", stage="input")
@@ -271,6 +279,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                     {
                         "risk_id": f"{project_id}:{artifact_key}:missing",
                         "risk_type": "missing_artifact",
+                        "reason_code": _missing_artifact_reason_code(artifact_key),
                         "project_id": project_id,
                         "artifact_key": artifact_key,
                         "reason": "artifact missing from Earth sweep",
@@ -300,6 +309,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                         {
                             "risk_id": f"{project_id}:{artifact_key}:stale",
                             "risk_type": "stale_artifact",
+                            "reason_code": "stale_source_artifact_detected",
                             "project_id": project_id,
                             "artifact_key": artifact_key,
                             "reason": "artifact stale against threshold",
@@ -351,9 +361,11 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 {
                     "risk_id": f"{candidate['obligation_id']}:unresolved",
                     "risk_type": "unresolved_cross_project_obligation",
+                    "reason_code": "unresolved_cross_project_obligation",
                     "project_id": None,
                     "artifact_key": None,
                     "reason": ",".join(unresolved_reasons),
+                    "reason_codes": unresolved_reasons,
                     "evidence_refs": candidate_evidence_refs,
                     "obligation_id": candidate["obligation_id"],
                     "summary": candidate["summary"],
