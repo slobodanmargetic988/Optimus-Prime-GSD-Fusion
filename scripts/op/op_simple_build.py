@@ -3052,9 +3052,22 @@ def _profile_rows_from_disk(*, selected_aliases: list[str] | None = None) -> lis
                 break
         return filtered
 
-    if len(rows) > 1:
-        rows = [row for row in rows if str(row.get("alias") or "").strip() != "codex"]
     return rows
+
+
+def _default_selected_aliases_from_disk() -> list[str] | None:
+    rows = _profile_rows_from_disk(selected_aliases=None)
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        alias = str(row.get("alias") or "").strip().lower()
+        if not alias or alias in seen:
+            continue
+        seen.add(alias)
+        aliases.append(alias)
+    return aliases or None
 
 
 def _write_boss_stub(cfg: RunConfig, cycle_number: int) -> None:
@@ -3875,8 +3888,6 @@ def _boss_profile_candidates_from_snapshot(cfg: RunConfig) -> list[dict[str, Any
         return []
 
     candidate_rows = [row for row in rows if isinstance(row, dict)]
-    if len(candidate_rows) > 1:
-        candidate_rows = [row for row in candidate_rows if str(row.get("alias") or "").strip() != "codex"]
 
     candidates: list[dict[str, Any]] = []
     for row in candidate_rows:
@@ -4171,6 +4182,53 @@ def _refresh_profile_snapshot_via_skill(cfg: RunConfig, cycle_number: int) -> tu
     }
     _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], snapshot_payload)
     return True, f"profile snapshot refreshed via codex-rate-snapshot ({len(rows)} profiles)"
+
+
+def _profile_snapshot_row_count(cfg: RunConfig) -> int:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], default={})
+    if not isinstance(payload, dict):
+        return 0
+    rows = payload.get("profiles")
+    if not isinstance(rows, list):
+        return 0
+    return sum(1 for row in rows if isinstance(row, dict))
+
+
+def _bootstrap_profile_snapshot_before_first_boss(cfg: RunConfig, *, cycle_number: int) -> tuple[bool, str]:
+    if not _executor_uses_codex_backend(_normalize_executor_provider(cfg.executor_provider)):
+        return True, "profile snapshot bootstrap skipped for non-codex executor provider"
+    if _llm_profile_mode_enabled(cfg):
+        existing_rows = _profile_snapshot_row_count(cfg)
+        if existing_rows > 0:
+            suffix = "" if existing_rows == 1 else "s"
+            return True, f"profile snapshot available via llm profile mode ({existing_rows} profile row{suffix})"
+        refreshed, refresh_message = _refresh_profile_snapshot_via_llm_profile_registry(cfg, cycle_number)
+        if refreshed:
+            return True, refresh_message
+        return False, f"{refresh_message}; profile snapshot remains empty in llm profile mode"
+
+    # Seed from local profile discovery first so BOSS does not start from an empty snapshot.
+    discovered_rows = _profile_rows_from_disk(selected_aliases=list(cfg.selected_aliases or []) or None)
+    if discovered_rows:
+        snapshot_payload = {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "cycle_number": int(cycle_number),
+            "source": "filesystem-profile-discovery-bootstrap",
+            "profiles": discovered_rows,
+        }
+        _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], snapshot_payload)
+        return True, f"profile snapshot bootstrapped from filesystem discovery ({len(discovered_rows)} profiles)"
+
+    refreshed, refresh_message = _refresh_profile_snapshot_via_skill(cfg, cycle_number)
+    if refreshed:
+        return True, refresh_message
+
+    existing_rows = _profile_snapshot_row_count(cfg)
+    if existing_rows > 0:
+        suffix = "" if existing_rows == 1 else "s"
+        return True, f"{refresh_message}; retained existing snapshot with {existing_rows} profile row{suffix}"
+    return False, f"{refresh_message}; profile snapshot remains empty"
 
 
 def _profiles_all_hard_gated(cfg: RunConfig) -> bool:
@@ -6811,8 +6869,14 @@ def _build_config(req: Any) -> RunConfig:
     boss_model = str(getattr(req, "boss_model", "") or "").strip() or "gpt-5.3-codex"
     boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "xhigh"
     codex_profile = str(getattr(req, "codex_profile", getattr(req, "profile", "")) or "").strip() or None
-    selected_aliases = _normalize_selected_aliases(getattr(req, "selected_aliases", None))
     executor_provider = _normalize_executor_provider(getattr(req, "executor_provider", "codex"))
+    selected_aliases = _normalize_selected_aliases(getattr(req, "selected_aliases", None))
+    if (
+        selected_aliases is None
+        and codex_profile is None
+        and _executor_uses_codex_backend(executor_provider)
+    ):
+        selected_aliases = _default_selected_aliases_from_disk()
     executor_model = str(getattr(req, "executor_model", "") or "").strip() or None
     blackbox_lane = _normalize_blackbox_lane(getattr(req, "blackbox_lane", "free"))
     allow_worker_executor_override = bool(getattr(req, "allow_worker_executor_override", False))
@@ -6954,6 +7018,28 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "profile_policy": "force_default_codex",
                     "rate_policy": None,
                 },
+            )
+        bootstrap_ok, bootstrap_message = _bootstrap_profile_snapshot_before_first_boss(cfg, cycle_number=0)
+        if bootstrap_ok:
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle=0 profile-snapshot-bootstrap status=ok message={bootstrap_message}",
+                flush=True,
+            )
+        else:
+            warnings.append(
+                {
+                    "code": "profile_snapshot_bootstrap_failed",
+                    "message": bootstrap_message,
+                    "stage": "op-simple-build",
+                }
+            )
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle=0 profile-snapshot-bootstrap status=failed message={bootstrap_message}",
+                flush=True,
             )
         _seed_plan_artifacts_from_planner(cfg)
         lane_contract_ok, lane_contract = _plan_lane_base_branches_contract(cfg)

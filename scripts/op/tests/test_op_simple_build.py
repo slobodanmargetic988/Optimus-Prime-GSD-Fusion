@@ -168,6 +168,18 @@ def test_build_config_accepts_selected_aliases_list_and_dedupes(tmp_path: Path) 
     assert cfg.selected_aliases == ["six", "seven", "eight"]
 
 
+def test_build_config_defaults_selected_aliases_to_discovered_profiles(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in (".codex", ".codex-second"):
+        profile = tmp_path / name
+        profile.mkdir(parents=True, exist_ok=True)
+        (profile / "auth.json").write_text("{}", encoding="utf-8")
+
+    cfg = MODULE._build_config(make_req(tmp_path))
+
+    assert cfg.selected_aliases == ["codex", "codex-second"]
+
+
 def write_boss_artifacts(root: Path, cycle_number: int, *, overrides: dict[str, dict[str, object]] | None = None) -> None:
     override_map = overrides or {}
     base_payloads: dict[str, dict[str, object]] = {
@@ -4130,7 +4142,7 @@ def test_max_build_cycles_applies_to_current_run_not_global_counter(tmp_path: Pa
     assert out["data"]["cycle_number"] == 11
 
 
-def test_profile_rows_from_disk_excludes_default_when_multiple_profiles(tmp_path: Path, monkeypatch) -> None:
+def test_profile_rows_from_disk_keeps_default_when_multiple_profiles(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     default_profile = tmp_path / ".codex"
     secondary_profile = tmp_path / ".codex-second"
@@ -4142,7 +4154,7 @@ def test_profile_rows_from_disk_excludes_default_when_multiple_profiles(tmp_path
     rows = MODULE._profile_rows_from_disk()
     aliases = {str(row.get("alias")) for row in rows if isinstance(row, dict)}
 
-    assert "codex" not in aliases
+    assert "codex" in aliases
     assert "codex-second" in aliases
 
 
@@ -4228,7 +4240,10 @@ def test_rate_snapshot_profile_args_autodiscovers_when_selected_aliases_not_set(
 
     args, missing = MODULE._rate_snapshot_profile_args(cfg)
 
-    assert args == [f"codex-second={(tmp_path / '.codex-second').resolve()}"]
+    assert args == [
+        "codex=default",
+        f"codex-second={(tmp_path / '.codex-second').resolve()}",
+    ]
     assert missing == []
 
 
@@ -4247,6 +4262,64 @@ def test_rate_snapshot_profile_args_defaults_to_codex_when_no_profiles_discovere
 
     assert args == ["codex=default"]
     assert missing == []
+
+
+def test_bootstrap_profile_snapshot_before_first_boss_seeds_from_discovery(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in (".codex", ".codex-second"):
+        profile = tmp_path / name
+        profile.mkdir(parents=True, exist_ok=True)
+        (profile / "auth.json").write_text("{}", encoding="utf-8")
+
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+        selected_aliases=None,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    ok, message = MODULE._bootstrap_profile_snapshot_before_first_boss(cfg, cycle_number=0)
+
+    assert ok is True
+    assert "filesystem discovery" in message
+    payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"]).read_text(encoding="utf-8"))
+    aliases = [str(row.get("alias")) for row in payload.get("profiles", []) if isinstance(row, dict)]
+    assert aliases == ["codex", "codex-second"]
+
+
+def test_run_bootstraps_profile_snapshot_before_first_boss(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    events: list[str] = []
+
+    def fake_bootstrap(_cfg, *, cycle_number: int):
+        events.append(f"bootstrap:{cycle_number}")
+        return True, "bootstrap ok"
+
+    def fake_invoke_manager(*_args, **kwargs):
+        manager = str(kwargs.get("manager_name") or "")
+        if manager == "BOSS":
+            events.append("boss")
+        return MODULE.ManagerResult(
+            manager=manager,
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+        )
+
+    monkeypatch.setattr(MODULE, "_bootstrap_profile_snapshot_before_first_boss", fake_bootstrap)
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, max_build_cycles=1, dry_run=True, sleep_minutes=0))
+
+    assert out["ok"] is True
+    assert events and events[0] == "bootstrap:0"
+    assert "boss" in events
 
 
 def test_select_boss_profile_from_snapshot_prefers_highest_weekly_not_5h_gated(tmp_path: Path) -> None:
@@ -4366,7 +4439,7 @@ def test_select_boss_profile_from_snapshot_switches_when_preferred_weekly_below_
     assert home == "/tmp/codex-higher"
 
 
-def test_select_boss_profile_from_snapshot_excludes_default_codex_when_multiple_profiles_exist(tmp_path: Path) -> None:
+def test_select_boss_profile_from_snapshot_includes_default_codex_when_highest_capacity(tmp_path: Path) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
         repo_root=tmp_path,
@@ -4401,8 +4474,8 @@ def test_select_boss_profile_from_snapshot_excludes_default_codex_when_multiple_
 
     alias, home = MODULE._select_boss_profile_from_snapshot(cfg)
 
-    assert alias == "codex-second"
-    assert home == "/tmp/codex-second"
+    assert alias == "codex"
+    assert home == "/tmp/codex"
 
 
 def test_select_boss_profile_from_snapshot_skips_hard_gated_profiles(tmp_path: Path) -> None:
