@@ -1,0 +1,43 @@
+{
+  "schema_version": "REQ-004-peer-project-mission-and-scope-ingestion-input.v1",
+  "current_project": {
+    "project_id": "optimus-prime-gsd-fusion"
+  },
+  "peer_projects": [
+    {
+      "project_id": "op-tools-strategy",
+      "documents": [
+        {
+          "document_type": "mission",
+          "source_path": "op-tools/strategy/mission.md",
+          "content": "Strategy mission baseline.\nStrategy MUST publish recommendation IDs for planner traceability.\nStrategy should reuse shared packet schema templates across projects."
+        },
+        {
+          "document_type": "scope",
+          "source_path": "op-tools/strategy/scope.md",
+          "content": "Planner SHALL ingest strategy outputs as first-class context.\nTeams can leverage common strategy packet validators to reduce drift."
+        },
+        {
+          "document_type": "roadmap",
+          "source_path": "op-tools/strategy/roadmap.md",
+          "content": "Roadmap MUST stay in sync with quarter goals."
+        }
+      ]
+    },
+    {
+      "project_id": "op-tools-research",
+      "documents": [
+        {
+          "document_type": "mission",
+          "source_path": "op-tools/research/mission.md",
+          "content": "Research mission baseline.\nResearch MUST capture provenance for each external reference."
+        },
+        {
+          "document_type": "scope",
+          "source_path": "op-tools/research/scope.md",
+          "content": "Planner should reuse shared research topic templates.\nResearch outputs need to integrate with planner context ingestion."
+        }
+      ]
+    }
+  ]
+}

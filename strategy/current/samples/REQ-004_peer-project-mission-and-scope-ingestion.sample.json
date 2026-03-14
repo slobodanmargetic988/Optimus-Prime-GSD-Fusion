@@ -1,0 +1,290 @@
+{
+  "schema_version": "REQ-004-peer-project-mission-and-scope-ingestion.v1",
+  "generated_at": "2026-03-14T00:00:00Z",
+  "current_project_id": "optimus-prime-gsd-fusion",
+  "peer_project_models": [
+    {
+      "peer_project_id": "op-tools-strategy",
+      "ingested_documents": [
+        {
+          "document_type": "mission",
+          "source_path": "op-tools/strategy/mission.md",
+          "source_sha256": "41051b454548f3294d5968501c5c046bf6bb92c0839f0e6e065b9cfdcf5b83f0",
+          "line_count": 3
+        },
+        {
+          "document_type": "scope",
+          "source_path": "op-tools/strategy/scope.md",
+          "source_sha256": "0383472e4a9ce6c06189e9bd587136c242edc7007bda3fc8771ed30730b0205b",
+          "line_count": 2
+        }
+      ],
+      "interaction_obligations": [
+        {
+          "obligation_id": "OBL-op-tools-strategy-001",
+          "statement": "Strategy MUST publish recommendation IDs for planner traceability.",
+          "source_provenance": [
+            {
+              "document_type": "mission",
+              "source_path": "op-tools/strategy/mission.md",
+              "source_sha256": "41051b454548f3294d5968501c5c046bf6bb92c0839f0e6e065b9cfdcf5b83f0",
+              "line_number": 2,
+              "excerpt": "Strategy MUST publish recommendation IDs for planner traceability."
+            }
+          ]
+        },
+        {
+          "obligation_id": "OBL-op-tools-strategy-002",
+          "statement": "Planner SHALL ingest strategy outputs as first-class context.",
+          "source_provenance": [
+            {
+              "document_type": "scope",
+              "source_path": "op-tools/strategy/scope.md",
+              "source_sha256": "0383472e4a9ce6c06189e9bd587136c242edc7007bda3fc8771ed30730b0205b",
+              "line_number": 1,
+              "excerpt": "Planner SHALL ingest strategy outputs as first-class context."
+            }
+          ]
+        }
+      ],
+      "reuse_opportunities": [
+        {
+          "opportunity_id": "REUSE-op-tools-strategy-001",
+          "statement": "Strategy should reuse shared packet schema templates across projects.",
+          "source_provenance": [
+            {
+              "document_type": "mission",
+              "source_path": "op-tools/strategy/mission.md",
+              "source_sha256": "41051b454548f3294d5968501c5c046bf6bb92c0839f0e6e065b9cfdcf5b83f0",
+              "line_number": 3,
+              "excerpt": "Strategy should reuse shared packet schema templates across projects."
+            }
+          ]
+        },
+        {
+          "opportunity_id": "REUSE-op-tools-strategy-002",
+          "statement": "Teams can leverage common strategy packet validators to reduce drift.",
+          "source_provenance": [
+            {
+              "document_type": "scope",
+              "source_path": "op-tools/strategy/scope.md",
+              "source_sha256": "0383472e4a9ce6c06189e9bd587136c242edc7007bda3fc8771ed30730b0205b",
+              "line_number": 2,
+              "excerpt": "Teams can leverage common strategy packet validators to reduce drift."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "peer_project_id": "op-tools-research",
+      "ingested_documents": [
+        {
+          "document_type": "mission",
+          "source_path": "op-tools/research/mission.md",
+          "source_sha256": "461a69490ad018aec4e1cd15f8a8e6901955180729aa8d9305fdb32e6a2c6576",
+          "line_count": 2
+        },
+        {
+          "document_type": "scope",
+          "source_path": "op-tools/research/scope.md",
+          "source_sha256": "e6f210cad696212ed52b8067e13d1c6d964327720576f778eca3156ff8558e40",
+          "line_count": 2
+        }
+      ],
+      "interaction_obligations": [
+        {
+          "obligation_id": "OBL-op-tools-research-001",
+          "statement": "Research MUST capture provenance for each external reference.",
+          "source_provenance": [
+            {
+              "document_type": "mission",
+              "source_path": "op-tools/research/mission.md",
+              "source_sha256": "461a69490ad018aec4e1cd15f8a8e6901955180729aa8d9305fdb32e6a2c6576",
+              "line_number": 2,
+              "excerpt": "Research MUST capture provenance for each external reference."
+            }
+          ]
+        },
+        {
+          "obligation_id": "OBL-op-tools-research-002",
+          "statement": "Research outputs need to integrate with planner context ingestion.",
+          "source_provenance": [
+            {
+              "document_type": "scope",
+              "source_path": "op-tools/research/scope.md",
+              "source_sha256": "e6f210cad696212ed52b8067e13d1c6d964327720576f778eca3156ff8558e40",
+              "line_number": 2,
+              "excerpt": "Research outputs need to integrate with planner context ingestion."
+            }
+          ]
+        }
+      ],
+      "reuse_opportunities": [
+        {
+          "opportunity_id": "REUSE-op-tools-research-001",
+          "statement": "Planner should reuse shared research topic templates.",
+          "source_provenance": [
+            {
+              "document_type": "scope",
+              "source_path": "op-tools/research/scope.md",
+              "source_sha256": "e6f210cad696212ed52b8067e13d1c6d964327720576f778eca3156ff8558e40",
+              "line_number": 1,
+              "excerpt": "Planner should reuse shared research topic templates."
+            }
+          ]
+        },
+        {
+          "opportunity_id": "REUSE-op-tools-research-002",
+          "statement": "Research outputs need to integrate with planner context ingestion.",
+          "source_provenance": [
+            {
+              "document_type": "scope",
+              "source_path": "op-tools/research/scope.md",
+              "source_sha256": "e6f210cad696212ed52b8067e13d1c6d964327720576f778eca3156ff8558e40",
+              "line_number": 2,
+              "excerpt": "Research outputs need to integrate with planner context ingestion."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "cross_project_recommendations": [
+    {
+      "recommendation_id": "REC-0001",
+      "recommendation_type": "interaction_obligation",
+      "source_project_id": "op-tools-strategy",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "summary": "Honor peer interaction obligation: Strategy MUST publish recommendation IDs for planner traceability.",
+      "source_provenance": [
+        {
+          "document_type": "mission",
+          "source_path": "op-tools/strategy/mission.md",
+          "source_sha256": "41051b454548f3294d5968501c5c046bf6bb92c0839f0e6e065b9cfdcf5b83f0",
+          "line_number": 2,
+          "excerpt": "Strategy MUST publish recommendation IDs for planner traceability."
+        }
+      ]
+    },
+    {
+      "recommendation_id": "REC-0002",
+      "recommendation_type": "interaction_obligation",
+      "source_project_id": "op-tools-strategy",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "summary": "Honor peer interaction obligation: Planner SHALL ingest strategy outputs as first-class context.",
+      "source_provenance": [
+        {
+          "document_type": "scope",
+          "source_path": "op-tools/strategy/scope.md",
+          "source_sha256": "0383472e4a9ce6c06189e9bd587136c242edc7007bda3fc8771ed30730b0205b",
+          "line_number": 1,
+          "excerpt": "Planner SHALL ingest strategy outputs as first-class context."
+        }
+      ]
+    },
+    {
+      "recommendation_id": "REC-0003",
+      "recommendation_type": "reuse_opportunity",
+      "source_project_id": "op-tools-strategy",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "summary": "Reuse peer capability or artifact: Strategy should reuse shared packet schema templates across projects.",
+      "source_provenance": [
+        {
+          "document_type": "mission",
+          "source_path": "op-tools/strategy/mission.md",
+          "source_sha256": "41051b454548f3294d5968501c5c046bf6bb92c0839f0e6e065b9cfdcf5b83f0",
+          "line_number": 3,
+          "excerpt": "Strategy should reuse shared packet schema templates across projects."
+        }
+      ]
+    },
+    {
+      "recommendation_id": "REC-0004",
+      "recommendation_type": "reuse_opportunity",
+      "source_project_id": "op-tools-strategy",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "summary": "Reuse peer capability or artifact: Teams can leverage common strategy packet validators to reduce drift.",
+      "source_provenance": [
+        {
+          "document_type": "scope",
+          "source_path": "op-tools/strategy/scope.md",
+          "source_sha256": "0383472e4a9ce6c06189e9bd587136c242edc7007bda3fc8771ed30730b0205b",
+          "line_number": 2,
+          "excerpt": "Teams can leverage common strategy packet validators to reduce drift."
+        }
+      ]
+    },
+    {
+      "recommendation_id": "REC-0005",
+      "recommendation_type": "interaction_obligation",
+      "source_project_id": "op-tools-research",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "summary": "Honor peer interaction obligation: Research MUST capture provenance for each external reference.",
+      "source_provenance": [
+        {
+          "document_type": "mission",
+          "source_path": "op-tools/research/mission.md",
+          "source_sha256": "461a69490ad018aec4e1cd15f8a8e6901955180729aa8d9305fdb32e6a2c6576",
+          "line_number": 2,
+          "excerpt": "Research MUST capture provenance for each external reference."
+        }
+      ]
+    },
+    {
+      "recommendation_id": "REC-0006",
+      "recommendation_type": "interaction_obligation",
+      "source_project_id": "op-tools-research",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "summary": "Honor peer interaction obligation: Research outputs need to integrate with planner context ingestion.",
+      "source_provenance": [
+        {
+          "document_type": "scope",
+          "source_path": "op-tools/research/scope.md",
+          "source_sha256": "e6f210cad696212ed52b8067e13d1c6d964327720576f778eca3156ff8558e40",
+          "line_number": 2,
+          "excerpt": "Research outputs need to integrate with planner context ingestion."
+        }
+      ]
+    },
+    {
+      "recommendation_id": "REC-0007",
+      "recommendation_type": "reuse_opportunity",
+      "source_project_id": "op-tools-research",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "summary": "Reuse peer capability or artifact: Planner should reuse shared research topic templates.",
+      "source_provenance": [
+        {
+          "document_type": "scope",
+          "source_path": "op-tools/research/scope.md",
+          "source_sha256": "e6f210cad696212ed52b8067e13d1c6d964327720576f778eca3156ff8558e40",
+          "line_number": 1,
+          "excerpt": "Planner should reuse shared research topic templates."
+        }
+      ]
+    },
+    {
+      "recommendation_id": "REC-0008",
+      "recommendation_type": "reuse_opportunity",
+      "source_project_id": "op-tools-research",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "summary": "Reuse peer capability or artifact: Research outputs need to integrate with planner context ingestion.",
+      "source_provenance": [
+        {
+          "document_type": "scope",
+          "source_path": "op-tools/research/scope.md",
+          "source_sha256": "e6f210cad696212ed52b8067e13d1c6d964327720576f778eca3156ff8558e40",
+          "line_number": 2,
+          "excerpt": "Research outputs need to integrate with planner context ingestion."
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "peer_projects_evaluated": 2,
+    "peer_projects_with_signals": 2,
+    "interaction_obligation_count": 4,
+    "reuse_opportunity_count": 4,
+    "recommendation_count": 8
+  }
+}
