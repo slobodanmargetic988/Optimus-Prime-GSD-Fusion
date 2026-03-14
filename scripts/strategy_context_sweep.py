@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,12 +16,20 @@ def _print_human(message: str) -> None:
     print(f"[{_utc_timestamp()}] {message}")
 
 
-def _error(reason_code: str, message: str) -> dict[str, str]:
-    return {"reason_code": reason_code, "message": message}
+def _error(
+    reason_code: str,
+    message: str,
+    *,
+    evidence_refs: list[str] | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {"reason_code": reason_code, "message": message}
+    if evidence_refs:
+        error["evidence_refs"] = evidence_refs
+    return error
 
 
-def _normalize_anchor(anchor: Any, *, field: str) -> tuple[str | None, str | None, list[dict[str, str]]]:
-    errors: list[dict[str, str]] = []
+def _normalize_anchor(anchor: Any, *, field: str) -> tuple[str | None, str | None, list[dict[str, Any]]]:
+    errors: list[dict[str, Any]] = []
 
     if anchor is None:
         errors.append(_error(f"{field}_missing", f"target_project.{field} is required"))
@@ -68,7 +77,7 @@ def _normalize_anchor(anchor: Any, *, field: str) -> tuple[str | None, str | Non
     return None, None, errors
 
 
-def _failure(errors: list[dict[str, str]]) -> dict[str, Any]:
+def _failure(errors: list[dict[str, Any]]) -> dict[str, Any]:
     reason_codes = []
     for item in errors:
         code = item["reason_code"]
@@ -169,6 +178,130 @@ def _extract_evidence_refs(item: Any) -> list[str]:
     return _normalize_evidence_refs(item.get("evidence_refs"))
 
 
+def _project_evidence_refs(project: Mapping[str, Any]) -> list[str]:
+    refs = _normalize_evidence_refs(project.get("earth_sweep_evidence_refs"))
+    if refs:
+        return refs
+
+    refs = _normalize_evidence_refs(project.get("evidence_refs"))
+    if refs:
+        return refs
+
+    source_artifact = project.get("source_artifact")
+    if isinstance(source_artifact, Mapping):
+        refs = _normalize_evidence_refs(source_artifact.get("evidence_refs"))
+        if refs:
+            return refs
+        single_ref = _normalize_evidence_ref(source_artifact.get("evidence_ref"))
+        if single_ref:
+            return [single_ref]
+    return []
+
+
+def _as_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y"}:
+            return True
+        if normalized in {"false", "0", "no", "n"}:
+            return False
+    return None
+
+
+def _is_stale_marker(value: Any) -> bool:
+    bool_value = _as_bool(value)
+    if bool_value is not None:
+        return bool_value
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return normalized in {"stale", "expired", "outdated", "obsolete"}
+    return False
+
+
+def _source_artifact_is_stale(project: Mapping[str, Any]) -> bool:
+    if _is_stale_marker(project.get("source_artifact_stale")):
+        return True
+    if _is_stale_marker(project.get("source_artifact_status")):
+        return True
+
+    source_artifact = project.get("source_artifact")
+    if _is_stale_marker(source_artifact):
+        return True
+    if isinstance(source_artifact, Mapping):
+        for key in ("stale", "status", "freshness", "state"):
+            if _is_stale_marker(source_artifact.get(key)):
+                return True
+
+    source_artifacts = project.get("source_artifacts")
+    if isinstance(source_artifacts, list):
+        for artifact in source_artifacts:
+            if _is_stale_marker(artifact):
+                return True
+            if isinstance(artifact, Mapping):
+                for key in ("stale", "status", "freshness", "state"):
+                    if _is_stale_marker(artifact.get(key)):
+                        return True
+    return False
+
+
+def _resolve_peer_project_doc(project: Mapping[str, Any]) -> tuple[str | None, bool]:
+    for key in (
+        "peer_project_doc",
+        "peer_project_mission_scope_doc",
+        "mission_scope_doc",
+        "mission_scope_source",
+    ):
+        if key not in project:
+            continue
+        value = project.get(key)
+        if isinstance(value, Mapping):
+            for doc_key in ("path", "source", "doc", "ref"):
+                doc_value = _as_non_empty_text(value.get(doc_key))
+                if doc_value:
+                    return doc_value, True
+            return None, True
+
+        doc_value = _as_non_empty_text(value)
+        if doc_value:
+            return doc_value, True
+        return None, True
+    return None, False
+
+
+def _collect_cross_project_gate_errors(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    projects = _extract_earth_sweep_projects(payload)
+    projects_by_label = sorted(
+        ((_project_label(project, idx), project) for idx, project in enumerate(projects)),
+        key=lambda item: item[0],
+    )
+
+    for project_label, project in projects_by_label:
+        evidence_refs = _project_evidence_refs(project)
+        peer_doc, peer_doc_declared = _resolve_peer_project_doc(project)
+        requires_peer_doc = _as_bool(project.get("requires_peer_project_doc")) is True or peer_doc_declared
+        if requires_peer_doc and not peer_doc:
+            errors.append(
+                _error(
+                    "peer_project_doc_missing",
+                    f"earth_sweep.projects[{project_label}].peer_project_doc is required",
+                    evidence_refs=evidence_refs,
+                )
+            )
+        if _source_artifact_is_stale(project):
+            errors.append(
+                _error(
+                    "stale_source_artifact_detected",
+                    f"earth_sweep.projects[{project_label}] contains stale source artifact metadata",
+                    evidence_refs=evidence_refs,
+                )
+            )
+    return errors
+
+
 def _collect_cross_project_recommendations(payload: Mapping[str, Any]) -> dict[str, Any]:
     action_items: list[dict[str, Any]] = []
     open_risks: list[dict[str, Any]] = []
@@ -242,6 +375,37 @@ def _collect_cross_project_recommendations(payload: Mapping[str, Any]) -> dict[s
     }
 
 
+def _build_context_bundle(
+    *,
+    mission_text: str,
+    mission_source: str,
+    scope_text: str,
+    scope_source: str,
+    cross_project: Mapping[str, Any],
+) -> dict[str, Any]:
+    bundle_payload = {
+        "target_project_constraints": {
+            "mission": {"text": mission_text, "source": mission_source},
+            "scope": {"text": scope_text, "source": scope_source},
+        },
+        "context_ingestion": {
+            "cross_project_context_used": bool(cross_project["cross_project_context_used"]),
+            "cross_project_inputs_considered": int(cross_project["cross_project_inputs_considered"]),
+            "earth_sweep_evidence_refs": list(cross_project["earth_sweep_evidence_refs"]),
+        },
+        "recommendations": {
+            "action_items": list(cross_project["action_items"]),
+            "open_risks": list(cross_project["open_risks"]),
+        },
+    }
+    canonical_json = json.dumps(bundle_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return {
+        "schema_version": "1.0",
+        "canonical_json": canonical_json,
+        "sha256": hashlib.sha256(canonical_json.encode("utf-8")).hexdigest(),
+    }
+
+
 def ingest_target_project_mission_scope(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Ingest target-project mission/scope anchors as authoritative constraints.
 
@@ -269,10 +433,18 @@ def ingest_target_project_mission_scope(payload: Mapping[str, Any]) -> dict[str,
         target_project.get("scope"), field="scope"
     )
     errors = mission_errors + scope_errors
+    errors.extend(_collect_cross_project_gate_errors(payload))
     if errors:
         return _failure(errors)
 
     cross_project = _collect_cross_project_recommendations(payload)
+    context_bundle = _build_context_bundle(
+        mission_text=mission_text,
+        mission_source=mission_source,
+        scope_text=scope_text,
+        scope_source=scope_source,
+        cross_project=cross_project,
+    )
 
     return {
         "ok": True,
@@ -311,6 +483,7 @@ def ingest_target_project_mission_scope(payload: Mapping[str, Any]) -> dict[str,
             "action_items": cross_project["action_items"],
             "open_risks": cross_project["open_risks"],
         },
+        "context_bundle": context_bundle,
     }
 
 
