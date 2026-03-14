@@ -1,0 +1,115 @@
+{
+  "input": {
+    "research_packet": {
+      "schema_version": "research-packet.v1",
+      "identity": {
+        "project_id": "prj.strategy",
+        "run_id": "run.20260314t220000z-r008",
+        "event_id": "event.20260314t220500z-research-packet",
+        "era_id": "era.2026q1-execution",
+        "plan_id": "plan.strategy-wave3"
+      },
+      "topics": [
+        {
+          "topic_id": "topic.dispatch-cycle-control",
+          "title": "Watcher-driven cycle release",
+          "recommendation_summary": "Assume watcher thresholds can gate cycle release while preserving worker autonomy.",
+          "tradeoffs": [
+            "Incorrect timeout tuning can reset healthy workers.",
+            "Signal fan-in adds operational complexity in exchange for lower idle cycles."
+          ],
+          "risk_level": "medium"
+        },
+        {
+          "topic_id": "topic.rate-limit-protection",
+          "title": "Rate-limit-aware scheduling",
+          "recommendation_summary": "Assume profile-level quotas can shape scheduling without starving critical work.",
+          "tradeoffs": [
+            "Aggressive throttling can delay high-priority fixes.",
+            "Conservative throttling can waste available budget windows."
+          ],
+          "risk_level": "high"
+        }
+      ],
+      "open_questions": [
+        "Which watcher threshold values minimize false resets under mixed workloads?",
+        "Should throttling policy prioritize recency or impact when budgets are tight?"
+      ],
+      "evidence_refs": [
+        {
+          "artifact_id": "artifact.dispatch-cycle-canary-20260314",
+          "kind": "canary_report",
+          "uri": "reports/optimus-prime/planning/VERIFICATION.md",
+          "notes": "Cycle telemetry from canary execution lanes."
+        },
+        {
+          "artifact_id": "artifact.rate-snapshot-20260314",
+          "kind": "rate_snapshot",
+          "uri": "reports/optimus-prime/planning/STATE.md",
+          "notes": "Profile budget observations used for scheduling assumptions."
+        }
+      ],
+      "source": {
+        "repo": "Optimus-Prime-GSD-Fusion",
+        "tool": "op-tools/research"
+      }
+    },
+    "recommendation_ids": [
+      "rec.dispatch-signal-watcher",
+      "rec.rate-limit-safety-lane"
+    ],
+    "recommendation_topic_map": {
+      "rec.dispatch-signal-watcher": [
+        "topic.dispatch-cycle-control"
+      ],
+      "rec.rate-limit-safety-lane": [
+        "topic.rate-limit-protection"
+      ]
+    },
+    "normalized_at_utc": "2026-03-14T22:10:00Z"
+  },
+  "expected_contract_anchors": {
+    "schema_version": "req-008.research-packet-ingestion-and-normalization.v1",
+    "requirement_id": "REQ-008",
+    "research_event_id": "event.20260314t220500z-research-packet",
+    "normalized_at_utc": "2026-03-14T22:10:00Z",
+    "assumption_ids": [
+      "assumption.001.topic-dispatch-cycle-control",
+      "assumption.002.topic-rate-limit-protection"
+    ],
+    "unknown_ids": [
+      "unknown.001",
+      "unknown.002"
+    ],
+    "risk_evidence_ids": [
+      "risk-evidence.001.topic-dispatch-cycle-control",
+      "risk-evidence.002.topic-rate-limit-protection"
+    ],
+    "recommendation_rationale_links": [
+      {
+        "recommendation_id": "rec.dispatch-signal-watcher",
+        "linked_topic_ids": [
+          "topic.dispatch-cycle-control"
+        ],
+        "linked_assumption_ids": [
+          "assumption.001.topic-dispatch-cycle-control"
+        ],
+        "linked_risk_evidence_ids": [
+          "risk-evidence.001.topic-dispatch-cycle-control"
+        ]
+      },
+      {
+        "recommendation_id": "rec.rate-limit-safety-lane",
+        "linked_topic_ids": [
+          "topic.rate-limit-protection"
+        ],
+        "linked_assumption_ids": [
+          "assumption.002.topic-rate-limit-protection"
+        ],
+        "linked_risk_evidence_ids": [
+          "risk-evidence.002.topic-rate-limit-protection"
+        ]
+      }
+    ]
+  }
+}

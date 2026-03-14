@@ -1,0 +1,187 @@
+{
+  "schema_version": "req-008.research-packet-ingestion-and-normalization.v1",
+  "requirement_id": "REQ-008",
+  "research_packet_identity": {
+    "project_id": "prj.strategy",
+    "run_id": "run.20260314t220000z-r008",
+    "event_id": "event.20260314t220500z-research-packet",
+    "era_id": "era.2026q1-execution",
+    "plan_id": "plan.strategy-wave3"
+  },
+  "strategy_context": {
+    "assumptions": [
+      {
+        "assumption_id": "assumption.001.topic-dispatch-cycle-control",
+        "topic_id": "topic.dispatch-cycle-control",
+        "statement": "Assume watcher thresholds can gate cycle release while preserving worker autonomy.",
+        "provenance": {
+          "research_event_id": "event.20260314t220500z-research-packet",
+          "source_field": "topics[].recommendation_summary"
+        }
+      },
+      {
+        "assumption_id": "assumption.002.topic-rate-limit-protection",
+        "topic_id": "topic.rate-limit-protection",
+        "statement": "Assume profile-level quotas can shape scheduling without starving critical work.",
+        "provenance": {
+          "research_event_id": "event.20260314t220500z-research-packet",
+          "source_field": "topics[].recommendation_summary"
+        }
+      }
+    ],
+    "unknowns": [
+      {
+        "unknown_id": "unknown.001",
+        "question": "Which watcher threshold values minimize false resets under mixed workloads?",
+        "provenance": {
+          "research_event_id": "event.20260314t220500z-research-packet",
+          "source_field": "open_questions[]"
+        }
+      },
+      {
+        "unknown_id": "unknown.002",
+        "question": "Should throttling policy prioritize recency or impact when budgets are tight?",
+        "provenance": {
+          "research_event_id": "event.20260314t220500z-research-packet",
+          "source_field": "open_questions[]"
+        }
+      }
+    ],
+    "risk_evidence": [
+      {
+        "risk_evidence_id": "risk-evidence.001.topic-dispatch-cycle-control",
+        "topic_id": "topic.dispatch-cycle-control",
+        "risk_level": "medium",
+        "risk_statement": "Incorrect timeout tuning can reset healthy workers.",
+        "evidence_refs": [
+          {
+            "artifact_id": "artifact.dispatch-cycle-canary-20260314",
+            "kind": "canary_report",
+            "uri": "reports/optimus-prime/planning/VERIFICATION.md",
+            "notes": "Cycle telemetry from canary execution lanes."
+          },
+          {
+            "artifact_id": "artifact.rate-snapshot-20260314",
+            "kind": "rate_snapshot",
+            "uri": "reports/optimus-prime/planning/STATE.md",
+            "notes": "Profile budget observations used for scheduling assumptions."
+          }
+        ],
+        "provenance": {
+          "research_event_id": "event.20260314t220500z-research-packet",
+          "source_fields": [
+            "topics[].risk_level",
+            "topics[].tradeoffs",
+            "evidence_refs[]"
+          ]
+        }
+      },
+      {
+        "risk_evidence_id": "risk-evidence.002.topic-rate-limit-protection",
+        "topic_id": "topic.rate-limit-protection",
+        "risk_level": "high",
+        "risk_statement": "Aggressive throttling can delay high-priority fixes.",
+        "evidence_refs": [
+          {
+            "artifact_id": "artifact.dispatch-cycle-canary-20260314",
+            "kind": "canary_report",
+            "uri": "reports/optimus-prime/planning/VERIFICATION.md",
+            "notes": "Cycle telemetry from canary execution lanes."
+          },
+          {
+            "artifact_id": "artifact.rate-snapshot-20260314",
+            "kind": "rate_snapshot",
+            "uri": "reports/optimus-prime/planning/STATE.md",
+            "notes": "Profile budget observations used for scheduling assumptions."
+          }
+        ],
+        "provenance": {
+          "research_event_id": "event.20260314t220500z-research-packet",
+          "source_fields": [
+            "topics[].risk_level",
+            "topics[].tradeoffs",
+            "evidence_refs[]"
+          ]
+        }
+      }
+    ]
+  },
+  "recommendation_rationale_provenance": [
+    {
+      "recommendation_id": "rec.dispatch-signal-watcher",
+      "rationale_field": "rationale",
+      "linked_assumption_ids": [
+        "assumption.001.topic-dispatch-cycle-control"
+      ],
+      "linked_unknown_ids": [
+        "unknown.001",
+        "unknown.002"
+      ],
+      "linked_risk_evidence_ids": [
+        "risk-evidence.001.topic-dispatch-cycle-control"
+      ],
+      "research_provenance": {
+        "research_packet_event_id": "event.20260314t220500z-research-packet",
+        "source_schema_version": "research-packet.v1",
+        "linked_topic_ids": [
+          "topic.dispatch-cycle-control"
+        ]
+      },
+      "provenance_refs": [
+        {
+          "artifact_id": "artifact.dispatch-cycle-canary-20260314",
+          "kind": "canary_report",
+          "uri": "reports/optimus-prime/planning/VERIFICATION.md",
+          "notes": "Cycle telemetry from canary execution lanes."
+        },
+        {
+          "artifact_id": "artifact.rate-snapshot-20260314",
+          "kind": "rate_snapshot",
+          "uri": "reports/optimus-prime/planning/STATE.md",
+          "notes": "Profile budget observations used for scheduling assumptions."
+        }
+      ]
+    },
+    {
+      "recommendation_id": "rec.rate-limit-safety-lane",
+      "rationale_field": "rationale",
+      "linked_assumption_ids": [
+        "assumption.002.topic-rate-limit-protection"
+      ],
+      "linked_unknown_ids": [
+        "unknown.001",
+        "unknown.002"
+      ],
+      "linked_risk_evidence_ids": [
+        "risk-evidence.002.topic-rate-limit-protection"
+      ],
+      "research_provenance": {
+        "research_packet_event_id": "event.20260314t220500z-research-packet",
+        "source_schema_version": "research-packet.v1",
+        "linked_topic_ids": [
+          "topic.rate-limit-protection"
+        ]
+      },
+      "provenance_refs": [
+        {
+          "artifact_id": "artifact.dispatch-cycle-canary-20260314",
+          "kind": "canary_report",
+          "uri": "reports/optimus-prime/planning/VERIFICATION.md",
+          "notes": "Cycle telemetry from canary execution lanes."
+        },
+        {
+          "artifact_id": "artifact.rate-snapshot-20260314",
+          "kind": "rate_snapshot",
+          "uri": "reports/optimus-prime/planning/STATE.md",
+          "notes": "Profile budget observations used for scheduling assumptions."
+        }
+      ]
+    }
+  ],
+  "source": {
+    "normalized_from_schema_version": "research-packet.v1",
+    "normalized_at_utc": "2026-03-14T22:10:00Z",
+    "tool": "strategy-context-sweep",
+    "tool_version": "1.0.0"
+  }
+}
