@@ -301,7 +301,7 @@ class OpRequest:
     blackbox_lane: str = "free"
     allow_worker_executor_override: bool = False
     cycle_release_mode: str = "token_conservative"
-    cycle_release_timeout_seconds: int = 300
+    cycle_release_timeout_seconds: int = 900
     cycle_release_poll_seconds: int = 5
 
 
@@ -11413,13 +11413,13 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             "cycle_release_mode must be one of: token_conservative, max_work",
             stage="input",
         )
-    cycle_release_timeout_raw = payload.get("cycle_release_timeout_seconds", 300)
+    cycle_release_timeout_raw = payload.get("cycle_release_timeout_seconds", 900)
     try:
         cycle_release_timeout_seconds = int(cycle_release_timeout_raw)
     except (TypeError, ValueError) as exc:
         raise OpError("input_error", "cycle_release_timeout_seconds must be integer", stage="input") from exc
     if cycle_release_timeout_seconds <= 0:
-        cycle_release_timeout_seconds = 300
+        cycle_release_timeout_seconds = 900
     cycle_release_poll_raw = payload.get("cycle_release_poll_seconds", 5)
     try:
         cycle_release_poll_seconds = int(cycle_release_poll_raw)

@@ -61,8 +61,8 @@ ARTIFACT_FILES = {
 }
 
 MANAGER_TIMEOUT_SECONDS = {
-    "BOSS": 720,
-    "wrapup-manager": 720,
+    "BOSS": 900,
+    "wrapup-manager": 900,
     "watchdog": 120,
     "summary": 120,
 }
@@ -155,8 +155,9 @@ GROUND_SYNC_DEFAULT_TIMEOUT_SECONDS = 120
 GROUND_SYNC_MANAGER_NAME = "ground-sync"
 GROUND_SYNC_SNAPSHOT_BASENAME = "current.trace_event_envelope.jsonl"
 DEFAULT_CYCLE_RELEASE_MODE = "token_conservative"
-DEFAULT_CYCLE_RELEASE_TIMEOUT_SECONDS = 300
+DEFAULT_CYCLE_RELEASE_TIMEOUT_SECONDS = 900
 DEFAULT_CYCLE_RELEASE_POLL_SECONDS = 5
+CYCLE_RELEASE_DEAD_PID_GUARD_SECONDS = 10
 CYCLE_RELEASE_MODES = {"token_conservative", "max_work"}
 DEFAULT_WORKTREES_PARENT = Path("/Users/slobodan/Forest")
 TRACE_EVENT_TIMESTAMP_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -4790,115 +4791,256 @@ def _cycle_release_baseline(cfg: RunConfig) -> tuple[str, int, int, int]:
     return signature, in_progress_workers, live_workers, task_in_progress
 
 
+def _cycle_release_watchset_from_dispatch_cycle(cfg: RunConfig, cycle_number: int) -> list[int]:
+    rows = _dispatch_events_for_cycle(cfg, cycle_number)
+    pids: set[int] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").strip() != "launched":
+            continue
+        pid_int = _coerce_pid(row.get("pid"))
+        if pid_int is None:
+            continue
+        pids.add(pid_int)
+    return sorted(pids)
+
+
+def _cycle_release_watchset_from_live_workers(cfg: RunConfig) -> list[int]:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
+    if not isinstance(payload, dict):
+        return []
+    worker_rows = payload.get("workers")
+    if not isinstance(worker_rows, list):
+        return []
+    pids: set[int] = set()
+    for row in worker_rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").strip() != "in_progress":
+            continue
+        pid_int = _coerce_pid(row.get("pid"))
+        if pid_int is None:
+            continue
+        if _is_pid_alive(pid_int):
+            pids.add(pid_int)
+    return sorted(pids)
+
+
+def _cycle_release_alive_pids(tracked_pids: list[int]) -> list[int]:
+    return sorted(pid for pid in tracked_pids if _is_pid_alive(pid))
+
+
 def _await_cycle_release_signal(
     cfg: RunConfig,
     *,
     cycle_number: int,
-    baseline_signature: str,
-    baseline_in_progress_workers: int,
-    baseline_live_workers: int,
-    baseline_task_in_progress: int,
 ) -> dict[str, Any]:
     wait_started_at = time.monotonic()
     mode = _normalize_cycle_release_mode(cfg.cycle_release_mode)
     timeout_seconds = max(1, int(cfg.cycle_release_timeout_seconds))
     poll_seconds = max(1, int(cfg.cycle_release_poll_seconds))
+    guard_seconds = max(0, int(CYCLE_RELEASE_DEAD_PID_GUARD_SECONDS))
+    if mode == "token_conservative":
+        tracked_pids = _cycle_release_watchset_from_dispatch_cycle(cfg, cycle_number)
+        watchset_source = "current_cycle_dispatch"
+    else:
+        tracked_pids = _cycle_release_watchset_from_live_workers(cfg)
+        watchset_source = "current_live_in_progress_workers"
 
-    if baseline_in_progress_workers <= 0 or baseline_live_workers <= 0 or baseline_task_in_progress <= 0:
+    if not tracked_pids:
         return {
             "mode": mode,
-            "decision": "no_wait_no_live_workers",
+            "watchset_source": watchset_source,
+            "decision": "no_wait_no_tracked_pids",
             "waited_seconds": 0.0,
             "timed_out": False,
-            "in_progress_workers": baseline_in_progress_workers,
-            "live_workers": baseline_live_workers,
-            "task_in_progress": baseline_task_in_progress,
+            "tracked_pid_count": 0,
+            "tracked_pids": [],
+            "alive_pid_count": 0,
+            "alive_pids": [],
+            "dead_pid_count": 0,
+            "dead_pids": [],
         }
 
     print(
         "[op-simple-build] "
         f"[{utc_now_iso()}] "
         f"cycle={cycle_number} cycle-release mode={mode} wait_start "
-        f"baseline_in_progress_workers={baseline_in_progress_workers} "
-        f"baseline_live_workers={baseline_live_workers} "
-        f"baseline_task_in_progress={baseline_task_in_progress} "
-        f"timeout_s={timeout_seconds} poll_s={poll_seconds}",
+        f"watchset_source={watchset_source} tracked_pid_count={len(tracked_pids)} "
+        f"tracked_pids={tracked_pids} timeout_s={timeout_seconds} poll_s={poll_seconds} "
+        f"guard_s={guard_seconds}",
         flush=True,
     )
 
+    previous_alive: set[int] = set(_cycle_release_alive_pids(tracked_pids))
+    heartbeat_due_at = wait_started_at + float(WAIT_HEARTBEAT_SECONDS)
+
+    def _result(*, decision: str, timed_out: bool, alive_set: set[int]) -> dict[str, Any]:
+        waited = round(float(time.monotonic() - wait_started_at), 3)
+        alive_sorted = sorted(alive_set)
+        dead_sorted = sorted(pid for pid in tracked_pids if pid not in alive_set)
+        return {
+            "mode": mode,
+            "watchset_source": watchset_source,
+            "decision": decision,
+            "waited_seconds": waited,
+            "timed_out": timed_out,
+            "tracked_pid_count": int(len(tracked_pids)),
+            "tracked_pids": list(tracked_pids),
+            "alive_pid_count": int(len(alive_sorted)),
+            "alive_pids": alive_sorted,
+            "dead_pid_count": int(len(dead_sorted)),
+            "dead_pids": dead_sorted,
+        }
+
+    def _guard_wait(alive_before_guard: set[int], *, release_decision: str) -> dict[str, Any] | None:
+        if guard_seconds <= 0:
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle={cycle_number} cycle-release mode={mode} guard_skipped guard_s=0 "
+                f"decision={release_decision}",
+                flush=True,
+            )
+            return _result(decision=release_decision, timed_out=False, alive_set=alive_before_guard)
+
+        guard_started_at = time.monotonic()
+        print(
+            "[op-simple-build] "
+            f"[{utc_now_iso()}] "
+            f"cycle={cycle_number} cycle-release mode={mode} guard_start "
+            f"guard_s={guard_seconds} decision_candidate={release_decision}",
+            flush=True,
+        )
+        while True:
+            now = time.monotonic()
+            elapsed_total = now - wait_started_at
+            if elapsed_total >= float(timeout_seconds):
+                alive_set = set(_cycle_release_alive_pids(tracked_pids))
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} cycle-release mode={mode} wait_timeout "
+                    f"release_reason=timeout_ceiling_reached_during_guard "
+                    f"alive_pid_count={len(alive_set)} alive_pids={sorted(alive_set)}",
+                    flush=True,
+                )
+                return _result(decision="timeout_release", timed_out=True, alive_set=alive_set)
+            guard_elapsed = now - guard_started_at
+            if guard_elapsed >= float(guard_seconds):
+                break
+            guard_remaining = float(guard_seconds) - guard_elapsed
+            timeout_remaining = float(timeout_seconds) - elapsed_total
+            sleep_seconds = min(float(poll_seconds), guard_remaining, timeout_remaining)
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+
+        alive_after_guard = set(_cycle_release_alive_pids(tracked_pids))
+        print(
+            "[op-simple-build] "
+            f"[{utc_now_iso()}] "
+            f"cycle={cycle_number} cycle-release mode={mode} guard_end "
+            f"guard_s={guard_seconds} alive_pid_count={len(alive_after_guard)} "
+            f"alive_pids={sorted(alive_after_guard)}",
+            flush=True,
+        )
+
+        if mode == "token_conservative":
+            if alive_after_guard:
+                return None
+            return _result(
+                decision="all_tracked_pids_dead_guarded",
+                timed_out=False,
+                alive_set=alive_after_guard,
+            )
+
+        dead_after_guard = [pid for pid in tracked_pids if pid not in alive_after_guard]
+        if not dead_after_guard:
+            return None
+        return _result(
+            decision="first_tracked_pid_dead_guarded",
+            timed_out=False,
+            alive_set=alive_after_guard,
+        )
+
     while True:
-        elapsed = time.monotonic() - wait_started_at
+        now = time.monotonic()
+        elapsed = now - wait_started_at
         if elapsed >= float(timeout_seconds):
-            in_progress_workers = baseline_in_progress_workers
-            live_workers = baseline_live_workers
-            task_in_progress = baseline_task_in_progress
-            try:
-                _sig, in_progress_workers, live_workers, task_in_progress = _cycle_release_baseline(cfg)
-            except Exception:  # noqa: BLE001
-                pass
-            waited = round(float(time.monotonic() - wait_started_at), 3)
+            alive_set = set(_cycle_release_alive_pids(tracked_pids))
             print(
                 "[op-simple-build] "
                 f"[{utc_now_iso()}] "
                 f"cycle={cycle_number} cycle-release mode={mode} wait_timeout "
-                f"waited_s={waited} in_progress_workers={in_progress_workers} "
-                f"live_workers={live_workers} task_in_progress={task_in_progress}",
+                "release_reason=timeout_ceiling_reached "
+                f"alive_pid_count={len(alive_set)} alive_pids={sorted(alive_set)}",
                 flush=True,
             )
-            return {
-                "mode": mode,
-                "decision": "timeout_fallback",
-                "waited_seconds": waited,
-                "timed_out": True,
-                "in_progress_workers": int(in_progress_workers),
-                "live_workers": int(live_workers),
-                "task_in_progress": int(task_in_progress),
-            }
+            return _result(decision="timeout_release", timed_out=True, alive_set=alive_set)
 
+        alive_set = set(_cycle_release_alive_pids(tracked_pids))
+        newly_dead = sorted(previous_alive - alive_set)
+        newly_alive = sorted(alive_set - previous_alive)
+        if newly_dead:
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle={cycle_number} cycle-release mode={mode} pid_transition "
+                f"event=dead pids={newly_dead} alive_pid_count={len(alive_set)}",
+                flush=True,
+            )
+        if newly_alive:
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle={cycle_number} cycle-release mode={mode} pid_transition "
+                f"event=alive pids={newly_alive} alive_pid_count={len(alive_set)}",
+                flush=True,
+            )
+
+        if mode == "token_conservative":
+            if not alive_set:
+                guard_result = _guard_wait(alive_set, release_decision="all_tracked_pids_dead_guarded")
+                if guard_result is not None:
+                    print(
+                        "[op-simple-build] "
+                        f"[{utc_now_iso()}] "
+                        f"cycle={cycle_number} cycle-release mode={mode} release_signal={guard_result['decision']} "
+                        f"waited_s={guard_result['waited_seconds']}",
+                        flush=True,
+                    )
+                    return guard_result
+        else:
+            dead_now = [pid for pid in tracked_pids if pid not in alive_set]
+            if dead_now:
+                guard_result = _guard_wait(alive_set, release_decision="first_tracked_pid_dead_guarded")
+                if guard_result is not None:
+                    print(
+                        "[op-simple-build] "
+                        f"[{utc_now_iso()}] "
+                        f"cycle={cycle_number} cycle-release mode={mode} release_signal={guard_result['decision']} "
+                        f"waited_s={guard_result['waited_seconds']}",
+                        flush=True,
+                    )
+                    return guard_result
+
+        if now >= heartbeat_due_at:
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle={cycle_number} cycle-release mode={mode} heartbeat "
+                f"waited_s={round(float(elapsed), 3)} tracked_pid_count={len(tracked_pids)} "
+                f"alive_pid_count={len(alive_set)} dead_pid_count={len(tracked_pids) - len(alive_set)}",
+                flush=True,
+            )
+            heartbeat_due_at = now + float(WAIT_HEARTBEAT_SECONDS)
+
+        previous_alive = alive_set
         remaining = float(timeout_seconds) - float(elapsed)
         sleep_seconds = poll_seconds if remaining > float(poll_seconds) else remaining
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
-
-        signature, in_progress_workers, live_workers, task_in_progress = _cycle_release_baseline(cfg)
-
-        if mode == "token_conservative":
-            released = (
-                in_progress_workers <= 0
-                or live_workers <= 0
-                or task_in_progress <= 0
-            )
-            decision = "all_workers_settled"
-        else:
-            released = (
-                signature != baseline_signature
-                or in_progress_workers < baseline_in_progress_workers
-                or live_workers < baseline_live_workers
-                or task_in_progress < baseline_task_in_progress
-            )
-            decision = "first_progress_signal"
-
-        if not released:
-            continue
-
-        waited = round(float(time.monotonic() - wait_started_at), 3)
-        print(
-            "[op-simple-build] "
-            f"[{utc_now_iso()}] "
-            f"cycle={cycle_number} cycle-release mode={mode} release_signal={decision} "
-            f"waited_s={waited} in_progress_workers={in_progress_workers} "
-            f"live_workers={live_workers} task_in_progress={task_in_progress}",
-            flush=True,
-        )
-        return {
-            "mode": mode,
-            "decision": decision,
-            "waited_seconds": waited,
-            "timed_out": False,
-            "in_progress_workers": int(in_progress_workers),
-            "live_workers": int(live_workers),
-            "task_in_progress": int(task_in_progress),
-        }
 
 
 def _load_watchdog_recovery_nudge_body() -> str:
@@ -7607,12 +7749,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     )
 
             _snapshot_cycle(cfg, cycle_number)
-            (
-                previous_state_signature,
-                next_in_progress_workers,
-                next_live_workers,
-                next_task_in_progress,
-            ) = _cycle_release_baseline(cfg)
+            previous_state_signature = _cycle_release_baseline(cfg)[0]
 
             if stop_reason:
                 _persist_cycle_summary_stop_reason(cfg, cycle_number=cycle_number, stop_reason=stop_reason)
@@ -7643,33 +7780,10 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             if cfg.sleep_minutes > 0:
                 sleep_seconds = max(0.0, float(cfg.sleep_minutes) * 60.0)
                 if sleep_seconds > 0:
-                    if (
-                        next_in_progress_workers > 0
-                        and next_live_workers > 0
-                        and next_task_in_progress > 0
-                    ):
-                        release_wait_result = _await_cycle_release_signal(
-                            cfg,
-                            cycle_number=cycle_number,
-                            baseline_signature=previous_state_signature,
-                            baseline_in_progress_workers=next_in_progress_workers,
-                            baseline_live_workers=next_live_workers,
-                            baseline_task_in_progress=next_task_in_progress,
-                        )
-                        waited_seconds = float(release_wait_result.get("waited_seconds") or 0.0)
-                        if waited_seconds < sleep_seconds and bool(release_wait_result.get("timed_out")):
-                            remaining_sleep = sleep_seconds - waited_seconds
-                            if remaining_sleep > 0:
-                                print(
-                                    "[op-simple-build] "
-                                    f"[{utc_now_iso()}] "
-                                    f"cycle={cycle_number} cycle-release timeout fallback "
-                                    f"sleep_remaining_s={remaining_sleep:.3f}",
-                                    flush=True,
-                                )
-                                time.sleep(remaining_sleep)
-                    else:
-                        time.sleep(sleep_seconds)
+                    _await_cycle_release_signal(
+                        cfg,
+                        cycle_number=cycle_number,
+                    )
 
         if stop_reason:
             _persist_cycle_summary_stop_reason(cfg, cycle_number=cycle_number, stop_reason=stop_reason)

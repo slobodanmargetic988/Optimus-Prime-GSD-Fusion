@@ -994,7 +994,7 @@ def test_packet4_gate_recommendation_scaffold_writer_builds_expected_artifact(tm
     assert "Decision: `hold`" in md_text
 
 
-def test_await_cycle_release_signal_token_conservative_releases_on_settle(tmp_path: Path, monkeypatch) -> None:
+def test_cycle_release_watchset_from_dispatch_cycle_tracks_launched_rows_with_pid_only(tmp_path: Path) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
         repo_root=tmp_path,
@@ -1003,46 +1003,153 @@ def test_await_cycle_release_signal_token_conservative_releases_on_settle(tmp_pa
         max_parallel_workers=8,
         dry_run=True,
         cycle_release_mode="token_conservative",
-        cycle_release_timeout_seconds=20,
+    )
+    rows = [
+        {
+            "cycle_number": 7,
+            "worker_id": "worker-1",
+            "status": "launched",
+            "pid": 1111,
+            "timestamp": "2026-03-14T00:00:01Z",
+        },
+        {
+            "cycle_number": 7,
+            "worker_id": "worker-2",
+            "status": "unknown",
+            "pid": 2222,
+            "timestamp": "2026-03-14T00:00:02Z",
+        },
+        {
+            "cycle_number": 7,
+            "worker_id": "worker-3",
+            "status": "launched",
+            "pid": None,
+            "timestamp": "2026-03-14T00:00:03Z",
+        },
+        {
+            "cycle_number": 6,
+            "worker_id": "worker-4",
+            "status": "launched",
+            "pid": 4444,
+            "timestamp": "2026-03-14T00:00:04Z",
+        },
+        {
+            "cycle_number": 7,
+            "worker_id": "worker-5",
+            "status": "launched",
+            "pid": "not-an-int",
+            "timestamp": "2026-03-14T00:00:05Z",
+        },
+    ]
+    text = "\n".join(json.dumps(row) for row in rows) + "\n"
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    (tmp_path / MODULE.DISPATCH_LAUNCH_LOG_FILE).write_text(text, encoding="utf-8")
+
+    out = MODULE._cycle_release_watchset_from_dispatch_cycle(cfg, 7)
+    assert out == [1111]
+
+
+def test_cycle_release_watchset_from_live_workers_uses_pid_liveness_only(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=5,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+        cycle_release_mode="max_work",
+    )
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
+        {
+            "schema_version": "1.0",
+            "updated_at": now_iso,
+            "cycle_number": 12,
+            "workers": [
+                {
+                    "worker_id": "worker-thread-only",
+                    "status": "in_progress",
+                    "pid": None,
+                    "thread_id": "thread-fresh",
+                    "last_update": now_iso,
+                },
+                {
+                    "worker_id": "worker-dead-pid",
+                    "status": "in_progress",
+                    "pid": 1111,
+                    "thread_id": "thread-fresh",
+                    "last_update": now_iso,
+                },
+                {
+                    "worker_id": "worker-live-pid",
+                    "status": "in_progress",
+                    "pid": 2222,
+                    "thread_id": "thread-stale",
+                    "last_update": "2020-01-01T00:00:00Z",
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(MODULE, "_is_pid_alive", lambda pid: int(pid) == 2222)
+    out = MODULE._cycle_release_watchset_from_live_workers(cfg)
+    assert out == [2222]
+
+
+def test_await_cycle_release_signal_token_conservative_waits_for_all_dead_with_guard(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=5,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+        cycle_release_mode="token_conservative",
+        cycle_release_timeout_seconds=40,
         cycle_release_poll_seconds=1,
     )
-    sequence = iter(
+    alive_sequence = iter(
         [
-            ("sig-a", 2, 2, 2),
-            ("sig-b", 1, 1, 1),
-            ("sig-c", 0, 0, 0),
+            [101, 102],
+            [101, 102],
+            [101],
+            [],
+            [],
         ]
     )
 
-    def fake_cycle_release_baseline(_cfg):
-        return next(sequence)
+    def fake_alive_pids(_tracked_pids):
+        try:
+            return next(alive_sequence)
+        except StopIteration:
+            return []
 
     ticks = {"t": 0.0}
 
     def fake_monotonic():
-        ticks["t"] += 1.0
-        return ticks["t"]
+        return float(ticks["t"])
 
-    monkeypatch.setattr(MODULE, "_cycle_release_baseline", fake_cycle_release_baseline)
-    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    def fake_sleep(seconds):
+        ticks["t"] += float(seconds)
+
+    monkeypatch.setattr(MODULE, "_cycle_release_watchset_from_dispatch_cycle", lambda _cfg, _cycle: [101, 102])
+    monkeypatch.setattr(MODULE, "_cycle_release_alive_pids", fake_alive_pids)
+    monkeypatch.setattr(MODULE.time, "sleep", fake_sleep)
     monkeypatch.setattr(MODULE.time, "monotonic", fake_monotonic)
 
     out = MODULE._await_cycle_release_signal(
         cfg,
         cycle_number=11,
-        baseline_signature="sig-a",
-        baseline_in_progress_workers=2,
-        baseline_live_workers=2,
-        baseline_task_in_progress=2,
     )
 
     assert out["mode"] == "token_conservative"
     assert out["timed_out"] is False
-    assert out["decision"] == "all_workers_settled"
-    assert out["in_progress_workers"] == 0
+    assert out["decision"] == "all_tracked_pids_dead_guarded"
+    assert out["tracked_pids"] == [101, 102]
+    assert out["alive_pids"] == []
 
 
-def test_await_cycle_release_signal_max_work_releases_on_first_progress(tmp_path: Path, monkeypatch) -> None:
+def test_await_cycle_release_signal_max_work_releases_on_first_dead_with_guard(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
         repo_root=tmp_path,
@@ -1054,42 +1161,47 @@ def test_await_cycle_release_signal_max_work_releases_on_first_progress(tmp_path
         cycle_release_timeout_seconds=20,
         cycle_release_poll_seconds=1,
     )
-    sequence = iter(
+    alive_sequence = iter(
         [
-            ("sig-a", 2, 2, 2),
-            ("sig-b", 2, 2, 2),
+            [201, 202],
+            [201, 202],
+            [201],
+            [201],
         ]
     )
 
-    def fake_cycle_release_baseline(_cfg):
-        return next(sequence)
+    def fake_alive_pids(_tracked_pids):
+        try:
+            return next(alive_sequence)
+        except StopIteration:
+            return [201]
 
     ticks = {"t": 0.0}
 
     def fake_monotonic():
-        ticks["t"] += 1.0
-        return ticks["t"]
+        return float(ticks["t"])
 
-    monkeypatch.setattr(MODULE, "_cycle_release_baseline", fake_cycle_release_baseline)
-    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    def fake_sleep(seconds):
+        ticks["t"] += float(seconds)
+
+    monkeypatch.setattr(MODULE, "_cycle_release_watchset_from_live_workers", lambda _cfg: [201, 202])
+    monkeypatch.setattr(MODULE, "_cycle_release_alive_pids", fake_alive_pids)
+    monkeypatch.setattr(MODULE.time, "sleep", fake_sleep)
     monkeypatch.setattr(MODULE.time, "monotonic", fake_monotonic)
 
     out = MODULE._await_cycle_release_signal(
         cfg,
         cycle_number=12,
-        baseline_signature="sig-a",
-        baseline_in_progress_workers=2,
-        baseline_live_workers=2,
-        baseline_task_in_progress=2,
     )
 
     assert out["mode"] == "max_work"
     assert out["timed_out"] is False
-    assert out["decision"] == "first_progress_signal"
-    assert out["in_progress_workers"] == 2
+    assert out["decision"] == "first_tracked_pid_dead_guarded"
+    assert out["tracked_pids"] == [201, 202]
+    assert out["alive_pids"] == [201]
 
 
-def test_await_cycle_release_signal_returns_timeout_fallback(tmp_path: Path, monkeypatch) -> None:
+def test_await_cycle_release_signal_returns_timeout_release(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
         repo_root=tmp_path,
@@ -1101,31 +1213,46 @@ def test_await_cycle_release_signal_returns_timeout_fallback(tmp_path: Path, mon
         cycle_release_timeout_seconds=3,
         cycle_release_poll_seconds=1,
     )
-
-    def fake_cycle_release_baseline(_cfg):
-        return ("sig-a", 2, 2, 2)
+    monkeypatch.setattr(MODULE, "_cycle_release_watchset_from_dispatch_cycle", lambda _cfg, _cycle: [301])
+    monkeypatch.setattr(MODULE, "_cycle_release_alive_pids", lambda _tracked: [301])
 
     ticks = {"t": 0.0}
 
     def fake_monotonic():
-        ticks["t"] += 1.0
-        return ticks["t"]
+        return float(ticks["t"])
 
-    monkeypatch.setattr(MODULE, "_cycle_release_baseline", fake_cycle_release_baseline)
-    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    def fake_sleep(seconds):
+        ticks["t"] += float(seconds)
+
+    monkeypatch.setattr(MODULE.time, "sleep", fake_sleep)
     monkeypatch.setattr(MODULE.time, "monotonic", fake_monotonic)
 
     out = MODULE._await_cycle_release_signal(
         cfg,
         cycle_number=13,
-        baseline_signature="sig-a",
-        baseline_in_progress_workers=2,
-        baseline_live_workers=2,
-        baseline_task_in_progress=2,
     )
 
     assert out["timed_out"] is True
-    assert out["decision"] == "timeout_fallback"
+    assert out["decision"] == "timeout_release"
+
+
+def test_await_cycle_release_signal_returns_immediate_when_no_tracked_pids(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=5,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+        cycle_release_mode="token_conservative",
+        cycle_release_timeout_seconds=10,
+        cycle_release_poll_seconds=1,
+    )
+    monkeypatch.setattr(MODULE, "_cycle_release_watchset_from_dispatch_cycle", lambda _cfg, _cycle: [])
+    out = MODULE._await_cycle_release_signal(cfg, cycle_number=14)
+    assert out["timed_out"] is False
+    assert out["decision"] == "no_wait_no_tracked_pids"
+    assert out["tracked_pid_count"] == 0
 
 
 def test_quiet_cycle_gate_skips_boss_when_state_unchanged(tmp_path: Path, monkeypatch) -> None:

@@ -255,7 +255,7 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
     payload.setdefault("blackbox_lane", "free")
     payload.setdefault("allow_worker_executor_override", False)
     payload.setdefault("cycle_release_mode", "token_conservative")
-    payload.setdefault("cycle_release_timeout_seconds", 300)
+    payload.setdefault("cycle_release_timeout_seconds", 900)
     payload.setdefault("cycle_release_poll_seconds", 5)
 
     command_raw = str(payload.get("command") or "").strip()
