@@ -26,6 +26,29 @@ def _require_nonempty_str(value: Any, *, label: str) -> str:
     return value.strip()
 
 
+def _require_mapping(value: Any, *, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    return value
+
+
+def _normalize_string_list(value: Any, *, label: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+    out: list[str] = []
+    seen: set[str] = set()
+    for idx, item in enumerate(value):
+        item_str = _require_nonempty_str(item, label=f"{label}[{idx}]")
+        if item_str in seen:
+            continue
+        seen.add(item_str)
+        out.append(item_str)
+    out.sort()
+    return out
+
+
 def _checksum_sha256(payload: Mapping[str, Any]) -> str:
     blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
@@ -52,6 +75,16 @@ def load_ground_graph_snapshot(path: Path) -> dict[str, Any]:
         raise ValueError(f"invalid JSON at {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError("ground_graph_snapshot must be a JSON object")
+    return payload
+
+
+def load_json_object(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON at {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON payload at {path} must be an object")
     return payload
 
 
@@ -127,12 +160,189 @@ def ingest_ground_graph_snapshot(
     return output
 
 
+def _lineage_context_rows(anchors: list[dict[str, str]]) -> list[dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    for anchor in anchors:
+        linked_project_id = anchor["linked_project_id"]
+        row = rows.setdefault(
+            linked_project_id,
+            {
+                "linked_project_id": linked_project_id,
+                "lineage_anchor_count": 0,
+                "relationship_types": set(),
+                "anchor_ids": [],
+            },
+        )
+        row["lineage_anchor_count"] += 1
+        row["relationship_types"].add(anchor["relationship"])
+        row["anchor_ids"].append(anchor["anchor_id"])
+
+    ordered: list[dict[str, Any]] = []
+    for linked_project_id in sorted(rows):
+        row = rows[linked_project_id]
+        ordered.append(
+            {
+                "linked_project_id": linked_project_id,
+                "lineage_anchor_count": row["lineage_anchor_count"],
+                "relationship_types": sorted(row["relationship_types"]),
+                "anchor_ids": sorted(row["anchor_ids"]),
+            }
+        )
+    return ordered
+
+
+def _candidate_actions_from_context(broad_sweep_context: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    for key in ("cross_project_action_candidates", "candidate_actions", "recommendation_candidates"):
+        value = broad_sweep_context.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            raise ValueError(f"broad_sweep_context.{key} must be a list")
+        out: list[Mapping[str, Any]] = []
+        for idx, row in enumerate(value):
+            out.append(_require_mapping(row, label=f"broad_sweep_context.{key}[{idx}]"))
+        return out
+    return []
+
+
+def process_ground_graph_snapshot(
+    snapshot: Mapping[str, Any],
+    *,
+    broad_sweep_context: Mapping[str, Any],
+    source_path: str | None = None,
+    ingested_at: str | None = None,
+) -> dict[str, Any]:
+    canonical_ingestion = ingest_ground_graph_snapshot(snapshot, source_path=source_path, ingested_at=ingested_at)
+    anchors = canonical_ingestion["lineage_anchors"]
+    linked_project_ids = set(canonical_ingestion["lineage_index"]["linked_project_ids"])
+
+    context = _require_mapping(broad_sweep_context, label="broad_sweep_context")
+    active_project_id = _require_nonempty_str(
+        context.get("active_project_id"), label="broad_sweep_context.active_project_id"
+    )
+    earth_sweep_evidence_refs = _normalize_string_list(
+        context.get("earth_sweep_evidence_refs"), label="broad_sweep_context.earth_sweep_evidence_refs"
+    )
+    earth_ref_set = set(earth_sweep_evidence_refs)
+
+    lineage_context_rows = _lineage_context_rows(anchors)
+    lineage_context_by_project = {row["linked_project_id"]: row for row in lineage_context_rows}
+    candidate_actions = _candidate_actions_from_context(context)
+
+    supported_actions: list[dict[str, Any]] = []
+    deferred_actions: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    recommendation_evidence_refs: set[str] = set()
+
+    for idx, candidate in enumerate(candidate_actions):
+        linked_project_id = _require_nonempty_str(
+            candidate.get("linked_project_id"), label=f"broad_sweep_context.candidate_actions[{idx}].linked_project_id"
+        )
+        action = _require_nonempty_str(
+            candidate.get("action"), label=f"broad_sweep_context.candidate_actions[{idx}].action"
+        )
+        candidate_evidence_refs = _normalize_string_list(
+            candidate.get("evidence_refs"), label=f"broad_sweep_context.candidate_actions[{idx}].evidence_refs"
+        )
+        supported_evidence_refs = sorted(ref for ref in candidate_evidence_refs if ref in earth_ref_set)
+        missing_evidence_refs = sorted(ref for ref in candidate_evidence_refs if ref not in earth_ref_set)
+
+        if linked_project_id not in linked_project_ids:
+            open_risks.append(
+                {
+                    "risk_id": f"{linked_project_id}::{action}::not_in_ground_graph",
+                    "reason": "candidate_linked_project_missing_from_ground_graph",
+                    "linked_project_id": linked_project_id,
+                    "action": action,
+                    "evidence_refs": supported_evidence_refs,
+                }
+            )
+            continue
+        if not supported_evidence_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"{linked_project_id}::{action}::missing_earth_evidence",
+                    "reason": "candidate_action_missing_earth_sweep_evidence_refs",
+                    "linked_project_id": linked_project_id,
+                    "action": action,
+                    "evidence_refs": [],
+                }
+            )
+            continue
+
+        recommendation_evidence_refs.update(supported_evidence_refs)
+        recommendation_row = {
+            "linked_project_id": linked_project_id,
+            "action": action,
+            "evidence_refs": supported_evidence_refs,
+            "lineage_anchor_ids": list(lineage_context_by_project[linked_project_id]["anchor_ids"]),
+        }
+        if missing_evidence_refs:
+            recommendation_row["out_of_scope_evidence_refs"] = missing_evidence_refs
+        supported_actions.append(recommendation_row)
+
+    for row in supported_actions:
+        if row.get("out_of_scope_evidence_refs"):
+            deferred_actions.append(
+                {
+                    "linked_project_id": row["linked_project_id"],
+                    "action": row["action"],
+                    "reason": "candidate_includes_non_earth_evidence_refs",
+                    "out_of_scope_evidence_refs": row["out_of_scope_evidence_refs"],
+                }
+            )
+
+    supported_actions.sort(key=lambda row: (row["linked_project_id"], row["action"]))
+    deferred_actions.sort(key=lambda row: (row["linked_project_id"], row["action"], row["reason"]))
+    open_risks.sort(key=lambda row: row["risk_id"])
+    recommendation_evidence_ref_list = sorted(recommendation_evidence_refs)
+
+    if supported_actions:
+        decision = "ready_for_planning" if not open_risks else "planning_with_open_risks"
+    elif open_risks:
+        decision = "blocked_missing_evidence"
+    else:
+        decision = "no_cross_project_candidates"
+
+    recommendation = {
+        "decision": decision,
+        "summary": (
+            f"{len(supported_actions)} supported cross-project action(s); "
+            f"{len(open_risks)} open risk(s); {len(deferred_actions)} deferred action(s)."
+        ),
+        "supported_actions": supported_actions,
+        "deferred_actions": deferred_actions,
+        "open_risks": open_risks,
+        "evidence_refs": recommendation_evidence_ref_list,
+    }
+
+    return {
+        **canonical_ingestion,
+        "cross_project_context": {
+            "active_project_id": active_project_id,
+            "linked_projects": [row["linked_project_id"] for row in lineage_context_rows],
+            "linked_project_context": lineage_context_rows,
+            "active_project_anchor_count": len([row for row in anchors if row["project_id"] == active_project_id]),
+            "total_anchor_count": len(anchors),
+        },
+        "evidence_refs": {
+            "earth_sweep": earth_sweep_evidence_refs,
+            "recommendation": recommendation_evidence_ref_list,
+        },
+        "recommendation": recommendation,
+    }
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="REQ-007 Ground graph snapshot ingestion")
     parser.add_argument("--input", required=True, help="Path to Ground graph snapshot JSON")
     parser.add_argument("--output", help="Path to write canonical ingestion JSON")
     parser.add_argument("--source-path", help="Source path string stored in output")
     parser.add_argument("--ingested-at", help="ISO-8601 timestamp to stamp in output")
+    parser.add_argument(
+        "--broad-sweep-context",
+        help="Optional path to broad-sweep context JSON for deterministic REQ-007 recommendation processing",
+    )
     return parser
 
 
@@ -145,8 +355,20 @@ def main(argv: list[str] | None = None) -> int:
     _print_human(f"Loading Ground graph snapshot from {input_path}")
     snapshot = load_ground_graph_snapshot(input_path)
 
-    _print_human("Ingesting snapshot into canonical REQ-007 lineage context")
-    ingested = ingest_ground_graph_snapshot(snapshot, source_path=source_path, ingested_at=args.ingested_at)
+    if args.broad_sweep_context:
+        broad_sweep_context_path = Path(args.broad_sweep_context).expanduser().resolve()
+        _print_human(f"Loading broad-sweep context from {broad_sweep_context_path}")
+        broad_sweep_context = load_json_object(broad_sweep_context_path)
+        _print_human("Processing snapshot with broad-sweep context for deterministic REQ-007 recommendation output")
+        ingested = process_ground_graph_snapshot(
+            snapshot,
+            broad_sweep_context=broad_sweep_context,
+            source_path=source_path,
+            ingested_at=args.ingested_at,
+        )
+    else:
+        _print_human("Ingesting snapshot into canonical REQ-007 lineage context")
+        ingested = ingest_ground_graph_snapshot(snapshot, source_path=source_path, ingested_at=args.ingested_at)
 
     rendered = json.dumps(ingested, indent=2, ensure_ascii=False) + "\n"
     if args.output:
