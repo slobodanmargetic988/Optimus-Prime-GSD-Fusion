@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_at": "2026-03-13T20:56:02Z",
+  "generated_at": "2026-03-14T21:08:56Z",
   "plan_id": "plan-20260310T232916Z-strategy-tool-v1",
   "phase": "multi-phase",
   "phases": [
@@ -1202,7 +1202,7 @@
       "task_id": "TASK-001",
       "title": "Implement contract and data model surface: LLM-first strategy runtime entrypoint",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1236,7 +1236,7 @@
       "task_id": "TASK-002",
       "title": "Implement reasoning/processing behavior: LLM-first strategy runtime entrypoint",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1272,7 +1272,7 @@
       "task_id": "TASK-003",
       "title": "Harden replay and failure-path behavior: LLM-first strategy runtime entrypoint",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -1310,7 +1310,7 @@
       "task_id": "TASK-004",
       "title": "Implement contract and data model surface: Earth-wide repository discovery manifest",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1344,7 +1344,7 @@
       "task_id": "TASK-005",
       "title": "Implement reasoning/processing behavior: Earth-wide repository discovery manifest",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1380,7 +1380,7 @@
       "task_id": "TASK-006",
       "title": "Harden replay and failure-path behavior: Earth-wide repository discovery manifest",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -1418,7 +1418,7 @@
       "task_id": "TASK-007",
       "title": "Implement contract and data model surface: Target project mission and scope ingestion",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1452,7 +1452,7 @@
       "task_id": "TASK-008",
       "title": "Implement reasoning/processing behavior: Target project mission and scope ingestion",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1488,7 +1488,7 @@
       "task_id": "TASK-009",
       "title": "Harden replay and failure-path behavior: Target project mission and scope ingestion",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -1526,7 +1526,7 @@
       "task_id": "TASK-010",
       "title": "Implement contract and data model surface: Peer project mission and scope ingestion",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1560,7 +1560,7 @@
       "task_id": "TASK-011",
       "title": "Implement reasoning/processing behavior: Peer project mission and scope ingestion",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1596,7 +1596,7 @@
       "task_id": "TASK-012",
       "title": "Harden replay and failure-path behavior: Peer project mission and scope ingestion",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -1634,7 +1634,7 @@
       "task_id": "TASK-013",
       "title": "Implement contract and data model surface: Planning artifact sweep across Earth",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1668,7 +1668,7 @@
       "task_id": "TASK-014",
       "title": "Implement reasoning/processing behavior: Planning artifact sweep across Earth",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1704,7 +1704,7 @@
       "task_id": "TASK-015",
       "title": "Harden replay and failure-path behavior: Planning artifact sweep across Earth",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -1742,7 +1742,7 @@
       "task_id": "TASK-016",
       "title": "Implement contract and data model surface: Runtime telemetry artifact sweep across Earth",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1776,7 +1776,7 @@
       "task_id": "TASK-017",
       "title": "Implement reasoning/processing behavior: Runtime telemetry artifact sweep across Earth",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1812,7 +1812,7 @@
       "task_id": "TASK-018",
       "title": "Harden replay and failure-path behavior: Runtime telemetry artifact sweep across Earth",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -1850,7 +1850,7 @@
       "task_id": "TASK-019",
       "title": "Implement contract and data model surface: Ground graph snapshot ingestion",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1884,7 +1884,7 @@
       "task_id": "TASK-020",
       "title": "Implement reasoning/processing behavior: Ground graph snapshot ingestion",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -1920,7 +1920,7 @@
       "task_id": "TASK-021",
       "title": "Harden replay and failure-path behavior: Ground graph snapshot ingestion",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -1958,7 +1958,7 @@
       "task_id": "TASK-022",
       "title": "Operational acceptance and handoff evidence: Ground graph snapshot ingestion",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -1994,7 +1994,7 @@
       "task_id": "TASK-023",
       "title": "Implement contract and data model surface: Research packet ingestion and normalization",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2028,7 +2028,7 @@
       "task_id": "TASK-024",
       "title": "Implement reasoning/processing behavior: Research packet ingestion and normalization",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2064,7 +2064,7 @@
       "task_id": "TASK-025",
       "title": "Harden replay and failure-path behavior: Research packet ingestion and normalization",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -2102,7 +2102,7 @@
       "task_id": "TASK-026",
       "title": "Implement contract and data model surface: Prior strategy revision ingestion",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2136,7 +2136,7 @@
       "task_id": "TASK-027",
       "title": "Implement reasoning/processing behavior: Prior strategy revision ingestion",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2172,7 +2172,7 @@
       "task_id": "TASK-028",
       "title": "Harden replay and failure-path behavior: Prior strategy revision ingestion",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -2210,7 +2210,7 @@
       "task_id": "TASK-029",
       "title": "Implement contract and data model surface: Change detection since previous strategy revision",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2244,7 +2244,7 @@
       "task_id": "TASK-030",
       "title": "Implement reasoning/processing behavior: Change detection since previous strategy revision",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2280,7 +2280,7 @@
       "task_id": "TASK-031",
       "title": "Harden replay and failure-path behavior: Change detection since previous strategy revision",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -2318,7 +2318,7 @@
       "task_id": "TASK-032",
       "title": "Operational acceptance and handoff evidence: Change detection since previous strategy revision",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -2354,7 +2354,7 @@
       "task_id": "TASK-033",
       "title": "Implement contract and data model surface: Cross-project dependency extraction",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2388,7 +2388,7 @@
       "task_id": "TASK-034",
       "title": "Implement reasoning/processing behavior: Cross-project dependency extraction",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2424,7 +2424,7 @@
       "task_id": "TASK-035",
       "title": "Harden replay and failure-path behavior: Cross-project dependency extraction",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -2462,7 +2462,7 @@
       "task_id": "TASK-036",
       "title": "Implement contract and data model surface: Interface contract extraction",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2496,7 +2496,7 @@
       "task_id": "TASK-037",
       "title": "Implement reasoning/processing behavior: Interface contract extraction",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2532,7 +2532,7 @@
       "task_id": "TASK-038",
       "title": "Harden replay and failure-path behavior: Interface contract extraction",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -2570,7 +2570,7 @@
       "task_id": "TASK-039",
       "title": "Implement contract and data model surface: Capability catalog extraction",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2604,7 +2604,7 @@
       "task_id": "TASK-040",
       "title": "Implement reasoning/processing behavior: Capability catalog extraction",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2640,7 +2640,7 @@
       "task_id": "TASK-041",
       "title": "Harden replay and failure-path behavior: Capability catalog extraction",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -2678,7 +2678,7 @@
       "task_id": "TASK-042",
       "title": "Implement contract and data model surface: Deficit and need signal extraction",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2712,7 +2712,7 @@
       "task_id": "TASK-043",
       "title": "Implement reasoning/processing behavior: Deficit and need signal extraction",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2748,7 +2748,7 @@
       "task_id": "TASK-044",
       "title": "Harden replay and failure-path behavior: Deficit and need signal extraction",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -2786,7 +2786,7 @@
       "task_id": "TASK-045",
       "title": "Implement contract and data model surface: Integration opportunity detection",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2820,7 +2820,7 @@
       "task_id": "TASK-046",
       "title": "Implement reasoning/processing behavior: Integration opportunity detection",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2856,7 +2856,7 @@
       "task_id": "TASK-047",
       "title": "Harden replay and failure-path behavior: Integration opportunity detection",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -2894,7 +2894,7 @@
       "task_id": "TASK-048",
       "title": "Operational acceptance and handoff evidence: Integration opportunity detection",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -2930,7 +2930,7 @@
       "task_id": "TASK-049",
       "title": "Implement contract and data model surface: Reuse opportunity detection",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -2964,7 +2964,7 @@
       "task_id": "TASK-050",
       "title": "Implement reasoning/processing behavior: Reuse opportunity detection",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3000,7 +3000,7 @@
       "task_id": "TASK-051",
       "title": "Harden replay and failure-path behavior: Reuse opportunity detection",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -3038,7 +3038,7 @@
       "task_id": "TASK-052",
       "title": "Implement contract and data model surface: Overlap and conflict detection",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3072,7 +3072,7 @@
       "task_id": "TASK-053",
       "title": "Implement reasoning/processing behavior: Overlap and conflict detection",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3108,7 +3108,7 @@
       "task_id": "TASK-054",
       "title": "Harden replay and failure-path behavior: Overlap and conflict detection",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-a",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -3146,7 +3146,7 @@
       "task_id": "TASK-055",
       "title": "Implement contract and data model surface: Strategic debt signal extraction",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3180,7 +3180,7 @@
       "task_id": "TASK-056",
       "title": "Implement reasoning/processing behavior: Strategic debt signal extraction",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3216,7 +3216,7 @@
       "task_id": "TASK-057",
       "title": "Harden replay and failure-path behavior: Strategic debt signal extraction",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -3254,7 +3254,7 @@
       "task_id": "TASK-058",
       "title": "Operational acceptance and handoff evidence: Strategic debt signal extraction",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -3290,7 +3290,7 @@
       "task_id": "TASK-059",
       "title": "Implement contract and data model surface: Execution-resource context ingestion",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3324,7 +3324,7 @@
       "task_id": "TASK-060",
       "title": "Implement reasoning/processing behavior: Execution-resource context ingestion",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-a",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3360,7 +3360,7 @@
       "task_id": "TASK-061",
       "title": "Harden replay and failure-path behavior: Execution-resource context ingestion",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -3398,7 +3398,7 @@
       "task_id": "TASK-062",
       "title": "Implement contract and data model surface: Risk signal normalization",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3432,7 +3432,7 @@
       "task_id": "TASK-063",
       "title": "Implement reasoning/processing behavior: Risk signal normalization",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3468,7 +3468,7 @@
       "task_id": "TASK-064",
       "title": "Harden replay and failure-path behavior: Risk signal normalization",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -3506,7 +3506,7 @@
       "task_id": "TASK-065",
       "title": "Implement contract and data model surface: Evidence provenance ledger for context",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3540,7 +3540,7 @@
       "task_id": "TASK-066",
       "title": "Implement reasoning/processing behavior: Evidence provenance ledger for context",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3576,7 +3576,7 @@
       "task_id": "TASK-067",
       "title": "Harden replay and failure-path behavior: Evidence provenance ledger for context",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -3614,7 +3614,7 @@
       "task_id": "TASK-068",
       "title": "Operational acceptance and handoff evidence: Evidence provenance ledger for context",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -3650,7 +3650,7 @@
       "task_id": "TASK-069",
       "title": "Implement contract and data model surface: Context confidence scoring",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3684,7 +3684,7 @@
       "task_id": "TASK-070",
       "title": "Implement reasoning/processing behavior: Context confidence scoring",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3720,7 +3720,7 @@
       "task_id": "TASK-071",
       "title": "Harden replay and failure-path behavior: Context confidence scoring",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -3758,7 +3758,7 @@
       "task_id": "TASK-072",
       "title": "Implement contract and data model surface: Context compaction for LLM call budget",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3792,7 +3792,7 @@
       "task_id": "TASK-073",
       "title": "Implement reasoning/processing behavior: Context compaction for LLM call budget",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3828,7 +3828,7 @@
       "task_id": "TASK-074",
       "title": "Harden replay and failure-path behavior: Context compaction for LLM call budget",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -3866,7 +3866,7 @@
       "task_id": "TASK-075",
       "title": "Implement contract and data model surface: Strategy context bundle serialization",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-a",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3900,7 +3900,7 @@
       "task_id": "TASK-076",
       "title": "Implement reasoning/processing behavior: Strategy context bundle serialization",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-a",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -3936,7 +3936,7 @@
       "task_id": "TASK-077",
       "title": "Harden replay and failure-path behavior: Strategy context bundle serialization",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -3974,7 +3974,7 @@
       "task_id": "TASK-078",
       "title": "Operational acceptance and handoff evidence: Strategy context bundle serialization",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-a",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -4010,7 +4010,7 @@
       "task_id": "TASK-079",
       "title": "Implement contract and data model surface: Multi-call strategy pipeline planner",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4046,7 +4046,7 @@
       "task_id": "TASK-080",
       "title": "Implement reasoning/processing behavior: Multi-call strategy pipeline planner",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4083,7 +4083,7 @@
       "task_id": "TASK-081",
       "title": "Implement multi-call orchestration trace: Multi-call strategy pipeline planner",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4121,7 +4121,7 @@
       "task_id": "TASK-082",
       "title": "Harden replay and failure-path behavior: Multi-call strategy pipeline planner",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -4160,7 +4160,7 @@
       "task_id": "TASK-083",
       "title": "Implement contract and data model surface: Call-1 situational analysis reasoning",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4196,7 +4196,7 @@
       "task_id": "TASK-084",
       "title": "Implement reasoning/processing behavior: Call-1 situational analysis reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4233,7 +4233,7 @@
       "task_id": "TASK-085",
       "title": "Implement multi-call orchestration trace: Call-1 situational analysis reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4271,7 +4271,7 @@
       "task_id": "TASK-086",
       "title": "Harden replay and failure-path behavior: Call-1 situational analysis reasoning",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -4310,7 +4310,7 @@
       "task_id": "TASK-087",
       "title": "Implement contract and data model surface: Call-2 ecosystem linkage reasoning",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4346,7 +4346,7 @@
       "task_id": "TASK-088",
       "title": "Implement reasoning/processing behavior: Call-2 ecosystem linkage reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4383,7 +4383,7 @@
       "task_id": "TASK-089",
       "title": "Implement multi-call orchestration trace: Call-2 ecosystem linkage reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4421,7 +4421,7 @@
       "task_id": "TASK-090",
       "title": "Harden replay and failure-path behavior: Call-2 ecosystem linkage reasoning",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -4460,7 +4460,7 @@
       "task_id": "TASK-091",
       "title": "Implement contract and data model surface: Call-3 gap and opportunity reasoning",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4496,7 +4496,7 @@
       "task_id": "TASK-092",
       "title": "Implement reasoning/processing behavior: Call-3 gap and opportunity reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4533,7 +4533,7 @@
       "task_id": "TASK-093",
       "title": "Implement multi-call orchestration trace: Call-3 gap and opportunity reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4571,7 +4571,7 @@
       "task_id": "TASK-094",
       "title": "Harden replay and failure-path behavior: Call-3 gap and opportunity reasoning",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -4610,7 +4610,7 @@
       "task_id": "TASK-095",
       "title": "Implement contract and data model surface: Call-4 recommendation synthesis",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4646,7 +4646,7 @@
       "task_id": "TASK-096",
       "title": "Implement reasoning/processing behavior: Call-4 recommendation synthesis",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4683,7 +4683,7 @@
       "task_id": "TASK-097",
       "title": "Implement multi-call orchestration trace: Call-4 recommendation synthesis",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4721,7 +4721,7 @@
       "task_id": "TASK-098",
       "title": "Harden replay and failure-path behavior: Call-4 recommendation synthesis",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -4760,7 +4760,7 @@
       "task_id": "TASK-099",
       "title": "Implement contract and data model surface: Call-5 sequencing and lane design reasoning",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4796,7 +4796,7 @@
       "task_id": "TASK-100",
       "title": "Implement reasoning/processing behavior: Call-5 sequencing and lane design reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4833,7 +4833,7 @@
       "task_id": "TASK-101",
       "title": "Implement multi-call orchestration trace: Call-5 sequencing and lane design reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4871,7 +4871,7 @@
       "task_id": "TASK-102",
       "title": "Harden replay and failure-path behavior: Call-5 sequencing and lane design reasoning",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -4910,7 +4910,7 @@
       "task_id": "TASK-103",
       "title": "Implement contract and data model surface: Call-6 KPI impact estimation reasoning",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4946,7 +4946,7 @@
       "task_id": "TASK-104",
       "title": "Implement reasoning/processing behavior: Call-6 KPI impact estimation reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -4983,7 +4983,7 @@
       "task_id": "TASK-105",
       "title": "Implement multi-call orchestration trace: Call-6 KPI impact estimation reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5021,7 +5021,7 @@
       "task_id": "TASK-106",
       "title": "Harden replay and failure-path behavior: Call-6 KPI impact estimation reasoning",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -5060,7 +5060,7 @@
       "task_id": "TASK-107",
       "title": "Implement contract and data model surface: Call-7 blocker and risk policy reasoning",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5096,7 +5096,7 @@
       "task_id": "TASK-108",
       "title": "Implement reasoning/processing behavior: Call-7 blocker and risk policy reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5133,7 +5133,7 @@
       "task_id": "TASK-109",
       "title": "Implement multi-call orchestration trace: Call-7 blocker and risk policy reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5171,7 +5171,7 @@
       "task_id": "TASK-110",
       "title": "Harden replay and failure-path behavior: Call-7 blocker and risk policy reasoning",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -5210,7 +5210,7 @@
       "task_id": "TASK-111",
       "title": "Implement contract and data model surface: Call-8 constraint classification reasoning",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5246,7 +5246,7 @@
       "task_id": "TASK-112",
       "title": "Implement reasoning/processing behavior: Call-8 constraint classification reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5283,7 +5283,7 @@
       "task_id": "TASK-113",
       "title": "Implement multi-call orchestration trace: Call-8 constraint classification reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5321,7 +5321,7 @@
       "task_id": "TASK-114",
       "title": "Harden replay and failure-path behavior: Call-8 constraint classification reasoning",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -5360,7 +5360,7 @@
       "task_id": "TASK-115",
       "title": "Implement contract and data model surface: Cross-call memory handoff contract",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5396,7 +5396,7 @@
       "task_id": "TASK-116",
       "title": "Implement reasoning/processing behavior: Cross-call memory handoff contract",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5433,7 +5433,7 @@
       "task_id": "TASK-117",
       "title": "Implement multi-call orchestration trace: Cross-call memory handoff contract",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5471,7 +5471,7 @@
       "task_id": "TASK-118",
       "title": "Harden replay and failure-path behavior: Cross-call memory handoff contract",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-b",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -5510,7 +5510,7 @@
       "task_id": "TASK-119",
       "title": "Implement contract and data model surface: Evidence citation discipline in reasoning calls",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5546,7 +5546,7 @@
       "task_id": "TASK-120",
       "title": "Implement reasoning/processing behavior: Evidence citation discipline in reasoning calls",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5583,7 +5583,7 @@
       "task_id": "TASK-121",
       "title": "Implement multi-call orchestration trace: Evidence citation discipline in reasoning calls",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5621,7 +5621,7 @@
       "task_id": "TASK-122",
       "title": "Harden replay and failure-path behavior: Evidence citation discipline in reasoning calls",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -5660,7 +5660,7 @@
       "task_id": "TASK-123",
       "title": "Implement contract and data model surface: Cross-call contradiction detection",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-b",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5696,7 +5696,7 @@
       "task_id": "TASK-124",
       "title": "Implement reasoning/processing behavior: Cross-call contradiction detection",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5733,7 +5733,7 @@
       "task_id": "TASK-125",
       "title": "Implement multi-call orchestration trace: Cross-call contradiction detection",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5771,7 +5771,7 @@
       "task_id": "TASK-126",
       "title": "Harden replay and failure-path behavior: Cross-call contradiction detection",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -5810,7 +5810,7 @@
       "task_id": "TASK-127",
       "title": "Implement contract and data model surface: Recommendation deduplication and merge",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5846,7 +5846,7 @@
       "task_id": "TASK-128",
       "title": "Implement reasoning/processing behavior: Recommendation deduplication and merge",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5883,7 +5883,7 @@
       "task_id": "TASK-129",
       "title": "Implement multi-call orchestration trace: Recommendation deduplication and merge",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5921,7 +5921,7 @@
       "task_id": "TASK-130",
       "title": "Harden replay and failure-path behavior: Recommendation deduplication and merge",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -5960,7 +5960,7 @@
       "task_id": "TASK-131",
       "title": "Implement contract and data model surface: Recommendation priority calibration",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -5996,7 +5996,7 @@
       "task_id": "TASK-132",
       "title": "Implement reasoning/processing behavior: Recommendation priority calibration",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6033,7 +6033,7 @@
       "task_id": "TASK-133",
       "title": "Implement multi-call orchestration trace: Recommendation priority calibration",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6071,7 +6071,7 @@
       "task_id": "TASK-134",
       "title": "Harden replay and failure-path behavior: Recommendation priority calibration",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -6110,7 +6110,7 @@
       "task_id": "TASK-135",
       "title": "Implement contract and data model surface: Recommendation rationale quality scoring",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6146,7 +6146,7 @@
       "task_id": "TASK-136",
       "title": "Implement reasoning/processing behavior: Recommendation rationale quality scoring",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6183,7 +6183,7 @@
       "task_id": "TASK-137",
       "title": "Implement multi-call orchestration trace: Recommendation rationale quality scoring",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6221,7 +6221,7 @@
       "task_id": "TASK-138",
       "title": "Harden replay and failure-path behavior: Recommendation rationale quality scoring",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -6260,7 +6260,7 @@
       "task_id": "TASK-139",
       "title": "Implement contract and data model surface: Recommendation feasibility scoring",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6296,7 +6296,7 @@
       "task_id": "TASK-140",
       "title": "Implement reasoning/processing behavior: Recommendation feasibility scoring",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6333,7 +6333,7 @@
       "task_id": "TASK-141",
       "title": "Implement multi-call orchestration trace: Recommendation feasibility scoring",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6371,7 +6371,7 @@
       "task_id": "TASK-142",
       "title": "Harden replay and failure-path behavior: Recommendation feasibility scoring",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -6410,7 +6410,7 @@
       "task_id": "TASK-143",
       "title": "Implement contract and data model surface: Recommendation dependency-effect modeling",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6446,7 +6446,7 @@
       "task_id": "TASK-144",
       "title": "Implement reasoning/processing behavior: Recommendation dependency-effect modeling",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6483,7 +6483,7 @@
       "task_id": "TASK-145",
       "title": "Implement multi-call orchestration trace: Recommendation dependency-effect modeling",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6521,7 +6521,7 @@
       "task_id": "TASK-146",
       "title": "Harden replay and failure-path behavior: Recommendation dependency-effect modeling",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -6560,7 +6560,7 @@
       "task_id": "TASK-147",
       "title": "Implement contract and data model surface: Existing-functionality interaction reasoning",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6596,7 +6596,7 @@
       "task_id": "TASK-148",
       "title": "Implement reasoning/processing behavior: Existing-functionality interaction reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6633,7 +6633,7 @@
       "task_id": "TASK-149",
       "title": "Implement multi-call orchestration trace: Existing-functionality interaction reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6671,7 +6671,7 @@
       "task_id": "TASK-150",
       "title": "Harden replay and failure-path behavior: Existing-functionality interaction reasoning",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -6710,7 +6710,7 @@
       "task_id": "TASK-151",
       "title": "Implement contract and data model surface: Project obligation reasoning",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6746,7 +6746,7 @@
       "task_id": "TASK-152",
       "title": "Implement reasoning/processing behavior: Project obligation reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6783,7 +6783,7 @@
       "task_id": "TASK-153",
       "title": "Implement multi-call orchestration trace: Project obligation reasoning",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6821,7 +6821,7 @@
       "task_id": "TASK-154",
       "title": "Harden replay and failure-path behavior: Project obligation reasoning",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -6860,7 +6860,7 @@
       "task_id": "TASK-155",
       "title": "Implement contract and data model surface: Recommendation omission detector",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6896,7 +6896,7 @@
       "task_id": "TASK-156",
       "title": "Implement reasoning/processing behavior: Recommendation omission detector",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6933,7 +6933,7 @@
       "task_id": "TASK-157",
       "title": "Implement multi-call orchestration trace: Recommendation omission detector",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -6971,7 +6971,7 @@
       "task_id": "TASK-158",
       "title": "Harden replay and failure-path behavior: Recommendation omission detector",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -7010,7 +7010,7 @@
       "task_id": "TASK-159",
       "title": "Implement contract and data model surface: Alternative strategic scenario generator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7046,7 +7046,7 @@
       "task_id": "TASK-160",
       "title": "Implement reasoning/processing behavior: Alternative strategic scenario generator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7083,7 +7083,7 @@
       "task_id": "TASK-161",
       "title": "Implement multi-call orchestration trace: Alternative strategic scenario generator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7121,7 +7121,7 @@
       "task_id": "TASK-162",
       "title": "Harden replay and failure-path behavior: Alternative strategic scenario generator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -7160,7 +7160,7 @@
       "task_id": "TASK-163",
       "title": "Implement contract and data model surface: Final strategy synthesis composer",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7196,7 +7196,7 @@
       "task_id": "TASK-164",
       "title": "Implement reasoning/processing behavior: Final strategy synthesis composer",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7233,7 +7233,7 @@
       "task_id": "TASK-165",
       "title": "Implement multi-call orchestration trace: Final strategy synthesis composer",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7271,7 +7271,7 @@
       "task_id": "TASK-166",
       "title": "Harden replay and failure-path behavior: Final strategy synthesis composer",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -7310,7 +7310,7 @@
       "task_id": "TASK-167",
       "title": "Operational acceptance and handoff evidence: Final strategy synthesis composer",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -7347,7 +7347,7 @@
       "task_id": "TASK-168",
       "title": "Implement contract and data model surface: LLM call trace and decision ledger",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-b",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7383,7 +7383,7 @@
       "task_id": "TASK-169",
       "title": "Implement reasoning/processing behavior: LLM call trace and decision ledger",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7420,7 +7420,7 @@
       "task_id": "TASK-170",
       "title": "Implement multi-call orchestration trace: LLM call trace and decision ledger",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-b",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7458,7 +7458,7 @@
       "task_id": "TASK-171",
       "title": "Harden replay and failure-path behavior: LLM call trace and decision ledger",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -7497,7 +7497,7 @@
       "task_id": "TASK-172",
       "title": "Operational acceptance and handoff evidence: LLM call trace and decision ledger",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-b",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -7534,7 +7534,7 @@
       "task_id": "TASK-173",
       "title": "Implement contract and data model surface: STRATEGY.md generator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7571,7 +7571,7 @@
       "task_id": "TASK-174",
       "title": "Implement reasoning/processing behavior: STRATEGY.md generator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7609,7 +7609,7 @@
       "task_id": "TASK-175",
       "title": "Harden replay and failure-path behavior: STRATEGY.md generator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -7649,7 +7649,7 @@
       "task_id": "TASK-176",
       "title": "Implement contract and data model surface: STRATEGY.json generator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7686,7 +7686,7 @@
       "task_id": "TASK-177",
       "title": "Implement reasoning/processing behavior: STRATEGY.json generator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7724,7 +7724,7 @@
       "task_id": "TASK-178",
       "title": "Harden replay and failure-path behavior: STRATEGY.json generator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -7764,7 +7764,7 @@
       "task_id": "TASK-179",
       "title": "Implement contract and data model surface: ECOSYSTEM_LINK_MAP.json generator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7801,7 +7801,7 @@
       "task_id": "TASK-180",
       "title": "Implement reasoning/processing behavior: ECOSYSTEM_LINK_MAP.json generator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7839,7 +7839,7 @@
       "task_id": "TASK-181",
       "title": "Harden replay and failure-path behavior: ECOSYSTEM_LINK_MAP.json generator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -7879,7 +7879,7 @@
       "task_id": "TASK-182",
       "title": "Implement contract and data model surface: STRATEGY_CHANGELOG.md generator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7916,7 +7916,7 @@
       "task_id": "TASK-183",
       "title": "Implement reasoning/processing behavior: STRATEGY_CHANGELOG.md generator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -7954,7 +7954,7 @@
       "task_id": "TASK-184",
       "title": "Harden replay and failure-path behavior: STRATEGY_CHANGELOG.md generator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -7994,7 +7994,7 @@
       "task_id": "TASK-185",
       "title": "Implement contract and data model surface: strategy_packet.v1 generator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8031,7 +8031,7 @@
       "task_id": "TASK-186",
       "title": "Implement reasoning/processing behavior: strategy_packet.v1 generator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8069,7 +8069,7 @@
       "task_id": "TASK-187",
       "title": "Harden replay and failure-path behavior: strategy_packet.v1 generator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-c",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -8109,7 +8109,7 @@
       "task_id": "TASK-188",
       "title": "Implement validator and consumability gate: strategy_packet.v1 generator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8148,7 +8148,7 @@
       "task_id": "TASK-189",
       "title": "Implement contract and data model surface: Recommendation ID stability contract",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-c",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8185,7 +8185,7 @@
       "task_id": "TASK-190",
       "title": "Implement reasoning/processing behavior: Recommendation ID stability contract",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8223,7 +8223,7 @@
       "task_id": "TASK-191",
       "title": "Harden replay and failure-path behavior: Recommendation ID stability contract",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -8264,7 +8264,7 @@
       "task_id": "TASK-192",
       "title": "Implement validator and consumability gate: Recommendation ID stability contract",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8304,7 +8304,7 @@
       "task_id": "TASK-193",
       "title": "Implement contract and data model surface: Recommendation-to-planner mapping artifact",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8341,7 +8341,7 @@
       "task_id": "TASK-194",
       "title": "Implement reasoning/processing behavior: Recommendation-to-planner mapping artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8379,7 +8379,7 @@
       "task_id": "TASK-195",
       "title": "Harden replay and failure-path behavior: Recommendation-to-planner mapping artifact",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -8420,7 +8420,7 @@
       "task_id": "TASK-196",
       "title": "Implement validator and consumability gate: Recommendation-to-planner mapping artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8460,7 +8460,7 @@
       "task_id": "TASK-197",
       "title": "Implement contract and data model surface: Constraint classification artifact",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8497,7 +8497,7 @@
       "task_id": "TASK-198",
       "title": "Implement reasoning/processing behavior: Constraint classification artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8535,7 +8535,7 @@
       "task_id": "TASK-199",
       "title": "Harden replay and failure-path behavior: Constraint classification artifact",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -8576,7 +8576,7 @@
       "task_id": "TASK-200",
       "title": "Implement validator and consumability gate: Constraint classification artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8616,7 +8616,7 @@
       "task_id": "TASK-201",
       "title": "Implement contract and data model surface: KPI target artifact",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8653,7 +8653,7 @@
       "task_id": "TASK-202",
       "title": "Implement reasoning/processing behavior: KPI target artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8691,7 +8691,7 @@
       "task_id": "TASK-203",
       "title": "Harden replay and failure-path behavior: KPI target artifact",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -8732,7 +8732,7 @@
       "task_id": "TASK-204",
       "title": "Implement validator and consumability gate: KPI target artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8772,7 +8772,7 @@
       "task_id": "TASK-205",
       "title": "Implement contract and data model surface: Blocker handling policy artifact",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8809,7 +8809,7 @@
       "task_id": "TASK-206",
       "title": "Implement reasoning/processing behavior: Blocker handling policy artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8847,7 +8847,7 @@
       "task_id": "TASK-207",
       "title": "Harden replay and failure-path behavior: Blocker handling policy artifact",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -8888,7 +8888,7 @@
       "task_id": "TASK-208",
       "title": "Implement validator and consumability gate: Blocker handling policy artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8928,7 +8928,7 @@
       "task_id": "TASK-209",
       "title": "Implement contract and data model surface: Ecosystem obligation artifact",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -8965,7 +8965,7 @@
       "task_id": "TASK-210",
       "title": "Implement reasoning/processing behavior: Ecosystem obligation artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9003,7 +9003,7 @@
       "task_id": "TASK-211",
       "title": "Harden replay and failure-path behavior: Ecosystem obligation artifact",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -9044,7 +9044,7 @@
       "task_id": "TASK-212",
       "title": "Implement validator and consumability gate: Ecosystem obligation artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9084,7 +9084,7 @@
       "task_id": "TASK-213",
       "title": "Implement contract and data model surface: Strategy quality report artifact",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9121,7 +9121,7 @@
       "task_id": "TASK-214",
       "title": "Implement reasoning/processing behavior: Strategy quality report artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9159,7 +9159,7 @@
       "task_id": "TASK-215",
       "title": "Harden replay and failure-path behavior: Strategy quality report artifact",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -9200,7 +9200,7 @@
       "task_id": "TASK-216",
       "title": "Implement validator and consumability gate: Strategy quality report artifact",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9240,7 +9240,7 @@
       "task_id": "TASK-217",
       "title": "Implement contract and data model surface: strategy_packet.v1 schema validator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9277,7 +9277,7 @@
       "task_id": "TASK-218",
       "title": "Implement reasoning/processing behavior: strategy_packet.v1 schema validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9315,7 +9315,7 @@
       "task_id": "TASK-219",
       "title": "Harden replay and failure-path behavior: strategy_packet.v1 schema validator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -9356,7 +9356,7 @@
       "task_id": "TASK-220",
       "title": "Implement validator and consumability gate: strategy_packet.v1 schema validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-e",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9396,7 +9396,7 @@
       "task_id": "TASK-221",
       "title": "Implement contract and data model surface: Recommendation quality validator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9433,7 +9433,7 @@
       "task_id": "TASK-222",
       "title": "Implement reasoning/processing behavior: Recommendation quality validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9471,7 +9471,7 @@
       "task_id": "TASK-223",
       "title": "Harden replay and failure-path behavior: Recommendation quality validator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -9512,7 +9512,7 @@
       "task_id": "TASK-224",
       "title": "Implement validator and consumability gate: Recommendation quality validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9552,7 +9552,7 @@
       "task_id": "TASK-225",
       "title": "Implement contract and data model surface: Recommendation ID uniqueness validator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9589,7 +9589,7 @@
       "task_id": "TASK-226",
       "title": "Implement reasoning/processing behavior: Recommendation ID uniqueness validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9627,7 +9627,7 @@
       "task_id": "TASK-227",
       "title": "Harden replay and failure-path behavior: Recommendation ID uniqueness validator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -9668,7 +9668,7 @@
       "task_id": "TASK-228",
       "title": "Implement validator and consumability gate: Recommendation ID uniqueness validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9708,7 +9708,7 @@
       "task_id": "TASK-229",
       "title": "Implement contract and data model surface: Ecosystem link-map integrity validator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9745,7 +9745,7 @@
       "task_id": "TASK-230",
       "title": "Implement reasoning/processing behavior: Ecosystem link-map integrity validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9783,7 +9783,7 @@
       "task_id": "TASK-231",
       "title": "Harden replay and failure-path behavior: Ecosystem link-map integrity validator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -9824,7 +9824,7 @@
       "task_id": "TASK-232",
       "title": "Implement validator and consumability gate: Ecosystem link-map integrity validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9864,7 +9864,7 @@
       "task_id": "TASK-233",
       "title": "Implement contract and data model surface: Source traceability validator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9901,7 +9901,7 @@
       "task_id": "TASK-234",
       "title": "Implement reasoning/processing behavior: Source traceability validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -9939,7 +9939,7 @@
       "task_id": "TASK-235",
       "title": "Harden replay and failure-path behavior: Source traceability validator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -9980,7 +9980,7 @@
       "task_id": "TASK-236",
       "title": "Implement validator and consumability gate: Source traceability validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10020,7 +10020,7 @@
       "task_id": "TASK-237",
       "title": "Implement contract and data model surface: Planner-consumability validator",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10057,7 +10057,7 @@
       "task_id": "TASK-238",
       "title": "Implement reasoning/processing behavior: Planner-consumability validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10095,7 +10095,7 @@
       "task_id": "TASK-239",
       "title": "Harden replay and failure-path behavior: Planner-consumability validator",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -10136,7 +10136,7 @@
       "task_id": "TASK-240",
       "title": "Implement validator and consumability gate: Planner-consumability validator",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10176,7 +10176,7 @@
       "task_id": "TASK-241",
       "title": "Implement contract and data model surface: Validator runner and aggregate verdict",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10213,7 +10213,7 @@
       "task_id": "TASK-242",
       "title": "Implement reasoning/processing behavior: Validator runner and aggregate verdict",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10251,7 +10251,7 @@
       "task_id": "TASK-243",
       "title": "Harden replay and failure-path behavior: Validator runner and aggregate verdict",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -10292,7 +10292,7 @@
       "task_id": "TASK-244",
       "title": "Implement validator and consumability gate: Validator runner and aggregate verdict",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10332,7 +10332,7 @@
       "task_id": "TASK-245",
       "title": "Implement contract and data model surface: op-initialize pre-plan strategy hook",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10369,7 +10369,7 @@
       "task_id": "TASK-246",
       "title": "Implement reasoning/processing behavior: op-initialize pre-plan strategy hook",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10407,7 +10407,7 @@
       "task_id": "TASK-247",
       "title": "Harden replay and failure-path behavior: op-initialize pre-plan strategy hook",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -10448,7 +10448,7 @@
       "task_id": "TASK-248",
       "title": "Implement validator and consumability gate: op-initialize pre-plan strategy hook",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10488,7 +10488,7 @@
       "task_id": "TASK-249",
       "title": "Implement contract and data model surface: op-plan strategy ingestion hook",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10525,7 +10525,7 @@
       "task_id": "TASK-250",
       "title": "Implement reasoning/processing behavior: op-plan strategy ingestion hook",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10563,7 +10563,7 @@
       "task_id": "TASK-251",
       "title": "Harden replay and failure-path behavior: op-plan strategy ingestion hook",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -10604,7 +10604,7 @@
       "task_id": "TASK-252",
       "title": "Implement validator and consumability gate: op-plan strategy ingestion hook",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10644,7 +10644,7 @@
       "task_id": "TASK-253",
       "title": "Implement contract and data model surface: Strategy revision history and diff workflow",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10681,7 +10681,7 @@
       "task_id": "TASK-254",
       "title": "Implement reasoning/processing behavior: Strategy revision history and diff workflow",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10719,7 +10719,7 @@
       "task_id": "TASK-255",
       "title": "Harden replay and failure-path behavior: Strategy revision history and diff workflow",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -10760,7 +10760,7 @@
       "task_id": "TASK-256",
       "title": "Operational acceptance and handoff evidence: Strategy revision history and diff workflow",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -10799,7 +10799,7 @@
       "task_id": "TASK-257",
       "title": "Implement contract and data model surface: End-to-end autonomous strategy run and acceptance packet",
       "phase_id": "phase-1",
-      "lane_id": "phase-1/lane-c",
+      "lane_id": "phase-1/lane-p1-d",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10836,7 +10836,7 @@
       "task_id": "TASK-258",
       "title": "Implement reasoning/processing behavior: End-to-end autonomous strategy run and acceptance packet",
       "phase_id": "phase-2",
-      "lane_id": "phase-2/lane-c",
+      "lane_id": "phase-2/lane-p2-f",
       "status": "pending",
       "verification_contract": {
         "mode": "implementation_green",
@@ -10874,7 +10874,7 @@
       "task_id": "TASK-259",
       "title": "Harden replay and failure-path behavior: End-to-end autonomous strategy run and acceptance packet",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -10915,7 +10915,7 @@
       "task_id": "TASK-260",
       "title": "Operational acceptance and handoff evidence: End-to-end autonomous strategy run and acceptance packet",
       "phase_id": "phase-3",
-      "lane_id": "phase-3/lane-c",
+      "lane_id": "phase-3/lane-p3-d",
       "status": "pending",
       "verification_contract": {
         "mode": "hardening",
@@ -10963,14 +10963,19 @@
     "python3 -m pytest tests -q"
   ],
   "lane_base_branches": {
-    "phase-1/lane-a": "lane-phase-1-lane-a",
-    "phase-2/lane-a": "lane-phase-2-lane-a",
-    "phase-3/lane-a": "lane-phase-3-lane-a",
-    "phase-1/lane-b": "lane-phase-1-lane-b",
-    "phase-2/lane-b": "lane-phase-2-lane-b",
-    "phase-3/lane-b": "lane-phase-3-lane-b",
-    "phase-1/lane-c": "lane-phase-1-lane-c",
-    "phase-2/lane-c": "lane-phase-2-lane-c",
-    "phase-3/lane-c": "lane-phase-3-lane-c"
+    "phase-1/lane-p1-a": "lane-phase-1-lane-p1-a",
+    "phase-1/lane-p1-b": "lane-phase-1-lane-p1-b",
+    "phase-1/lane-p1-c": "lane-phase-1-lane-p1-c",
+    "phase-1/lane-p1-d": "lane-phase-1-lane-p1-d",
+    "phase-2/lane-p2-a": "lane-phase-2-lane-p2-a",
+    "phase-2/lane-p2-b": "lane-phase-2-lane-p2-b",
+    "phase-2/lane-p2-c": "lane-phase-2-lane-p2-c",
+    "phase-2/lane-p2-d": "lane-phase-2-lane-p2-d",
+    "phase-2/lane-p2-e": "lane-phase-2-lane-p2-e",
+    "phase-2/lane-p2-f": "lane-phase-2-lane-p2-f",
+    "phase-3/lane-p3-a": "lane-phase-3-lane-p3-a",
+    "phase-3/lane-p3-b": "lane-phase-3-lane-p3-b",
+    "phase-3/lane-p3-c": "lane-phase-3-lane-p3-c",
+    "phase-3/lane-p3-d": "lane-phase-3-lane-p3-d"
   }
 }
