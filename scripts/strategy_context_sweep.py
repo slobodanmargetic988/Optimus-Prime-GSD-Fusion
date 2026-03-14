@@ -20,6 +20,13 @@ TOOL = "strategy-context-sweep"
 TOOL_VERSION = "1.0.0"
 MANIFEST_SCHEMA_VERSION = "req-002.earth-wide-repository-discovery-manifest.v1"
 ARCHIVED_NAME_TOKENS = ("archive", "archives", "archived")
+EXCLUDE_REASON_CODES = (
+    "exclude_non_directory",
+    "exclude_hidden_path",
+    "exclude_archived_path",
+    "exclude_non_owner_path",
+    "exclude_non_repository_path",
+)
 LOG_ROOT = Path("/Users/slobodan/projects/LOGS")
 LOG_PATH = LOG_ROOT / "strategy_context_sweep.log"
 LOG_BUDGET_CHECK_STAMP = LOG_ROOT / ".log_budget_check.strategy_context_sweep"
@@ -106,6 +113,198 @@ def _discovery_fingerprint(projects: list[dict[str, Any]]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _sorted_unique_strings(values: list[str]) -> list[str]:
+    return sorted({value for value in values if _as_str(value)})
+
+
+def _build_evidence_refs(projects: list[dict[str, Any]], excluded_paths: list[dict[str, str]]) -> list[str]:
+    refs: list[str] = []
+    for project in projects:
+        repo_relpath = _as_str(project.get("repo_relpath"))
+        if repo_relpath:
+            refs.append(f"{repo_relpath}/.git")
+        source_refs = project.get("source_refs") if isinstance(project.get("source_refs"), dict) else {}
+        for key in ("mission", "scope"):
+            source_ref = _as_str(source_refs.get(key))
+            if repo_relpath and source_ref:
+                refs.append(f"{repo_relpath}/{source_ref}")
+
+    for row in excluded_paths:
+        path = _as_str(row.get("path"))
+        reason_code = _as_str(row.get("reason_code"))
+        if path and reason_code:
+            refs.append(f"excluded:{path}#{reason_code}")
+
+    return _sorted_unique_strings(refs)
+
+
+def _build_cross_project_context(projects: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    context_rows: list[dict[str, Any]] = []
+    partial_project_ids: list[str] = []
+    for project in projects:
+        project_id = _as_str(project.get("project_id"))
+        project_name = _as_str(project.get("project_name"))
+        repo_relpath = _as_str(project.get("repo_relpath"))
+        source_refs = project.get("source_refs") if isinstance(project.get("source_refs"), dict) else {}
+        mission_source = _as_str(source_refs.get("mission"))
+        scope_source = _as_str(source_refs.get("scope"))
+        mission_ref = f"{repo_relpath}/{mission_source}" if repo_relpath and mission_source else None
+        scope_ref = f"{repo_relpath}/{scope_source}" if repo_relpath and scope_source else None
+        status = "complete" if mission_ref and scope_ref else "partial"
+        if status == "partial":
+            partial_project_ids.append(project_id)
+        row_evidence_refs = _sorted_unique_strings(
+            [f"{repo_relpath}/.git" if repo_relpath else "", mission_ref or "", scope_ref or ""]
+        )
+        context_rows.append(
+            {
+                "project_id": project_id,
+                "project_name": project_name,
+                "mission_ref": mission_ref,
+                "scope_ref": scope_ref,
+                "context_status": status,
+                "evidence_refs": row_evidence_refs,
+            }
+        )
+    context_rows.sort(key=lambda row: row["project_id"])
+    partial_project_ids.sort()
+    return context_rows, partial_project_ids
+
+
+def _build_broad_sweep_inputs(
+    *,
+    earth_root: Path,
+    owner_username: str,
+    owner_prefix: Path,
+    direct_child_count: int,
+    projects: list[dict[str, Any]],
+    excluded_paths: list[dict[str, str]],
+    partial_project_ids: list[str],
+) -> dict[str, Any]:
+    reason_counts: dict[str, int] = {code: 0 for code in EXCLUDE_REASON_CODES}
+    for row in excluded_paths:
+        reason_code = _as_str(row.get("reason_code"))
+        if reason_code in reason_counts:
+            reason_counts[reason_code] += 1
+    return {
+        "earth_root": earth_root.as_posix(),
+        "owner_username": owner_username,
+        "owner_prefix": owner_prefix.as_posix(),
+        "include_rule": "direct_child_repository_roots_only",
+        "direct_child_count": direct_child_count,
+        "discovered_project_ids": [project["project_id"] for project in projects],
+        "source_ref_coverage": {
+            "project_count": len(projects),
+            "complete_project_count": len(projects) - len(partial_project_ids),
+            "partial_project_count": len(partial_project_ids),
+            "mission_ref_count": sum(
+                1 for project in projects if _as_str((project.get("source_refs") or {}).get("mission"))
+            ),
+            "scope_ref_count": sum(
+                1 for project in projects if _as_str((project.get("source_refs") or {}).get("scope"))
+            ),
+        },
+        "excluded_reason_counts": {code: reason_counts[code] for code in EXCLUDE_REASON_CODES},
+    }
+
+
+def _build_recommendation_and_open_risks(
+    *,
+    projects: list[dict[str, Any]],
+    cross_project_context: list[dict[str, Any]],
+    partial_project_ids: list[str],
+    evidence_refs: list[str],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    project_ids = [project["project_id"] for project in projects]
+    context_by_project_id = {row["project_id"]: row for row in cross_project_context}
+    open_risks: list[dict[str, Any]] = []
+    obligations: list[dict[str, Any]] = []
+
+    for project_id in partial_project_ids:
+        row = context_by_project_id[project_id]
+        missing_refs: list[str] = []
+        if row.get("mission_ref") is None:
+            missing_refs.append("mission.md")
+        if row.get("scope_ref") is None:
+            missing_refs.append("scope.md")
+        open_risks.append(
+            {
+                "risk_id": f"risk.missing-source-refs.{project_id}",
+                "project_id": project_id,
+                "summary": f"{project_id} is missing required source refs: {', '.join(missing_refs)}.",
+                "evidence_refs": row["evidence_refs"],
+                "missing_source_refs": missing_refs,
+            }
+        )
+
+    if len(project_ids) >= 2:
+        mission_scope_evidence = _sorted_unique_strings(
+            [ref for row in cross_project_context for ref in [row.get("mission_ref"), row.get("scope_ref")] if ref]
+        )
+        if partial_project_ids:
+            open_risks.append(
+                {
+                    "risk_id": "risk.cross-project-obligation-evidence-gap",
+                    "project_ids": partial_project_ids,
+                    "summary": (
+                        "Cross-project obligations are deferred because one or more projects lack mission/scope evidence."
+                    ),
+                    "evidence_refs": _sorted_unique_strings(
+                        [ref for project_id in partial_project_ids for ref in context_by_project_id[project_id]["evidence_refs"]]
+                    ),
+                }
+            )
+        elif mission_scope_evidence:
+            obligations.append(
+                {
+                    "obligation_id": "obl.cross-project.mission-scope-coverage",
+                    "title": "Maintain complete mission/scope evidence coverage across discovered Earth repositories.",
+                    "project_ids": project_ids,
+                    "evidence_refs": mission_scope_evidence,
+                }
+            )
+        else:
+            open_risks.append(
+                {
+                    "risk_id": "risk.cross-project-obligation-evidence-gap",
+                    "project_ids": project_ids,
+                    "summary": "Cross-project obligation inference skipped because mission/scope evidence refs are unavailable.",
+                    "evidence_refs": _sorted_unique_strings(
+                        [ref for row in cross_project_context for ref in row["evidence_refs"]]
+                    ),
+                }
+            )
+
+    if not projects:
+        decision = "blocked_no_projects_discovered"
+        rationale = "No repository roots were discovered under Earth root, so cross-project planning cannot begin."
+        action_items = ["Verify Earth root and owner policy inputs, then rerun discovery."]
+    elif partial_project_ids:
+        decision = "needs_evidence_backfill"
+        rationale = (
+            "At least one discovered project has partial mission/scope evidence, so cross-project obligations stay open risks."
+        )
+        action_items = ["Backfill missing mission/scope files for partial projects and rerun strategy context sweep."]
+    else:
+        decision = "ready_for_cross_project_planning"
+        rationale = (
+            "All discovered projects provide mission/scope evidence; recommendation can include evidence-backed obligations."
+        )
+        action_items = ["Proceed with cross-project planning using the manifest evidence refs and obligations."]
+
+    recommendation = {
+        "decision": decision,
+        "rationale": rationale,
+        "context_project_ids": project_ids,
+        "evidence_refs": evidence_refs[:10] if evidence_refs else [],
+        "action_items": action_items,
+        "proposed_cross_project_obligations": obligations,
+    }
+
+    open_risks.sort(key=lambda row: row["risk_id"])
+    return recommendation, open_risks
+
+
 def build_earth_repository_discovery_manifest(
     earth_root: Path,
     *,
@@ -125,7 +324,8 @@ def build_earth_repository_discovery_manifest(
     projects: list[dict[str, Any]] = []
     excluded_paths: list[dict[str, str]] = []
 
-    for child in sorted(resolved_earth_root.iterdir(), key=lambda item: item.name.lower()):
+    children = sorted(resolved_earth_root.iterdir(), key=lambda item: item.name.lower())
+    for child in children:
         relpath = _safe_relpath(child, resolved_earth_root)
         if not child.is_dir():
             excluded_paths.append({"path": relpath, "reason_code": "exclude_non_directory"})
@@ -157,6 +357,23 @@ def build_earth_repository_discovery_manifest(
 
     projects.sort(key=lambda item: item["project_id"])
     excluded_paths.sort(key=lambda item: (item["path"], item["reason_code"]))
+    cross_project_context, partial_project_ids = _build_cross_project_context(projects)
+    evidence_refs = _build_evidence_refs(projects, excluded_paths)
+    recommendation, open_risks = _build_recommendation_and_open_risks(
+        projects=projects,
+        cross_project_context=cross_project_context,
+        partial_project_ids=partial_project_ids,
+        evidence_refs=evidence_refs,
+    )
+    broad_sweep_inputs = _build_broad_sweep_inputs(
+        earth_root=resolved_earth_root,
+        owner_username=owner,
+        owner_prefix=owner_prefix,
+        direct_child_count=len(children),
+        projects=projects,
+        excluded_paths=excluded_paths,
+        partial_project_ids=partial_project_ids,
+    )
 
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -174,9 +391,14 @@ def build_earth_repository_discovery_manifest(
                 {"rule_id": "exclude_non_repository_path", "description": "Ignore directories that do not look like repository roots (.git missing)."},
             ],
         },
+        "broad_sweep_inputs": broad_sweep_inputs,
         "earth_root": resolved_earth_root.as_posix(),
         "projects": projects,
         "excluded_paths": excluded_paths,
+        "evidence_refs": evidence_refs,
+        "cross_project_context": cross_project_context,
+        "recommendation": recommendation,
+        "open_risks": open_risks,
         "stats": {
             "project_count": len(projects),
             "excluded_path_count": len(excluded_paths),
@@ -222,6 +444,40 @@ def validate_earth_repository_discovery_manifest(payload: dict[str, Any]) -> lis
     if not earth_root:
         errors.append("earth_root is required")
 
+    broad_sweep_inputs = payload.get("broad_sweep_inputs")
+    if not isinstance(broad_sweep_inputs, dict):
+        errors.append("broad_sweep_inputs must be an object")
+    else:
+        if not isinstance(broad_sweep_inputs.get("direct_child_count"), int):
+            errors.append("broad_sweep_inputs.direct_child_count must be an integer")
+        discovered_project_ids = broad_sweep_inputs.get("discovered_project_ids")
+        if not isinstance(discovered_project_ids, list):
+            errors.append("broad_sweep_inputs.discovered_project_ids must be a list")
+        else:
+            for idx, value in enumerate(discovered_project_ids):
+                if not re.fullmatch(r"prj\.[a-z0-9][a-z0-9-]*", _as_str(value)):
+                    errors.append(f"broad_sweep_inputs.discovered_project_ids[{idx}] must match prj.<slug>")
+        source_ref_coverage = broad_sweep_inputs.get("source_ref_coverage")
+        if not isinstance(source_ref_coverage, dict):
+            errors.append("broad_sweep_inputs.source_ref_coverage must be an object")
+        else:
+            for key in (
+                "project_count",
+                "complete_project_count",
+                "partial_project_count",
+                "mission_ref_count",
+                "scope_ref_count",
+            ):
+                if not isinstance(source_ref_coverage.get(key), int):
+                    errors.append(f"broad_sweep_inputs.source_ref_coverage.{key} must be an integer")
+        excluded_reason_counts = broad_sweep_inputs.get("excluded_reason_counts")
+        if not isinstance(excluded_reason_counts, dict):
+            errors.append("broad_sweep_inputs.excluded_reason_counts must be an object")
+        else:
+            for reason_code in EXCLUDE_REASON_CODES:
+                if not isinstance(excluded_reason_counts.get(reason_code), int):
+                    errors.append(f"broad_sweep_inputs.excluded_reason_counts.{reason_code} must be an integer")
+
     projects = payload.get("projects")
     if not isinstance(projects, list):
         errors.append("projects must be a list")
@@ -259,13 +515,6 @@ def validate_earth_repository_discovery_manifest(payload: dict[str, Any]) -> lis
     if not isinstance(excluded, list):
         errors.append("excluded_paths must be a list")
     else:
-        allowed_reason_codes = {
-            "exclude_non_directory",
-            "exclude_hidden_path",
-            "exclude_archived_path",
-            "exclude_non_owner_path",
-            "exclude_non_repository_path",
-        }
         for idx, row in enumerate(excluded):
             if not isinstance(row, dict):
                 errors.append(f"excluded_paths[{idx}] must be an object")
@@ -274,8 +523,184 @@ def validate_earth_repository_discovery_manifest(payload: dict[str, Any]) -> lis
             reason_code = _as_str(row.get("reason_code"))
             if not path:
                 errors.append(f"excluded_paths[{idx}].path is required")
-            if reason_code not in allowed_reason_codes:
+            if reason_code not in EXCLUDE_REASON_CODES:
                 errors.append(f"excluded_paths[{idx}].reason_code is invalid")
+
+    evidence_refs = payload.get("evidence_refs")
+    if not isinstance(evidence_refs, list) or not evidence_refs:
+        errors.append("evidence_refs must be a non-empty list")
+        evidence_refs = []
+    else:
+        for idx, ref in enumerate(evidence_refs):
+            if not _as_str(ref):
+                errors.append(f"evidence_refs[{idx}] must be a non-empty string")
+        if evidence_refs != sorted(evidence_refs):
+            errors.append("evidence_refs must be sorted for rerun stability")
+        if len(set(evidence_refs)) != len(evidence_refs):
+            errors.append("evidence_refs must be unique")
+
+    cross_project_context = payload.get("cross_project_context")
+    partial_project_ids: set[str] = set()
+    if not isinstance(cross_project_context, list):
+        errors.append("cross_project_context must be a list")
+        cross_project_context = []
+    else:
+        context_project_ids: list[str] = []
+        for idx, row in enumerate(cross_project_context):
+            if not isinstance(row, dict):
+                errors.append(f"cross_project_context[{idx}] must be an object")
+                continue
+            project_id = _as_str(row.get("project_id"))
+            if project_id not in project_ids:
+                errors.append(f"cross_project_context[{idx}].project_id must reference discovered projects")
+            context_project_ids.append(project_id)
+            context_status = _as_str(row.get("context_status"))
+            if context_status not in {"complete", "partial"}:
+                errors.append(f"cross_project_context[{idx}].context_status must be complete|partial")
+            if context_status == "partial":
+                partial_project_ids.add(project_id)
+            for key in ("mission_ref", "scope_ref"):
+                value = row.get(key)
+                if value is not None and not isinstance(value, str):
+                    errors.append(f"cross_project_context[{idx}].{key} must be string|null")
+            row_evidence_refs = row.get("evidence_refs")
+            if not isinstance(row_evidence_refs, list) or not row_evidence_refs:
+                errors.append(f"cross_project_context[{idx}].evidence_refs must be a non-empty list")
+            else:
+                for ref_idx, ref in enumerate(row_evidence_refs):
+                    if not _as_str(ref):
+                        errors.append(f"cross_project_context[{idx}].evidence_refs[{ref_idx}] must be non-empty string")
+                    if isinstance(evidence_refs, list) and ref not in evidence_refs:
+                        errors.append(
+                            f"cross_project_context[{idx}].evidence_refs[{ref_idx}] must exist in top-level evidence_refs"
+                        )
+        if len(context_project_ids) != len(set(context_project_ids)):
+            errors.append("cross_project_context.project_id values must be unique")
+        if context_project_ids != sorted(context_project_ids):
+            errors.append("cross_project_context must be sorted by project_id")
+        if sorted(context_project_ids) != sorted(project_ids):
+            errors.append("cross_project_context must provide one row per discovered project")
+
+    recommendation = payload.get("recommendation")
+    obligations: list[dict[str, Any]] = []
+    if not isinstance(recommendation, dict):
+        errors.append("recommendation must be an object")
+    else:
+        if not _as_str(recommendation.get("decision")):
+            errors.append("recommendation.decision is required")
+        if not _as_str(recommendation.get("rationale")):
+            errors.append("recommendation.rationale is required")
+        context_project_ids = recommendation.get("context_project_ids")
+        if not isinstance(context_project_ids, list):
+            errors.append("recommendation.context_project_ids must be a list")
+        else:
+            if context_project_ids != project_ids:
+                errors.append("recommendation.context_project_ids must equal discovered project_ids")
+        rec_evidence_refs = recommendation.get("evidence_refs")
+        if not isinstance(rec_evidence_refs, list) or not rec_evidence_refs:
+            errors.append("recommendation.evidence_refs must be a non-empty list")
+        else:
+            for idx, ref in enumerate(rec_evidence_refs):
+                if not _as_str(ref):
+                    errors.append(f"recommendation.evidence_refs[{idx}] must be a non-empty string")
+                if isinstance(evidence_refs, list) and ref not in evidence_refs:
+                    errors.append(f"recommendation.evidence_refs[{idx}] must exist in top-level evidence_refs")
+        action_items = recommendation.get("action_items")
+        if not isinstance(action_items, list) or not action_items:
+            errors.append("recommendation.action_items must be a non-empty list")
+        else:
+            for idx, item in enumerate(action_items):
+                if not _as_str(item):
+                    errors.append(f"recommendation.action_items[{idx}] must be a non-empty string")
+
+        obligations_raw = recommendation.get("proposed_cross_project_obligations")
+        if not isinstance(obligations_raw, list):
+            errors.append("recommendation.proposed_cross_project_obligations must be a list")
+        else:
+            for idx, row in enumerate(obligations_raw):
+                if not isinstance(row, dict):
+                    errors.append(f"recommendation.proposed_cross_project_obligations[{idx}] must be an object")
+                    continue
+                obligation_id = _as_str(row.get("obligation_id"))
+                if not obligation_id:
+                    errors.append(f"recommendation.proposed_cross_project_obligations[{idx}].obligation_id is required")
+                if not _as_str(row.get("title")):
+                    errors.append(f"recommendation.proposed_cross_project_obligations[{idx}].title is required")
+                related_project_ids = row.get("project_ids")
+                if not isinstance(related_project_ids, list) or not related_project_ids:
+                    errors.append(
+                        f"recommendation.proposed_cross_project_obligations[{idx}].project_ids must be non-empty list"
+                    )
+                else:
+                    for pid_idx, project_id in enumerate(related_project_ids):
+                        if _as_str(project_id) not in project_ids:
+                            errors.append(
+                                f"recommendation.proposed_cross_project_obligations[{idx}].project_ids[{pid_idx}] "
+                                "must reference discovered projects"
+                            )
+                obligation_evidence_refs = row.get("evidence_refs")
+                if not isinstance(obligation_evidence_refs, list) or not obligation_evidence_refs:
+                    errors.append(
+                        f"recommendation.proposed_cross_project_obligations[{idx}].evidence_refs must be non-empty list"
+                    )
+                else:
+                    for ref_idx, ref in enumerate(obligation_evidence_refs):
+                        if not _as_str(ref):
+                            errors.append(
+                                f"recommendation.proposed_cross_project_obligations[{idx}].evidence_refs[{ref_idx}] "
+                                "must be a non-empty string"
+                            )
+                        if isinstance(evidence_refs, list) and ref not in evidence_refs:
+                            errors.append(
+                                f"recommendation.proposed_cross_project_obligations[{idx}].evidence_refs[{ref_idx}] "
+                                "must exist in top-level evidence_refs"
+                            )
+                obligations.append(row)
+
+    open_risks = payload.get("open_risks")
+    if not isinstance(open_risks, list):
+        errors.append("open_risks must be a list")
+        open_risks = []
+    else:
+        for idx, row in enumerate(open_risks):
+            if not isinstance(row, dict):
+                errors.append(f"open_risks[{idx}] must be an object")
+                continue
+            if not _as_str(row.get("risk_id")):
+                errors.append(f"open_risks[{idx}].risk_id is required")
+            if not _as_str(row.get("summary")):
+                errors.append(f"open_risks[{idx}].summary is required")
+            project_id = row.get("project_id")
+            if project_id is not None and _as_str(project_id) not in project_ids:
+                errors.append(f"open_risks[{idx}].project_id must reference discovered projects when set")
+            risk_project_ids = row.get("project_ids")
+            if risk_project_ids is not None:
+                if not isinstance(risk_project_ids, list):
+                    errors.append(f"open_risks[{idx}].project_ids must be a list when set")
+                else:
+                    for pid_idx, risk_project_id in enumerate(risk_project_ids):
+                        if _as_str(risk_project_id) not in project_ids:
+                            errors.append(
+                                f"open_risks[{idx}].project_ids[{pid_idx}] must reference discovered projects"
+                            )
+            row_evidence_refs = row.get("evidence_refs")
+            if not isinstance(row_evidence_refs, list) or not row_evidence_refs:
+                errors.append(f"open_risks[{idx}].evidence_refs must be a non-empty list")
+            else:
+                for ref_idx, ref in enumerate(row_evidence_refs):
+                    if not _as_str(ref):
+                        errors.append(f"open_risks[{idx}].evidence_refs[{ref_idx}] must be a non-empty string")
+                    if isinstance(evidence_refs, list) and ref not in evidence_refs:
+                        errors.append(
+                            f"open_risks[{idx}].evidence_refs[{ref_idx}] must exist in top-level evidence_refs"
+                        )
+
+    if partial_project_ids and obligations:
+        errors.append(
+            "recommendation.proposed_cross_project_obligations must be empty when partial cross_project_context exists"
+        )
+    if partial_project_ids and not open_risks:
+        errors.append("open_risks must capture unresolved cross-project ideas when evidence is partial")
 
     stats = payload.get("stats")
     if not isinstance(stats, dict):

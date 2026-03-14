@@ -56,11 +56,39 @@ def test_req002_manifest_discovery_contract_and_stability():
         assert source_refs["prj.optimus-prime-gsd-fusion"] == {"mission": "mission.md", "scope": "scope.md"}
         assert source_refs["prj.tetris"] == {"mission": "mission.md", "scope": "scope.md"}
 
+        assert first["broad_sweep_inputs"]["discovered_project_ids"] == [
+            "prj.optimus-prime-gsd-fusion",
+            "prj.tetris",
+        ]
+        assert first["broad_sweep_inputs"]["source_ref_coverage"] == {
+            "project_count": 2,
+            "complete_project_count": 2,
+            "partial_project_count": 0,
+            "mission_ref_count": 2,
+            "scope_ref_count": 2,
+        }
+
         exclusion_map = {(row["path"], row["reason_code"]) for row in first["excluded_paths"]}
         assert ("archives", "exclude_archived_path") in exclusion_map
         assert ("ScratchFolder", "exclude_non_repository_path") in exclusion_map
         assert (".hidden-repo", "exclude_hidden_path") in exclusion_map
         assert ("foreign-link", "exclude_non_owner_path") in exclusion_map
+
+        assert first["evidence_refs"] == sorted(set(first["evidence_refs"]))
+        cross_project_context = {row["project_id"]: row for row in first["cross_project_context"]}
+        assert sorted(cross_project_context.keys()) == ["prj.optimus-prime-gsd-fusion", "prj.tetris"]
+        assert cross_project_context["prj.optimus-prime-gsd-fusion"]["context_status"] == "complete"
+        assert cross_project_context["prj.tetris"]["context_status"] == "complete"
+
+        recommendation = first["recommendation"]
+        assert recommendation["decision"] == "ready_for_cross_project_planning"
+        assert recommendation["context_project_ids"] == ["prj.optimus-prime-gsd-fusion", "prj.tetris"]
+        assert recommendation["evidence_refs"]
+        assert recommendation["action_items"]
+        obligations = recommendation["proposed_cross_project_obligations"]
+        assert len(obligations) == 1
+        assert obligations[0]["evidence_refs"]
+        assert first["open_risks"] == []
 
         assert first["stats"] == {"project_count": 2, "excluded_path_count": len(first["excluded_paths"])}
 

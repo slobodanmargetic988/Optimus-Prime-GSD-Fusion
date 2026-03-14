@@ -29,6 +29,31 @@
       }
     ]
   },
+  "broad_sweep_inputs": {
+    "earth_root": "/Users/slobodan/projects/Earth",
+    "owner_username": "slobodan",
+    "owner_prefix": "/Users/slobodan/projects/Earth",
+    "include_rule": "direct_child_repository_roots_only",
+    "direct_child_count": 4,
+    "discovered_project_ids": [
+      "prj.optimus-prime-gsd-fusion",
+      "prj.tetris"
+    ],
+    "source_ref_coverage": {
+      "project_count": 2,
+      "complete_project_count": 2,
+      "partial_project_count": 0,
+      "mission_ref_count": 2,
+      "scope_ref_count": 2
+    },
+    "excluded_reason_counts": {
+      "exclude_non_directory": 0,
+      "exclude_hidden_path": 0,
+      "exclude_archived_path": 1,
+      "exclude_non_owner_path": 1,
+      "exclude_non_repository_path": 0
+    }
+  },
   "earth_root": "/Users/slobodan/projects/Earth",
   "projects": [
     {
@@ -62,6 +87,80 @@
       "reason_code": "exclude_non_owner_path"
     }
   ],
+  "evidence_refs": [
+    "Optimus-Prime-GSD-Fusion/.git",
+    "Optimus-Prime-GSD-Fusion/mission.md",
+    "Optimus-Prime-GSD-Fusion/scope.md",
+    "Tetris/.git",
+    "Tetris/mission.md",
+    "Tetris/scope.md",
+    "excluded:archives#exclude_archived_path",
+    "excluded:external-link#exclude_non_owner_path"
+  ],
+  "cross_project_context": [
+    {
+      "project_id": "prj.optimus-prime-gsd-fusion",
+      "project_name": "Optimus-Prime-GSD-Fusion",
+      "mission_ref": "Optimus-Prime-GSD-Fusion/mission.md",
+      "scope_ref": "Optimus-Prime-GSD-Fusion/scope.md",
+      "context_status": "complete",
+      "evidence_refs": [
+        "Optimus-Prime-GSD-Fusion/.git",
+        "Optimus-Prime-GSD-Fusion/mission.md",
+        "Optimus-Prime-GSD-Fusion/scope.md"
+      ]
+    },
+    {
+      "project_id": "prj.tetris",
+      "project_name": "Tetris",
+      "mission_ref": "Tetris/mission.md",
+      "scope_ref": "Tetris/scope.md",
+      "context_status": "complete",
+      "evidence_refs": [
+        "Tetris/.git",
+        "Tetris/mission.md",
+        "Tetris/scope.md"
+      ]
+    }
+  ],
+  "recommendation": {
+    "decision": "ready_for_cross_project_planning",
+    "rationale": "All discovered projects provide mission/scope evidence; recommendation can include evidence-backed obligations.",
+    "context_project_ids": [
+      "prj.optimus-prime-gsd-fusion",
+      "prj.tetris"
+    ],
+    "evidence_refs": [
+      "Optimus-Prime-GSD-Fusion/.git",
+      "Optimus-Prime-GSD-Fusion/mission.md",
+      "Optimus-Prime-GSD-Fusion/scope.md",
+      "Tetris/.git",
+      "Tetris/mission.md",
+      "Tetris/scope.md",
+      "excluded:archives#exclude_archived_path",
+      "excluded:external-link#exclude_non_owner_path"
+    ],
+    "action_items": [
+      "Proceed with cross-project planning using the manifest evidence refs and obligations."
+    ],
+    "proposed_cross_project_obligations": [
+      {
+        "obligation_id": "obl.cross-project.mission-scope-coverage",
+        "title": "Maintain complete mission/scope evidence coverage across discovered Earth repositories.",
+        "project_ids": [
+          "prj.optimus-prime-gsd-fusion",
+          "prj.tetris"
+        ],
+        "evidence_refs": [
+          "Optimus-Prime-GSD-Fusion/mission.md",
+          "Optimus-Prime-GSD-Fusion/scope.md",
+          "Tetris/mission.md",
+          "Tetris/scope.md"
+        ]
+      }
+    ]
+  },
+  "open_risks": [],
   "stats": {
     "project_count": 2,
     "excluded_path_count": 2
