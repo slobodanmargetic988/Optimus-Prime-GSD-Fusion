@@ -180,6 +180,21 @@ def test_build_config_defaults_selected_aliases_to_discovered_profiles(tmp_path:
     assert cfg.selected_aliases == ["codex-second"]
 
 
+def test_repo_workstation_prefix_uses_git_toplevel_name(monkeypatch, tmp_path: Path) -> None:
+    nested_repo_root = tmp_path / "op-tools" / "strategy"
+    nested_repo_root.mkdir(parents=True, exist_ok=True)
+    fake_toplevel = tmp_path / "Optimus-Prime-GSD-Fusion"
+    monkeypatch.setattr(MODULE, "_git_text", lambda *_args, **_kwargs: str(fake_toplevel))
+    assert MODULE._repo_workstation_prefix(nested_repo_root) == "optimus-prime-gsd-fusion"
+
+
+def test_repo_workstation_prefix_falls_back_to_repo_root_name(monkeypatch, tmp_path: Path) -> None:
+    nested_repo_root = tmp_path / "op-tools" / "strategy"
+    nested_repo_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(MODULE, "_git_text", lambda *_args, **_kwargs: "")
+    assert MODULE._repo_workstation_prefix(nested_repo_root) == "strategy"
+
+
 def write_boss_artifacts(root: Path, cycle_number: int, *, overrides: dict[str, dict[str, object]] | None = None) -> None:
     override_map = overrides or {}
     base_payloads: dict[str, dict[str, object]] = {

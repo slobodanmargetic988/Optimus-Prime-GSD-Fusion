@@ -284,7 +284,14 @@ def _normalize_selected_aliases(value: Any) -> list[str] | None:
 
 
 def _repo_workstation_prefix(repo_root: Path) -> str:
-    raw = str(repo_root.name or "").strip().lower()
+    # Workstation-preparation validates optional prefixes against the git toplevel
+    # repository name, so nested repo-root runs (e.g. op-tools/strategy) must
+    # derive the same prefix to avoid false invalid-name failures.
+    toplevel = _git_text(repo_root, "rev-parse", "--show-toplevel")
+    if toplevel:
+        raw = str(Path(toplevel).name or "").strip().lower()
+    else:
+        raw = str(repo_root.name or "").strip().lower()
     normalized = re.sub(r"[^a-z0-9._-]+", "-", raw)
     normalized = re.sub(r"-{2,}", "-", normalized).strip("-._")
     return normalized or "repo"
