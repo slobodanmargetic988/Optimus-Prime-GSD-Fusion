@@ -27,6 +27,18 @@ EXCLUDE_REASON_CODES = (
     "exclude_non_owner_path",
     "exclude_non_repository_path",
 )
+SOURCE_REASON_CODES = (
+    "source_present",
+    "missing_mission_doc",
+    "missing_scope_doc",
+    "stale_source_artifact_detected",
+)
+OPEN_RISK_REASON_CODES = (
+    "missing_mission_doc",
+    "missing_scope_doc",
+    "stale_source_artifact_detected",
+    "missing_peer_project_doc",
+)
 LOG_ROOT = Path("/Users/slobodan/projects/LOGS")
 LOG_PATH = LOG_ROOT / "strategy_context_sweep.log"
 LOG_BUDGET_CHECK_STAMP = LOG_ROOT / ".log_budget_check.strategy_context_sweep"
@@ -108,6 +120,27 @@ def _source_ref(path: Path, rel_name: str) -> str | None:
     return None
 
 
+def _source_artifact_status(path: Path, rel_name: str) -> tuple[str | None, str]:
+    candidate = path / rel_name
+    if candidate.exists() and candidate.is_file():
+        return rel_name, "source_present"
+    if candidate.is_symlink():
+        return None, "stale_source_artifact_detected"
+    if rel_name == "mission.md":
+        return None, "missing_mission_doc"
+    if rel_name == "scope.md":
+        return None, "missing_scope_doc"
+    return None, "source_present"
+
+
+def _source_evidence_ref(repo_relpath: str, rel_name: str, reason_code: str) -> str:
+    if reason_code == "source_present":
+        return f"{repo_relpath}/{rel_name}"
+    if reason_code == "stale_source_artifact_detected":
+        return f"stale:{repo_relpath}/{rel_name}#stale_source_artifact_detected"
+    return f"missing:{repo_relpath}/{rel_name}#{reason_code}"
+
+
 def _discovery_fingerprint(projects: list[dict[str, Any]]) -> str:
     encoded = json.dumps(projects, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -117,7 +150,11 @@ def _sorted_unique_strings(values: list[str]) -> list[str]:
     return sorted({value for value in values if _as_str(value)})
 
 
-def _build_evidence_refs(projects: list[dict[str, Any]], excluded_paths: list[dict[str, str]]) -> list[str]:
+def _build_evidence_refs(
+    projects: list[dict[str, Any]],
+    excluded_paths: list[dict[str, str]],
+    cross_project_context: list[dict[str, Any]],
+) -> list[str]:
     refs: list[str] = []
     for project in projects:
         repo_relpath = _as_str(project.get("repo_relpath"))
@@ -135,6 +172,11 @@ def _build_evidence_refs(projects: list[dict[str, Any]], excluded_paths: list[di
         if path and reason_code:
             refs.append(f"excluded:{path}#{reason_code}")
 
+    for row in cross_project_context:
+        row_refs = row.get("evidence_refs")
+        if isinstance(row_refs, list):
+            refs.extend(_as_str(ref) for ref in row_refs)
+
     return _sorted_unique_strings(refs)
 
 
@@ -151,10 +193,23 @@ def _build_cross_project_context(projects: list[dict[str, Any]]) -> tuple[list[d
         mission_ref = f"{repo_relpath}/{mission_source}" if repo_relpath and mission_source else None
         scope_ref = f"{repo_relpath}/{scope_source}" if repo_relpath and scope_source else None
         status = "complete" if mission_ref and scope_ref else "partial"
+        reason_codes = [
+            _as_str((project.get("source_artifact_reason_codes") or {}).get("mission")),
+            _as_str((project.get("source_artifact_reason_codes") or {}).get("scope")),
+        ]
+        reason_codes = _sorted_unique_strings([code for code in reason_codes if code and code != "source_present"])
         if status == "partial":
             partial_project_ids.append(project_id)
         row_evidence_refs = _sorted_unique_strings(
             [f"{repo_relpath}/.git" if repo_relpath else "", mission_ref or "", scope_ref or ""]
+            + [
+                _source_evidence_ref(repo_relpath, "mission.md", _as_str((project.get("source_artifact_reason_codes") or {}).get("mission")))
+                if repo_relpath
+                else "",
+                _source_evidence_ref(repo_relpath, "scope.md", _as_str((project.get("source_artifact_reason_codes") or {}).get("scope")))
+                if repo_relpath
+                else "",
+            ]
         )
         context_rows.append(
             {
@@ -163,6 +218,7 @@ def _build_cross_project_context(projects: list[dict[str, Any]]) -> tuple[list[d
                 "mission_ref": mission_ref,
                 "scope_ref": scope_ref,
                 "context_status": status,
+                "reason_codes": reason_codes,
                 "evidence_refs": row_evidence_refs,
             }
         )
@@ -222,18 +278,36 @@ def _build_recommendation_and_open_risks(
 
     for project_id in partial_project_ids:
         row = context_by_project_id[project_id]
+        row_reason_codes = _sorted_unique_strings([_as_str(code) for code in row.get("reason_codes", [])])
         missing_refs: list[str] = []
         if row.get("mission_ref") is None:
             missing_refs.append("mission.md")
         if row.get("scope_ref") is None:
             missing_refs.append("scope.md")
+        missing_reason_codes = [code for code in row_reason_codes if code in {"missing_mission_doc", "missing_scope_doc"}]
+        if not missing_reason_codes and missing_refs:
+            missing_reason_codes = _sorted_unique_strings(
+                [
+                    "missing_mission_doc" if ref == "mission.md" else "missing_scope_doc"
+                    for ref in missing_refs
+                ]
+            )
+        stale_detected = "stale_source_artifact_detected" in row_reason_codes
+        summary_bits: list[str] = []
+        if missing_refs:
+            summary_bits.append(f"missing required source refs: {', '.join(missing_refs)}")
+        if stale_detected:
+            summary_bits.append("contains stale source artifacts")
+        summary_text = "; ".join(summary_bits) if summary_bits else "has unresolved source-document issues"
+        reason_code = "stale_source_artifact_detected" if stale_detected else ",".join(missing_reason_codes)
         open_risks.append(
             {
                 "risk_id": f"risk.missing-source-refs.{project_id}",
                 "project_id": project_id,
-                "summary": f"{project_id} is missing required source refs: {', '.join(missing_refs)}.",
+                "summary": f"{project_id} {summary_text}.",
+                "reason_code": reason_code,
                 "evidence_refs": row["evidence_refs"],
-                "missing_source_refs": missing_refs,
+                "missing_source_refs": missing_refs if missing_refs else [],
             }
         )
 
@@ -246,6 +320,7 @@ def _build_recommendation_and_open_risks(
                 {
                     "risk_id": "risk.cross-project-obligation-evidence-gap",
                     "project_ids": partial_project_ids,
+                    "reason_code": "missing_peer_project_doc",
                     "summary": (
                         "Cross-project obligations are deferred because one or more projects lack mission/scope evidence."
                     ),
@@ -268,6 +343,7 @@ def _build_recommendation_and_open_risks(
                 {
                     "risk_id": "risk.cross-project-obligation-evidence-gap",
                     "project_ids": project_ids,
+                    "reason_code": "missing_peer_project_doc",
                     "summary": "Cross-project obligation inference skipped because mission/scope evidence refs are unavailable.",
                     "evidence_refs": _sorted_unique_strings(
                         [ref for row in cross_project_context for ref in row["evidence_refs"]]
@@ -310,6 +386,34 @@ def _build_recommendation_and_open_risks(
 
     open_risks.sort(key=lambda row: row["risk_id"])
     return recommendation, open_risks
+
+
+def build_earth_repository_discovery_context_bundle(manifest: dict[str, Any]) -> dict[str, Any]:
+    projects = manifest.get("projects") if isinstance(manifest.get("projects"), list) else []
+    cross_project_context = (
+        manifest.get("cross_project_context") if isinstance(manifest.get("cross_project_context"), list) else []
+    )
+    open_risks = manifest.get("open_risks") if isinstance(manifest.get("open_risks"), list) else []
+    return {
+        "schema_version": "req-002.earth-wide-repository-discovery-context-bundle.v1",
+        "manifest_schema_version": _as_str(manifest.get("schema_version")),
+        "earth_root": _as_str(manifest.get("earth_root")),
+        "discovery_fingerprint": _as_str(manifest.get("discovery_fingerprint")),
+        "project_ids": _sorted_unique_strings([_as_str(row.get("project_id")) for row in projects if isinstance(row, dict)]),
+        "context_project_ids": _sorted_unique_strings(
+            [_as_str(row.get("project_id")) for row in cross_project_context if isinstance(row, dict)]
+        ),
+        "open_risk_reason_codes": _sorted_unique_strings(
+            [_as_str(row.get("reason_code")) for row in open_risks if isinstance(row, dict)]
+        ),
+        "evidence_refs": _sorted_unique_strings(
+            [_as_str(ref) for ref in manifest.get("evidence_refs", []) if isinstance(ref, str)]
+        ),
+    }
+
+
+def serialize_earth_repository_discovery_context_bundle(bundle: dict[str, Any]) -> str:
+    return json.dumps(bundle, sort_keys=True, separators=(",", ":"))
 
 
 def build_earth_repository_discovery_manifest(
@@ -359,13 +463,17 @@ def build_earth_repository_discovery_manifest(
                 "mission": _source_ref(child, "mission.md"),
                 "scope": _source_ref(child, "scope.md"),
             },
+            "source_artifact_reason_codes": {
+                "mission": _source_artifact_status(child, "mission.md")[1],
+                "scope": _source_artifact_status(child, "scope.md")[1],
+            },
         }
         projects.append(entry)
 
     projects.sort(key=lambda item: item["project_id"])
     excluded_paths.sort(key=lambda item: (item["path"], item["reason_code"]))
     cross_project_context, partial_project_ids = _build_cross_project_context(projects)
-    evidence_refs = _build_evidence_refs(projects, excluded_paths)
+    evidence_refs = _build_evidence_refs(projects, excluded_paths, cross_project_context)
     recommendation, open_risks = _build_recommendation_and_open_risks(
         projects=projects,
         cross_project_context=cross_project_context,
@@ -581,6 +689,17 @@ def validate_earth_repository_discovery_manifest(payload: dict[str, Any]) -> lis
                         errors.append(
                             f"cross_project_context[{idx}].evidence_refs[{ref_idx}] must exist in top-level evidence_refs"
                         )
+            row_reason_codes = row.get("reason_codes")
+            if row_reason_codes is not None:
+                if not isinstance(row_reason_codes, list):
+                    errors.append(f"cross_project_context[{idx}].reason_codes must be a list when set")
+                else:
+                    for code_idx, code in enumerate(row_reason_codes):
+                        if _as_str(code) not in SOURCE_REASON_CODES:
+                            errors.append(
+                                f"cross_project_context[{idx}].reason_codes[{code_idx}] "
+                                f"must be one of {', '.join(SOURCE_REASON_CODES)}"
+                            )
         if len(context_project_ids) != len(set(context_project_ids)):
             errors.append("cross_project_context.project_id values must be unique")
         if context_project_ids != sorted(context_project_ids):
@@ -701,6 +820,14 @@ def validate_earth_repository_discovery_manifest(payload: dict[str, Any]) -> lis
                         errors.append(
                             f"open_risks[{idx}].evidence_refs[{ref_idx}] must exist in top-level evidence_refs"
                         )
+            reason_code = _as_str(row.get("reason_code"))
+            if not reason_code:
+                errors.append(f"open_risks[{idx}].reason_code is required")
+            elif reason_code not in OPEN_RISK_REASON_CODES and "," not in reason_code:
+                errors.append(
+                    f"open_risks[{idx}].reason_code must be one of {', '.join(OPEN_RISK_REASON_CODES)} "
+                    "or a comma-delimited subset for missing source docs"
+                )
 
     if partial_project_ids and obligations:
         errors.append(
