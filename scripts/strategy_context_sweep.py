@@ -99,6 +99,29 @@ def _normalize_string_list(value: Any) -> list[str]:
     return out
 
 
+def _normalize_evidence_ref(ref: Any) -> str | None:
+    text = _as_non_empty_text(ref)
+    if not text:
+        return None
+    # Canonicalize common relative/path separator variance for stable reconciliation.
+    normalized = text.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _normalize_evidence_refs(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    deduped: list[str] = []
+    for item in value:
+        normalized = _normalize_evidence_ref(item)
+        if normalized and normalized not in deduped:
+            deduped.append(normalized)
+    deduped.sort()
+    return deduped
+
+
 def _extract_earth_sweep_projects(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     broad_sweep = payload.get("broad_sweep_context")
     if not isinstance(broad_sweep, Mapping):
@@ -140,10 +163,10 @@ def _extract_evidence_refs(item: Any) -> list[str]:
     if not isinstance(item, Mapping):
         return []
     if "earth_sweep_evidence_refs" in item:
-        refs = _normalize_string_list(item.get("earth_sweep_evidence_refs"))
+        refs = _normalize_evidence_refs(item.get("earth_sweep_evidence_refs"))
         if refs:
             return refs
-    return _normalize_string_list(item.get("evidence_refs"))
+    return _normalize_evidence_refs(item.get("evidence_refs"))
 
 
 def _collect_cross_project_recommendations(payload: Mapping[str, Any]) -> dict[str, Any]:

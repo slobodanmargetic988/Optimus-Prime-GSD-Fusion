@@ -17,8 +17,9 @@ def test_broad_sweep_context_produces_evidence_gated_recommendations() -> None:
                         "obligations": [
                             {
                                 "summary": "Adopt shared release tag format for handoff reports.",
-                                "evidence_refs": [
-                                    "reports/earth-ops/planning/evidence/TASK-042/TASK_EVIDENCE.json"
+                                "earth_sweep_evidence_refs": [
+                                    "./reports\\earth-ops\\planning\\evidence\\TASK-042\\TASK_EVIDENCE.json",
+                                    "reports/earth-ops/planning/evidence/TASK-042/TASK_EVIDENCE.json",
                                 ],
                             },
                             {"summary": "Mirror dashboards to analytics cluster", "evidence_refs": []},
