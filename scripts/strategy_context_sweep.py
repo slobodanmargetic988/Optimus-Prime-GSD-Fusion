@@ -81,6 +81,144 @@ def _failure(errors: list[dict[str, str]]) -> dict[str, Any]:
     }
 
 
+def _as_non_empty_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = _as_non_empty_text(item)
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _extract_earth_sweep_projects(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    broad_sweep = payload.get("broad_sweep_context")
+    if not isinstance(broad_sweep, Mapping):
+        return []
+
+    earth_sweep = broad_sweep.get("earth_sweep")
+    if isinstance(earth_sweep, list):
+        return [item for item in earth_sweep if isinstance(item, Mapping)]
+    if not isinstance(earth_sweep, Mapping):
+        return []
+
+    projects = earth_sweep.get("projects")
+    if not isinstance(projects, list):
+        return []
+    return [item for item in projects if isinstance(item, Mapping)]
+
+
+def _project_label(project: Mapping[str, Any], fallback_index: int) -> str:
+    for key in ("project_id", "project", "name", "id"):
+        label = _as_non_empty_text(project.get(key))
+        if label:
+            return label
+    return f"project-{fallback_index:03d}"
+
+
+def _extract_item_text(item: Any) -> str | None:
+    if isinstance(item, str):
+        return _as_non_empty_text(item)
+    if not isinstance(item, Mapping):
+        return None
+    for key in ("recommendation", "summary", "title", "text", "idea"):
+        text = _as_non_empty_text(item.get(key))
+        if text:
+            return text
+    return None
+
+
+def _extract_evidence_refs(item: Any) -> list[str]:
+    if not isinstance(item, Mapping):
+        return []
+    if "earth_sweep_evidence_refs" in item:
+        refs = _normalize_string_list(item.get("earth_sweep_evidence_refs"))
+        if refs:
+            return refs
+    return _normalize_string_list(item.get("evidence_refs"))
+
+
+def _collect_cross_project_recommendations(payload: Mapping[str, Any]) -> dict[str, Any]:
+    action_items: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    evidence_refs: list[str] = []
+    projects = _extract_earth_sweep_projects(payload)
+    projects_by_label = sorted(
+        ((_project_label(project, idx), project) for idx, project in enumerate(projects)),
+        key=lambda item: item[0],
+    )
+
+    for project_label, project in projects_by_label:
+        obligations = project.get("obligations")
+        if isinstance(obligations, list):
+            for obligation in obligations:
+                recommendation = _extract_item_text(obligation)
+                if not recommendation:
+                    continue
+                refs = _extract_evidence_refs(obligation)
+                if refs:
+                    for ref in refs:
+                        if ref not in evidence_refs:
+                            evidence_refs.append(ref)
+                    action_items.append(
+                        {
+                            "source_project": project_label,
+                            "recommendation": recommendation,
+                            "earth_sweep_evidence_refs": refs,
+                        }
+                    )
+                else:
+                    open_risks.append(
+                        {
+                            "risk_code": "missing_earth_sweep_evidence_refs",
+                            "source_project": project_label,
+                            "item": recommendation,
+                            "resolution_hint": "attach Earth-sweep evidence refs before promotion",
+                        }
+                    )
+
+        unresolved = project.get("unresolved_ideas")
+        if isinstance(unresolved, list):
+            for idea in unresolved:
+                idea_text = _extract_item_text(idea)
+                if not idea_text:
+                    continue
+                refs = _extract_evidence_refs(idea)
+                if refs:
+                    for ref in refs:
+                        if ref not in evidence_refs:
+                            evidence_refs.append(ref)
+                open_risks.append(
+                    {
+                        "risk_code": "unresolved_cross_project_idea",
+                        "source_project": project_label,
+                        "item": idea_text,
+                        "earth_sweep_evidence_refs": refs,
+                        "resolution_hint": "triage idea before implementation",
+                    }
+                )
+
+    action_items.sort(key=lambda item: (item["source_project"], item["recommendation"]))
+    open_risks.sort(key=lambda item: (item["source_project"], item["risk_code"], item["item"]))
+    evidence_refs.sort()
+
+    return {
+        "cross_project_inputs_considered": len(projects_by_label),
+        "cross_project_context_used": bool(projects_by_label),
+        "earth_sweep_evidence_refs": evidence_refs,
+        "action_items": action_items,
+        "open_risks": open_risks,
+    }
+
+
 def ingest_target_project_mission_scope(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Ingest target-project mission/scope anchors as authoritative constraints.
 
@@ -111,6 +249,8 @@ def ingest_target_project_mission_scope(payload: Mapping[str, Any]) -> dict[str,
     if errors:
         return _failure(errors)
 
+    cross_project = _collect_cross_project_recommendations(payload)
+
     return {
         "ok": True,
         "reason_codes": [],
@@ -126,9 +266,27 @@ def ingest_target_project_mission_scope(payload: Mapping[str, Any]) -> dict[str,
                 "authoritative": True,
             },
         },
+        "context_ingestion": {
+            "input_source": "broad_sweep_context",
+            "cross_project_context_used": cross_project["cross_project_context_used"],
+            "cross_project_inputs_considered": cross_project["cross_project_inputs_considered"],
+            "earth_sweep_evidence_refs": cross_project["earth_sweep_evidence_refs"],
+        },
         "recommendation_generation": {
             "base_constraints_source": "target_project_mission_scope",
             "authoritative_fields": ["mission", "scope"],
+            "required_recommendation_fields": [
+                "target_project_constraints",
+                "context_ingestion",
+                "recommendations",
+            ],
+            "recommendation_fields_complete": True,
+            "cross_project_context_used": cross_project["cross_project_context_used"],
+            "evidence_ref_policy": "earth_sweep_refs_required_for_cross_project_obligations",
+        },
+        "recommendations": {
+            "action_items": cross_project["action_items"],
+            "open_risks": cross_project["open_risks"],
         },
     }
 
