@@ -1019,12 +1019,13 @@ def test_gitignore_helper_only_invoked_by_bootstrap_commands(monkeypatch: pytest
         assert len(calls) == 3
 
 
-def test_op_build_default_sleep_minutes_is_two():
+def test_op_build_defaults_use_watcher_driven_cycle_release():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
         req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
-        assert req.sleep_minutes == 2.0
+        assert req.sleep_minutes == 0.0
+        assert req.start_policy == "auto"
         assert req.enable_artifact_fan_in is False
 
 
@@ -1042,12 +1043,12 @@ def test_op_build_request_accepts_enable_artifact_fan_in_override():
         assert req.enable_artifact_fan_in is True
 
 
-def test_op_simple_build_default_sleep_and_parallel_workers():
+def test_op_simple_build_defaults_parallel_workers_and_boss_settings():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         build_repo(root)
         req = MODULE.parse_request({"command": "/op-simple-build", "repo_root": str(root)})
-        assert req.sleep_minutes == 5.0
+        assert req.sleep_minutes == 0.0
         assert req.max_parallel_workers == 8
         assert req.boss_model == "gpt-5.3-codex"
         assert req.boss_reasoning_effort == "xhigh"
@@ -1081,6 +1082,64 @@ def test_op_simple_build_accepts_run_base_source_branch_override():
             }
         )
         assert req.run_base_source_branch == "op-simple-canary-prev"
+
+
+def test_op_build_accepts_start_policy_override():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "start_policy": "resume",
+            }
+        )
+        assert req.start_policy == "resume"
+
+
+def test_parse_request_rejects_start_policy_on_non_build_command():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        with pytest.raises(MODULE.OpError, match="start_policy is only supported for /op-build"):
+            MODULE.parse_request(
+                {
+                    "command": "/op-resume",
+                    "repo_root": str(root),
+                    "start_policy": "resume",
+                }
+            )
+
+
+def test_parse_request_rejects_invalid_start_policy():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        with pytest.raises(MODULE.OpError, match="start_policy must be one of"):
+            MODULE.parse_request(
+                {
+                    "command": "/op-build",
+                    "repo_root": str(root),
+                    "start_policy": "sideways",
+                }
+            )
+
+
+def test_parse_request_rejects_resume_start_policy_with_fresh_run_flags():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        with pytest.raises(MODULE.OpError, match="conflicts with fresh-run flags"):
+            MODULE.parse_request(
+                {
+                    "command": "/op-build",
+                    "repo_root": str(root),
+                    "start_policy": "resume",
+                    "mission": "Build a better thing",
+                    "scope": "Fresh scope",
+                }
+            )
 
 
 def test_op_simple_build_executor_defaults():
@@ -1159,6 +1218,7 @@ def test_command_build_passes_selected_aliases_to_op_simple_build(monkeypatch: p
         captured: dict[str, object] = {}
 
         fake_module = types.ModuleType("op_simple_build")
+        fake_module.SimpleBuildError = RuntimeError
 
         def fake_run_op_simple_build(simple_req):
             captured["selected_aliases"] = list(simple_req.selected_aliases or [])
@@ -1175,6 +1235,9 @@ def test_command_build_passes_selected_aliases_to_op_simple_build(monkeypatch: p
                 "data": {},
             }
 
+        fake_module.inspect_resume_run_base_meta = lambda *_args, **_kwargs: {
+            "run_base_branch": "main",
+        }
         fake_module.run_op_simple_build = fake_run_op_simple_build
         monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
         monkeypatch.setattr(
@@ -1214,6 +1277,7 @@ def test_command_build_enforces_managed_gitignore_before_runtime(monkeypatch: py
         captured: dict[str, object] = {}
 
         fake_module = types.ModuleType("op_simple_build")
+        fake_module.SimpleBuildError = RuntimeError
 
         def fake_run_op_simple_build(simple_req):
             captured["command"] = simple_req.command
@@ -1232,6 +1296,9 @@ def test_command_build_enforces_managed_gitignore_before_runtime(monkeypatch: py
         def record_gitignore(repo_root: Path) -> None:
             calls.append(repo_root)
 
+        fake_module.inspect_resume_run_base_meta = lambda *_args, **_kwargs: {
+            "run_base_branch": "main",
+        }
         fake_module.run_op_simple_build = fake_run_op_simple_build
         monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
         monkeypatch.setattr(MODULE, "_ensure_managed_gitignore_block", record_gitignore)
@@ -1243,6 +1310,298 @@ def test_command_build_enforces_managed_gitignore_before_runtime(monkeypatch: py
         assert captured["command"] == "op-simple-build"
         assert len(calls) == 1
         assert calls[0].resolve() == root.resolve()
+
+
+def test_command_build_auto_selects_new_on_fresh_run_intent(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "mission": "Fresh mission",
+            }
+        )
+        captured: dict[str, object] = {}
+
+        fake_module = types.ModuleType("op_simple_build")
+        fake_module.SimpleBuildError = RuntimeError
+        fake_module.inspect_resume_run_base_meta = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not inspect resume state"))
+
+        def fake_run_op_simple_build(simple_req):
+            captured["command"] = simple_req.command
+            return {
+                "ok": True,
+                "status": "completed",
+                "summary": "ok",
+                "warnings": [],
+                "errors": [],
+                "artifacts": [],
+                "next_action": None,
+                "state_ref": None,
+                "data": {},
+            }
+
+        fake_module.run_op_simple_build = fake_run_op_simple_build
+        monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+        monkeypatch.setattr(
+            MODULE,
+            "command_initialize",
+            lambda _req: {
+                "ok": True,
+                "status": "completed",
+                "summary": "init ok",
+                "warnings": [],
+                "errors": [],
+                "artifacts": [],
+                "next_action": None,
+                "state_ref": None,
+                "data": {},
+            },
+        )
+
+        out = MODULE.command_build(req)
+
+        assert out["ok"] is True
+        assert captured["command"] == "op-simple-build"
+        assert out["data"]["requested_start_policy"] == "auto"
+        assert out["data"]["resolved_start_mode"] == "new"
+        assert out["data"]["start_policy_reason_code"] == "fresh_run_intent"
+
+
+def test_command_build_auto_selects_new_when_runtime_marker_missing(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        captured: dict[str, object] = {}
+
+        fake_module = types.ModuleType("op_simple_build")
+        fake_module.SimpleBuildError = RuntimeError
+        fake_module.inspect_resume_run_base_meta = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not inspect without marker"))
+
+        def fake_run_op_simple_build(simple_req):
+            captured["command"] = simple_req.command
+            return {
+                "ok": True,
+                "status": "completed",
+                "summary": "ok",
+                "warnings": [],
+                "errors": [],
+                "artifacts": [],
+                "next_action": None,
+                "state_ref": None,
+                "data": {},
+            }
+
+        fake_module.run_op_simple_build = fake_run_op_simple_build
+        monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+        monkeypatch.setattr(MODULE, "MANDATORY_BUILD_BASELINE", [])
+
+        out = MODULE.command_build(req)
+
+        assert out["ok"] is True
+        assert captured["command"] == "op-simple-build"
+        assert out["data"]["resolved_start_mode"] == "new"
+        assert out["data"]["start_policy_reason_code"] == "no_existing_op_simple_state"
+
+
+def test_command_build_auto_selects_resume_when_runtime_state_is_valid(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        marker = root / ".op-simple" / "current" / "initialize_state.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("{}\n", encoding="utf-8")
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        captured: dict[str, object] = {}
+
+        fake_module = types.ModuleType("op_simple_build")
+        fake_module.SimpleBuildError = RuntimeError
+        fake_module.inspect_resume_run_base_meta = lambda *_args, **_kwargs: {
+            "run_base_branch": "op-simple-canary-123",
+        }
+
+        def fake_run_op_simple_build(simple_req):
+            captured["command"] = simple_req.command
+            return {
+                "ok": True,
+                "status": "completed",
+                "summary": "ok",
+                "warnings": [],
+                "errors": [],
+                "artifacts": [],
+                "next_action": None,
+                "state_ref": None,
+                "data": {},
+            }
+
+        fake_module.run_op_simple_build = fake_run_op_simple_build
+        monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+
+        out = MODULE.command_build(req)
+
+        assert out["ok"] is True
+        assert captured["command"] == "op-resume"
+        assert out["data"]["resolved_start_mode"] == "resume"
+        assert out["data"]["start_policy_reason_code"] == "resume_state_valid"
+
+
+def test_command_build_auto_blocks_when_existing_runtime_state_is_invalid(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        marker = root / ".op-simple" / "current" / "initialize_state.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("{}\n", encoding="utf-8")
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+
+        fake_module = types.ModuleType("op_simple_build")
+
+        class FakeSimpleBuildError(Exception):
+            def __init__(self, code, message):
+                super().__init__(message)
+                self.code = code
+                self.message = message
+
+        fake_module.SimpleBuildError = FakeSimpleBuildError
+        fake_module.inspect_resume_run_base_meta = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            FakeSimpleBuildError("op_simple_resume_missing_branch", "branch missing")
+        )
+        fake_module.run_op_simple_build = lambda _req: (_ for _ in ()).throw(AssertionError("runtime should not launch"))
+        monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+
+        out = MODULE.command_build(req)
+
+        assert out["ok"] is False
+        assert out["status"] == "blocked_preflight"
+        assert out["data"]["requested_start_policy"] == "auto"
+        assert out["data"]["resolved_start_mode"] is None
+        assert out["data"]["start_policy_reason_code"] == "resume_state_invalid_existing_state_present"
+
+
+def test_command_build_explicit_resume_uses_resume_runtime(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "start_policy": "resume",
+            }
+        )
+        captured: dict[str, object] = {}
+
+        fake_module = types.ModuleType("op_simple_build")
+        fake_module.SimpleBuildError = RuntimeError
+        fake_module.inspect_resume_run_base_meta = lambda *_args, **_kwargs: {
+            "run_base_branch": "op-simple-canary-123",
+        }
+
+        def fake_run_op_simple_build(simple_req):
+            captured["command"] = simple_req.command
+            return {
+                "ok": True,
+                "status": "completed",
+                "summary": "ok",
+                "warnings": [],
+                "errors": [],
+                "artifacts": [],
+                "next_action": None,
+                "state_ref": None,
+                "data": {},
+            }
+
+        fake_module.run_op_simple_build = fake_run_op_simple_build
+        monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+
+        out = MODULE.command_build(req)
+
+        assert out["ok"] is True
+        assert captured["command"] == "op-resume"
+        assert out["data"]["start_policy_reason_code"] == "explicit_resume_requested"
+
+
+def test_command_build_explicit_resume_blocks_when_runtime_state_invalid(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "start_policy": "resume",
+            }
+        )
+
+        fake_module = types.ModuleType("op_simple_build")
+
+        class FakeSimpleBuildError(Exception):
+            def __init__(self, code, message):
+                super().__init__(message)
+                self.code = code
+                self.message = message
+
+        fake_module.SimpleBuildError = FakeSimpleBuildError
+        fake_module.inspect_resume_run_base_meta = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            FakeSimpleBuildError("op_simple_resume_unavailable", "missing initialize state")
+        )
+        fake_module.run_op_simple_build = lambda _req: (_ for _ in ()).throw(AssertionError("runtime should not launch"))
+        monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+
+        out = MODULE.command_build(req)
+
+        assert out["ok"] is False
+        assert out["status"] == "blocked_preflight"
+        assert out["data"]["requested_start_policy"] == "resume"
+        assert out["data"]["start_policy_reason_code"] == "resume_state_invalid_existing_state_present"
+
+
+def test_command_build_explicit_new_ignores_existing_resume_state(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        marker = root / ".op-simple" / "current" / "initialize_state.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("{}\n", encoding="utf-8")
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "start_policy": "new",
+            }
+        )
+        captured: dict[str, object] = {}
+
+        fake_module = types.ModuleType("op_simple_build")
+        fake_module.SimpleBuildError = RuntimeError
+        fake_module.inspect_resume_run_base_meta = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("explicit new should not inspect"))
+
+        def fake_run_op_simple_build(simple_req):
+            captured["command"] = simple_req.command
+            return {
+                "ok": True,
+                "status": "completed",
+                "summary": "ok",
+                "warnings": [],
+                "errors": [],
+                "artifacts": [],
+                "next_action": None,
+                "state_ref": None,
+                "data": {},
+            }
+
+        fake_module.run_op_simple_build = fake_run_op_simple_build
+        monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+        monkeypatch.setattr(MODULE, "MANDATORY_BUILD_BASELINE", [])
+
+        out = MODULE.command_build(req)
+
+        assert out["ok"] is True
+        assert captured["command"] == "op-simple-build"
+        assert out["data"]["start_policy_reason_code"] == "explicit_new_requested"
 
 
 def test_parse_request_rejects_invalid_executor_provider():

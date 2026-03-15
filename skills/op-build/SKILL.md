@@ -8,7 +8,7 @@ description: Run autonomous Optimus build loop with strict planning preflight an
 Runs autonomous build orchestration from planning artifacts until terminal completion or hard stop.
 
 Current runtime path:
-- `/op-build` executes `/op-simple-build` (initialize pre-step when needed).
+- `/op-build` defaults to `--start-policy auto`: it resumes valid OP Simple state when possible, otherwise executes `/op-simple-build` as a fresh run (initialize pre-step when needed).
 - `/op-resume` resumes OP Simple state only.
 - Legacy `/op-resume` fallback to non-`.op-simple` state is removed.
 

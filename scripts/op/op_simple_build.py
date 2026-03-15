@@ -1992,8 +1992,8 @@ def _create_run_base_branch(cfg: RunConfig) -> dict[str, Any]:
     )
 
 
-def _load_resume_run_base_meta(cfg: RunConfig) -> dict[str, Any]:
-    state = _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
+def inspect_resume_run_base_meta(repo_root: Path, *, run_base_source_branch: str | None = None) -> dict[str, Any]:
+    state = _read_json(repo_root / INITIALIZE_STATE_FILE, default={})
     if not isinstance(state, dict):
         state = {}
     run_context = state.get("run_context") if isinstance(state.get("run_context"), dict) else {}
@@ -2006,29 +2006,34 @@ def _load_resume_run_base_meta(cfg: RunConfig) -> dict[str, Any]:
         )
 
     ref = f"refs/heads/{run_base_branch}"
-    branch_commit = _git_text(cfg.repo_root, "rev-parse", "--verify", ref)
+    branch_commit = _git_text(repo_root, "rev-parse", "--verify", ref)
     if not branch_commit:
         raise SimpleBuildError(
             "op_simple_resume_missing_branch",
             f"Cannot resume /op-simple-build: run base branch '{run_base_branch}' does not exist.",
         )
 
-    if not cfg.dry_run:
-        code, _out, err = _git_run(cfg.repo_root, "checkout", run_base_branch)
-        if code != 0:
-            raise SimpleBuildError(
-                "op_simple_resume_checkout_failed",
-                f"Cannot checkout run base branch '{run_base_branch}' for resume: {err or 'unknown git error'}",
-            )
-
     return {
         "run_base_branch": run_base_branch,
-        "run_base_from_branch": str(run_context.get("run_base_from_branch") or cfg.run_base_source_branch or "main"),
+        "run_base_from_branch": str(run_context.get("run_base_from_branch") or run_base_source_branch or "main"),
         "run_base_from_commit": str(run_context.get("run_base_from_commit") or branch_commit),
         "run_base_created_at": str(run_context.get("run_base_created_at") or utc_now_iso()),
         "created_new": False,
-        "dry_run": bool(cfg.dry_run),
+        "dry_run": False,
     }
+
+
+def _load_resume_run_base_meta(cfg: RunConfig) -> dict[str, Any]:
+    out = inspect_resume_run_base_meta(cfg.repo_root, run_base_source_branch=cfg.run_base_source_branch)
+    if not cfg.dry_run:
+        code, _out, err = _git_run(cfg.repo_root, "checkout", str(out["run_base_branch"]))
+        if code != 0:
+            raise SimpleBuildError(
+                "op_simple_resume_checkout_failed",
+                f"Cannot checkout run base branch '{str(out['run_base_branch'])}' for resume: {err or 'unknown git error'}",
+            )
+    out["dry_run"] = bool(cfg.dry_run)
+    return out
 
 
 def _default_initialize_state(repo_root: Path, max_parallel_workers: int, run_meta: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -7183,13 +7188,6 @@ def _release_run_lock(cfg: RunConfig, lock_id: str | None) -> None:
 
 def _build_config(req: Any) -> RunConfig:
     repo_root = Path(req.repo_root).resolve()
-    sleep_minutes_raw = getattr(req, "sleep_minutes", None)
-    if sleep_minutes_raw is None:
-        sleep_minutes = 5.0
-    else:
-        sleep_minutes = float(sleep_minutes_raw)
-    if sleep_minutes < 0:
-        sleep_minutes = 0.0
     max_cycles = getattr(req, "max_build_cycles", None)
     if max_cycles is not None:
         try:
@@ -7270,7 +7268,7 @@ def _build_config(req: Any) -> RunConfig:
 
     return RunConfig(
         repo_root=repo_root,
-        sleep_minutes=sleep_minutes,
+        sleep_minutes=0.0,
         max_build_cycles=max_cycles,
         max_parallel_workers=max_parallel_workers,
         dry_run=bool(getattr(req, "dry_run", False)),
@@ -7985,13 +7983,10 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 final_summary = f"Reached max_build_cycles={cfg.max_build_cycles}."
                 break
 
-            if cfg.sleep_minutes > 0:
-                sleep_seconds = max(0.0, float(cfg.sleep_minutes) * 60.0)
-                if sleep_seconds > 0:
-                    _await_cycle_release_signal(
-                        cfg,
-                        cycle_number=cycle_number,
-                    )
+            _await_cycle_release_signal(
+                cfg,
+                cycle_number=cycle_number,
+            )
 
         if stop_reason:
             _persist_cycle_summary_stop_reason(cfg, cycle_number=cycle_number, stop_reason=stop_reason)

@@ -291,6 +291,7 @@ class OpRequest:
     selected_aliases: list[str] | None
     dry_run: bool
     reset_exhausted_retries: bool
+    start_policy: str | None = None
     run_base_source_branch: str | None = None
     boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "xhigh"
@@ -621,6 +622,65 @@ def _emit_build_progress(req: OpRequest, message: str) -> None:
         label = "op-runtime"
     stamp = datetime.now().astimezone().strftime("%H:%M:%S")
     print(f"[{label} {stamp}] {message}", flush=True)
+
+
+def _merge_response_data(*parts: dict[str, Any] | None) -> dict[str, Any] | None:
+    merged: dict[str, Any] = {}
+    for part in parts:
+        if isinstance(part, dict):
+            merged.update(part)
+    return merged or None
+
+
+def _build_start_policy_payload(
+    *,
+    requested_start_policy: str | None,
+    resolved_start_mode: str | None,
+    reason_code: str,
+) -> dict[str, Any]:
+    return {
+        "requested_start_policy": requested_start_policy or "auto",
+        "resolved_start_mode": resolved_start_mode,
+        "start_policy_reason_code": reason_code,
+    }
+
+
+def _build_fresh_run_intent_flags(req: OpRequest) -> list[str]:
+    flags: list[str] = []
+    if req.mission:
+        flags.append("--mission")
+    if req.mission_file:
+        flags.append("--mission-file")
+    if req.scope:
+        flags.append("--scope")
+    if req.scope_file:
+        flags.append("--scope-file")
+    if req.override_old_plan:
+        flags.append("--override-old-plan")
+    if req.run_base_source_branch:
+        flags.append("--run-base-source-branch")
+    return flags
+
+
+def _resolve_build_start_mode(req: OpRequest) -> tuple[str, str]:
+    requested_start_policy = req.start_policy or "auto"
+    fresh_run_flags = _build_fresh_run_intent_flags(req)
+    if requested_start_policy == "new":
+        return "new", "explicit_new_requested"
+    if requested_start_policy == "resume":
+        from op_simple_build import inspect_resume_run_base_meta
+
+        inspect_resume_run_base_meta(req.repo_root, run_base_source_branch=req.run_base_source_branch)
+        return "resume", "explicit_resume_requested"
+    if fresh_run_flags:
+        return "new", "fresh_run_intent"
+    simple_runtime_marker = req.repo_root / ".op-simple" / "current" / "initialize_state.json"
+    if not simple_runtime_marker.exists():
+        return "new", "no_existing_op_simple_state"
+    from op_simple_build import inspect_resume_run_base_meta
+
+    inspect_resume_run_base_meta(req.repo_root, run_base_source_branch=req.run_base_source_branch)
+    return "resume", "resume_state_valid"
 
 
 def _task_status_counts(task_state: dict[str, Any]) -> dict[str, int]:
@@ -10623,42 +10683,88 @@ def _preflight_build(
 
 
 def command_build(req: OpRequest) -> dict[str, Any]:
-    from op_simple_build import run_op_simple_build
+    from op_simple_build import SimpleBuildError, run_op_simple_build
 
     _ensure_managed_gitignore_block(req.repo_root)
+    requested_start_policy = req.start_policy or "auto"
+    start_policy_data: dict[str, Any]
+    try:
+        resolved_start_mode, reason_code = _resolve_build_start_mode(req)
+    except SimpleBuildError as exc:
+        start_policy_data = _build_start_policy_payload(
+            requested_start_policy=requested_start_policy,
+            resolved_start_mode=None,
+            reason_code="resume_state_invalid_existing_state_present",
+        )
+        _emit_build_progress(
+            req,
+            "build start policy requested="
+            f"{requested_start_policy} resolved=blocked reason=resume_state_invalid_existing_state_present",
+        )
+        return _response(
+            req,
+            ok=False,
+            status="blocked_preflight",
+            summary="Build blocked: existing OP Simple runtime state is present but invalid for resume.",
+            errors=[
+                {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "stage": "build",
+                }
+            ],
+            next_action="Repair .op-simple/current/initialize_state.json and run-base branch state, or rerun /op-build with --start-policy new.",
+            state_ref=str(req.repo_root / ".op-simple" / "current" / "initialize_state.json"),
+            data=start_policy_data,
+        )
 
-    # /op-build is the one-command entrypoint: optional initialize refresh + OP Simple runtime.
-    mission_scope_supplied = bool(req.mission or req.mission_file or req.scope or req.scope_file)
-    baseline_missing = any(
-        not _repo_path(req.repo_root, rel).exists()
-        for rel in MANDATORY_BUILD_BASELINE
+    start_policy_data = _build_start_policy_payload(
+        requested_start_policy=requested_start_policy,
+        resolved_start_mode=resolved_start_mode,
+        reason_code=reason_code,
     )
-    should_initialize = mission_scope_supplied or bool(req.override_old_plan) or baseline_missing
+    _emit_build_progress(
+        req,
+        f"build start policy requested={requested_start_policy} resolved={resolved_start_mode} reason={reason_code}",
+    )
 
     combined_warnings: list[dict[str, Any]] = []
-    if should_initialize:
-        _emit_build_progress(req, "running /op-initialize before /op-simple-build")
-        init_req = replace(req, command="op-initialize")
-        init_result = command_initialize(init_req)
-        init_warnings = init_result.get("warnings")
-        if isinstance(init_warnings, list):
-            combined_warnings.extend(init_warnings)
-        if not bool(init_result.get("ok")):
-            return _response(
-                req,
-                ok=False,
-                status=_as_str(init_result.get("status")) or "failed",
-                summary=_as_str(init_result.get("summary")) or "Build failed during /op-initialize pre-step.",
-                warnings=combined_warnings,
-                errors=init_result.get("errors") if isinstance(init_result.get("errors"), list) else [],
-                artifacts=init_result.get("artifacts") if isinstance(init_result.get("artifacts"), list) else [],
-                next_action=_as_str(init_result.get("next_action")),
-                state_ref=_as_str(init_result.get("state_ref")),
-                data=init_result.get("data") if isinstance(init_result.get("data"), dict) else None,
-            )
-        _emit_build_progress(req, "initialize pre-step completed")
+    if resolved_start_mode == "new":
+        # /op-build fresh mode is the one-command entrypoint: optional initialize refresh + OP Simple runtime.
+        mission_scope_supplied = bool(req.mission or req.mission_file or req.scope or req.scope_file)
+        baseline_missing = any(
+            not _repo_path(req.repo_root, rel).exists()
+            for rel in MANDATORY_BUILD_BASELINE
+        )
+        should_initialize = mission_scope_supplied or bool(req.override_old_plan) or baseline_missing
+        if should_initialize:
+            _emit_build_progress(req, "running /op-initialize before /op-simple-build")
+            init_req = replace(req, command="op-initialize")
+            init_result = command_initialize(init_req)
+            init_warnings = init_result.get("warnings")
+            if isinstance(init_warnings, list):
+                combined_warnings.extend(init_warnings)
+            if not bool(init_result.get("ok")):
+                return _response(
+                    req,
+                    ok=False,
+                    status=_as_str(init_result.get("status")) or "failed",
+                    summary=_as_str(init_result.get("summary")) or "Build failed during /op-initialize pre-step.",
+                    warnings=combined_warnings,
+                    errors=init_result.get("errors") if isinstance(init_result.get("errors"), list) else [],
+                    artifacts=init_result.get("artifacts") if isinstance(init_result.get("artifacts"), list) else [],
+                    next_action=_as_str(init_result.get("next_action")),
+                    state_ref=_as_str(init_result.get("state_ref")),
+                    data=_merge_response_data(
+                        init_result.get("data") if isinstance(init_result.get("data"), dict) else None,
+                        start_policy_data,
+                    ),
+                )
+            _emit_build_progress(req, "initialize pre-step completed")
+        simple_req = replace(req, command="op-simple-build")
+    else:
+        simple_req = replace(req, command="op-resume")
 
-    simple_req = replace(req, command="op-simple-build")
     result = run_op_simple_build(simple_req)
     simple_warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
     return _response(
@@ -10671,7 +10777,10 @@ def command_build(req: OpRequest) -> dict[str, Any]:
         artifacts=result.get("artifacts") if isinstance(result.get("artifacts"), list) else [],
         next_action=_as_str(result.get("next_action")),
         state_ref=_as_str(result.get("state_ref")),
-        data=result.get("data") if isinstance(result.get("data"), dict) else None,
+        data=_merge_response_data(
+            result.get("data") if isinstance(result.get("data"), dict) else None,
+            start_policy_data,
+        ),
     )
 
 def command_health(req: OpRequest) -> dict[str, Any]:
@@ -11514,12 +11623,9 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             raise OpError("input_error", "max_build_cycles must be integer", stage="input") from exc
         max_cycles_out = parsed if parsed > 0 else None
 
-    default_sleep = 5 if command == "op-simple-build" else 2 if command in {"op-build", "op-resume"} else 0
-    sleep_minutes = payload.get("sleep_minutes", default_sleep)
-    try:
-        sleep_val = float(sleep_minutes)
-    except (TypeError, ValueError) as exc:
-        raise OpError("input_error", "sleep_minutes must be numeric", stage="input") from exc
+    # Public sleep control was removed once cycle release became watcher-driven.
+    # Keep the field internally for compatibility with older helpers/tests.
+    sleep_val = 0.0
     max_parallel_workers_raw = payload.get("max_parallel_workers", 8)
     try:
         max_parallel_workers = int(max_parallel_workers_raw)
@@ -11533,7 +11639,38 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         Path(worktrees_parent_raw).expanduser().resolve() if worktrees_parent_raw else None
     )
     selected_aliases = _as_alias_list(payload.get("selected_aliases"))
+    start_policy = _as_str(payload.get("start_policy"))
+    if start_policy is not None:
+        start_policy = start_policy.lower()
+    if start_policy is not None and start_policy not in {"auto", "new", "resume"}:
+        raise OpError("input_error", "start_policy must be one of: auto, new, resume", stage="input")
+    if start_policy is not None and command != "op-build":
+        raise OpError("input_error", "start_policy is only supported for /op-build", stage="input")
+    if command == "op-build" and start_policy is None:
+        start_policy = "auto"
     run_base_source_branch = _as_str(payload.get("run_base_source_branch"))
+    fresh_run_conflicts: list[str] = []
+    if _as_str(payload.get("mission")):
+        fresh_run_conflicts.append("--mission")
+    if _as_str(payload.get("mission_file")):
+        fresh_run_conflicts.append("--mission-file")
+    if _as_str(payload.get("scope")):
+        fresh_run_conflicts.append("--scope")
+    if _as_str(payload.get("scope_file")):
+        fresh_run_conflicts.append("--scope-file")
+    if _as_bool(payload.get("override_old_plan"), default=False):
+        fresh_run_conflicts.append("--override-old-plan")
+    if run_base_source_branch:
+        fresh_run_conflicts.append("--run-base-source-branch")
+    if start_policy == "resume" and fresh_run_conflicts:
+        conflict_list = ", ".join(fresh_run_conflicts)
+        raise OpError(
+            "input_error",
+            "start_policy=resume conflicts with fresh-run flags: "
+            f"{conflict_list}. Remove those flags and retry resume, or use --start-policy new.",
+            stage="input",
+        )
+
     boss_model = _as_str(payload.get("boss_model")) or "gpt-5.3-codex"
     boss_reasoning_effort = _as_str(payload.get("boss_reasoning_effort")) or "xhigh"
     profile = _as_str(payload.get("profile"))
@@ -11589,12 +11726,13 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         output_mode=_as_str(payload.get("output_mode")) or "json",
         max_build_cycles=max_cycles_out,
         max_parallel_workers=max_parallel_workers,
-        sleep_minutes=max(0.0, sleep_val),
+        sleep_minutes=sleep_val,
         enable_artifact_fan_in=enable_artifact_fan_in,
         worktrees_parent=worktrees_parent,
         selected_aliases=selected_aliases,
         dry_run=_as_bool(payload.get("dry_run"), default=False),
         reset_exhausted_retries=_as_bool(payload.get("reset_exhausted_retries"), default=False),
+        start_policy=start_policy if command == "op-build" else None,
         run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,
         boss_reasoning_effort=boss_reasoning_effort,

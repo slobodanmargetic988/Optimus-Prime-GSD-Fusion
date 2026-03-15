@@ -83,6 +83,50 @@ def test_build_config_accepts_run_base_source_branch_override(tmp_path: Path) ->
     assert cfg.run_base_source_branch == "op-simple-canary-prev"
 
 
+def test_inspect_resume_run_base_meta_reads_existing_state_without_checkout(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    state_path = tmp_path / MODULE.INITIALIZE_STATE_FILE
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        state_path,
+        {
+            "run_context": {
+                "run_base_branch": "main",
+                "run_base_from_branch": "feature/base",
+                "run_base_from_commit": "abc1234",
+                "run_base_created_at": "2026-03-15T10:00:00Z",
+            }
+        },
+    )
+    git_run_calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(MODULE, "_git_run", lambda *_args: git_run_calls.append(_args) or (0, "", ""))
+
+    out = MODULE.inspect_resume_run_base_meta(tmp_path)
+
+    assert out["run_base_branch"] == "main"
+    assert out["run_base_from_branch"] == "feature/base"
+    assert out["run_base_from_commit"] == "abc1234"
+    assert out["created_new"] is False
+    assert git_run_calls == []
+
+
+def test_inspect_resume_run_base_meta_rejects_missing_branch(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    state_path = tmp_path / MODULE.INITIALIZE_STATE_FILE
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        state_path,
+        {
+            "run_context": {
+                "run_base_branch": "op-simple-canary-missing",
+            }
+        },
+    )
+
+    with pytest.raises(MODULE.SimpleBuildError, match="does not exist"):
+        MODULE.inspect_resume_run_base_meta(tmp_path)
+
+
 def test_build_config_defaults_executor_settings(tmp_path: Path) -> None:
     cfg = MODULE._build_config(make_req(tmp_path))
     assert cfg.codex_profile is None

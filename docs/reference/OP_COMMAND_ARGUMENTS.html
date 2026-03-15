@@ -191,16 +191,19 @@
     <section class="card">
       <h2>Command Semantics Snapshot</h2>
       <div class="callout">
-        <strong>/op-build</strong> is the one-command entrypoint. It runs <code>/op-initialize</code> first only when mission/scope is supplied, <code>--override-old-plan</code> is set, or required planning baseline artifacts are missing.
+        <strong>/op-build</strong> is the one-command entrypoint. Its default <code>--start-policy auto</code> resumes valid OP Simple state when possible; otherwise it starts a fresh run and runs <code>/op-initialize</code> first only when mission/scope is supplied, <code>--override-old-plan</code> is set, or required planning baseline artifacts are missing.
       </div>
       <div class="callout">
         <strong>/op-resume</strong> requires <code>.op-simple/current/initialize_state.json</code>. If that marker is missing, resume is blocked.
       </div>
       <div class="callout warn">
-        <strong>Run-base note:</strong> <code>--run-base-source-branch</code> sets the source for a new run-base branch in fresh <code>/op-build</code>. It does not invoke resume semantics.
+        <strong>Run-base note:</strong> <code>--run-base-source-branch</code> sets the source for a new run-base branch in fresh <code>/op-build</code>. It is treated as explicit fresh-run intent and does not invoke resume semantics.
       </div>
       <div class="callout">
         <strong>/op-simple-build</strong> runs the OP Simple runtime directly (no initialize pre-step).
+      </div>
+      <div class="callout">
+        <strong>Cycle release note:</strong> watcher-based cycle release now runs by default; the old public <code>--sleep-minutes</code> switch has been removed.
       </div>
     </section>
 
@@ -224,7 +227,7 @@
           <tr><td><code>--max-build-cycles</code></td><td>int</td><td>unbounded</td><td>Stop after N cycles for bounded/canary runs.</td></tr>
           <tr><td><code>--max-parallel-workers</code></td><td>int</td><td>config/default</td><td>Worker parallelism cap.</td></tr>
           <tr><td><code>--worktrees-parent</code></td><td>path</td><td>derived</td><td>Overrides worker worktree parent directory.</td></tr>
-          <tr><td><code>--sleep-minutes</code></td><td>float</td><td>2.0</td><td>Cycle sleep interval.</td></tr>
+          <tr><td><code>--start-policy</code></td><td>enum</td><td><code>auto</code></td><td>Build entry policy: <code>auto</code> resumes valid OP Simple state when possible, <code>new</code> always starts fresh, <code>resume</code> requires valid existing OP Simple state.</td></tr>
           <tr><td><code>--run-base-source-branch</code></td><td>string</td><td><code>main</code></td><td>Source branch used to create a new <code>op-simple-canary-*</code> run-base branch.</td></tr>
           <tr><td><code>--executor-provider</code></td><td>enum</td><td><code>codex</code></td><td>Worker executor backend: <code>codex</code>, <code>openrouter</code>, <code>blackbox</code>.</td></tr>
           <tr><td><code>--selected-aliases</code></td><td>CSV string</td><td>autodiscover for codex backend</td><td>Codex alias/home pool for profile selection.</td></tr>
@@ -243,6 +246,7 @@
         </tbody>
       </table>
       <pre>caffeinate -dimsu opctl /op-build --repo-root /absolute/path/to/repo --json-pretty</pre>
+      <div class="mini"><strong>Auto resolution:</strong> fresh-run intent (<code>--mission*</code>, <code>--scope*</code>, <code>--override-old-plan</code>, explicit <code>--run-base-source-branch</code>) forces <code>new</code>; otherwise <code>auto</code> checks <code>.op-simple/current/initialize_state.json</code> and resumes only when the stored run-base branch still resolves locally.</div>
     </section>
 
     <section class="card">
@@ -261,7 +265,6 @@
           <tr><td><code>--max-build-cycles</code></td><td>int</td><td>unbounded</td><td>Stop after N runtime cycles.</td></tr>
           <tr><td><code>--max-parallel-workers</code></td><td>int</td><td>8</td><td>Worker parallelism cap for direct OP Simple runtime.</td></tr>
           <tr><td><code>--worktrees-parent</code></td><td>path</td><td>derived</td><td>Overrides worker worktree parent directory.</td></tr>
-          <tr><td><code>--sleep-minutes</code></td><td>float</td><td>5.0</td><td>Cycle sleep interval for direct OP Simple runs.</td></tr>
           <tr><td><code>--run-base-source-branch</code></td><td>string</td><td><code>main</code></td><td>Source branch used to create a new <code>op-simple-canary-*</code> run-base branch.</td></tr>
           <tr><td><code>--executor-provider</code></td><td>enum</td><td><code>codex</code></td><td>Worker executor backend: <code>codex</code>, <code>openrouter</code>, <code>blackbox</code>.</td></tr>
           <tr><td><code>--selected-aliases</code></td><td>CSV string</td><td>autodiscover for codex backend</td><td>Codex alias/home pool for profile selection.</td></tr>
@@ -298,7 +301,6 @@
           <tr><td><code>--max-build-cycles</code></td><td>int</td><td>unbounded</td><td>Bounds resume loop by cycle count.</td></tr>
           <tr><td><code>--max-parallel-workers</code></td><td>int</td><td>config/default</td><td>Resume-time worker parallelism cap.</td></tr>
           <tr><td><code>--worktrees-parent</code></td><td>path</td><td>derived</td><td>Worker worktree parent override.</td></tr>
-          <tr><td><code>--sleep-minutes</code></td><td>float</td><td>2.0</td><td>Cycle sleep interval during resume run.</td></tr>
           <tr><td><code>--executor-provider</code>, <code>--selected-aliases</code>, <code>--profile</code>, <code>--executor-model</code>, <code>--blackbox-lane</code>, <code>--allow-worker-executor-override</code></td><td>runtime routing</td><td>same defaults as build</td><td>Controls profile/executor behavior during resumed cycles.</td></tr>
           <tr><td><code>--cycle-release-mode</code>, <code>--cycle-release-timeout-seconds</code>, <code>--cycle-release-poll-seconds</code></td><td>release controls</td><td><code>token_conservative</code>, 900, 5</td><td>Cycle release watcher behavior during resume.</td></tr>
           <tr><td><code>--boss-model</code>, <code>--boss-reasoning-effort</code></td><td>string</td><td><code>gpt-5.3-codex</code>, <code>xhigh</code></td><td>BOSS manager overrides in resumed runtime.</td></tr>
@@ -363,8 +365,9 @@
     <section class="card">
       <h2>Cross-Command Notes</h2>
       <ul>
-        <li><span class="ok">/op-build default source branch:</span> if <code>--run-base-source-branch</code> is omitted, runtime uses <code>main</code> as run-base source for new runs.</li>
-        <li><span class="ok">/op-resume and /op-build share OP Simple runtime:</span> both execute through <code>/op-simple-build</code>; resume toggles <code>resume_mode</code>.</li>
+        <li><span class="ok">/op-build default start behavior:</span> if <code>--start-policy</code> is omitted, runtime uses <code>auto</code> and resumes only when existing OP Simple state and run-base branch are both valid.</li>
+        <li><span class="ok">/op-build default source branch:</span> if <code>--run-base-source-branch</code> is omitted, runtime uses <code>main</code> as run-base source for fresh runs.</li>
+        <li><span class="ok">/op-resume and resumed /op-build share OP Simple runtime:</span> both execute through <code>/op-simple-build</code>; resume toggles <code>resume_mode</code>.</li>
         <li><span class="warn-t">Accepted vs effective:</span> opctl accepts a broad parser surface globally; command handlers use only relevant subsets listed above.</li>
       </ul>
     </section>
