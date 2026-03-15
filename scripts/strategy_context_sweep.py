@@ -1000,6 +1000,34 @@ def _canonical_req_009_input(
     }
 
 
+def _canonical_req_009_processing_input(
+    *,
+    current_revision_identity: str,
+    prior_strategy_revisions: list[dict[str, Any]],
+    changelog_history: list[dict[str, Any]],
+    analysis: dict[str, Any],
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    candidate_recommendations: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+) -> dict[str, Any]:
+    canonical = _canonical_processing_input(
+        target_project_evidence_refs=target_project_evidence_refs,
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+        candidate_recommendations=candidate_recommendations,
+        earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+        required_context_documents=required_context_documents,
+    )
+    canonical["current_revision_identity"] = current_revision_identity
+    canonical["prior_strategy_revisions"] = prior_strategy_revisions
+    canonical["changelog_history"] = changelog_history
+    canonical["analysis"] = analysis
+    return canonical
+
+
 def _build_req_009_analysis(
     *,
     prior_strategy_revisions: list[dict[str, Any]],
@@ -1065,11 +1093,323 @@ def _build_req_009_analysis(
     }
 
 
+def _req_009_action_state(*, action_id: str, analysis: Mapping[str, Any]) -> str:
+    continuity = analysis.get("continuity")
+    drift = analysis.get("drift")
+    if not isinstance(continuity, Mapping) or not isinstance(drift, Mapping):
+        return "untracked"
+
+    continuing_action_ids = set(continuity.get("continuing_action_ids", []))
+    retired_action_ids = set(continuity.get("retired_action_ids", []))
+    new_action_ids = set(drift.get("new_action_ids", []))
+    changelog_only_action_ids = set(drift.get("changelog_only_action_ids", []))
+
+    if action_id in continuing_action_ids:
+        return "continuing"
+    if action_id in new_action_ids:
+        return "new"
+    if action_id in retired_action_ids:
+        return "retired"
+    if action_id in changelog_only_action_ids:
+        return "changelog-only"
+    return "untracked"
+
+
+def _build_req_009_action_evidence_maps(
+    *,
+    prior_strategy_revisions: list[dict[str, Any]],
+    changelog_history: list[dict[str, Any]],
+) -> tuple[dict[str, list[str]], dict[str, list[str]], list[str], list[str]]:
+    prior_refs_by_action: dict[str, set[str]] = {}
+    for revision in prior_strategy_revisions:
+        revision_refs = revision["evidence_refs"]
+        for action_id in revision["recommended_action_ids"]:
+            bucket = prior_refs_by_action.setdefault(action_id, set())
+            bucket.update(revision_refs)
+
+    changelog_refs_by_action: dict[str, set[str]] = {}
+    for change in changelog_history:
+        action_id = change["action_id"]
+        if not action_id:
+            continue
+        bucket = changelog_refs_by_action.setdefault(action_id, set())
+        bucket.update(change["evidence_refs"])
+
+    normalized_prior_refs_by_action = {
+        action_id: sorted(refs) for action_id, refs in prior_refs_by_action.items()
+    }
+    normalized_changelog_refs_by_action = {
+        action_id: sorted(refs) for action_id, refs in changelog_refs_by_action.items()
+    }
+
+    prior_evidence_refs = _collect_unique_refs(*[row["evidence_refs"] for row in prior_strategy_revisions])
+    changelog_evidence_refs = _collect_unique_refs(*[row["evidence_refs"] for row in changelog_history])
+    return (
+        normalized_prior_refs_by_action,
+        normalized_changelog_refs_by_action,
+        prior_evidence_refs,
+        changelog_evidence_refs,
+    )
+
+
+def _compose_req_009_candidate_recommendations(
+    *,
+    analysis: Mapping[str, Any],
+    candidate_recommendations: list[dict[str, Any]],
+    prior_strategy_revisions: list[dict[str, Any]],
+    changelog_history: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    prior_refs_by_action, changelog_refs_by_action, _, _ = _build_req_009_action_evidence_maps(
+        prior_strategy_revisions=prior_strategy_revisions,
+        changelog_history=changelog_history,
+    )
+
+    seed_candidates = list(candidate_recommendations)
+    if not seed_candidates:
+        anchor_action_ids = []
+        composition_context = analysis.get("composition_context")
+        if isinstance(composition_context, Mapping):
+            anchor_action_ids = list(composition_context.get("recommendation_anchor_action_ids", []))
+        for action_id in anchor_action_ids:
+            state = _req_009_action_state(action_id=action_id, analysis=analysis)
+            seed_candidates.append(
+                {
+                    "action_id": action_id,
+                    "summary": f"Carry forward action '{action_id}' with explicit continuity/drift checks.",
+                    "rationale": (
+                        "Composed from ingested prior strategy revisions and changelog history "
+                        f"(state={state})."
+                    ),
+                    "action_scope": "local",
+                    "requires_earth_evidence": False,
+                    "project_id": "",
+                    "evidence_refs": _collect_unique_refs(
+                        prior_refs_by_action.get(action_id, []),
+                        changelog_refs_by_action.get(action_id, []),
+                    ),
+                    "next_step": f"Validate '{action_id}' against current revision objectives.",
+                }
+            )
+
+    composed: list[dict[str, Any]] = []
+    for candidate in seed_candidates:
+        action_id = candidate["action_id"]
+        composed.append(
+            {
+                "action_id": action_id,
+                "summary": candidate["summary"],
+                "rationale": candidate["rationale"],
+                "action_scope": candidate["action_scope"],
+                "requires_earth_evidence": candidate["requires_earth_evidence"],
+                "project_id": candidate["project_id"],
+                "evidence_refs": _collect_unique_refs(
+                    candidate["evidence_refs"],
+                    prior_refs_by_action.get(action_id, []),
+                    changelog_refs_by_action.get(action_id, []),
+                ),
+                "next_step": candidate["next_step"],
+            }
+        )
+
+    composed.sort(key=lambda row: row["action_id"])
+    return composed
+
+
+def _build_req_009_processing_behavior(
+    *,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    candidate_recommendations: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+    prior_strategy_revisions: list[dict[str, Any]],
+    changelog_history: list[dict[str, Any]],
+    analysis: dict[str, Any],
+) -> dict[str, Any]:
+    composed_candidates = _compose_req_009_candidate_recommendations(
+        analysis=analysis,
+        candidate_recommendations=candidate_recommendations,
+        prior_strategy_revisions=prior_strategy_revisions,
+        changelog_history=changelog_history,
+    )
+    _, _, prior_revision_evidence_refs, changelog_evidence_refs = _build_req_009_action_evidence_maps(
+        prior_strategy_revisions=prior_strategy_revisions,
+        changelog_history=changelog_history,
+    )
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    source_artifact_refs = _collect_unique_refs(
+        *[_collect_unique_refs([row["artifact_ref"]], row["evidence_refs"]) for row in earth_sweep_source_artifacts]
+    )
+    required_doc_refs = _collect_unique_refs(
+        *[_collect_unique_refs([row["doc_ref"]], row["evidence_refs"]) for row in required_context_documents]
+    )
+
+    recommended_actions: list[dict[str, Any]] = []
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+
+    for source_artifact in earth_sweep_source_artifacts:
+        if source_artifact["status"] != "stale":
+            continue
+        open_risks.append(
+            {
+                "risk_id": f"risk-earth-source-{_stable_id_fragment(source_artifact['artifact_ref'])}",
+                "summary": f"Earth sweep source artifact is stale: {source_artifact['artifact_ref']}",
+                "reason_code": "stale_earth_sweep_source_artifact",
+                "required_evidence_refs": _collect_unique_refs(
+                    [source_artifact["artifact_ref"]],
+                    source_artifact["evidence_refs"],
+                ),
+            }
+        )
+
+    for required_doc in required_context_documents:
+        if required_doc["status"] != "missing":
+            continue
+        reason_code = {
+            "mission": "missing_mission_doc",
+            "scope": "missing_scope_doc",
+            "peer-project": "missing_peer_project_doc",
+        }[required_doc["doc_kind"]]
+        summary = (
+            f"Required peer-project document is missing for '{required_doc['project_id']}': {required_doc['doc_ref']}"
+            if required_doc["doc_kind"] == "peer-project"
+            else f"Required {required_doc['doc_kind']} document is missing: {required_doc['doc_ref']}"
+        )
+        open_risks.append(
+            {
+                "risk_id": f"risk-context-doc-{_stable_id_fragment(required_doc['doc_kind'], required_doc['project_id'], required_doc['doc_ref'])}",
+                "summary": summary,
+                "reason_code": reason_code,
+                "required_evidence_refs": _collect_unique_refs(
+                    [required_doc["doc_ref"]],
+                    required_doc["evidence_refs"],
+                ),
+            }
+        )
+
+    for candidate in composed_candidates:
+        action = {
+            "action_id": candidate["action_id"],
+            "summary": candidate["summary"],
+            "rationale": candidate["rationale"],
+            "action_scope": candidate["action_scope"],
+            "next_step": candidate["next_step"],
+            "evidence_refs": candidate["evidence_refs"],
+        }
+        if candidate["requires_earth_evidence"]:
+            if earth_sweep_evidence_refs:
+                obligation_project_id = candidate["project_id"] or (
+                    cross_project_context[0]["project_id"] if cross_project_context else "earth"
+                )
+                cross_project_obligations.append(
+                    {
+                        "obligation_id": f"obligation-{candidate['action_id']}",
+                        "project_id": obligation_project_id,
+                        "summary": candidate["summary"],
+                        "evidence_refs": _collect_unique_refs(candidate["evidence_refs"], earth_sweep_evidence_refs),
+                    }
+                )
+                recommended_actions.append(action)
+            else:
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{candidate['action_id']}",
+                        "summary": candidate["summary"],
+                        "reason_code": "missing_earth_sweep_evidence_refs",
+                        "required_evidence_refs": candidate["evidence_refs"],
+                    }
+                )
+        else:
+            recommended_actions.append(action)
+
+    recommendation_refs = _collect_unique_refs(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        source_artifact_refs,
+        required_doc_refs,
+        prior_revision_evidence_refs,
+        changelog_evidence_refs,
+        *[row["evidence_refs"] for row in recommended_actions],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    decision = _recommendation_decision(recommended_actions=recommended_actions, open_risks=open_risks)
+
+    context_inputs: dict[str, Any] = {
+        "target_project": {
+            "evidence_refs": target_project_evidence_refs,
+        },
+        "earth_sweep": {
+            "evidence_refs": earth_sweep_evidence_refs,
+        },
+        "cross_project_context": cross_project_context,
+        "candidate_recommendations": composed_candidates,
+        "prior_strategy_revisions": prior_strategy_revisions,
+        "changelog_history": changelog_history,
+        "analysis": analysis,
+    }
+    if earth_sweep_source_artifacts:
+        context_inputs["earth_sweep_source_artifacts"] = earth_sweep_source_artifacts
+    if required_context_documents:
+        context_inputs["required_context_documents"] = required_context_documents
+
+    context_usage: dict[str, Any] = {
+        "target_project_context_used": bool(target_project_evidence_refs),
+        "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+        "cross_project_context_used": bool(cross_project_context),
+        "prior_strategy_revisions_used": bool(prior_strategy_revisions),
+        "changelog_history_used": bool(changelog_history),
+        "target_project_refs_used": target_project_evidence_refs,
+        "earth_sweep_refs_used": earth_sweep_evidence_refs,
+        "cross_project_refs_used": cross_project_refs,
+        "prior_revision_refs_used": prior_revision_evidence_refs,
+        "changelog_refs_used": changelog_evidence_refs,
+        "cross_project_projects_considered": sorted({row["project_id"] for row in cross_project_context}),
+        "prior_revision_ids_used": [row["revision_identity"] for row in prior_strategy_revisions],
+        "changelog_change_ids_used": [row["change_id"] for row in changelog_history],
+        "continuity_action_ids_used": list(analysis["continuity"]["continuing_action_ids"]),
+        "drift_action_ids_used": list(analysis["drift"]["drift_action_ids"]),
+        "evidence_refs_used": recommendation_refs,
+    }
+    if earth_sweep_source_artifacts:
+        context_usage["earth_sweep_source_artifacts_used"] = True
+        context_usage["earth_sweep_source_artifact_refs_used"] = source_artifact_refs
+    if required_context_documents:
+        context_usage["required_context_documents_used"] = True
+        context_usage["required_context_document_refs_used"] = required_doc_refs
+
+    return {
+        "strategy": "prior-revision-aware-broad-sweep",
+        "reasoning_mode": EXECUTION_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": context_inputs,
+        "context_usage": context_usage,
+        "recommendation": {
+            "decision": decision,
+            "rationale": _recommendation_rationale(decision=decision),
+            "confidence": _recommendation_confidence(evidence_refs=recommendation_refs, open_risks=open_risks),
+            "evidence_refs": recommendation_refs,
+            "recommended_actions": recommended_actions,
+            "cross_project_obligations": cross_project_obligations,
+            "open_risks": open_risks,
+        },
+    }
+
+
 def build_req_009_prior_strategy_revision_ingestion(
     *,
     current_revision_identity: str,
     prior_strategy_revisions: list[Mapping[str, Any]] | None = None,
     changelog_history: list[Mapping[str, Any]] | None = None,
+    target_project_evidence_refs: list[str] | None = None,
+    earth_sweep_evidence_refs: list[str] | None = None,
+    cross_project_context: list[Mapping[str, Any]] | None = None,
+    candidate_recommendations: list[Mapping[str, Any]] | None = None,
+    earth_sweep_source_artifacts: list[Mapping[str, Any]] | None = None,
+    required_context_documents: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the REQ-009 prior strategy revision ingestion contract payload."""
     normalized_current_revision_identity = _require_nonempty_text(
@@ -1078,6 +1418,18 @@ def build_req_009_prior_strategy_revision_ingestion(
     )
     normalized_prior_strategy_revisions = _normalize_prior_strategy_revisions(prior_strategy_revisions)
     normalized_changelog_history = _normalize_changelog_history(changelog_history)
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_context = _normalize_cross_project_context(cross_project_context)
+    normalized_candidates = _normalize_candidate_recommendations(candidate_recommendations)
+    normalized_earth_source_artifacts = _normalize_earth_sweep_source_artifacts(earth_sweep_source_artifacts)
+    normalized_required_documents = _normalize_required_context_documents(required_context_documents)
 
     canonical_input = _canonical_req_009_input(
         current_revision_identity=normalized_current_revision_identity,
@@ -1089,6 +1441,30 @@ def build_req_009_prior_strategy_revision_ingestion(
         prior_strategy_revisions=normalized_prior_strategy_revisions,
         changelog_history=normalized_changelog_history,
     )
+    processing_behavior = _build_req_009_processing_behavior(
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        prior_strategy_revisions=normalized_prior_strategy_revisions,
+        changelog_history=normalized_changelog_history,
+        analysis=analysis,
+    )
+    canonical_processing_input = _canonical_req_009_processing_input(
+        current_revision_identity=normalized_current_revision_identity,
+        prior_strategy_revisions=normalized_prior_strategy_revisions,
+        changelog_history=normalized_changelog_history,
+        analysis=analysis,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=list(processing_behavior["context_inputs"]["candidate_recommendations"]),
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+    )
+    processing_digest = _canonical_input_digest(canonical_processing_input)
 
     return {
         "schema_version": REQ_009_SCHEMA_VERSION,
@@ -1099,11 +1475,15 @@ def build_req_009_prior_strategy_revision_ingestion(
             "changelog_history": normalized_changelog_history,
             "analysis": analysis,
         },
+        "processing_behavior": processing_behavior,
         "call_metadata": {
             "reproducibility": "deterministic-input-fingerprint",
             "canonical_input_sha256": digest,
             "reproducible_call_id": f"req009-{digest[:16]}",
             "canonical_input": canonical_input,
+            "processing_input_sha256": processing_digest,
+            "processing_call_id": f"req009-processing-{processing_digest[:16]}",
+            "canonical_processing_input": canonical_processing_input,
         },
     }
 
@@ -1115,7 +1495,13 @@ def validate_req_009_prior_strategy_revision_ingestion(payload: Mapping[str, Any
         return ["payload must be a JSON object"]
 
     top_keys = set(payload.keys())
-    required_top = {"schema_version", "requirement_id", "prior_strategy_revision_ingestion", "call_metadata"}
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "prior_strategy_revision_ingestion",
+        "processing_behavior",
+        "call_metadata",
+    }
     missing_top = sorted(required_top - top_keys)
     if missing_top:
         errors.append(f"missing top-level keys: {missing_top}")
@@ -1224,12 +1610,105 @@ def validate_req_009_prior_strategy_revision_ingestion(payload: Mapping[str, Any
                         f"missing {required_field}"
                     )
 
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+
+    required_processing_behavior = {
+        "strategy",
+        "reasoning_mode",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "recommendation",
+    }
+    processing_keys = set(processing_behavior.keys())
+    missing_processing = sorted(required_processing_behavior - processing_keys)
+    if missing_processing:
+        errors.append(f"processing_behavior missing keys: {missing_processing}")
+    unexpected_processing = sorted(processing_keys - required_processing_behavior)
+    if unexpected_processing:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected_processing}")
+
+    if processing_behavior.get("strategy") != "prior-revision-aware-broad-sweep":
+        errors.append("processing_behavior.strategy must be prior-revision-aware-broad-sweep")
+    if processing_behavior.get("reasoning_mode") != EXECUTION_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+    else:
+        for required_field in (
+            "target_project",
+            "earth_sweep",
+            "cross_project_context",
+            "candidate_recommendations",
+            "prior_strategy_revisions",
+            "changelog_history",
+            "analysis",
+        ):
+            if required_field not in context_inputs:
+                errors.append(f"processing_behavior.context_inputs missing {required_field}")
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        for required_field in (
+            "target_project_context_used",
+            "earth_sweep_context_used",
+            "cross_project_context_used",
+            "prior_strategy_revisions_used",
+            "changelog_history_used",
+            "target_project_refs_used",
+            "earth_sweep_refs_used",
+            "cross_project_refs_used",
+            "prior_revision_refs_used",
+            "changelog_refs_used",
+            "cross_project_projects_considered",
+            "prior_revision_ids_used",
+            "changelog_change_ids_used",
+            "continuity_action_ids_used",
+            "drift_action_ids_used",
+            "evidence_refs_used",
+        ):
+            if required_field not in context_usage:
+                errors.append(f"processing_behavior.context_usage missing {required_field}")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        for required_field in (
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "recommended_actions",
+            "cross_project_obligations",
+            "open_risks",
+        ):
+            if required_field not in recommendation:
+                errors.append(f"processing_behavior.recommendation missing {required_field}")
+
     metadata = payload.get("call_metadata")
     if not isinstance(metadata, Mapping):
         errors.append("call_metadata must be an object")
         return errors
 
-    required_metadata = {"reproducibility", "canonical_input_sha256", "reproducible_call_id", "canonical_input"}
+    required_metadata = {
+        "reproducibility",
+        "canonical_input_sha256",
+        "reproducible_call_id",
+        "canonical_input",
+        "processing_input_sha256",
+        "processing_call_id",
+        "canonical_processing_input",
+    }
     metadata_keys = set(metadata.keys())
     missing_metadata = sorted(required_metadata - metadata_keys)
     if missing_metadata:
@@ -1259,6 +1738,48 @@ def validate_req_009_prior_strategy_revision_ingestion(payload: Mapping[str, Any
         errors.append(str(exc))
         return errors
 
+    expected_analysis = _build_req_009_analysis(
+        prior_strategy_revisions=normalized_prior_strategy_revisions,
+        changelog_history=normalized_changelog_history,
+    )
+    if ingestion.get("analysis") != expected_analysis:
+        errors.append("prior_strategy_revision_ingestion.analysis must mirror deterministic ingestion analysis")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        return errors
+
+    target_project_context = context_inputs.get("target_project")
+    earth_context = context_inputs.get("earth_sweep")
+    if not isinstance(target_project_context, Mapping):
+        errors.append("processing_behavior.context_inputs.target_project must be an object")
+        return errors
+    if not isinstance(earth_context, Mapping):
+        errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+        return errors
+
+    try:
+        normalized_target_refs = _normalize_string_list(
+            target_project_context.get("evidence_refs"),
+            field_name="processing_behavior.context_inputs.target_project.evidence_refs",
+        )
+        normalized_earth_refs = _normalize_string_list(
+            earth_context.get("evidence_refs"),
+            field_name="processing_behavior.context_inputs.earth_sweep.evidence_refs",
+        )
+        normalized_cross_context = _normalize_cross_project_context(context_inputs.get("cross_project_context"))
+        normalized_candidates = _normalize_candidate_recommendations(context_inputs.get("candidate_recommendations"))
+        normalized_earth_source_artifacts = _normalize_earth_sweep_source_artifacts(
+            context_inputs.get("earth_sweep_source_artifacts")
+        )
+        normalized_required_documents = _normalize_required_context_documents(
+            context_inputs.get("required_context_documents")
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
+
     expected_canonical_input = _canonical_req_009_input(
         current_revision_identity=normalized_current_revision_identity,
         prior_strategy_revisions=normalized_prior_strategy_revisions,
@@ -1274,12 +1795,46 @@ def validate_req_009_prior_strategy_revision_ingestion(payload: Mapping[str, Any
     if metadata.get("reproducible_call_id") != expected_call_id:
         errors.append("call_metadata.reproducible_call_id does not match canonical digest")
 
-    expected_analysis = _build_req_009_analysis(
+    expected_processing_behavior = _build_req_009_processing_behavior(
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
         prior_strategy_revisions=normalized_prior_strategy_revisions,
         changelog_history=normalized_changelog_history,
+        analysis=expected_analysis,
     )
-    if ingestion.get("analysis") != expected_analysis:
-        errors.append("prior_strategy_revision_ingestion.analysis must mirror deterministic ingestion analysis")
+    if payload.get("processing_behavior") != expected_processing_behavior:
+        errors.append("processing_behavior must mirror deterministic broad-sweep processing output")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+        return errors
+
+    expected_canonical_processing_input = _canonical_req_009_processing_input(
+        current_revision_identity=normalized_current_revision_identity,
+        prior_strategy_revisions=normalized_prior_strategy_revisions,
+        changelog_history=normalized_changelog_history,
+        analysis=expected_analysis,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=list(expected_processing_behavior["context_inputs"]["candidate_recommendations"]),
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+    )
+    if dict(canonical_processing_input) != expected_canonical_processing_input:
+        errors.append("call_metadata.canonical_processing_input must mirror normalized processing input")
+
+    expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
+    expected_processing_call_id = f"req009-processing-{expected_processing_digest[:16]}"
+    if metadata.get("processing_input_sha256") != expected_processing_digest:
+        errors.append("call_metadata.processing_input_sha256 does not match processing input")
+    if metadata.get("processing_call_id") != expected_processing_call_id:
+        errors.append("call_metadata.processing_call_id does not match processing digest")
 
     return errors
 
