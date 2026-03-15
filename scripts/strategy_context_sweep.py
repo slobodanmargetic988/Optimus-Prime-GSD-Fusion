@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-001, REQ-009, and REQ-020 contract surfaces for strategy context sweep processing."""
+"""REQ-001, REQ-009, REQ-020, and REQ-024 contract surfaces for strategy context sweep processing."""
 
 from __future__ import annotations
 
@@ -44,6 +44,13 @@ REQ_020_REQUIREMENT_ID = "REQ-020"
 REQ_020_TOOL = "strategy-context-sweep"
 REQ_020_TOOL_VERSION = "1.0.0"
 REQ_020_FALLBACK_NORMALIZED_AT_UTC = "1970-01-01T00:00:00Z"
+REQ_024_SCHEMA_VERSION = "req-024.strategy-context-bundle-serialization.v1"
+REQ_024_REQUIREMENT_ID = "REQ-024"
+REQ_024_TOOL = "strategy-context-sweep"
+REQ_024_TOOL_VERSION = "1.0.0"
+REQ_024_BUNDLE_SCHEMA_VERSION = "strategy-context-bundle.v1"
+REQ_024_SERIALIZATION_FORMAT = "json-canonical-v1"
+REQ_024_FALLBACK_BUNDLE_GENERATED_AT_UTC = "1970-01-01T00:00:00Z"
 
 REQ_020_ALLOWED_SOURCES = {
     "blocker",
@@ -3031,6 +3038,324 @@ def validate_req_020_risk_signal_normalization(payload: Mapping[str, Any]) -> li
     return errors
 
 
+def _normalize_req_024_timestamp(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return REQ_024_FALLBACK_BUNDLE_GENERATED_AT_UTC
+    return _normalize_req_020_timestamp(raw_value, field_name=field_name, allow_empty=False)
+
+
+def _normalize_req_024_strategy_context(raw_value: Any) -> dict[str, Any]:
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("strategy_context must be an object")
+    if not raw_value:
+        raise ValueError("strategy_context must include at least one key")
+    try:
+        canonical_json = json.dumps(raw_value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    except TypeError as exc:
+        raise ValueError(f"strategy_context must be JSON-serializable: {exc}") from exc
+    normalized = json.loads(canonical_json)
+    if not isinstance(normalized, dict):
+        raise ValueError("strategy_context must normalize to a JSON object")
+    return normalized
+
+
+def _normalize_req_024_llm_chain_stages(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        raise ValueError("llm_call_chain.stages must be a list")
+    if not isinstance(raw_value, list):
+        raise ValueError("llm_call_chain.stages must be a list")
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"llm_call_chain.stages[{index}] must be an object")
+        stage_id = _require_nonempty_text(item.get("stage_id"), field_name=f"llm_call_chain.stages[{index}].stage_id")
+        purpose = _require_nonempty_text(item.get("purpose"), field_name=f"llm_call_chain.stages[{index}].purpose")
+        model = _require_nonempty_text(item.get("model"), field_name=f"llm_call_chain.stages[{index}].model")
+        prompt_artifact_ref = _require_nonempty_text(
+            item.get("prompt_artifact_ref"),
+            field_name=f"llm_call_chain.stages[{index}].prompt_artifact_ref",
+        )
+        required_context_keys = _normalize_string_list(
+            item.get("required_context_keys"),
+            field_name=f"llm_call_chain.stages[{index}].required_context_keys",
+        )
+        if not required_context_keys:
+            raise ValueError(f"llm_call_chain.stages[{index}].required_context_keys must include at least one key")
+        normalized.append(
+            {
+                "stage_id": stage_id,
+                "purpose": purpose,
+                "model": model,
+                "prompt_artifact_ref": prompt_artifact_ref,
+                "required_context_keys": required_context_keys,
+            }
+        )
+    if not normalized:
+        raise ValueError("llm_call_chain.stages must include at least one stage")
+    normalized.sort(key=lambda row: (row["stage_id"], row["purpose"], row["model"], row["prompt_artifact_ref"]))
+    return normalized
+
+
+def _normalize_req_024_llm_call_chain(raw_value: Any) -> dict[str, Any]:
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("llm_call_chain must be an object")
+    chain_id = _require_nonempty_text(raw_value.get("chain_id"), field_name="llm_call_chain.chain_id")
+    stages = _normalize_req_024_llm_chain_stages(raw_value.get("stages"))
+    return {
+        "chain_id": chain_id,
+        "stages": stages,
+    }
+
+
+def _serialize_req_024_context_bundle(
+    *,
+    strategy_context: Mapping[str, Any],
+    llm_call_chain: Mapping[str, Any],
+    bundle_generated_at_utc: str,
+) -> tuple[str, str]:
+    context_bundle = {
+        "bundle_generated_at_utc": bundle_generated_at_utc,
+        "llm_call_chain": llm_call_chain,
+        "strategy_context": strategy_context,
+    }
+    serialized = json.dumps(
+        context_bundle,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    checksum_sha256 = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return serialized, checksum_sha256
+
+
+def _is_lower_hex_sha256(raw_value: Any) -> bool:
+    if not isinstance(raw_value, str):
+        return False
+    return len(raw_value) == 64 and all(character in "0123456789abcdef" for character in raw_value)
+
+
+def build_req_024_strategy_context_bundle_serialization(
+    *,
+    strategy_context: Mapping[str, Any],
+    llm_call_chain: Mapping[str, Any],
+    bundle_generated_at_utc: str | None = None,
+) -> dict[str, Any]:
+    normalized_strategy_context = _normalize_req_024_strategy_context(strategy_context)
+    normalized_llm_call_chain = _normalize_req_024_llm_call_chain(llm_call_chain)
+    normalized_bundle_generated_at_utc = _normalize_req_024_timestamp(
+        bundle_generated_at_utc,
+        field_name="bundle_generated_at_utc",
+    )
+    serialized_context_bundle, context_bundle_sha256 = _serialize_req_024_context_bundle(
+        strategy_context=normalized_strategy_context,
+        llm_call_chain=normalized_llm_call_chain,
+        bundle_generated_at_utc=normalized_bundle_generated_at_utc,
+    )
+    context_bundle_byte_length = len(serialized_context_bundle.encode("utf-8"))
+
+    canonical_input = {
+        "strategy_context": normalized_strategy_context,
+        "llm_call_chain": normalized_llm_call_chain,
+        "bundle_generated_at_utc": normalized_bundle_generated_at_utc,
+    }
+    digest = _canonical_input_digest(canonical_input)
+    return {
+        "schema_version": REQ_024_SCHEMA_VERSION,
+        "requirement_id": REQ_024_REQUIREMENT_ID,
+        "strategy_context_bundle_serialization": {
+            "bundle_schema_version": REQ_024_BUNDLE_SCHEMA_VERSION,
+            "serialization_format": REQ_024_SERIALIZATION_FORMAT,
+            "bundle_generated_at_utc": normalized_bundle_generated_at_utc,
+            "llm_call_chain": normalized_llm_call_chain,
+            "context_bundle_sha256": context_bundle_sha256,
+            "context_bundle_byte_length": context_bundle_byte_length,
+            "serialized_context_bundle": serialized_context_bundle,
+        },
+        "source": {
+            "tool": REQ_024_TOOL,
+            "tool_version": REQ_024_TOOL_VERSION,
+        },
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req024-{digest[:16]}",
+            "canonical_input": canonical_input,
+        },
+    }
+
+
+def validate_req_024_strategy_context_bundle_serialization(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "strategy_context_bundle_serialization",
+        "source",
+        "call_metadata",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_024_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_024_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_024_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_024_REQUIREMENT_ID}")
+
+    serialization = payload.get("strategy_context_bundle_serialization")
+    if not isinstance(serialization, Mapping):
+        errors.append("strategy_context_bundle_serialization must be an object")
+        return errors
+
+    required_serialization_fields = {
+        "bundle_schema_version",
+        "serialization_format",
+        "bundle_generated_at_utc",
+        "llm_call_chain",
+        "context_bundle_sha256",
+        "context_bundle_byte_length",
+        "serialized_context_bundle",
+    }
+    serialization_keys = set(serialization.keys())
+    missing_serialization = sorted(required_serialization_fields - serialization_keys)
+    if missing_serialization:
+        errors.append(f"strategy_context_bundle_serialization missing keys: {missing_serialization}")
+    unexpected_serialization = sorted(serialization_keys - required_serialization_fields)
+    if unexpected_serialization:
+        errors.append(f"strategy_context_bundle_serialization has unexpected keys: {unexpected_serialization}")
+
+    if serialization.get("bundle_schema_version") != REQ_024_BUNDLE_SCHEMA_VERSION:
+        errors.append(
+            f"strategy_context_bundle_serialization.bundle_schema_version must be {REQ_024_BUNDLE_SCHEMA_VERSION}"
+        )
+    if serialization.get("serialization_format") != REQ_024_SERIALIZATION_FORMAT:
+        errors.append(
+            f"strategy_context_bundle_serialization.serialization_format must be {REQ_024_SERIALIZATION_FORMAT}"
+        )
+
+    try:
+        _normalize_req_024_timestamp(
+            serialization.get("bundle_generated_at_utc"),
+            field_name="strategy_context_bundle_serialization.bundle_generated_at_utc",
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+
+    try:
+        normalized_llm_call_chain = _normalize_req_024_llm_call_chain(serialization.get("llm_call_chain"))
+    except ValueError as exc:
+        errors.append(str(exc))
+        normalized_llm_call_chain = None
+
+    context_bundle_sha256 = serialization.get("context_bundle_sha256")
+    if not _is_lower_hex_sha256(context_bundle_sha256):
+        errors.append("strategy_context_bundle_serialization.context_bundle_sha256 must be a lowercase hex sha256 digest")
+
+    context_bundle_byte_length = serialization.get("context_bundle_byte_length")
+    if not isinstance(context_bundle_byte_length, int) or context_bundle_byte_length <= 0:
+        errors.append("strategy_context_bundle_serialization.context_bundle_byte_length must be a positive integer")
+
+    serialized_context_bundle = serialization.get("serialized_context_bundle")
+    if not isinstance(serialized_context_bundle, str) or not serialized_context_bundle:
+        errors.append("strategy_context_bundle_serialization.serialized_context_bundle must be a non-empty string")
+        parsed_bundle = None
+    else:
+        try:
+            parsed_bundle = json.loads(serialized_context_bundle)
+        except json.JSONDecodeError:
+            errors.append("strategy_context_bundle_serialization.serialized_context_bundle must be valid JSON")
+            parsed_bundle = None
+
+    if isinstance(parsed_bundle, Mapping):
+        required_bundle_keys = {"bundle_generated_at_utc", "llm_call_chain", "strategy_context"}
+        bundle_keys = set(parsed_bundle.keys())
+        missing_bundle_keys = sorted(required_bundle_keys - bundle_keys)
+        if missing_bundle_keys:
+            errors.append(f"serialized context bundle missing keys: {missing_bundle_keys}")
+        unexpected_bundle_keys = sorted(bundle_keys - required_bundle_keys)
+        if unexpected_bundle_keys:
+            errors.append(f"serialized context bundle has unexpected keys: {unexpected_bundle_keys}")
+
+        if parsed_bundle.get("bundle_generated_at_utc") != serialization.get("bundle_generated_at_utc"):
+            errors.append(
+                "strategy_context_bundle_serialization.serialized_context_bundle.bundle_generated_at_utc "
+                "must match strategy_context_bundle_serialization.bundle_generated_at_utc"
+            )
+        if normalized_llm_call_chain is not None and parsed_bundle.get("llm_call_chain") != normalized_llm_call_chain:
+            errors.append(
+                "strategy_context_bundle_serialization.serialized_context_bundle.llm_call_chain "
+                "must match normalized strategy_context_bundle_serialization.llm_call_chain"
+            )
+        strategy_context_in_bundle = parsed_bundle.get("strategy_context")
+        if not isinstance(strategy_context_in_bundle, Mapping) or not strategy_context_in_bundle:
+            errors.append(
+                "strategy_context_bundle_serialization.serialized_context_bundle.strategy_context "
+                "must be a non-empty object"
+            )
+
+        recomputed_sha256 = hashlib.sha256(serialized_context_bundle.encode("utf-8")).hexdigest()
+        if context_bundle_sha256 != recomputed_sha256:
+            errors.append(
+                "strategy_context_bundle_serialization.context_bundle_sha256 must match serialized_context_bundle digest"
+            )
+        if isinstance(context_bundle_byte_length, int):
+            recomputed_size = len(serialized_context_bundle.encode("utf-8"))
+            if context_bundle_byte_length != recomputed_size:
+                errors.append(
+                    "strategy_context_bundle_serialization.context_bundle_byte_length must match serialized_context_bundle byte length"
+                )
+
+    source = payload.get("source")
+    if not isinstance(source, Mapping):
+        errors.append("source must be an object")
+    else:
+        if source.get("tool") != REQ_024_TOOL:
+            errors.append(f"source.tool must be {REQ_024_TOOL}")
+        if source.get("tool_version") != REQ_024_TOOL_VERSION:
+            errors.append(f"source.tool_version must be {REQ_024_TOOL_VERSION}")
+
+    call_metadata = payload.get("call_metadata")
+    if not isinstance(call_metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+
+    for field_name in ("reproducibility", "canonical_input_sha256", "reproducible_call_id", "canonical_input"):
+        if field_name not in call_metadata:
+            errors.append(f"call_metadata missing {field_name}")
+
+    if call_metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    canonical_input = call_metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+
+    if errors:
+        return errors
+
+    try:
+        rebuilt = build_req_024_strategy_context_bundle_serialization(
+            strategy_context=canonical_input.get("strategy_context"),
+            llm_call_chain=canonical_input.get("llm_call_chain"),
+            bundle_generated_at_utc=canonical_input.get("bundle_generated_at_utc"),
+        )
+    except ValueError as exc:
+        errors.append(f"call_metadata.canonical_input is invalid: {exc}")
+        return errors
+
+    if dict(payload) != rebuilt:
+        errors.append("payload must mirror deterministic REQ-024 strategy context bundle serialization output")
+    return errors
+
+
 def _write_payload(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
@@ -3148,6 +3473,11 @@ def _looks_like_req020_builder_input(payload: Mapping[str, Any]) -> bool:
     return "risk_signals" in payload
 
 
+def _looks_like_req024_builder_input(payload: Mapping[str, Any]) -> bool:
+    analysis_type = str(payload.get("analysis_type", "")).strip()
+    return analysis_type == "strategy_context_bundle_serialization"
+
+
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     analysis_type = str(payload.get("analysis_type", "")).strip()
     if analysis_type == "deficit_and_need_signal_extraction":
@@ -3156,6 +3486,12 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return build_req_020_risk_signal_normalization(
             risk_signals=list(payload.get("risk_signals", [])),
             normalized_at_utc=payload.get("normalized_at_utc"),
+        )
+    if analysis_type == "strategy_context_bundle_serialization":
+        return build_req_024_strategy_context_bundle_serialization(
+            strategy_context=payload.get("strategy_context"),
+            llm_call_chain=payload.get("llm_call_chain"),
+            bundle_generated_at_utc=payload.get("bundle_generated_at_utc"),
         )
 
     projects = payload.get("projects")
@@ -3171,7 +3507,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return _worker_w02.run(payload)
 
     raise ValueError(
-        "unable to route run payload: expected deficit/need extraction, planning artifact sweep, or runtime telemetry sweep input"
+        "unable to route run payload: expected deficit/need extraction, risk signal normalization, "
+        "strategy context bundle serialization, planning artifact sweep, or runtime telemetry sweep input"
     )
 
 
@@ -3210,6 +3547,12 @@ def main(argv: list[str] | None = None) -> int:
             output_payload = build_req_020_risk_signal_normalization(
                 risk_signals=list(payload.get("risk_signals", [])),
                 normalized_at_utc=payload.get("normalized_at_utc"),
+            )
+        elif _looks_like_req024_builder_input(payload):
+            output_payload = build_req_024_strategy_context_bundle_serialization(
+                strategy_context=payload.get("strategy_context"),
+                llm_call_chain=payload.get("llm_call_chain"),
+                bundle_generated_at_utc=payload.get("bundle_generated_at_utc"),
             )
         else:
             output_payload = run(payload)

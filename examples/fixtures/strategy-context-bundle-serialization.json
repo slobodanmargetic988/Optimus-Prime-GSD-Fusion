@@ -1,0 +1,75 @@
+{
+  "input": {
+    "strategy_context": {
+      "strategy_runtime_entrypoint": {
+        "runtime_mode": "llm-first",
+        "execution_mode": "long-thinking",
+        "revision_identity": "rev-req024-fixture-r1"
+      },
+      "processing_behavior": {
+        "context_usage": {
+          "target_project_context_used": true,
+          "earth_sweep_context_used": true,
+          "cross_project_context_used": true,
+          "evidence_refs_used": [
+            "reports/optimus-prime/planning/evidence/TASK-075/TASK_EVIDENCE.json",
+            "reports/optimus-prime/research/evidence/REQ-008.json"
+          ]
+        },
+        "recommendation": {
+          "decision": "ready-for-llm-chain",
+          "confidence": "high"
+        }
+      },
+      "open_risks": [
+        {
+          "risk_id": "risk-req024-001",
+          "reason_code": "missing_peer_signal"
+        }
+      ]
+    },
+    "llm_call_chain": {
+      "chain_id": "strategy-llm-chain",
+      "stages": [
+        {
+          "stage_id": "s02-constraint-check",
+          "purpose": "Validate recommendation constraints before synthesis.",
+          "model": "gpt-5.4-mini",
+          "prompt_artifact_ref": "prompts/strategy/constraint-check.md",
+          "required_context_keys": [
+            "recommendation",
+            "processing_behavior",
+            "recommendation"
+          ]
+        },
+        {
+          "stage_id": "s01-context-ingest",
+          "purpose": "Ingest serialized context bundle for long-thinking planning.",
+          "model": "gpt-5.4",
+          "prompt_artifact_ref": "prompts/strategy/context-ingest.md",
+          "required_context_keys": [
+            "strategy_runtime_entrypoint",
+            "processing_behavior",
+            "open_risks"
+          ]
+        }
+      ]
+    },
+    "bundle_generated_at_utc": "2026-03-15T02:00:00Z"
+  },
+  "expected_contract_anchors": {
+    "schema_version": "req-024.strategy-context-bundle-serialization.v1",
+    "requirement_id": "REQ-024",
+    "bundle_schema_version": "strategy-context-bundle.v1",
+    "serialization_format": "json-canonical-v1",
+    "bundle_generated_at_utc": "2026-03-15T02:00:00Z",
+    "stage_ids": [
+      "s01-context-ingest",
+      "s02-constraint-check"
+    ],
+    "context_bundle_sha256": "59c3f8a6e6cadc6b367845dac835abe9f5d6fc34470062fe3ac91cc3786cee45",
+    "context_bundle_byte_length": 1239,
+    "canonical_input_sha256": "59c3f8a6e6cadc6b367845dac835abe9f5d6fc34470062fe3ac91cc3786cee45",
+    "reproducible_call_id": "req024-59c3f8a6e6cadc6b"
+  }
+}
