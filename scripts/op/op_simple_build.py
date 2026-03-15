@@ -76,7 +76,6 @@ BLACKBOX_MANAGER_TIMEOUT_SECONDS = {
     "wrapup-manager": 1800,
 }
 
-QUIET_CYCLE_FORCE_FULL_EVERY = 5
 WATCHDOG_STALE_COMMIT_MINUTES = 150
 WATCHDOG_NEAR_STALE_MARGIN_MINUTES = 10
 WATCHDOG_RECOVERY_NUDGE_MINUTES = 30
@@ -120,7 +119,6 @@ Prioritize merge/fan-in recovery now so run-base receives fresh commits before h
 After applying this warning, rename this file to `recovery_instructions_terminal_warning_CONSUMED.md`."""
 NON_TERMINAL_STOP_REASONS = {
     "skip_cycle",
-    "active_workers_in_progress_no_safe_new_dispatch",
 }
 TERMINAL_STOP_REASONS = {
     "project_done",
@@ -8298,7 +8296,6 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         )
         cycles_this_run = 0
         previous_state_signature: str | None = None
-        quiet_cycle_streak = 0
         watchdog_reset_pending = bool(cfg.resume_mode)
 
         while True:
@@ -8334,16 +8331,8 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
             cycle_mode = "normal"
             mergeability_report: dict[str, Any] | None = None
-            state_signature, in_progress_workers = _worker_task_state_signature(cfg)
-            live_pid_in_progress_workers = _live_pid_in_progress_worker_count(cfg)
+            state_signature, _ = _worker_task_state_signature(cfg)
             task_counts_snapshot = _task_counts_from_execution_state(cfg)
-            task_in_progress_count = int(task_counts_snapshot.get("in_progress") or 0)
-            state_changed = previous_state_signature is None or state_signature != previous_state_signature
-            force_full_cycle = quiet_cycle_streak >= (QUIET_CYCLE_FORCE_FULL_EVERY - 1)
-            has_recovery_nudge = (cfg.repo_root / RECOVERY_INSTRUCTIONS_FILE).exists()
-            has_boss_timeout_marker = (cfg.repo_root / BOSS_EVIDENCE_FILE).exists()
-            near_watchdog_idle = _watchdog_near_idle_threshold(cfg)
-            has_lease_recovery = bool(lease_recovery["reclaimed_workers"] or lease_recovery["requeued_tasks"])
             run_base_ref = _mergeability_run_base_ref(cfg)
             watchdog_stop = False
             watchdog_signal: dict[str, Any] = {}
@@ -8483,20 +8472,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     ),
                 }
 
-            skip_boss_for_quiet_cycle = (
-                not watchdog_stop
-                and not has_lease_recovery
-                and not has_recovery_nudge
-                and not has_boss_timeout_marker
-                and not near_watchdog_idle
-                and not state_changed
-                and in_progress_workers > 0
-                and live_pid_in_progress_workers > 0
-                and task_in_progress_count > 0
-                and not force_full_cycle
-            )
             boss_result: ManagerResult | None = None
-            quiet_skip_reason = ""
 
             manager_statuses["watchdog"] = {
                 "status": "stop" if watchdog_stop else "ok",
@@ -8540,36 +8516,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     f"reason={str(watchdog_signal.get('reason_code') or 'stale_base_branch_commit')}",
                     flush=True,
                 )
-            elif skip_boss_for_quiet_cycle:
-                quiet_cycle_streak += 1
-                quiet_skip_reason = "active_workers_in_progress_no_safe_new_dispatch"
-                manager_statuses["BOSS"] = {
-                    "status": "skipped",
-                    "note": (
-                        f"quiet-cycle gate: no worker/task state change with {in_progress_workers} "
-                        f"in-progress workers (quiet_streak={quiet_cycle_streak})"
-                    ),
-                }
-                manager_statuses["rate-gate"] = {"status": "skipped", "note": "quiet-cycle gate skipped BOSS"}
-                manager_statuses["work-dispatcher"] = {"status": "skipped", "note": "quiet-cycle gate skipped BOSS"}
-                _write_cycle_manager_decision(
-                    cfg,
-                    cycle_number,
-                    decision="skip_cycle",
-                    reason_code=quiet_skip_reason,
-                    message=manager_statuses["BOSS"]["note"],
-                    worker_registry_ready=True,
-                    cycle_mode=cycle_mode,
-                )
-                print(
-                    "[op-simple-build] "
-                    f"[{utc_now_iso()}] "
-                    f"cycle={cycle_number} quiet-cycle gate skipped BOSS "
-                    f"in_progress_workers={in_progress_workers} quiet_streak={quiet_cycle_streak}",
-                    flush=True,
-                )
             else:
-                quiet_cycle_streak = 0
                 boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
                 print(
                     "[op-simple-build] "
@@ -8831,21 +8778,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
             manager_statuses["summary"] = {"status": "ok", "note": "summary written"}
             base_summary: dict[str, Any] | None = None
-            if skip_boss_for_quiet_cycle:
-                base_summary = {
-                    "schema_version": SCHEMA_VERSION,
-                    "cycle_number": cycle_number,
-                    "cycle_mode": cycle_mode,
-                    "manager_statuses": {},
-                    "task_counts": task_counts_snapshot,
-                    "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
-                    "project_done": False,
-                    "insurmountable_blocker": False,
-                    "termination": {"reason_code": quiet_skip_reason},
-                    "stop_reason": "skip_cycle",
-                    "notes": manager_statuses["BOSS"]["note"],
-                }
-            elif boss_result is not None and boss_result.status != "ok":
+            if boss_result is not None and boss_result.status != "ok":
                 base_summary = {
                     "schema_version": SCHEMA_VERSION,
                     "cycle_number": cycle_number,
