@@ -1,0 +1,188 @@
+{
+  "schema_version": "req-017.overlap-and-conflict-detection.v1",
+  "requirement_id": "REQ-017",
+  "target_project": {
+    "project_id": "prj.optimus-prime-gsd-fusion",
+    "project_name": "Optimus Prime GSD Fusion"
+  },
+  "projects_considered": [
+    "prj.analytics-hub",
+    "prj.optimus-prime-gsd-fusion",
+    "prj.runtime-core"
+  ],
+  "overlaps": [
+    {
+      "overlap_id": "overlap-25e4daa1ea8e",
+      "shared_domains": [
+        "dispatch",
+        "rate-limits"
+      ],
+      "overlap_window": {
+        "start_date": "2026-03-20",
+        "end_date": "2026-04-15"
+      },
+      "initiatives": {
+        "left": {
+          "project_id": "prj.optimus-prime-gsd-fusion",
+          "initiative_id": "init.dispatch-safety-lane",
+          "title": "Budget-aware dispatch safety lane",
+          "start_date": "2026-03-01",
+          "end_date": "2026-04-15"
+        },
+        "right": {
+          "project_id": "prj.runtime-core",
+          "initiative_id": "init.dispatch-fair-queue",
+          "title": "Fair-queue dispatch policy refactor",
+          "start_date": "2026-03-20",
+          "end_date": "2026-05-01"
+        }
+      },
+      "overlap_summary": "Initiatives overlap on dispatch, rate-limits between 2026-03-20 and 2026-04-15.",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/runtime-core/initiative.dispatch-fair-queue.json",
+        "reports/optimus-prime/planning/evidence/TASK-052/initiative.dispatch-safety-lane.json"
+      ],
+      "provenance": {
+        "source_fields": [
+          "initiatives[].project_id",
+          "initiatives[].initiative_id",
+          "initiatives[].title",
+          "initiatives[].domains[]",
+          "initiatives[].start_date",
+          "initiatives[].end_date",
+          "initiatives[].evidence_refs[]"
+        ],
+        "research_event_id": "event.20260315t090000z-req-017"
+      }
+    }
+  ],
+  "conflicts": [
+    {
+      "conflict_id": "conflict-ac5700dd8782",
+      "topic": "dispatch_policy",
+      "stance_variants": [
+        {
+          "stance": "budget-aware-safety-lane",
+          "project_ids": [
+            "prj.optimus-prime-gsd-fusion"
+          ],
+          "signals": [
+            {
+              "project_id": "prj.optimus-prime-gsd-fusion",
+              "signal_id": "sig.dispatch-policy-budget-aware",
+              "statement": "Prefer budget-aware safety lanes so high-impact work is never starved during quota pressure.",
+              "confidence": 0.8,
+              "evidence_refs": [
+                "reports/optimus-prime/planning/evidence/TASK-052/dispatch-policy-signal.json"
+              ]
+            }
+          ]
+        },
+        {
+          "stance": "fifo",
+          "project_ids": [
+            "prj.runtime-core"
+          ],
+          "signals": [
+            {
+              "project_id": "prj.runtime-core",
+              "signal_id": "sig.dispatch-policy-fifo",
+              "statement": "Prefer FIFO fairness so dispatch ordering remains simple and predictable under load.",
+              "confidence": 0.7,
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/runtime-core/dispatch-policy-signal.json"
+              ]
+            }
+          ]
+        }
+      ],
+      "conflict_summary": "Conflicting roadmap direction detected for topic 'dispatch_policy': budget-aware-safety-lane vs fifo.",
+      "resolution_options": [
+        {
+          "option_id": "option-01",
+          "title": "Align on 'budget-aware-safety-lane' for dispatch_policy",
+          "description": "Choose a single direction and align related initiatives to reduce duplicated effort and conflicting interfaces.",
+          "risk_level": "medium",
+          "tradeoffs": [
+            "Requires rework in projects currently pursuing other stances.",
+            "May reduce local autonomy for affected peer projects.",
+            "Improves interface compatibility and integration predictability."
+          ],
+          "recommended": true
+        },
+        {
+          "option_id": "option-02",
+          "title": "Align on 'fifo' for dispatch_policy",
+          "description": "Adopt the alternative stance across projects and retire competing direction signals.",
+          "risk_level": "high",
+          "tradeoffs": [
+            "Active project may incur redesign or delayed delivery.",
+            "Reduces short-term coordination risk if the alternative stance is already advanced.",
+            "Can increase migration cost if the active project already shipped assumptions."
+          ],
+          "recommended": false
+        },
+        {
+          "option_id": "option-03",
+          "title": "Define a boundary and allow divergence on dispatch_policy",
+          "description": "Allow projects to keep different stances, but define explicit interface boundaries and integration adapters.",
+          "risk_level": "medium",
+          "tradeoffs": [
+            "Higher ongoing integration complexity.",
+            "Risk of fragmented user experience across projects.",
+            "Can unblock delivery without forcing immediate alignment."
+          ],
+          "recommended": false
+        },
+        {
+          "option_id": "option-04",
+          "title": "Run a timeboxed experiment to choose stance for dispatch_policy",
+          "description": "Design a small proof and measure impact before committing to a single direction across projects.",
+          "risk_level": "low",
+          "tradeoffs": [
+            "Adds schedule delay and coordination overhead.",
+            "Reduces risk of choosing the wrong long-term direction.",
+            "May require temporary duplication during evaluation."
+          ],
+          "recommended": false
+        }
+      ],
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/runtime-core/dispatch-policy-signal.json",
+        "reports/optimus-prime/planning/evidence/TASK-052/dispatch-policy-signal.json"
+      ],
+      "provenance": {
+        "source_fields": [
+          "direction_signals[].project_id",
+          "direction_signals[].signal_id",
+          "direction_signals[].topic",
+          "direction_signals[].stance",
+          "direction_signals[].statement",
+          "direction_signals[].confidence",
+          "direction_signals[].evidence_refs[]"
+        ],
+        "research_event_id": "event.20260315t090000z-req-017"
+      }
+    }
+  ],
+  "evidence_refs": [
+    "reports/earth/sweeps/2026-03-15/runtime-core/dispatch-policy-signal.json",
+    "reports/earth/sweeps/2026-03-15/runtime-core/initiative.dispatch-fair-queue.json",
+    "reports/optimus-prime/planning/evidence/TASK-052/dispatch-policy-signal.json",
+    "reports/optimus-prime/planning/evidence/TASK-052/initiative.dispatch-safety-lane.json"
+  ],
+  "decision": "conflicts_detected",
+  "summary": {
+    "projects_considered": 3,
+    "initiative_rows": 3,
+    "direction_signal_rows": 4,
+    "overlap_count": 1,
+    "conflict_count": 1
+  },
+  "source": {
+    "normalized_at_utc": "2026-03-15T09:00:00Z",
+    "tool": "strategy-context-sweep",
+    "tool_version": "1.0.0",
+    "context_bundle_sha256": "e183ce3d9a8e8ecda69b4db8aaf065c40e3d0df7fd6fd4cf16a8af963d23a342"
+  }
+}
