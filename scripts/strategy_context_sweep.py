@@ -1493,6 +1493,8 @@ def _normalize_req_015_evidence_refs(evidence_rows: Sequence[Any], *, field_name
         notes = _as_text(evidence.get("notes"))
         if notes:
             normalized_row["notes"] = notes
+        if _is_stale_evidence_row(evidence):
+            normalized_row["stale"] = True
         normalized.append(normalized_row)
     if not normalized:
         raise Req015Error(f"{field_name} must contain at least one evidence ref")
@@ -1723,6 +1725,44 @@ def _fallback_req_015_evidence_refs(
     return selected
 
 
+def _resolve_req_015_optional_doc_refs(value: Any, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    rows = _require_sequence_req_015(value, field_name=field_name)
+    refs: list[str] = []
+    seen: set[str] = set()
+    for index, row in enumerate(rows):
+        ref = _require_text_req_015(row, field_name=f"{field_name}[{index}]")
+        if ref in seen:
+            continue
+        seen.add(ref)
+        refs.append(ref)
+    return refs
+
+
+def _normalize_req_015_context_doc_refs(broad_sweep_context: Mapping[str, Any]) -> dict[str, list[str]] | None:
+    mission_refs_raw = _mapping_value_by_alias(
+        broad_sweep_context,
+        ("mission_refs", "context_mission_refs"),
+    )
+    scope_refs_raw = _mapping_value_by_alias(
+        broad_sweep_context,
+        ("scope_refs", "context_scope_refs"),
+    )
+    if mission_refs_raw is None and scope_refs_raw is None:
+        return None
+    return {
+        "mission_refs": _resolve_req_015_optional_doc_refs(
+            mission_refs_raw,
+            field_name="broad_sweep_context.mission_refs",
+        ),
+        "scope_refs": _resolve_req_015_optional_doc_refs(
+            scope_refs_raw,
+            field_name="broad_sweep_context.scope_refs",
+        ),
+    }
+
+
 def _append_req_015_open_risk(
     *,
     open_risks: list[dict[str, Any]],
@@ -1843,6 +1883,26 @@ def _normalize_req_015_broad_sweep_context(
         evidence_by_id=evidence_by_id,
         fallback_rows=evidence_catalog_rows,
     )
+    context_doc_refs = _normalize_req_015_context_doc_refs(broad_sweep_context)
+    if context_doc_refs is not None:
+        missing_context_refs = _missing_context_doc_refs(context_doc_refs)
+        if not context_doc_refs.get("mission_refs"):
+            missing_context_refs.append("mission_refs")
+        if not context_doc_refs.get("scope_refs"):
+            missing_context_refs.append("scope_refs")
+        for missing_ref in missing_context_refs:
+            open_risk_index += 1
+            _append_req_015_open_risk(
+                open_risks=open_risks,
+                open_risk_index=open_risk_index,
+                reason_code=REASON_CODE_CONTEXT_DOC_MISSING,
+                risk_level="high",
+                risk_statement=f"Context doc is missing or unreadable: {missing_ref}",
+                source_fields=["broad_sweep_context.mission_refs[]", "broad_sweep_context.scope_refs[]"],
+                recommendation_ids=list(recommendation_ids),
+                evidence_rows=baseline_evidence_refs,
+                research_event_id=research_event_id,
+            )
 
     cross_project_raw = _mapping_value_by_alias(
         broad_sweep_context,
@@ -1983,6 +2043,36 @@ def _normalize_req_015_broad_sweep_context(
                         f"{summary}"
                     ),
                     source_fields=["broad_sweep_context.cross_project_obligations[].dependency_side_effect_notes[]"],
+                    recommendation_ids=recommendation_links,
+                    evidence_rows=baseline_evidence_refs,
+                    target_project_id=peer_project_id,
+                    research_event_id=research_event_id,
+                )
+                continue
+
+            peer_doc_refs = _resolve_req_015_optional_doc_refs(
+                _mapping_value_by_alias(
+                    row,
+                    ("peer_project_doc_refs", "peer_project_docs", "doc_refs", "project_doc_refs"),
+                ),
+                field_name=f"broad_sweep_context.cross_project_obligations[{index}].peer_project_doc_refs",
+            )
+            missing_peer_doc_refs = [ref for ref in peer_doc_refs if not _resolve_ref_path(ref).exists()]
+            if missing_peer_doc_refs:
+                open_risk_index += 1
+                _append_req_015_open_risk(
+                    open_risks=open_risks,
+                    open_risk_index=open_risk_index,
+                    reason_code=REASON_CODE_PEER_PROJECT_DOC_MISSING,
+                    risk_level="high",
+                    risk_statement=(
+                        "Cross-project obligation blocked by missing peer-project docs "
+                        f"for {peer_project_id}: {', '.join(missing_peer_doc_refs)}"
+                    ),
+                    source_fields=[
+                        "broad_sweep_context.cross_project_obligations[].peer_project_doc_refs[]",
+                        "broad_sweep_context.cross_project_obligations[]",
+                    ],
                     recommendation_ids=recommendation_links,
                     evidence_rows=baseline_evidence_refs,
                     target_project_id=peer_project_id,
