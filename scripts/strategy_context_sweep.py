@@ -1864,14 +1864,23 @@ def _build_req_023_context_compaction(
     }
 
 
-def _req_023_recommendation_decision(*, compacted_packets: list[dict[str, Any]], coverage: Mapping[str, Any]) -> str:
+def _req_023_recommendation_decision(
+    *,
+    compacted_packets: list[dict[str, Any]],
+    coverage: Mapping[str, Any],
+    base_decision: str,
+) -> str:
     if compacted_packets and not any(list(coverage.get(field_name, [])) for field_name in (
         "uncovered_action_ids",
         "uncovered_obligation_ids",
         "uncovered_risk_ids",
         "uncovered_hard_constraint_ids",
     )):
-        return "compact-ready"
+        if base_decision == "proceed":
+            return "compact-ready"
+        if base_decision == "insufficient-context" and list(coverage.get("hard_constraint_ids", [])):
+            return "compact-ready"
+        return base_decision
     if coverage.get("hard_constraint_ids"):
         return "constraints-only"
     return "insufficient-context"
@@ -1914,17 +1923,29 @@ def _build_req_023_processing_behavior(
 
     coverage = context_compaction["coverage"]
     compacted_packets = context_compaction["compacted_packets"]
+    base_decision = str(recommendation["decision"])
     recommendation["decision"] = _req_023_recommendation_decision(
         compacted_packets=compacted_packets,
         coverage=coverage,
+        base_decision=base_decision,
     )
-    recommendation["rationale"] = (
+    compaction_rationale = (
         f"Compacted {len(compacted_packets)} packet(s) covering "
         f"{len(coverage['covered_action_ids'])} action(s), "
         f"{len(coverage['covered_obligation_ids'])} obligation(s), "
         f"{len(coverage['covered_risk_ids'])} risk(s), and "
         f"{len(coverage['covered_hard_constraint_ids'])} hard constraint(s)."
     )
+    if recommendation["decision"] == "compact-ready":
+        recommendation["rationale"] = compaction_rationale
+    elif recommendation["decision"] == "constraints-only":
+        recommendation["rationale"] = (
+            f"{compaction_rationale} Only hard-constraint packets are ready for downstream reasoning."
+        )
+    else:
+        recommendation["rationale"] = (
+            f"{compaction_rationale} {_recommendation_rationale(decision=recommendation['decision'])}"
+        )
     recommendation["confidence"] = _recommendation_confidence(
         evidence_refs=context_compaction["mandatory_traceability_refs"],
         open_risks=list(recommendation["open_risks"]),

@@ -382,8 +382,8 @@
       }
     },
     "recommendation": {
-      "decision": "compact-ready",
-      "rationale": "Compacted 3 packet(s) covering 3 action(s), 2 obligation(s), 2 risk(s), and 2 hard constraint(s).",
+      "decision": "proceed-with-open-risks",
+      "rationale": "Compacted 3 packet(s) covering 3 action(s), 2 obligation(s), 2 risk(s), and 2 hard constraint(s). Some actions are evidence-backed, while unresolved cross-project ideas remain open risks.",
       "confidence": "medium",
       "evidence_refs": [
         "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md",
