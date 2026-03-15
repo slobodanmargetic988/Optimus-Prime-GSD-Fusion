@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-1",
+  "task_id": "TASK-014",
+  "requirement_ids": [
+    "REQ-005"
+  ],
+  "updated_at": "2026-03-14T23:02:25Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "pytest_integration",
+        "command": "python3 -m pytest tests/integration/test_planning-artifact-sweep-across-earth.py -q",
+        "exit_code": 0
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_planning-artifact-sweep-across-earth.py -q",
+        "passed": true
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/integration/test_planning-artifact-sweep-across-earth.py",
+      "reports/optimus-prime/planning/evidence/TASK-014/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "ready_for_test"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}
