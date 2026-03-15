@@ -11,10 +11,20 @@ from typing import Any
 
 
 REQ004_SCHEMA_VERSION = "REQ-004-peer-project-mission-and-scope-ingestion.v1"
+REQ012_SCHEMA_VERSION = "REQ-012-interface-contract-extraction.v1"
 SUPPORTED_DOCUMENT_TYPES = {"mission", "scope"}
 OBLIGATION_PATTERN = re.compile(r"\b(must|shall|required|needs?\s+to)\b", re.IGNORECASE)
+OPTIONAL_OBLIGATION_PATTERN = re.compile(r"\b(should|may|optional|can|recommended)\b", re.IGNORECASE)
 REUSE_PATTERN = re.compile(r"\b(reuse|shared|common|template|library|leverage|integrate)\b", re.IGNORECASE)
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+INTERFACE_DECLARATION_PATTERN = re.compile(
+    r"\binterface\s*[:\-]\s*([a-z0-9][a-z0-9_.-]*(?:\.v[0-9]+)?)\b",
+    re.IGNORECASE,
+)
+INTERFACE_TOKEN_PATTERN = re.compile(
+    r"\b([a-z0-9][a-z0-9-]*(?:[._-][a-z0-9-]+)*\.v[0-9]+)\b",
+    re.IGNORECASE,
+)
 
 REASON_CODE_MISSING_EARTH_SWEEP_EVIDENCE = "missing_earth_sweep_evidence_refs"
 REASON_CODE_STALE_EARTH_SWEEP_SOURCE_ARTIFACT = "stale_earth_sweep_source_artifact_detected"
@@ -288,6 +298,175 @@ def _extract_signals_from_document(
             )
 
     return interaction_obligations, reuse_opportunities, obligation_start_index, reuse_start_index
+
+
+def _normalize_applies_to_projects(value: Any, *, field_name: str) -> list[str]:
+    if value is None:
+        return ["*"]
+    entries = _require_list(value, field_name=field_name)
+    normalized: list[str] = []
+    for idx, raw_entry in enumerate(entries):
+        entry = _require_non_empty_string(raw_entry, field_name=f"{field_name}[{idx}]")
+        normalized.append(entry)
+    return normalized
+
+
+def _source_is_relevant_to_target(*, applies_to_projects: list[str], target_project_id: str) -> bool:
+    normalized = {item.strip().lower() for item in applies_to_projects if isinstance(item, str)}
+    if "*" in normalized:
+        return True
+    return target_project_id.lower() in normalized
+
+
+def _classify_obligation_level(statement: str) -> str | None:
+    if OBLIGATION_PATTERN.search(statement):
+        return "required"
+    if OPTIONAL_OBLIGATION_PATTERN.search(statement):
+        return "optional"
+    return None
+
+
+def _extract_interface_id_from_statement(statement: str, *, active_interface_id: str | None) -> str | None:
+    declaration_match = INTERFACE_DECLARATION_PATTERN.search(statement)
+    if declaration_match:
+        return declaration_match.group(1).strip().lower()
+
+    token_match = INTERFACE_TOKEN_PATTERN.search(statement)
+    if token_match:
+        return token_match.group(1).strip().lower()
+
+    return active_interface_id
+
+
+def extract_interface_contracts(payload: dict[str, Any], *, generated_at: str | None = None) -> dict[str, Any]:
+    payload_obj = _require_mapping(payload, field_name="payload")
+    current_project = _require_mapping(payload_obj.get("current_project"), field_name="current_project")
+    current_project_id = _require_non_empty_string(
+        current_project.get("project_id"), field_name="current_project.project_id"
+    )
+    contract_sources = _require_list(payload_obj.get("earth_contract_sources"), field_name="earth_contract_sources")
+
+    interfaces_by_id: dict[str, dict[str, Any]] = {}
+    obligation_index = 0
+    required_count = 0
+    optional_count = 0
+    relevant_source_count = 0
+
+    for source_idx, raw_source in enumerate(contract_sources):
+        source = _require_mapping(raw_source, field_name=f"earth_contract_sources[{source_idx}]")
+        source_id = _require_non_empty_string(
+            source.get("source_id"),
+            field_name=f"earth_contract_sources[{source_idx}].source_id",
+        )
+        source_path = _require_non_empty_string(
+            source.get("source_path"),
+            field_name=f"earth_contract_sources[{source_idx}].source_path",
+        )
+        content = _require_non_empty_string(
+            source.get("content"),
+            field_name=f"earth_contract_sources[{source_idx}].content",
+        )
+        applies_to_projects = _normalize_applies_to_projects(
+            source.get("applies_to_projects"),
+            field_name=f"earth_contract_sources[{source_idx}].applies_to_projects",
+        )
+        if not _source_is_relevant_to_target(
+            applies_to_projects=applies_to_projects,
+            target_project_id=current_project_id,
+        ):
+            continue
+        relevant_source_count += 1
+        source_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        active_interface_id: str | None = None
+
+        for line_number, raw_line in enumerate(content.splitlines(), start=1):
+            statement = raw_line.strip()
+            if not statement:
+                continue
+            active_interface_id = _extract_interface_id_from_statement(
+                statement,
+                active_interface_id=active_interface_id,
+            )
+            obligation_level = _classify_obligation_level(statement)
+            if obligation_level is None or active_interface_id is None:
+                continue
+
+            obligation_index += 1
+            if obligation_level == "required":
+                required_count += 1
+            else:
+                optional_count += 1
+
+            interface_entry = interfaces_by_id.setdefault(
+                active_interface_id,
+                {
+                    "interface_id": active_interface_id,
+                    "source_contract_ids": set(),
+                    "required_obligation_count": 0,
+                    "optional_obligation_count": 0,
+                    "obligations": [],
+                },
+            )
+            interface_entry["source_contract_ids"].add(source_id)
+            if obligation_level == "required":
+                interface_entry["required_obligation_count"] += 1
+            else:
+                interface_entry["optional_obligation_count"] += 1
+
+            interface_entry["obligations"].append(
+                {
+                    "obligation_id": f"ICO-{obligation_index:04d}",
+                    "obligation_level": obligation_level,
+                    "statement": statement,
+                    "source_provenance": [
+                        {
+                            "source_id": source_id,
+                            "source_path": source_path,
+                            "source_sha256": source_sha256,
+                            "line_number": line_number,
+                            "excerpt": statement,
+                        }
+                    ],
+                }
+            )
+
+    shared_interface_contracts = []
+    for interface_id in sorted(interfaces_by_id.keys()):
+        row = interfaces_by_id[interface_id]
+        shared_interface_contracts.append(
+            {
+                "interface_id": interface_id,
+                "source_contract_ids": sorted(row["source_contract_ids"]),
+                "required_obligation_count": row["required_obligation_count"],
+                "optional_obligation_count": row["optional_obligation_count"],
+                "obligations": row["obligations"],
+            }
+        )
+
+    return {
+        "schema_version": REQ012_SCHEMA_VERSION,
+        "generated_at": generated_at or _utc_now_iso(),
+        "current_project_id": current_project_id,
+        "shared_interface_contracts": shared_interface_contracts,
+        "summary": {
+            "earth_contract_source_count": len(contract_sources),
+            "relevant_source_count": relevant_source_count,
+            "shared_interface_contract_count": len(shared_interface_contracts),
+            "required_obligation_count": required_count,
+            "optional_obligation_count": optional_count,
+            "total_obligation_count": required_count + optional_count,
+        },
+    }
+
+
+def extract_interface_contracts_file(
+    *, input_path: Path, output_path: Path, generated_at: str | None = None
+) -> dict[str, Any]:
+    payload = json.loads(input_path.read_text(encoding="utf-8"))
+    result = extract_interface_contracts(payload, generated_at=generated_at)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return result
 
 
 def ingest_peer_project_mission_and_scope(

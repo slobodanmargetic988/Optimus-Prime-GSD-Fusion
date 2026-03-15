@@ -1,0 +1,129 @@
+{
+  "schema_version": "REQ-012-interface-contract-extraction.v1",
+  "generated_at": "2026-03-15T00:00:00Z",
+  "current_project_id": "optimus-prime-gsd-fusion",
+  "shared_interface_contracts": [
+    {
+      "interface_id": "fusion-evidence.v1",
+      "source_contract_ids": [
+        "earth-targeted-interface"
+      ],
+      "required_obligation_count": 1,
+      "optional_obligation_count": 1,
+      "obligations": [
+        {
+          "obligation_id": "ICO-0005",
+          "obligation_level": "required",
+          "statement": "fusion-evidence.v1 required fields: evidence_ref and source_path.",
+          "source_provenance": [
+            {
+              "source_id": "earth-targeted-interface",
+              "source_path": "earth/contracts/targeted-interface.md",
+              "source_sha256": "310a8ca3236a7d893e48785eea28259244275106213668d5f6a7eb2dce908003",
+              "line_number": 2,
+              "excerpt": "fusion-evidence.v1 required fields: evidence_ref and source_path."
+            }
+          ]
+        },
+        {
+          "obligation_id": "ICO-0006",
+          "obligation_level": "optional",
+          "statement": "fusion-evidence.v1 optional fields: source_sha256.",
+          "source_provenance": [
+            {
+              "source_id": "earth-targeted-interface",
+              "source_path": "earth/contracts/targeted-interface.md",
+              "source_sha256": "310a8ca3236a7d893e48785eea28259244275106213668d5f6a7eb2dce908003",
+              "line_number": 3,
+              "excerpt": "fusion-evidence.v1 optional fields: source_sha256."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "interface_id": "planning-packet.v2",
+      "source_contract_ids": [
+        "earth-shared-interfaces"
+      ],
+      "required_obligation_count": 1,
+      "optional_obligation_count": 1,
+      "obligations": [
+        {
+          "obligation_id": "ICO-0001",
+          "obligation_level": "required",
+          "statement": "planning-packet.v2 MUST include task_identifier and requirement_ids.",
+          "source_provenance": [
+            {
+              "source_id": "earth-shared-interfaces",
+              "source_path": "earth/contracts/shared-interfaces.md",
+              "source_sha256": "70de275f1de712725ba02e4a4578de427781e552c6d2251a2e095fff77dc03f2",
+              "line_number": 2,
+              "excerpt": "planning-packet.v2 MUST include task_identifier and requirement_ids."
+            }
+          ]
+        },
+        {
+          "obligation_id": "ICO-0002",
+          "obligation_level": "optional",
+          "statement": "planning-packet.v2 SHOULD include operator_summary for human review.",
+          "source_provenance": [
+            {
+              "source_id": "earth-shared-interfaces",
+              "source_path": "earth/contracts/shared-interfaces.md",
+              "source_sha256": "70de275f1de712725ba02e4a4578de427781e552c6d2251a2e095fff77dc03f2",
+              "line_number": 3,
+              "excerpt": "planning-packet.v2 SHOULD include operator_summary for human review."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "interface_id": "telemetry-handshake.v1",
+      "source_contract_ids": [
+        "earth-shared-interfaces"
+      ],
+      "required_obligation_count": 1,
+      "optional_obligation_count": 1,
+      "obligations": [
+        {
+          "obligation_id": "ICO-0003",
+          "obligation_level": "required",
+          "statement": "telemetry-handshake.v1 SHALL include source_commit and generated_at.",
+          "source_provenance": [
+            {
+              "source_id": "earth-shared-interfaces",
+              "source_path": "earth/contracts/shared-interfaces.md",
+              "source_sha256": "70de275f1de712725ba02e4a4578de427781e552c6d2251a2e095fff77dc03f2",
+              "line_number": 5,
+              "excerpt": "telemetry-handshake.v1 SHALL include source_commit and generated_at."
+            }
+          ]
+        },
+        {
+          "obligation_id": "ICO-0004",
+          "obligation_level": "optional",
+          "statement": "telemetry-handshake.v1 MAY include debug_notes when available.",
+          "source_provenance": [
+            {
+              "source_id": "earth-shared-interfaces",
+              "source_path": "earth/contracts/shared-interfaces.md",
+              "source_sha256": "70de275f1de712725ba02e4a4578de427781e552c6d2251a2e095fff77dc03f2",
+              "line_number": 6,
+              "excerpt": "telemetry-handshake.v1 MAY include debug_notes when available."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "earth_contract_source_count": 3,
+    "relevant_source_count": 2,
+    "shared_interface_contract_count": 3,
+    "required_obligation_count": 3,
+    "optional_obligation_count": 3,
+    "total_obligation_count": 6
+  }
+}

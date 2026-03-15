@@ -1,0 +1,32 @@
+{
+  "schema_version": "REQ-012-interface-contract-extraction-input.v1",
+  "current_project": {
+    "project_id": "optimus-prime-gsd-fusion"
+  },
+  "earth_contract_sources": [
+    {
+      "source_id": "earth-shared-interfaces",
+      "source_path": "earth/contracts/shared-interfaces.md",
+      "applies_to_projects": [
+        "*"
+      ],
+      "content": "Interface: planning-packet.v2\nplanning-packet.v2 MUST include task_identifier and requirement_ids.\nplanning-packet.v2 SHOULD include operator_summary for human review.\nInterface: telemetry-handshake.v1\ntelemetry-handshake.v1 SHALL include source_commit and generated_at.\ntelemetry-handshake.v1 MAY include debug_notes when available."
+    },
+    {
+      "source_id": "earth-ops-only",
+      "source_path": "earth/contracts/ops-only.md",
+      "applies_to_projects": [
+        "ops-control"
+      ],
+      "content": "Interface: ops-control-channel.v1\nops-control-channel.v1 MUST rotate credentials every 24h."
+    },
+    {
+      "source_id": "earth-targeted-interface",
+      "source_path": "earth/contracts/targeted-interface.md",
+      "applies_to_projects": [
+        "optimus-prime-gsd-fusion"
+      ],
+      "content": "Interface: fusion-evidence.v1\nfusion-evidence.v1 required fields: evidence_ref and source_path.\nfusion-evidence.v1 optional fields: source_sha256."
+    }
+  ]
+}
