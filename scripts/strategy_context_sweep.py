@@ -16,6 +16,8 @@ RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 REQ_009_SCHEMA_VERSION = "req-009.prior-strategy-revision-ingestion.v1"
 REQ_009_REQUIREMENT_ID = "REQ-009"
+REQ_013_SCHEMA_VERSION = "req-013.capability-catalog-extraction.v1"
+REQ_013_REQUIREMENT_ID = "REQ-013"
 
 
 def _require_nonempty_text(value: Any, *, field_name: str) -> str:
@@ -865,6 +867,582 @@ def validate_req_001_runtime_entrypoint(payload: Mapping[str, Any]) -> list[str]
 
     expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
     expected_processing_call_id = f"req001-processing-{expected_processing_digest[:16]}"
+    if metadata.get("processing_input_sha256") != expected_processing_digest:
+        errors.append("call_metadata.processing_input_sha256 does not match processing input")
+    if metadata.get("processing_call_id") != expected_processing_call_id:
+        errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    return errors
+
+
+def _normalize_capability_status(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return "missing"
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string when provided")
+    status = raw_value.strip().lower()
+    if status not in {"provided", "missing"}:
+        raise ValueError(f"{field_name} must be either 'provided' or 'missing'")
+    return status
+
+
+def _normalize_capability_catalog_entries(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("capability_catalog_entries must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"capability_catalog_entries[{index}] must be an object")
+
+        project_id = _require_nonempty_text(
+            item.get("project_id"),
+            field_name=f"capability_catalog_entries[{index}].project_id",
+        )
+        project_root = _normalize_root(
+            item.get("project_root"),
+            field_name=f"capability_catalog_entries[{index}].project_root",
+        )
+        capability_id = _require_nonempty_text(
+            item.get("capability_id"),
+            field_name=f"capability_catalog_entries[{index}].capability_id",
+        )
+        capability_summary = _require_nonempty_text(
+            item.get("capability_summary")
+            if item.get("capability_summary") is not None
+            else capability_id,
+            field_name=f"capability_catalog_entries[{index}].capability_summary",
+        )
+        status = _normalize_capability_status(
+            item.get("status"),
+            field_name=f"capability_catalog_entries[{index}].status",
+        )
+        source_version = _require_nonempty_text(
+            item.get("source_version"),
+            field_name=f"capability_catalog_entries[{index}].source_version",
+        )
+        source_artifact_ref = _require_nonempty_text(
+            item.get("source_artifact_ref"),
+            field_name=f"capability_catalog_entries[{index}].source_artifact_ref",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"capability_catalog_entries[{index}].evidence_refs",
+        )
+
+        normalized.append(
+            {
+                "project_id": project_id,
+                "project_root": project_root,
+                "capability_id": capability_id,
+                "capability_summary": capability_summary,
+                "status": status,
+                "source_version": source_version,
+                "source_artifact_ref": source_artifact_ref,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(
+        key=lambda row: (
+            row["project_id"],
+            row["capability_id"],
+            row["status"],
+            row["source_version"],
+            row["source_artifact_ref"],
+        )
+    )
+    return normalized
+
+
+def _capability_entry_refs(entry: Mapping[str, Any]) -> list[str]:
+    return _collect_unique_refs([str(entry["source_artifact_ref"])], list(entry["evidence_refs"]))
+
+
+def _build_capability_catalog(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    provided = [row for row in entries if row["status"] == "provided"]
+    missing = [row for row in entries if row["status"] == "missing"]
+    catalog_refs = _collect_unique_refs(*[_capability_entry_refs(row) for row in entries])
+    return {
+        "catalog_strategy": "project-capability-catalog",
+        "projects_considered": sorted({row["project_id"] for row in entries}),
+        "entries": entries,
+        "provided_capability_ids": sorted({row["capability_id"] for row in provided}),
+        "missing_capability_ids": sorted({row["capability_id"] for row in missing}),
+        "source_versions": sorted({row["source_version"] for row in entries}),
+        "evidence_refs": catalog_refs,
+    }
+
+
+def _canonical_req_013_processing_input(
+    *,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    candidate_recommendations: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+    capability_catalog_entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    canonical = _canonical_processing_input(
+        target_project_evidence_refs=target_project_evidence_refs,
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+        candidate_recommendations=candidate_recommendations,
+        earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+        required_context_documents=required_context_documents,
+    )
+    if capability_catalog_entries:
+        canonical["capability_catalog_entries"] = capability_catalog_entries
+    return canonical
+
+
+def _build_req_013_processing_behavior(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    candidate_recommendations: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+    capability_catalog_entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    base_behavior = _build_processing_behavior(
+        target_project_root=target_project_root,
+        earth_root=earth_root,
+        target_project_evidence_refs=target_project_evidence_refs,
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+        candidate_recommendations=candidate_recommendations,
+        earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+        required_context_documents=required_context_documents,
+    )
+    capability_catalog = _build_capability_catalog(capability_catalog_entries)
+    provided_entries = [row for row in capability_catalog_entries if row["status"] == "provided"]
+    provided_refs_by_capability: dict[str, list[str]] = {}
+    for row in provided_entries:
+        provided_refs_by_capability[row["capability_id"]] = _collect_unique_refs(
+            provided_refs_by_capability.get(row["capability_id"], []),
+            _capability_entry_refs(row),
+        )
+
+    base_recommendation = dict(base_behavior["recommendation"])
+    base_open_risks = list(base_recommendation["open_risks"])
+    base_recommended_actions = list(base_recommendation["recommended_actions"])
+    base_obligations = list(base_recommendation["cross_project_obligations"])
+
+    recommended_actions: list[dict[str, Any]] = []
+    suppressed_actions: list[dict[str, Any]] = []
+    for action in base_recommended_actions:
+        action_id = action["action_id"]
+        if action_id in provided_refs_by_capability:
+            suppressed_actions.append(
+                {
+                    "action_id": action_id,
+                    "reason_code": "capability_already_provided",
+                    "summary": f"Suppressed '{action_id}' because capability catalog marks it as already provided.",
+                    "evidence_refs": provided_refs_by_capability[action_id],
+                }
+            )
+            continue
+        recommended_actions.append(action)
+
+    suppressed_ids = {row["action_id"] for row in suppressed_actions}
+    cross_project_obligations = [
+        row
+        for row in base_obligations
+        if str(row.get("obligation_id", "")).removeprefix("obligation-") not in suppressed_ids
+    ]
+
+    catalog_refs = capability_catalog["evidence_refs"]
+    recommendation_refs = _collect_unique_refs(
+        base_recommendation["evidence_refs"],
+        catalog_refs,
+        *[row["evidence_refs"] for row in suppressed_actions],
+    )
+    decision = _recommendation_decision(recommended_actions=recommended_actions, open_risks=base_open_risks)
+    recommendation = {
+        "decision": decision,
+        "rationale": _recommendation_rationale(decision=decision),
+        "confidence": _recommendation_confidence(evidence_refs=recommendation_refs, open_risks=base_open_risks),
+        "evidence_refs": recommendation_refs,
+        "recommended_actions": recommended_actions,
+        "cross_project_obligations": cross_project_obligations,
+        "open_risks": base_open_risks,
+        "suppressed_actions": suppressed_actions,
+    }
+
+    context_inputs = dict(base_behavior["context_inputs"])
+    if capability_catalog_entries:
+        context_inputs["capability_catalog_entries"] = capability_catalog_entries
+
+    context_usage = dict(base_behavior["context_usage"])
+    context_usage["capability_catalog_used"] = bool(capability_catalog_entries)
+    context_usage["capability_catalog_projects_considered"] = capability_catalog["projects_considered"]
+    context_usage["capability_catalog_refs_used"] = catalog_refs
+    context_usage["capability_catalog_source_versions_used"] = capability_catalog["source_versions"]
+    context_usage["capabilities_provided_ids"] = capability_catalog["provided_capability_ids"]
+    context_usage["capabilities_missing_ids"] = capability_catalog["missing_capability_ids"]
+    context_usage["suppressed_completed_action_ids"] = sorted(suppressed_ids)
+    context_usage["evidence_refs_used"] = recommendation_refs
+
+    return {
+        "strategy": "capability-catalog-broad-sweep",
+        "reasoning_mode": EXECUTION_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": context_inputs,
+        "context_usage": context_usage,
+        "capability_catalog": capability_catalog,
+        "recommendation": recommendation,
+    }
+
+
+def build_req_013_capability_catalog_extraction(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    target_project_evidence_refs: list[str] | None = None,
+    earth_sweep_evidence_refs: list[str] | None = None,
+    cross_project_context: list[Mapping[str, Any]] | None = None,
+    candidate_recommendations: list[Mapping[str, Any]] | None = None,
+    earth_sweep_source_artifacts: list[Mapping[str, Any]] | None = None,
+    required_context_documents: list[Mapping[str, Any]] | None = None,
+    capability_catalog_entries: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_nonempty_text(revision_identity, field_name="revision_identity")
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_context = _normalize_cross_project_context(cross_project_context)
+    normalized_candidates = _normalize_candidate_recommendations(candidate_recommendations)
+    normalized_earth_source_artifacts = _normalize_earth_sweep_source_artifacts(earth_sweep_source_artifacts)
+    normalized_required_documents = _normalize_required_context_documents(required_context_documents)
+    normalized_capability_catalog = _normalize_capability_catalog_entries(capability_catalog_entries)
+
+    canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    digest = _canonical_input_digest(canonical_input)
+    canonical_processing_input = _canonical_req_013_processing_input(
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        capability_catalog_entries=normalized_capability_catalog,
+    )
+    processing_digest = _canonical_input_digest(canonical_processing_input)
+    processing_behavior = _build_req_013_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        capability_catalog_entries=normalized_capability_catalog,
+    )
+
+    return {
+        "schema_version": REQ_013_SCHEMA_VERSION,
+        "requirement_id": REQ_013_REQUIREMENT_ID,
+        "capability_catalog_extraction": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+        },
+        "processing_behavior": processing_behavior,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req013-{digest[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_digest,
+            "processing_call_id": f"req013-processing-{processing_digest[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+        },
+    }
+
+
+def validate_req_013_capability_catalog_extraction(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    top_keys = set(payload.keys())
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "capability_catalog_extraction",
+        "processing_behavior",
+        "call_metadata",
+    }
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_013_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_013_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_013_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_013_REQUIREMENT_ID}")
+
+    extraction = payload.get("capability_catalog_extraction")
+    if not isinstance(extraction, Mapping):
+        errors.append("capability_catalog_extraction must be an object")
+        return errors
+
+    required_extraction = {
+        "runtime_mode",
+        "execution_mode",
+        "target_project_root",
+        "earth_root",
+        "output_root",
+        "revision_identity",
+    }
+    extraction_keys = set(extraction.keys())
+    missing_extraction = sorted(required_extraction - extraction_keys)
+    if missing_extraction:
+        errors.append(f"capability_catalog_extraction missing keys: {missing_extraction}")
+    unexpected_extraction = sorted(extraction_keys - required_extraction)
+    if unexpected_extraction:
+        errors.append(f"capability_catalog_extraction has unexpected keys: {unexpected_extraction}")
+
+    if extraction.get("runtime_mode") != RUNTIME_MODE:
+        errors.append(f"runtime_mode must be {RUNTIME_MODE}")
+    if extraction.get("execution_mode") != EXECUTION_MODE:
+        errors.append(f"execution_mode must be {EXECUTION_MODE}")
+
+    for root_field in ("target_project_root", "earth_root", "output_root"):
+        value = extraction.get(root_field)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{root_field} must be non-empty string")
+        elif not value.startswith("/"):
+            errors.append(f"{root_field} must be absolute path")
+
+    revision_identity = extraction.get("revision_identity")
+    if not isinstance(revision_identity, str) or not revision_identity.strip():
+        errors.append("revision_identity must be non-empty string")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+
+    required_processing_behavior = {
+        "strategy",
+        "reasoning_mode",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "capability_catalog",
+        "recommendation",
+    }
+    processing_keys = set(processing_behavior.keys())
+    missing_processing = sorted(required_processing_behavior - processing_keys)
+    if missing_processing:
+        errors.append(f"processing_behavior missing keys: {missing_processing}")
+    unexpected_processing = sorted(processing_keys - required_processing_behavior)
+    if unexpected_processing:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected_processing}")
+
+    if processing_behavior.get("strategy") != "capability-catalog-broad-sweep":
+        errors.append("processing_behavior.strategy must be capability-catalog-broad-sweep")
+    if processing_behavior.get("reasoning_mode") != EXECUTION_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        return errors
+
+    target_project_context = context_inputs.get("target_project")
+    earth_context = context_inputs.get("earth_sweep")
+    if not isinstance(target_project_context, Mapping):
+        errors.append("processing_behavior.context_inputs.target_project must be an object")
+        return errors
+    if not isinstance(earth_context, Mapping):
+        errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+        return errors
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        for required_field in (
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "recommended_actions",
+            "cross_project_obligations",
+            "open_risks",
+            "suppressed_actions",
+        ):
+            if required_field not in recommendation:
+                errors.append(f"processing_behavior.recommendation missing {required_field}")
+
+    capability_catalog = processing_behavior.get("capability_catalog")
+    if not isinstance(capability_catalog, Mapping):
+        errors.append("processing_behavior.capability_catalog must be an object")
+    else:
+        for required_field in (
+            "catalog_strategy",
+            "projects_considered",
+            "entries",
+            "provided_capability_ids",
+            "missing_capability_ids",
+            "source_versions",
+            "evidence_refs",
+        ):
+            if required_field not in capability_catalog:
+                errors.append(f"processing_behavior.capability_catalog missing {required_field}")
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+
+    required_metadata = {
+        "reproducibility",
+        "canonical_input_sha256",
+        "reproducible_call_id",
+        "canonical_input",
+        "processing_input_sha256",
+        "processing_call_id",
+        "canonical_processing_input",
+    }
+    metadata_keys = set(metadata.keys())
+    missing_metadata = sorted(required_metadata - metadata_keys)
+    if missing_metadata:
+        errors.append(f"call_metadata missing keys: {missing_metadata}")
+    unexpected_metadata = sorted(metadata_keys - required_metadata)
+    if unexpected_metadata:
+        errors.append(f"call_metadata has unexpected keys: {unexpected_metadata}")
+
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+
+    try:
+        normalized_target_root = _normalize_root(
+            extraction.get("target_project_root"),
+            field_name="capability_catalog_extraction.target_project_root",
+        )
+        normalized_earth_root = _normalize_root(
+            extraction.get("earth_root"),
+            field_name="capability_catalog_extraction.earth_root",
+        )
+        normalized_output_root = _normalize_root(
+            extraction.get("output_root"),
+            field_name="capability_catalog_extraction.output_root",
+        )
+        normalized_revision_identity = _require_nonempty_text(
+            extraction.get("revision_identity"),
+            field_name="capability_catalog_extraction.revision_identity",
+        )
+        normalized_target_refs = _normalize_string_list(
+            target_project_context.get("evidence_refs"),
+            field_name="processing_behavior.context_inputs.target_project.evidence_refs",
+        )
+        normalized_earth_refs = _normalize_string_list(
+            earth_context.get("evidence_refs"),
+            field_name="processing_behavior.context_inputs.earth_sweep.evidence_refs",
+        )
+        normalized_cross_context = _normalize_cross_project_context(context_inputs.get("cross_project_context"))
+        normalized_candidates = _normalize_candidate_recommendations(context_inputs.get("candidate_recommendations"))
+        normalized_earth_source_artifacts = _normalize_earth_sweep_source_artifacts(
+            context_inputs.get("earth_sweep_source_artifacts")
+        )
+        normalized_required_documents = _normalize_required_context_documents(
+            context_inputs.get("required_context_documents")
+        )
+        normalized_capability_catalog = _normalize_capability_catalog_entries(
+            context_inputs.get("capability_catalog_entries")
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
+
+    expected_canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    if dict(canonical_input) != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized extraction anchors")
+
+    expected_digest = _canonical_input_digest(expected_canonical_input)
+    expected_call_id = f"req013-{expected_digest[:16]}"
+    if metadata.get("canonical_input_sha256") != expected_digest:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != expected_call_id:
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    expected_processing_behavior = _build_req_013_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        capability_catalog_entries=normalized_capability_catalog,
+    )
+    if dict(processing_behavior) != expected_processing_behavior:
+        errors.append("processing_behavior must mirror deterministic capability catalog processing output")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+        return errors
+
+    expected_canonical_processing_input = _canonical_req_013_processing_input(
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        capability_catalog_entries=normalized_capability_catalog,
+    )
+    if dict(canonical_processing_input) != expected_canonical_processing_input:
+        errors.append("call_metadata.canonical_processing_input must mirror normalized processing input")
+
+    expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
+    expected_processing_call_id = f"req013-processing-{expected_processing_digest[:16]}"
     if metadata.get("processing_input_sha256") != expected_processing_digest:
         errors.append("call_metadata.processing_input_sha256 does not match processing input")
     if metadata.get("processing_call_id") != expected_processing_call_id:
