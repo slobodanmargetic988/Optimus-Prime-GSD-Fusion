@@ -106,5 +106,32 @@
       "max_focus_points_per_packet": 2,
       "max_evidence_refs_per_packet": 3
     }
+  },
+  "hard_constraints_only_input": {
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/current/out",
+    "revision_identity": "rev-req023-hard-constraints-only-r1",
+    "hard_constraints": [
+      {
+        "constraint_id": "keep-hard-constraints-visible",
+        "statement": "Do not remove hard constraints when compressing context for multi-call reasoning.",
+        "evidence_refs": [
+          "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md"
+        ]
+      },
+      {
+        "constraint_id": "preserve-traceability-pointers",
+        "statement": "Preserve evidence refs needed to trace each compacted packet back to the original sweep.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "llm_call_budget": {
+      "max_context_packets": 3,
+      "max_focus_points_per_packet": 2,
+      "max_evidence_refs_per_packet": 3
+    }
   }
 }

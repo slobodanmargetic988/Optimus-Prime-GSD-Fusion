@@ -1680,8 +1680,31 @@ def _build_req_023_compacted_packets(
     hard_constraints: list[dict[str, Any]],
     llm_call_budget: Mapping[str, int],
 ) -> list[dict[str, Any]]:
+    hard_constraint_ids = [row["constraint_id"] for row in hard_constraints]
+    hard_constraint_refs = _collect_unique_refs(*[row["evidence_refs"] for row in hard_constraints])
+    max_focus_points = int(llm_call_budget["max_focus_points_per_packet"])
+    max_evidence_refs = int(llm_call_budget["max_evidence_refs_per_packet"])
     if not group_specs:
-        return []
+        if not hard_constraints:
+            return []
+        return [
+            {
+                "packet_id": "packet-01",
+                "packet_kind": "mixed",
+                "summary": f"Hard-constraint packet covering {len(hard_constraints)} constraint(s).",
+                "focus_points": [str(row["statement"]) for row in hard_constraints][:max_focus_points],
+                "project_ids": [],
+                "source_action_ids": [],
+                "source_obligation_ids": [],
+                "source_risk_ids": [],
+                "hard_constraint_ids": hard_constraint_ids,
+                "traceability_refs": hard_constraint_refs,
+                "evidence_focus_refs": hard_constraint_refs[:max_evidence_refs],
+                "next_steps": [
+                    "Carry all hard constraints and traceability refs forward unchanged into each LLM call."
+                ],
+            }
+        ]
 
     max_context_packets = int(llm_call_budget["max_context_packets"])
     if len(group_specs) <= max_context_packets:
@@ -1691,11 +1714,6 @@ def _build_req_023_compacted_packets(
     else:
         packet_groups = [[group_spec] for group_spec in group_specs[: max_context_packets - 1]]
         packet_groups.append(group_specs[max_context_packets - 1 :])
-
-    hard_constraint_ids = [row["constraint_id"] for row in hard_constraints]
-    hard_constraint_refs = _collect_unique_refs(*[row["evidence_refs"] for row in hard_constraints])
-    max_focus_points = int(llm_call_budget["max_focus_points_per_packet"])
-    max_evidence_refs = int(llm_call_budget["max_evidence_refs_per_packet"])
 
     packets: list[dict[str, Any]] = []
     for index, packet_group in enumerate(packet_groups, start=1):
@@ -2095,6 +2113,19 @@ def validate_req_023_context_compaction_for_llm_call_budget(payload: Mapping[str
     if unexpected_processing:
         errors.append(f"processing_behavior has unexpected keys: {unexpected_processing}")
 
+    context_compaction = processing_behavior.get("context_compaction")
+    if not isinstance(context_compaction, Mapping):
+        errors.append("processing_behavior.context_compaction must be an object")
+        return errors
+    compacted_packets = context_compaction.get("compacted_packets")
+    if not isinstance(compacted_packets, list):
+        errors.append("processing_behavior.context_compaction.compacted_packets must be a list")
+        return errors
+    coverage = context_compaction.get("coverage")
+    if not isinstance(coverage, Mapping):
+        errors.append("processing_behavior.context_compaction.coverage must be an object")
+        return errors
+
     context_inputs = processing_behavior.get("context_inputs")
     if not isinstance(context_inputs, Mapping):
         errors.append("processing_behavior.context_inputs must be an object")
@@ -2206,6 +2237,49 @@ def validate_req_023_context_compaction_for_llm_call_budget(payload: Mapping[str
         errors.append("call_metadata.processing_input_sha256 does not match processing input")
     if metadata.get("processing_call_id") != expected_processing_call_id:
         errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    expected_hard_constraint_ids = sorted(
+        {str(row["constraint_id"]) for row in normalized_hard_constraints}
+    )
+    actual_hard_constraint_ids = coverage.get("hard_constraint_ids")
+    actual_covered_hard_constraint_ids = coverage.get("covered_hard_constraint_ids")
+    actual_uncovered_hard_constraint_ids = coverage.get("uncovered_hard_constraint_ids")
+    if actual_hard_constraint_ids != expected_hard_constraint_ids:
+        errors.append(
+            "processing_behavior.context_compaction.coverage.hard_constraint_ids must mirror normalized hard constraints"
+        )
+
+    packet_hard_constraint_ids = sorted(
+        {
+            str(constraint_id)
+            for packet in compacted_packets
+            if isinstance(packet, Mapping)
+            for constraint_id in list(packet.get("hard_constraint_ids", []))
+        }
+    )
+    if actual_covered_hard_constraint_ids != packet_hard_constraint_ids:
+        errors.append(
+            "processing_behavior.context_compaction.coverage.covered_hard_constraint_ids must match packet hard_constraint_ids"
+        )
+    if expected_hard_constraint_ids and not compacted_packets:
+        errors.append(
+            "processing_behavior.context_compaction.compacted_packets must include at least one packet when hard_constraints are present"
+        )
+    if expected_hard_constraint_ids and actual_uncovered_hard_constraint_ids != []:
+        errors.append(
+            "processing_behavior.context_compaction.coverage.uncovered_hard_constraint_ids must be empty when hard_constraints are present"
+        )
+    if expected_hard_constraint_ids:
+        for index, packet in enumerate(compacted_packets):
+            if not isinstance(packet, Mapping):
+                errors.append(
+                    f"processing_behavior.context_compaction.compacted_packets[{index}] must be an object"
+                )
+                continue
+            if packet.get("hard_constraint_ids") != expected_hard_constraint_ids:
+                errors.append(
+                    f"processing_behavior.context_compaction.compacted_packets[{index}].hard_constraint_ids must include every hard constraint"
+                )
 
     return errors
 

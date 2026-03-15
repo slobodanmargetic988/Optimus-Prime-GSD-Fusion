@@ -1,3 +1,4 @@
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -71,8 +72,55 @@ def test_req_023_call_metadata_is_reproducible_for_identical_invocations():
     assert changed["call_metadata"]["reproducible_call_id"] != first["call_metadata"]["reproducible_call_id"]
 
 
+def test_req_023_hard_constraints_only_input_still_emits_a_packet():
+    fixture = _read_json(FIXTURE_PATH)
+
+    payload = module.build_req_023_context_compaction_for_llm_call_budget(
+        **fixture["hard_constraints_only_input"]
+    )
+
+    assert module.validate_req_023_context_compaction_for_llm_call_budget(payload) == []
+
+    compaction = payload["processing_behavior"]["context_compaction"]
+    coverage = compaction["coverage"]
+    packets = compaction["compacted_packets"]
+
+    assert payload["processing_behavior"]["recommendation"]["decision"] == "compact-ready"
+    assert len(packets) == 1
+    assert coverage["covered_hard_constraint_ids"] == coverage["hard_constraint_ids"]
+    assert coverage["uncovered_hard_constraint_ids"] == []
+    assert packets[0]["hard_constraint_ids"] == coverage["hard_constraint_ids"]
+    assert packets[0]["traceability_refs"] == compaction["mandatory_traceability_refs"]
+
+
+def test_req_023_validator_rejects_uncovered_hard_constraints():
+    fixture = _read_json(FIXTURE_PATH)
+    payload = module.build_req_023_context_compaction_for_llm_call_budget(
+        **fixture["hard_constraints_only_input"]
+    )
+    broken = deepcopy(payload)
+    compaction = broken["processing_behavior"]["context_compaction"]
+    compaction["compacted_packets"] = []
+    compaction["coverage"]["covered_hard_constraint_ids"] = []
+    compaction["coverage"]["uncovered_hard_constraint_ids"] = list(
+        compaction["coverage"]["hard_constraint_ids"]
+    )
+
+    errors = module.validate_req_023_context_compaction_for_llm_call_budget(broken)
+
+    assert (
+        "processing_behavior.context_compaction.compacted_packets must include at least one packet when "
+        "hard_constraints are present"
+    ) in errors
+    assert (
+        "processing_behavior.context_compaction.coverage.uncovered_hard_constraint_ids must be empty when "
+        "hard_constraints are present"
+    ) in errors
+
+
 def test_req_023_contract_doc_references_sample_structure():
     contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
 
     assert "strategy/current/samples/REQ-023_context-compaction-for-llm-call-budget.sample.json" in contract_text
     assert "processing_behavior.context_compaction" in contract_text
+    assert "hard_constraints_only_input" in contract_text

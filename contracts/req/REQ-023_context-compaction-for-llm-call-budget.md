@@ -131,11 +131,13 @@ The builder emits a top-level `context_compaction_for_llm_call_budget` surface p
 Behavior:
 - `mandatory_traceability_refs` preserves the full traceability pointer set needed to replay packet provenance.
 - Every packet carries `hard_constraint_ids`, so hard constraints stay visible even when source groups are merged to fit the call budget.
+- When action, obligation, and risk groups are all absent, the builder still emits one compacted packet that carries every `hard_constraint_id` plus the mandatory traceability refs.
 - `evidence_focus_refs` is budget-bounded for prompt packing; `traceability_refs` remains the non-lossy provenance surface.
 - `coverage.uncovered_*` lists must remain empty for valid REQ-023 output.
 
 ## Deterministic Fixtures and Samples
 - Input fixture: `examples/fixtures/context-compaction-for-llm-call-budget.json`
 - Output sample: `strategy/current/samples/REQ-023_context-compaction-for-llm-call-budget.sample.json`
+- The fixture includes `hard_constraints_only_input` to prove the hard-constraints-only packet path remains non-lossy and validator-enforced.
 
 `strategy/current/samples/REQ-023_context-compaction-for-llm-call-budget.sample.json` is the reference structure for REQ-023 output shape and documents the exact `processing_behavior.context_compaction` packet surface.
