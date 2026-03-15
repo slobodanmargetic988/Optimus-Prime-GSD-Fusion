@@ -2,13 +2,14 @@
 
 Use these examples as starting points. Adapt review focus and risk criteria to your own task packet.
 
-## Example 1: Review Passed
+## Example 1: Lane Review Passed
 
 ### Input
 ```text
 Agent: optimus-reviewer
-Goal: Final review of timezone preference feature after testing.
+Goal: Integrated lane review of timezone preference work after lane testing.
 Inputs: task_identifier: MYO-81
+Inputs: task_kind: lane_review
 Inputs: repo_root: ../Ouroboros
 Inputs: worktree_root: ../workstation-8
 Inputs: branch_name: MYO-81-profile-timezone-test
@@ -48,6 +49,7 @@ And write the same payload to:
 Agent: optimus-reviewer
 Goal: Catch remaining risk before merge routing.
 Inputs: task_identifier: BILL-55
+Inputs: task_kind: lane_review
 Inputs: repo_root: ../Billing
 Inputs: worktree_root: ../workstation-9
 Inputs: branch_name: BILL-55-approval-flow-test
@@ -89,6 +91,7 @@ And write the same payload to:
 Agent: optimus-reviewer
 Goal: Continue review when assigned branch is active elsewhere.
 Inputs: task_identifier: MYO-23
+Inputs: task_kind: deep_review
 Inputs: repo_root: ../Ouroboros
 Inputs: worktree_root: ../workstation-10
 Inputs: branch_name: MYO-23-make-menu-navbar-test

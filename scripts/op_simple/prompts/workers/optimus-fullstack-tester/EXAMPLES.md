@@ -2,13 +2,14 @@
 
 Use these examples as starting points. Adapt test scope, command set, and decision threshold to your own task packet.
 
-## Example 1: Ready For Review
+## Example 1: Lane Test Ready For Review
 
 ### Input
 ```text
 Agent: optimus-fullstack-tester
-Goal: Validate profile timezone feature before review handoff.
+Goal: Validate the integrated lane containing the profile timezone feature before lane review handoff.
 Inputs: task_identifier: MYO-81
+Inputs: task_kind: lane_test
 Inputs: repo_root: ../Ouroboros
 Inputs: worktree_root: ../workstation-5
 Inputs: branch_name: MYO-81-profile-timezone
@@ -27,6 +28,7 @@ Output: test decision for Optimus routing
 ```text
 Runs focused backend/frontend checks required for acceptance criteria.
 Returns concise summary with decision ready_for_review.
+Treats the packet as lane-level verification rather than per-task developer routing.
 Includes task_identifier, branch, head_commit, checks, and findings.
 ```
 
@@ -37,6 +39,7 @@ Includes task_identifier, branch, head_commit, checks, and findings.
 Agent: optimus-fullstack-tester
 Goal: Validate invoice approval flow and report defects.
 Inputs: task_identifier: BILL-55
+Inputs: task_kind: lane_test
 Inputs: repo_root: ../Billing
 Inputs: worktree_root: ../workstation-2
 Inputs: branch_name: BILL-55-approval-flow
@@ -65,6 +68,7 @@ Provides minimal repro clue without long narrative.
 Agent: optimus-fullstack-tester
 Goal: Continue testing when assigned branch is active in another worktree.
 Inputs: task_identifier: MYO-23
+Inputs: task_kind: lane_test
 Inputs: repo_root: ../Ouroboros
 Inputs: worktree_root: ../workstation-6
 Inputs: branch_name: MYO-23-make-menu-navbar

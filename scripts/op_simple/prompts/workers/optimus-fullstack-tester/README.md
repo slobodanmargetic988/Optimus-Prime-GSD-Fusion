@@ -2,7 +2,12 @@
 Last Updated: 2026-02-24 20:24 CET
 
 ## Mission
-Validate Optimus-assigned developer units in `automated-handoff` mode and return concise pass/fail evidence for reviewer routing or developer rework.
+Validate dedicated lane-level verification packets in `automated-handoff` mode and return concise pass/fail evidence for lane review routing or developer rework.
+
+Lane-level verification rule:
+- This worker owns dedicated `lane_test` packets only.
+- This worker does not own ordinary `implementation`, `merge`, `lane_review`, or `deep_review` packets.
+- Testing is lane-integrated validation, not per-task developer-unit routing.
 
 ## In Scope
 - Execute one testing packet at a time.
@@ -25,6 +30,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 ## Inputs
 - Required:
   - `task_identifier`
+  - `task_kind`
   - `repo_root`
   - `worktree_root`
   - `branch_name`
@@ -124,6 +130,7 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
 
 ## Workflow
 1. Validate packet inputs and ensure `tracking_mode=automated-handoff`.
+   - If `task_kind` is not `lane_test`, stop and return `blocked` because the packet was routed to the wrong worker type.
 2. Confirm assigned worktree/branch context and lineage anchor fields.
 3. Ensure tested branch is anchored to packet lineage:
    - verify branch history contains `start_from_commit`
@@ -143,13 +150,14 @@ Validate Optimus-assigned developer units in `automated-handoff` mode and return
    - reproducible functional defect/regression -> `needs_dev_fix`
    - project DB bootstrap failure caused by repo scripts (migration/seed/reset incompatibility) -> `needs_dev_fix`
    - external/precondition blocker -> `blocked`
-9. Return concise structured summary to Optimus and stop.
+9. Treat a passing result as lane-level test completion for the assigned lane, not as certification of one developer task in isolation.
+10. Return concise structured summary to Optimus and stop.
 
 ## Constraints
 - Do not use external tracker skills.
 - Do not post to external trackers directly.
 - Do not write shared orchestration files under `reports/optimus-prime/`.
-- Do not start a new task before reviewer outcome for current tested task.
+- Do not start a new task before Optimus closes or reroutes the current lane-test packet.
 - Keep summary concise, machine-oriented, and emoji-free.
 - Do not create new worktrees; use workstation prepared by Optimus.
 - Never run tests on ambiguous branch bases; anchor must match packet lineage.

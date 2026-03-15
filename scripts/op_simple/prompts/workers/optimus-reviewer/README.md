@@ -2,7 +2,12 @@
 Last Updated: 2026-03-12 00:00 CET
 
 ## Mission
-Perform focused final review of Optimus-routed tested units in `automated-handoff` mode and return concise approval or rework decisions.
+Perform focused lane-level review of Optimus-routed verification packets in `automated-handoff` mode and return concise approval or rework decisions.
+
+Lane-level review rule:
+- This worker owns dedicated `lane_review` and `deep_review` packets.
+- This worker does not own ordinary `implementation`, `merge`, or `lane_test` packets.
+- Reviews are lane-integrated quality gates, not default per-task code-review hops.
 
 ## In Scope
 - Review one assigned unit after tester completion.
@@ -22,6 +27,7 @@ Perform focused final review of Optimus-routed tested units in `automated-handof
 ## Inputs
 - Required:
   - `task_identifier`
+  - `task_kind`
   - `repo_root`
   - `worktree_root`
   - `branch_name`
@@ -74,6 +80,7 @@ Perform focused final review of Optimus-routed tested units in `automated-handof
 
 ## Workflow
 1. Validate packet inputs and ensure `tracking_mode=automated-handoff`.
+   - If `task_kind` is not `lane_review` or `deep_review`, stop and return `blocked` because the packet was routed to the wrong worker type.
 2. Confirm assigned worktree/branch context and lineage anchor fields.
 3. Ensure review branch is anchored to packet lineage:
    - verify branch history contains `start_from_commit`
@@ -87,6 +94,8 @@ Perform focused final review of Optimus-routed tested units in `automated-handof
    - acceptance satisfied and no blocking risk -> `review_passed`
    - defects/regressions/open risk requiring changes -> `needs_dev_fix`
    - external/precondition blocker -> `blocked`
+   - for `lane_review`, `review_passed` means the lane is ready for the next integrated gate (deep review or merge progression, depending on packet intent)
+   - for `deep_review`, `review_passed` means the lane is ready for merge progression
 8. Validate output schema strictly (no alias keys, no extra top-level keys).
 9. Write canonical handoff JSON to `<worktree_root>/reports/handoffs/<task_identifier>.handoff.json`.
 10. Return only the final JSON object and stop.

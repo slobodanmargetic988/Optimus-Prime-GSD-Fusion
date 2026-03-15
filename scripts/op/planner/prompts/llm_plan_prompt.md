@@ -59,15 +59,28 @@ Planning requirements:
 2. Every task has non-empty requirement_ids.
 3. Every task must include lane-aware runtime metadata (required, no defaults):
    - lane_id in format <phase_id>/lane-[a-c]
+   - task_kind in:
+     - implementation
+     - lane_test
+     - test_fix
+     - lane_review
+     - review_fix
+     - deep_review
+     - deep_fix
+     - merge
    - status set to pending
    - gaps_that_need_patching as a list (default empty)
    - verification_contract object with explicit fields:
-     - mode (tdd_red|implementation_green|hardening)
-     - dev_expectation (expect_fail|expect_pass)
-     - test_expectation (expect_fail|expect_pass)
-     - review_expectation (expect_fail|expect_pass)
+     - mode (tdd_red|implementation_green|hardening|lane_test|lane_review|deep_review|merge_validation)
      - expected_failure_reason_codes[] (non-empty)
      - infra_failure_reason_codes[] (non-empty)
+   - task_kind to verification_contract.mode mapping is hard:
+     - implementation -> tdd_red|implementation_green|hardening
+     - test_fix|review_fix|deep_fix -> implementation_green|hardening
+     - lane_test -> lane_test
+     - lane_review -> lane_review
+     - deep_review -> deep_review
+     - merge -> merge_validation
 4. Every TASK_EXECUTION_STATE task row must include:
    - gapfix_state object:
      - active_batch_id (null on initialize)
@@ -88,8 +101,16 @@ Planning requirements:
 5. Phase graph must be acyclic and task phase_id must map to a valid phase.
 6. Per phase, use at most 3 distinct lanes.
 7. TDD-first: each requirement and task must include verification intent.
-   - phase-1 seed TDD tasks MUST use verification_contract.mode=tdd_red and expect_fail for dev/test/review.
-8. For each functionality tree with more than 3 tasks, include:
+   - phase-1 seed implementation tasks MUST use task_kind=implementation and verification_contract.mode=tdd_red.
+8. Lane-level verification contract (hard):
+   - Ordinary implementation tasks must end at developer completion and must not encode mandatory per-task tester/reviewer routing.
+   - Each lane must include explicit dedicated verification tasks where needed:
+     - lane_test task(s) for integrated lane testing
+     - lane_review task(s) for integrated lane review
+     - deep_review task(s) for final integrated regression/risk review when warranted
+   - test_fix, review_fix, and deep_fix tasks are developer-owned follow-up tasks that return control to the corresponding lane gate.
+   - Tester/reviewer work must only be represented by dedicated lane verification task kinds, never by ordinary implementation tasks.
+9. For each functionality tree with more than 3 tasks, include:
 - at least 2 terminal hardening/review tasks
 - 1 final merge-to-run-base task
 
@@ -105,9 +126,9 @@ Merge-to-run-base task verification contract (required):
   - 1 review/hardening summary artifact with blocker status
 - If merge conflicts occur, route to LLM merge-recovery flow and keep merge task non-done until evidence contract is satisfied.
 
-9. PLAN_CHECK.passed must be true.
-10. Keep plan quality high enough for autonomous op-build execution.
-11. Plan quality bar (hard, internal self-check before finalizing):
+10. PLAN_CHECK.passed must be true.
+11. Keep plan quality high enough for autonomous op-build execution.
+12. Plan quality bar (hard, internal self-check before finalizing):
    - Do not finalize unless internal score >= 85/100.
    - Score dimensions:
      - mission coverage: 25
@@ -118,7 +139,7 @@ Merge-to-run-base task verification contract (required):
      - schema/contract correctness: 10
    - If score < 85, regenerate the full plan.
 
-12. Minimum task volume and decomposition:
+13. Minimum task volume and decomposition:
    - tasks_count MUST be >= max(20, requirements_count * 4).
    - For each requirement, produce at least:
      - 1 phase-1 tdd_red task
@@ -126,28 +147,28 @@ Merge-to-run-base task verification contract (required):
      - 1 phase-3 hardening/review task
    - If a task would require >2 verify_commands or >2 must_haves, split it.
 
-13. Parallelization contract:
+14. Parallelization contract:
    - phase-2 MUST use exactly 3 lanes: phase-2/lane-a, phase-2/lane-b, phase-2/lane-c.
    - Each phase-2 lane must have at least 2 tasks.
    - At least 6 phase-2 tasks must be runnable in parallel after phase-1 exits.
    - No task may depend on more than 2 predecessor tasks unless strictly unavoidable.
 
-14. Dependency shape constraints:
+15. Dependency shape constraints:
    - Avoid long single-lane chains; target critical path <= 40% of total task count.
    - Prefer lane-local dependencies; use cross-lane dependencies only for true integration points.
 
-15. Mission completeness guard:
+16. Mission completeness guard:
    - Every explicitly stated mission behavior must map to requirement(s) and task(s).
    - For game missions with post-game UX, include explicit coverage for “start new game” from results/leaderboard state.
 
-16. Planning mode resolution (required, internal):
+17. Planning mode resolution (required, internal):
    - Determine whether this run is primarily:
      - greenfield build (new project or effectively empty implementation), or
      - existing-project feature integration.
    - Use map_artifact, architecture_notes, package manifests, and existing source tree shape to decide.
    - Keep output schema unchanged; represent your mode decision in narrative artifacts (STATE.md / PROJECT.md / ROADMAP.md), not by adding new schema fields.
 
-17. Greenfield runnable-delivery contract (required when mode is greenfield):
+18. Greenfield runnable-delivery contract (required when mode is greenfield):
    - Plan must lead to a localhost-runnable app, not only libraries/modules.
    - Include explicit tasks for:
      - project runtime/bootstrap (package scripts, build tool, app entrypoint wiring),
@@ -159,7 +180,7 @@ Merge-to-run-base task verification contract (required):
    - Include verify_commands that prove runnable state (for example dev/start command plus a browser-level smoke or e2e check).
    - Do not consider plan complete if it only defines domain logic with no execution surface.
 
-18. Existing-project integration contract (required when mode is existing-project feature integration):
+19. Existing-project integration contract (required when mode is existing-project feature integration):
    - Perform targeted analysis before planning implementation:
      - identify current architecture boundaries,
      - identify integration points and ownership files/modules,
@@ -168,12 +189,12 @@ Merge-to-run-base task verification contract (required):
    - Include at least one explicit compatibility/hardening task for regression safety of existing behavior.
    - Ensure requirement-to-task mapping reflects only net-new mission scope and necessary integration work.
 
-19. Granularity and readiness guard:
+20. Granularity and readiness guard:
    - Each implementation task should be solvable by one agent in roughly 5-10 minutes.
    - If a task mixes setup + implementation + integration + validation in one step, split it.
    - Prefer explicit runnable-increment milestones at the end of phase-1 or early phase-2 so execution can prove forward progress quickly.
 
-20. Browser-app mission guard:
+21. Browser-app mission guard:
    - If mission implies a browser app/game/UI, include concrete tasks for:
      - local run scripts (`dev`, `build`, and `preview`/`start` as applicable),
      - real UI composition (not only service/state modules),
