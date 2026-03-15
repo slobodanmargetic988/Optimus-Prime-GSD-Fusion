@@ -15,6 +15,7 @@ REQ_015_SCHEMA_VERSION = "req-015.integration-opportunity-detection.v1"
 REQ_015_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-015.integration-opportunity-context-bundle.v1"
 REQ_016_SCHEMA_VERSION = "req-016.reuse-opportunity-detection.v1"
 REQ_017_SCHEMA_VERSION = "req-017.overlap-and-conflict-detection.v1"
+REQ_017_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-017.overlap-and-conflict-context-bundle.v1"
 REQ_017_ALLOWED_DIRECTION_SIGNALS = {"advance", "hold", "sunset"}
 
 
@@ -1063,6 +1064,167 @@ def _req_017_conflict_summary(
     )
 
 
+def _normalize_req_017_source_artifact_status(value: Any, *, label: str) -> str:
+    status = _require_nonempty_str(value if value is not None else "fresh", label=label).lower()
+    if status not in {"fresh", "stale"}:
+        raise ValueError(f"{label} must be either 'fresh' or 'stale'")
+    return status
+
+
+def _normalize_req_017_earth_sweep_source_artifacts(value: Any, *, label: str) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+
+    rows: list[dict[str, Any]] = []
+    seen_artifact_refs: set[str] = set()
+    for idx, row in enumerate(value):
+        item = _require_mapping(row, label=f"{label}[{idx}]")
+        artifact_ref = _require_nonempty_str(item.get("artifact_ref"), label=f"{label}[{idx}].artifact_ref")
+        if artifact_ref in seen_artifact_refs:
+            continue
+        seen_artifact_refs.add(artifact_ref)
+        rows.append(
+            {
+                "artifact_ref": artifact_ref,
+                "status": _normalize_req_017_source_artifact_status(
+                    item.get("status"),
+                    label=f"{label}[{idx}].status",
+                ),
+                "evidence_refs": _normalize_string_list(
+                    item.get("evidence_refs"),
+                    label=f"{label}[{idx}].evidence_refs",
+                ),
+            }
+        )
+
+    rows.sort(key=lambda row: (row["artifact_ref"], row["status"]))
+    return rows
+
+
+def _normalize_req_017_required_doc_kind(value: Any, *, label: str) -> str:
+    doc_kind = _require_nonempty_str(value, label=label).lower()
+    if doc_kind not in {"mission", "scope", "peer-project"}:
+        raise ValueError(f"{label} must be one of: mission, scope, peer-project")
+    return doc_kind
+
+
+def _normalize_req_017_required_doc_status(value: Any, *, label: str) -> str:
+    status = _require_nonempty_str(value if value is not None else "present", label=label).lower()
+    if status not in {"present", "missing"}:
+        raise ValueError(f"{label} must be either 'present' or 'missing'")
+    return status
+
+
+def _normalize_req_017_required_context_documents(
+    value: Any,
+    *,
+    related_project_ids: set[str],
+    label: str,
+) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+
+    rows: list[dict[str, Any]] = []
+    for idx, row in enumerate(value):
+        item = _require_mapping(row, label=f"{label}[{idx}]")
+        doc_kind = _normalize_req_017_required_doc_kind(
+            item.get("doc_kind"),
+            label=f"{label}[{idx}].doc_kind",
+        )
+        project_id = ""
+        if doc_kind == "peer-project":
+            project_id = _require_nonempty_str(item.get("project_id"), label=f"{label}[{idx}].project_id")
+            if project_id not in related_project_ids:
+                raise ValueError(f"{label}[{idx}].project_id must reference related_project_ids")
+
+        rows.append(
+            {
+                "doc_kind": doc_kind,
+                "doc_ref": _require_nonempty_str(item.get("doc_ref"), label=f"{label}[{idx}].doc_ref"),
+                "status": _normalize_req_017_required_doc_status(
+                    item.get("status"),
+                    label=f"{label}[{idx}].status",
+                ),
+                "project_id": project_id,
+                "evidence_refs": _normalize_string_list(
+                    item.get("evidence_refs"),
+                    label=f"{label}[{idx}].evidence_refs",
+                ),
+            }
+        )
+
+    rows.sort(key=lambda row: (row["doc_kind"], row["project_id"], row["doc_ref"], row["status"]))
+    return rows
+
+
+def _req_017_hardening_open_risks(
+    *,
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+    earth_ref_set: set[str],
+) -> list[dict[str, Any]]:
+    risks: list[dict[str, Any]] = []
+
+    for source_artifact in earth_sweep_source_artifacts:
+        if source_artifact["status"] != "stale":
+            continue
+        all_evidence_refs = sorted(
+            {
+                source_artifact["artifact_ref"],
+                *source_artifact["evidence_refs"],
+            }
+        )
+        out_of_scope_evidence_refs = sorted(ref for ref in all_evidence_refs if ref not in earth_ref_set)
+        risks.append(
+            {
+                "risk_id": (
+                    "risk-earth-source-"
+                    + hashlib.sha256(source_artifact["artifact_ref"].encode("utf-8")).hexdigest()[:12]
+                ),
+                "reason": "stale_earth_sweep_source_artifact",
+                "reason_code": "stale_earth_sweep_source_artifact",
+                "artifact_ref": source_artifact["artifact_ref"],
+                "evidence_refs": all_evidence_refs,
+                "out_of_scope_evidence_refs": out_of_scope_evidence_refs,
+            }
+        )
+
+    for document in required_context_documents:
+        if document["status"] != "missing":
+            continue
+        reason_code = {
+            "mission": "missing_mission_doc",
+            "scope": "missing_scope_doc",
+            "peer-project": "missing_peer_project_doc",
+        }[document["doc_kind"]]
+        all_evidence_refs = sorted({document["doc_ref"], *document["evidence_refs"]})
+        out_of_scope_evidence_refs = sorted(ref for ref in all_evidence_refs if ref not in earth_ref_set)
+        risk_row = {
+            "risk_id": (
+                f"risk-{document['doc_kind']}-"
+                + hashlib.sha256(
+                    f"{document['project_id']}|{document['doc_ref']}".encode("utf-8")
+                ).hexdigest()[:12]
+            ),
+            "reason": reason_code,
+            "reason_code": reason_code,
+            "doc_kind": document["doc_kind"],
+            "doc_ref": document["doc_ref"],
+            "evidence_refs": all_evidence_refs,
+            "out_of_scope_evidence_refs": out_of_scope_evidence_refs,
+        }
+        if document["project_id"]:
+            risk_row["project_id"] = document["project_id"]
+        risks.append(risk_row)
+
+    risks.sort(key=lambda row: row["risk_id"])
+    return risks
+
+
 def detect_overlap_and_conflicts(
     payload: Mapping[str, Any],
     *,
@@ -1105,6 +1267,15 @@ def detect_overlap_and_conflicts(
         normalized_broad_sweep_context.get("unresolved_direction_ideas"),
         related_project_ids=set(related_project_ids),
         label="overlap_and_conflict_detection.broad_sweep_context.unresolved_direction_ideas",
+    )
+    earth_sweep_source_artifacts = _normalize_req_017_earth_sweep_source_artifacts(
+        normalized_broad_sweep_context.get("earth_sweep_source_artifacts"),
+        label="overlap_and_conflict_detection.broad_sweep_context.earth_sweep_source_artifacts",
+    )
+    required_context_documents = _normalize_req_017_required_context_documents(
+        normalized_broad_sweep_context.get("required_context_documents"),
+        related_project_ids=set(related_project_ids),
+        label="overlap_and_conflict_detection.broad_sweep_context.required_context_documents",
     )
 
     initiatives_raw = context.get("initiatives")
@@ -1325,6 +1496,16 @@ def detect_overlap_and_conflicts(
             }
         )
 
+    hardening_open_risks = _req_017_hardening_open_risks(
+        earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+        required_context_documents=required_context_documents,
+        earth_ref_set=earth_ref_set,
+    )
+    for risk in hardening_open_risks:
+        recommendation_evidence_refs.update(ref for ref in risk["evidence_refs"] if ref in earth_ref_set)
+        out_of_scope_refs.update(risk.get("out_of_scope_evidence_refs", []))
+    open_risks.extend(hardening_open_risks)
+
     overlap_ids_by_project: dict[str, list[str]] = {project_id: [] for project_id in related_project_ids}
     conflict_ids_by_project: dict[str, list[str]] = {project_id: [] for project_id in related_project_ids}
     for overlap in overlapping_initiatives:
@@ -1471,6 +1652,24 @@ def serialize_ground_graph_context_bundle(payload: Mapping[str, Any]) -> dict[st
         "requirement_id": "REQ-007",
         "surface": "ground_graph_context_bundle",
         "schema_version": REQ_007_CONTEXT_BUNDLE_SCHEMA_VERSION,
+        "serialization_format": "json-canonical-v1",
+        "checksum_sha256": hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest(),
+        "serialized_payload": serialized_payload,
+    }
+
+
+def serialize_overlap_and_conflict_context_bundle(payload: Mapping[str, Any]) -> dict[str, str]:
+    context_bundle = _require_mapping(payload, label="overlap_and_conflict_context_bundle")
+    serialized_payload = json.dumps(
+        context_bundle,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "requirement_id": "REQ-017",
+        "surface": "overlap_and_conflict_context_bundle",
+        "schema_version": REQ_017_CONTEXT_BUNDLE_SCHEMA_VERSION,
         "serialization_format": "json-canonical-v1",
         "checksum_sha256": hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest(),
         "serialized_payload": serialized_payload,

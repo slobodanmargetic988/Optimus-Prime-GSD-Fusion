@@ -25,9 +25,19 @@ Each `initiatives[]` row must include:
 
 Optional broad-sweep context:
 - `broad_sweep_context.earth_sweep_evidence_refs` (array of strings, optional)
+- `broad_sweep_context.earth_sweep_source_artifacts[]` (array, optional)
+  - `artifact_ref` (string, required)
+  - `status` (string, optional; `fresh` or `stale`, defaults to `fresh`)
+  - `evidence_refs` (array of strings, optional)
 - `broad_sweep_context.project_context[]` (array, optional)
   - `project_id` (string, required, must be one of `related_project_ids`)
   - `context_note` (string, optional)
+  - `evidence_refs` (array of strings, optional)
+- `broad_sweep_context.required_context_documents[]` (array, optional)
+  - `doc_kind` (string, required; one of `mission`, `scope`, `peer-project`)
+  - `doc_ref` (string, required)
+  - `status` (string, optional; `present` or `missing`, defaults to `present`)
+  - `project_id` (string, required for `peer-project`; must be one of `related_project_ids`)
   - `evidence_refs` (array of strings, optional)
 - `broad_sweep_context.unresolved_direction_ideas[]` (array, optional)
   - `idea_id` (string, optional; deterministic id derived when omitted)
@@ -67,6 +77,7 @@ Recommendation guardrails:
 - Fixture input: `examples/fixtures/overlap-and-conflict-detection.json`
 - Contract test: `tests/contracts/test_overlap-and-conflict-detection.py`
 - Integration test: `tests/integration/test_overlap-and-conflict-detection.py`
+- Hardening test: `tests/hardening/test_overlap-and-conflict-detection_hardening.py`
 - Canonical sample output: `strategy/current/samples/REQ-017_overlap-and-conflict-detection.sample.json`
 
 ## Sample structure
