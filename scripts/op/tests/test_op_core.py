@@ -107,9 +107,9 @@ def build_repo(root: Path) -> None:
                 "    {'id': 'REQ-003', 'title': 'Rollout ops', 'acceptance_criteria': ['ops path'], 'verify_commands': ['python3 -m pytest']},",
                 "]",
                 "tasks = [",
-                "    {'task_id': 'TASK-001', 'title': 'Implement core workflow', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-a', 'status': 'pending', 'verification_contract': {'mode': 'tdd_red', 'dev_expectation': 'expect_fail', 'test_expectation': 'expect_fail', 'review_expectation': 'expect_fail', 'expected_failure_reason_codes': ['tdd_expected_failure_observed'], 'infra_failure_reason_codes': ['verification_environment_error', 'verification_command_target_missing']}, 'requirement_ids': ['REQ-001'], 'depends_on': [], 'must_haves': ['core path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
-                "    {'task_id': 'TASK-002', 'title': 'Implement quality gates', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-b', 'status': 'pending', 'verification_contract': {'mode': 'tdd_red', 'dev_expectation': 'expect_fail', 'test_expectation': 'expect_fail', 'review_expectation': 'expect_fail', 'expected_failure_reason_codes': ['tdd_expected_failure_observed'], 'infra_failure_reason_codes': ['verification_environment_error', 'verification_command_target_missing']}, 'requirement_ids': ['REQ-002'], 'depends_on': ['TASK-001'], 'must_haves': ['quality path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
-                "    {'task_id': 'TASK-003', 'title': 'Implement rollout ops', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-c', 'status': 'pending', 'verification_contract': {'mode': 'tdd_red', 'dev_expectation': 'expect_fail', 'test_expectation': 'expect_fail', 'review_expectation': 'expect_fail', 'expected_failure_reason_codes': ['tdd_expected_failure_observed'], 'infra_failure_reason_codes': ['verification_environment_error', 'verification_command_target_missing']}, 'requirement_ids': ['REQ-003'], 'depends_on': ['TASK-002'], 'must_haves': ['ops path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
+                "    {'task_id': 'TASK-001', 'title': 'Implement core workflow', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-a', 'task_kind': 'implementation', 'status': 'pending', 'verification_contract': {'mode': 'tdd_red', 'expected_failure_reason_codes': ['tdd_expected_failure_observed'], 'infra_failure_reason_codes': ['verification_environment_error', 'verification_command_target_missing']}, 'requirement_ids': ['REQ-001'], 'depends_on': [], 'must_haves': ['core path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
+                "    {'task_id': 'TASK-002', 'title': 'Implement quality gates', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-b', 'task_kind': 'implementation', 'status': 'pending', 'verification_contract': {'mode': 'tdd_red', 'expected_failure_reason_codes': ['tdd_expected_failure_observed'], 'infra_failure_reason_codes': ['verification_environment_error', 'verification_command_target_missing']}, 'requirement_ids': ['REQ-002'], 'depends_on': ['TASK-001'], 'must_haves': ['quality path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
+                "    {'task_id': 'TASK-003', 'title': 'Implement rollout ops', 'phase_id': 'phase-1', 'lane_id': 'phase-1/lane-c', 'task_kind': 'implementation', 'status': 'pending', 'verification_contract': {'mode': 'tdd_red', 'expected_failure_reason_codes': ['tdd_expected_failure_observed'], 'infra_failure_reason_codes': ['verification_environment_error', 'verification_command_target_missing']}, 'requirement_ids': ['REQ-003'], 'depends_on': ['TASK-002'], 'must_haves': ['ops path'], 'verify_commands': ['python3 -m pytest'], 'gaps_that_need_patching': []},",
                 "]",
                 "plan_packets = {",
                 "    'schema_version': '1.0',",
@@ -129,7 +129,7 @@ def build_repo(root: Path) -> None:
                 "for task in tasks:",
                 "    task_id = task['task_id']",
                 "    evidence_ref = f'reports/optimus-prime/planning/evidence/{task_id}/TASK_EVIDENCE.json'",
-                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'lane_id': task['lane_id'], 'requirement_ids': task['requirement_ids'], 'verification_contract': task['verification_contract'], 'status': 'pending', 'owner_slot': None, 'dispatch_thread_id': None, 'last_progress_at': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'gaps_that_need_patching': [], 'blockers': [], 'last_handoff_outcome': {'status': None, 'reason_codes': [], 'timestamp': None}, 'blocking_source': 'none', 'gapfix_state': {'active_batch_id': None, 'active': False, 'target_gap_stage': None, 'consumed_gap_ids': [], 'batch_started_cycle': None, 'batch_last_updated_at': None}, 'progress_watchdog': {'started': False, 'first_dispatched_cycle': None, 'task_started_cycle': None, 'last_forward_progress_cycle': None, 'consecutive_no_forward_progress_cycles': 0, 'threshold_cycles': 25, 'triggered': False, 'triggered_at': None}})",
+                "    task_state['tasks'].append({'task_id': task_id, 'phase_id': task['phase_id'], 'lane_id': task['lane_id'], 'task_kind': task['task_kind'], 'requirement_ids': task['requirement_ids'], 'verification_contract': task['verification_contract'], 'status': 'pending', 'owner_slot': None, 'dispatch_thread_id': None, 'last_progress_at': None, 'attempts': {'dev': 0, 'test': 0, 'review': 0}, 'evidence': {'task_evidence_ref': evidence_ref, 'dev_ready_evidence_ref': evidence_ref, 'verify_results': [], 'uat_results': []}, 'gaps_that_need_patching': [], 'blockers': [], 'last_handoff_outcome': {'status': None, 'reason_codes': [], 'timestamp': None}, 'blocking_source': 'none', 'gapfix_state': {'active_batch_id': None, 'active': False, 'target_gap_stage': None, 'consumed_gap_ids': [], 'batch_started_cycle': None, 'batch_last_updated_at': None}, 'progress_watchdog': {'started': False, 'first_dispatched_cycle': None, 'task_started_cycle': None, 'last_forward_progress_cycle': None, 'consecutive_no_forward_progress_cycles': 0, 'threshold_cycles': 25, 'triggered': False, 'triggered_at': None}})",
                 "",
                 "state_json = {'schema_version': '1.0', 'initialized_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z', 'mission': 'inline:Build MyBoard', 'scope': 'inline:Board workflow', 'mission_source': {'mode': 'inline', 'value': 'Build MyBoard', 'path': None, 'display': 'Build MyBoard'}, 'scope_source': {'mode': 'inline', 'value': 'Board workflow', 'path': None, 'display': 'Board workflow'}, 'constraints': [], 'requirements': requirements, 'map_fingerprint': 'map-test', 'repo_fingerprint': 'repo-test', 'baseline_ready': True, 'plan_ready': True, 'plan_id': plan_id, 'build_ready': True}",
                 "state_md = '# STATE\\\\n\\\\n- baseline_ready: true\\\\n- plan_ready: true\\\\n- build_ready: true\\\\n'",
@@ -155,7 +155,7 @@ def build_repo(root: Path) -> None:
                 "]",
                 "for task in tasks:",
                 "    task_id = task['task_id']",
-                "    ev = {'schema_version': '1.0', 'plan_id': plan_id, 'phase_id': task['phase_id'], 'task_id': task_id, 'requirement_ids': task['requirement_ids'], 'updated_at': '2026-01-01T00:00:00Z', 'dev': {'status': 'queued', 'checks': [], 'verify_results': [], 'dev_ready': False, 'blockers': [], 'artifacts': []}, 'test': {'status': 'queued', 'checks': [], 'verify_results': [], 'uat_results': [], 'blockers': [], 'artifacts': []}, 'review': {'status': 'queued', 'decision': None, 'blockers': [], 'artifacts': []}, 'gate': {'ready_for_test': False, 'ready_for_review': False, 'ready_for_phase_exit': False}, 'summary': {'result': 'blocked', 'expectation': 'expect_fail', 'expectation_met': False, 'failure_class': 'none', 'reason_codes': ['not_started']}}",
+                "    ev = {'schema_version': '1.0', 'plan_id': plan_id, 'phase_id': task['phase_id'], 'task_id': task_id, 'task_kind': task['task_kind'], 'requirement_ids': task['requirement_ids'], 'updated_at': '2026-01-01T00:00:00Z', 'dev': {'status': 'queued', 'checks': [], 'verify_results': [], 'dev_ready': False, 'blockers': [], 'artifacts': []}, 'test': {'status': 'queued', 'checks': [], 'verify_results': [], 'uat_results': [], 'blockers': [], 'artifacts': []}, 'review': {'status': 'queued', 'decision': None, 'blockers': [], 'artifacts': []}, 'summary': {'result': 'blocked', 'expectation': 'expect_fail', 'expectation_met': False, 'failure_class': 'none', 'reason_codes': ['not_started']}}",
                 "    rows.append(row(f'evidence/{task_id}/TASK_EVIDENCE.json', 'json', ev))",
                 "",
                 "bundle_path.write_text('\\n'.join(json.dumps(item) for item in rows) + '\\n', encoding='utf-8')",
@@ -2279,9 +2279,6 @@ def test_build_completes_when_project_done_evidence_valid():
             evidence_payload["test"]["uat_results"] = [{"requirement_id": req_id, "passed": True}]
             evidence_payload["review"]["status"] = "done"
             evidence_payload["review"]["decision"] = "accepted"
-            evidence_payload["gate"]["ready_for_test"] = True
-            evidence_payload["gate"]["ready_for_review"] = True
-            evidence_payload["gate"]["ready_for_phase_exit"] = True
             evidence_payload["summary"]["result"] = "pass"
             evidence_payload["summary"]["reason_codes"] = ["completed"]
             evidence_path.write_text(json.dumps(evidence_payload, indent=2) + "\n", encoding="utf-8")
@@ -2983,7 +2980,7 @@ def test_tdd_red_expected_fail_evidence_advances_stage():
         evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
         warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
-        assert task["status"] == "dev_done"
+        assert task["status"] == "review_done"
         assert task["owner_slot"] is None
         assert task["blocking_source"] == "none"
         assert any(item.get("code") == "tdd_expectation_met" for item in warnings if isinstance(item, dict))
@@ -3019,7 +3016,7 @@ def test_tdd_red_expected_fail_evidence_advances_stage_when_summary_result_pass(
         evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
         warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
-        assert task["status"] == "dev_done"
+        assert task["status"] == "review_done"
         assert task["owner_slot"] is None
         assert task["blocking_source"] == "none"
         assert any(item.get("code") == "tdd_expectation_met" for item in warnings if isinstance(item, dict))
@@ -3043,11 +3040,9 @@ def test_gapfix_test_stage_uses_gap_stage_expectation_and_returns_to_testing():
         task = task_state["tasks"][0]
         task["status"] = "review_done"
         task["owner_slot"] = None
+        task["task_kind"] = "implementation"
         task["verification_contract"] = {
             "mode": "hardening",
-            "dev_expectation": "expect_pass",
-            "test_expectation": "expect_fail",
-            "review_expectation": "expect_pass",
             "expected_failure_reason_codes": ["tdd_expected_failure_observed"],
             "infra_failure_reason_codes": ["verification_environment_error"],
         }
@@ -3062,16 +3057,16 @@ def test_gapfix_test_stage_uses_gap_stage_expectation_and_returns_to_testing():
         evidence_path = root / task["evidence"]["task_evidence_ref"]
         payload = json.loads(evidence_path.read_text(encoding="utf-8"))
         payload["summary"] = {
-            "result": "fail",
-            "expectation": "expect_fail",
+            "result": "pass",
+            "expectation": "expect_pass",
             "expectation_met": True,
-            "failure_class": "expected_red",
-            "reason_codes": ["tdd_expected_failure_observed"],
+            "failure_class": "none",
+            "reason_codes": ["gapfix_completed"],
         }
         evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
         warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
-        assert task["status"] == "dev_done"
+        assert task["status"] == "review_done"
         assert task["owner_slot"] is None
         assert task["blocking_source"] == "none"
         assert task["gapfix_state"]["active"] is False
@@ -3101,11 +3096,9 @@ def test_gapfix_review_stage_uses_gap_stage_expectation_and_returns_to_review():
         task = task_state["tasks"][0]
         task["status"] = "dev_done"
         task["owner_slot"] = None
+        task["task_kind"] = "implementation"
         task["verification_contract"] = {
             "mode": "hardening",
-            "dev_expectation": "expect_pass",
-            "test_expectation": "expect_pass",
-            "review_expectation": "expect_fail",
             "expected_failure_reason_codes": ["tdd_expected_failure_observed"],
             "infra_failure_reason_codes": ["verification_environment_error"],
         }
@@ -3120,16 +3113,16 @@ def test_gapfix_review_stage_uses_gap_stage_expectation_and_returns_to_review():
         evidence_path = root / task["evidence"]["task_evidence_ref"]
         payload = json.loads(evidence_path.read_text(encoding="utf-8"))
         payload["summary"] = {
-            "result": "fail",
-            "expectation": "expect_fail",
+            "result": "pass",
+            "expectation": "expect_pass",
             "expectation_met": True,
-            "failure_class": "expected_red",
-            "reason_codes": ["tdd_expected_failure_observed"],
+            "failure_class": "none",
+            "reason_codes": ["gapfix_completed"],
         }
         evidence_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
         warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
-        assert task["status"] == "tests_done"
+        assert task["status"] == "review_done"
         assert task["owner_slot"] is None
         assert task["blocking_source"] == "none"
         assert task["gapfix_state"]["active"] is False
@@ -3184,7 +3177,7 @@ def test_handoff_blocked_is_non_authoritative_when_evidence_contract_advances():
         handoff_warnings = MODULE._apply_handoff_updates(root, task_state, build_state)
         sync_warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
         assert any(item.get("code") == "handoff_non_authoritative_state_only" for item in handoff_warnings if isinstance(item, dict))
-        assert task["status"] == "dev_done"
+        assert task["status"] == "review_done"
         assert task["owner_slot"] is None
         assert task["last_handoff_outcome"]["status"] == "blocked"
         assert any(item.get("code") == "tdd_expectation_met" for item in sync_warnings if isinstance(item, dict))
@@ -3332,7 +3325,7 @@ def test_sync_task_state_advances_when_developer_dispatch_commit_link_passes(mon
         )
 
         warnings = MODULE._sync_task_state_from_evidence(root, plan_packets, task_state)
-        assert task["status"] == "dev_done"
+        assert task["status"] == "review_done"
         assert task["owner_slot"] is None
         assert any(item.get("code") == "tdd_expectation_met" for item in warnings if isinstance(item, dict))
 
@@ -3464,9 +3457,6 @@ def test_task_evidence_summary_awaiting_execution_stays_not_started_and_not_bloc
         payload = json.loads(evidence_path.read_text(encoding="utf-8"))
         payload["summary"]["result"] = "blocked"
         payload["summary"]["reason_codes"] = ["awaiting_execution"]
-        payload["gate"]["ready_for_test"] = False
-        payload["gate"]["ready_for_review"] = False
-        payload["gate"]["ready_for_phase_exit"] = False
         payload["dev"]["checks"] = []
         payload["dev"]["verify_results"] = []
         payload["test"]["checks"] = []
@@ -4442,6 +4432,77 @@ def test_planner_validator_rejects_missing_task_verification_contract():
         payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
         assert payload is None
         assert any("verification_contract" in str(item.get("message")) for item in errors)
+
+
+def test_planner_validator_rejects_missing_task_kind():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        rows = [json.loads(line) for line in bundle_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        for row in rows:
+            if row.get("artifact_path") == "PLAN_PACKETS.json":
+                del row["content"]["tasks"][0]["task_kind"]
+                row["checksum_sha256"] = planner_checksum("json", row["content"])
+                break
+        write_planner_bundle(bundle_path, rows)
+
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any("task_kind" in str(item.get("message")) for item in errors)
+
+
+def test_planner_validator_rejects_invalid_task_kind_mode_pair():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        rows = [json.loads(line) for line in bundle_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        for row in rows:
+            if row.get("artifact_path") == "PLAN_PACKETS.json":
+                row["content"]["tasks"][0]["task_kind"] = "lane_test"
+                row["content"]["tasks"][0]["verification_contract"]["mode"] = "hardening"
+                row["checksum_sha256"] = planner_checksum("json", row["content"])
+                break
+        write_planner_bundle(bundle_path, rows)
+
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any("mode must be one of lane_test" in str(item.get("message")) for item in errors)
 
 
 def test_planner_validator_rejects_missing_evidence_expectation_fields():
@@ -5908,6 +5969,86 @@ def test_dispatch_next_task_persists_dispatch_pid_and_log(monkeypatch: pytest.Mo
         )
         assert dev1.get("dispatch_pid") == 56789
         assert dev1.get("dispatch_log") == str(root / ".codex-dispatch" / "dispatch-main.log")
+
+
+def test_dispatch_next_task_routes_lane_test_tasks_to_tester(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["profile_aliases"] = ["codex"]
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        plan_packets["tasks"][0]["task_kind"] = "lane_test"
+        plan_packets["tasks"][0]["verification_contract"]["mode"] = "lane_test"
+        plan_packets["lane_base_branches"][plan_packets["tasks"][0]["lane_id"]] = "main"
+        task_state["tasks"][0]["task_kind"] = "lane_test"
+        task_state["tasks"][0]["verification_contract"]["mode"] = "lane_test"
+        monkeypatch.setattr(MODULE, "_select_profile_alias_for_slot", lambda *_args, **_kwargs: {"ok": True, "alias": "codex"})
+        monkeypatch.setattr(MODULE, "_active_worker_count_by_alias", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(MODULE, "_read_profile_rate_states", lambda *_args, **_kwargs: {"codex": {"soft_gated": False}})
+        seen: list[str] = []
+
+        def fake_dispatch(_req, _task_payload, _plan_task, stage_name, *_args, **_kwargs):
+            seen.append(stage_name)
+            return {"ok": True, "dispatch": {"dispatch_mode_used": "exec", "dispatch_thread_id": "thread-lane-test"}}
+
+        monkeypatch.setattr(MODULE, "_dispatch_task_packet", fake_dispatch)
+
+        out = MODULE._dispatch_next_task(req, plan_packets, task_state, build_state, None)
+        assert out.get("ok") is True
+        assert seen == ["test"]
+
+
+def test_dispatch_next_task_routes_lane_review_tasks_to_reviewer(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["profile_aliases"] = ["codex"]
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        plan_packets["tasks"][0]["task_kind"] = "lane_review"
+        plan_packets["tasks"][0]["verification_contract"]["mode"] = "lane_review"
+        plan_packets["lane_base_branches"][plan_packets["tasks"][0]["lane_id"]] = "main"
+        task_state["tasks"][0]["task_kind"] = "lane_review"
+        task_state["tasks"][0]["verification_contract"]["mode"] = "lane_review"
+        monkeypatch.setattr(MODULE, "_select_profile_alias_for_slot", lambda *_args, **_kwargs: {"ok": True, "alias": "codex"})
+        monkeypatch.setattr(MODULE, "_active_worker_count_by_alias", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(MODULE, "_read_profile_rate_states", lambda *_args, **_kwargs: {"codex": {"soft_gated": False}})
+        seen: list[str] = []
+
+        def fake_dispatch(_req, _task_payload, _plan_task, stage_name, *_args, **_kwargs):
+            seen.append(stage_name)
+            return {"ok": True, "dispatch": {"dispatch_mode_used": "exec", "dispatch_thread_id": "thread-lane-review"}}
+
+        monkeypatch.setattr(MODULE, "_dispatch_task_packet", fake_dispatch)
+
+        out = MODULE._dispatch_next_task(req, plan_packets, task_state, build_state, None)
+        assert out.get("ok") is True
+        assert seen == ["review"]
 
 
 def test_dispatch_next_task_marks_profile_permanently_blocked_on_refresh_token_reused_unauthorized(

@@ -237,10 +237,11 @@ Runtime propagation note:
 | tasks[].task_id | string | Task identity |
 | tasks[].phase_id | string | Phase membership |
 | tasks[].lane_id | string | Lane membership |
+| tasks[].task_kind | string | Canonical routing class: `implementation|lane_test|test_fix|lane_review|review_fix|deep_review|deep_fix|merge` |
 | tasks[].status | string | `pending|in_progress|done|blocked` |
 | tasks[].requirement_ids | array | Requirement links (may be empty) |
 | tasks[].depends_on | array | Dependency graph |
-| tasks[].verification_contract | object | Verification expectation contract |
+| tasks[].verification_contract | object | Task-kind-aware verification contract |
 
 ```json
 {
@@ -269,14 +270,12 @@ Runtime propagation note:
       "task_id": "TASK-123",
       "phase_id": "phase-1",
       "lane_id": "phase-1/lane-a",
+      "task_kind": "implementation",
       "status": "pending",
       "requirement_ids": ["REQ-1"],
       "depends_on": [],
       "verification_contract": {
         "mode": "implementation_green",
-        "dev_expectation": "expect_pass",
-        "test_expectation": "expect_pass",
-        "review_expectation": "expect_pass",
         "expected_failure_reason_codes": ["tdd_expected_failure_observed"],
         "infra_failure_reason_codes": ["verification_environment_error", "verification_command_target_missing"]
       }
@@ -300,6 +299,7 @@ Invariant:
 | attempts | object | Cycle-level stage counters |
 | last_handoff_outcome | object | Last cycle-level handoff outcome |
 | tasks[].task_id | string | Task identity |
+| tasks[].task_kind | string | Canonical routing class mirrored from `PLAN_PACKETS.tasks[]` |
 | tasks[].status | string | `pending|in_progress|done|blocked` |
 
 ```json
@@ -325,6 +325,7 @@ Invariant:
   "tasks": [
     {
       "task_id": "TASK-123",
+      "task_kind": "implementation",
       "status": "in_progress"
     }
   ]

@@ -186,6 +186,10 @@ VERIFICATION_MODES = {
     "tdd_red",
     "implementation_green",
     "hardening",
+    "lane_test",
+    "lane_review",
+    "deep_review",
+    "merge_validation",
 }
 VERIFICATION_EXPECTATIONS = {
     "expect_fail",
@@ -204,6 +208,24 @@ DEFAULT_INFRA_FAILURE_REASON_CODES = [
     "verification_environment_error",
     "verification_command_target_missing",
 ]
+TASK_KIND_IMPLEMENTATION = "implementation"
+TASK_KIND_LANE_TEST = "lane_test"
+TASK_KIND_TEST_FIX = "test_fix"
+TASK_KIND_LANE_REVIEW = "lane_review"
+TASK_KIND_REVIEW_FIX = "review_fix"
+TASK_KIND_DEEP_REVIEW = "deep_review"
+TASK_KIND_DEEP_FIX = "deep_fix"
+TASK_KIND_MERGE = "merge"
+TASK_KIND_ALLOWED = {
+    TASK_KIND_IMPLEMENTATION,
+    TASK_KIND_LANE_TEST,
+    TASK_KIND_TEST_FIX,
+    TASK_KIND_LANE_REVIEW,
+    TASK_KIND_REVIEW_FIX,
+    TASK_KIND_DEEP_REVIEW,
+    TASK_KIND_DEEP_FIX,
+    TASK_KIND_MERGE,
+}
 HUMAN_BLOCKED_GAP_REASON_TOKENS = (
     "secret",
     "token",
@@ -355,6 +377,23 @@ def _normalize_task_status(value: Any) -> str:
     return TASK_STATUS_NORMALIZE_MAP.get(text, TASK_STATUS_PENDING)
 
 
+def _normalize_task_kind(value: Any) -> str:
+    text = (_as_str(value) or TASK_KIND_IMPLEMENTATION).lower()
+    return text if text in TASK_KIND_ALLOWED else TASK_KIND_IMPLEMENTATION
+
+
+def _default_verification_mode_for_task_kind(task_kind: str) -> str:
+    if task_kind == TASK_KIND_LANE_TEST:
+        return "lane_test"
+    if task_kind == TASK_KIND_LANE_REVIEW:
+        return "lane_review"
+    if task_kind == TASK_KIND_DEEP_REVIEW:
+        return "deep_review"
+    if task_kind == TASK_KIND_MERGE:
+        return "merge_validation"
+    return "implementation_green"
+
+
 def _normalize_verification_mode(value: Any) -> str:
     text = (_as_str(value) or "implementation_green").lower()
     return text if text in VERIFICATION_MODES else "implementation_green"
@@ -368,6 +407,41 @@ def _normalize_stage_expectation(value: Any) -> str:
 def _normalize_failure_class(value: Any) -> str:
     text = (_as_str(value) or "none").lower()
     return text if text in EVIDENCE_FAILURE_CLASSES else "unexpected"
+
+
+def _allowed_verification_modes_for_task_kind(task_kind: str) -> set[str]:
+    if task_kind == TASK_KIND_IMPLEMENTATION:
+        return {"tdd_red", "implementation_green", "hardening"}
+    if task_kind in {TASK_KIND_TEST_FIX, TASK_KIND_REVIEW_FIX, TASK_KIND_DEEP_FIX}:
+        return {"implementation_green", "hardening"}
+    if task_kind == TASK_KIND_LANE_TEST:
+        return {"lane_test"}
+    if task_kind == TASK_KIND_LANE_REVIEW:
+        return {"lane_review"}
+    if task_kind == TASK_KIND_DEEP_REVIEW:
+        return {"deep_review"}
+    if task_kind == TASK_KIND_MERGE:
+        return {"merge_validation"}
+    return {"implementation_green"}
+
+
+def _primary_stage_for_task_kind(task_kind: str) -> str:
+    if task_kind == TASK_KIND_LANE_TEST:
+        return "test"
+    if task_kind in {TASK_KIND_LANE_REVIEW, TASK_KIND_DEEP_REVIEW}:
+        return "review"
+    return "dev"
+
+
+def _task_kind(task: dict[str, Any], plan_task: dict[str, Any] | None = None) -> str:
+    task_value = task.get("task_kind") if isinstance(task, dict) else None
+    plan_value = plan_task.get("task_kind") if isinstance(plan_task, dict) else None
+    normalized = _normalize_task_kind(task_value or plan_value)
+    if isinstance(task, dict):
+        task["task_kind"] = normalized
+    if isinstance(plan_task, dict):
+        plan_task["task_kind"] = _normalize_task_kind(plan_task.get("task_kind"))
+    return normalized
 
 
 def _as_str_list(value: Any) -> list[str]:
@@ -411,25 +485,25 @@ def _as_alias_list(value: Any) -> list[str] | None:
     return aliases or None
 
 
-def _default_verification_contract(*, mode: str = "implementation_green") -> dict[str, Any]:
-    normalized_mode = _normalize_verification_mode(mode)
-    expectation = "expect_fail" if normalized_mode == "tdd_red" else "expect_pass"
+def _default_verification_contract(*, mode: str | None = None, task_kind: str = TASK_KIND_IMPLEMENTATION) -> dict[str, Any]:
+    normalized_task_kind = _normalize_task_kind(task_kind)
+    normalized_mode = _normalize_verification_mode(mode or _default_verification_mode_for_task_kind(normalized_task_kind))
+    if normalized_mode not in _allowed_verification_modes_for_task_kind(normalized_task_kind):
+        normalized_mode = _default_verification_mode_for_task_kind(normalized_task_kind)
     return {
         "mode": normalized_mode,
-        "dev_expectation": expectation,
-        "test_expectation": expectation,
-        "review_expectation": expectation,
         "expected_failure_reason_codes": list(DEFAULT_EXPECTED_FAILURE_REASON_CODES),
         "infra_failure_reason_codes": list(DEFAULT_INFRA_FAILURE_REASON_CODES),
     }
 
 
-def _normalize_verification_contract(value: Any) -> dict[str, Any]:
+def _normalize_verification_contract(value: Any, *, task_kind: str = TASK_KIND_IMPLEMENTATION) -> dict[str, Any]:
     row = value if isinstance(value, dict) else {}
-    contract = _default_verification_contract(mode=_as_str(row.get("mode")) or "implementation_green")
-    contract["dev_expectation"] = _normalize_stage_expectation(row.get("dev_expectation"))
-    contract["test_expectation"] = _normalize_stage_expectation(row.get("test_expectation"))
-    contract["review_expectation"] = _normalize_stage_expectation(row.get("review_expectation"))
+    normalized_task_kind = _normalize_task_kind(task_kind)
+    contract = _default_verification_contract(
+        mode=_as_str(row.get("mode")) or None,
+        task_kind=normalized_task_kind,
+    )
     expected_failure_reason_codes = _as_str_list(row.get("expected_failure_reason_codes"))
     infra_failure_reason_codes = _as_str_list(row.get("infra_failure_reason_codes"))
     if not expected_failure_reason_codes:
@@ -438,21 +512,18 @@ def _normalize_verification_contract(value: Any) -> dict[str, Any]:
         infra_failure_reason_codes = list(DEFAULT_INFRA_FAILURE_REASON_CODES)
     contract["expected_failure_reason_codes"] = expected_failure_reason_codes
     contract["infra_failure_reason_codes"] = infra_failure_reason_codes
-    if contract["mode"] == "tdd_red":
-        contract["dev_expectation"] = "expect_fail"
-        contract["test_expectation"] = "expect_fail"
-        contract["review_expectation"] = "expect_fail"
     return contract
 
 
 def _task_verification_contract(task: dict[str, Any], plan_task: dict[str, Any] | None = None) -> dict[str, Any]:
+    task_kind = _task_kind(task, plan_task)
     task_contract = task.get("verification_contract") if isinstance(task.get("verification_contract"), dict) else None
     plan_contract = (
         plan_task.get("verification_contract")
         if isinstance(plan_task, dict) and isinstance(plan_task.get("verification_contract"), dict)
         else None
     )
-    normalized = _normalize_verification_contract(task_contract or plan_contract or {})
+    normalized = _normalize_verification_contract(task_contract or plan_contract or {}, task_kind=task_kind)
     task["verification_contract"] = normalized
     return normalized
 
@@ -473,11 +544,17 @@ def _current_stage_for_task_status(status: str, owner_slot: str | None = None) -
 
 
 def _expected_for_stage(contract: dict[str, Any], stage: str) -> str:
-    if stage == "test":
-        return _normalize_stage_expectation(contract.get("test_expectation"))
-    if stage == "review":
-        return _normalize_stage_expectation(contract.get("review_expectation"))
-    return _normalize_stage_expectation(contract.get("dev_expectation"))
+    del stage
+    return "expect_fail" if _normalize_verification_mode(contract.get("mode")) == "tdd_red" else "expect_pass"
+
+
+def _current_evidence_stage(task: dict[str, Any], plan_task: dict[str, Any] | None = None) -> str:
+    gapfix_state = _normalize_gapfix_state(task.get("gapfix_state"))
+    if _as_bool_field(gapfix_state.get("active")):
+        target = (_as_str(gapfix_state.get("target_gap_stage")) or "").lower()
+        if target in {"dev", "test", "review"}:
+            return target
+    return _primary_stage_for_task_kind(_task_kind(task, plan_task))
 
 
 def _task_has_open_embedded_gap(
@@ -2773,6 +2850,7 @@ def _default_task_evidence(
     task_id: str,
     requirement_ids: list[str],
     *,
+    task_kind: str = TASK_KIND_IMPLEMENTATION,
     summary_expectation: str = "expect_pass",
 ) -> dict[str, Any]:
     return {
@@ -2780,6 +2858,7 @@ def _default_task_evidence(
         "plan_id": plan_id,
         "phase_id": phase_id,
         "task_id": task_id,
+        "task_kind": _normalize_task_kind(task_kind),
         "requirement_ids": requirement_ids,
         "updated_at": utc_now_iso(),
         "dev": {
@@ -2803,11 +2882,6 @@ def _default_task_evidence(
             "decision": "pending",
             "blockers": [],
             "artifacts": [],
-        },
-        "gate": {
-            "ready_for_test": False,
-            "ready_for_review": False,
-            "ready_for_phase_exit": False,
         },
         "summary": {
             "result": "blocked",
@@ -2836,12 +2910,14 @@ def _write_task_evidence_files(repo_root: Path, plan_packets: dict[str, Any]) ->
         ]
         rel = _canonical_task_evidence_rel(task_id)
         abs_path = _repo_path(repo_root, rel)
-        contract = _normalize_verification_contract(task.get("verification_contract"))
+        task_kind = _normalize_task_kind(task.get("task_kind"))
+        contract = _normalize_verification_contract(task.get("verification_contract"), task_kind=task_kind)
         payload = _default_task_evidence(
             plan_id,
             phase_id,
             task_id,
             req_ids,
+            task_kind=task_kind,
             summary_expectation=_expected_for_stage(contract, "dev"),
         )
         _atomic_write_json(abs_path, payload)
@@ -2954,8 +3030,12 @@ def _task_state_from_plan(plan_packets: dict[str, Any], evidence_refs: dict[str,
                 "task_id": task_id,
                 "phase_id": phase_id,
                 "lane_id": lane_id,
+                "task_kind": _normalize_task_kind(task.get("task_kind")),
                 "requirement_ids": req_ids,
-                "verification_contract": _normalize_verification_contract(task.get("verification_contract")),
+                "verification_contract": _normalize_verification_contract(
+                    task.get("verification_contract"),
+                    task_kind=_normalize_task_kind(task.get("task_kind")),
+                ),
                 "status": _normalize_task_status(task.get("status")),
                 "owner_slot": None,
                 "dispatch_thread_id": None,
@@ -3022,11 +3102,13 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} lane_id is required"})
         elif not lane_id.startswith(f"{phase_id}/lane-"):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} lane_id must be phase-scoped"})
+        task_kind = _normalize_task_kind(item.get("task_kind"))
+        item["task_kind"] = task_kind
         verification_contract = item.get("verification_contract")
         if not isinstance(verification_contract, dict):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} verification_contract must be object"})
         else:
-            item["verification_contract"] = _normalize_verification_contract(verification_contract)
+            item["verification_contract"] = _normalize_verification_contract(verification_contract, task_kind=task_kind)
         dispatch_thread_id = item.get("dispatch_thread_id")
         if dispatch_thread_id is not None and not _as_str(dispatch_thread_id):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} dispatch_thread_id must be string|null"})
@@ -3259,13 +3341,14 @@ def _validate_task_evidence_payload(payload: dict[str, Any], task_id: str, phase
         errors.append("task_id mismatch")
     if _as_str(payload.get("phase_id")) != phase_id:
         errors.append("phase_id mismatch")
-    for section in ("dev", "test", "review", "gate", "summary"):
+    if _normalize_task_kind(payload.get("task_kind")) not in TASK_KIND_ALLOWED:
+        errors.append("task_kind invalid")
+    for section in ("dev", "test", "review", "summary"):
         if not isinstance(payload.get(section), dict):
             errors.append(f"missing section '{section}'")
     dev = payload.get("dev") if isinstance(payload.get("dev"), dict) else {}
     test = payload.get("test") if isinstance(payload.get("test"), dict) else {}
     review = payload.get("review") if isinstance(payload.get("review"), dict) else {}
-    gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     for key in ("checks", "verify_results", "blockers", "artifacts"):
         if not isinstance(dev.get(key), list):
@@ -3276,9 +3359,6 @@ def _validate_task_evidence_payload(payload: dict[str, Any], task_id: str, phase
     for key in ("blockers", "artifacts"):
         if not isinstance(review.get(key), list):
             errors.append(f"review.{key} must be list")
-    for key in ("ready_for_test", "ready_for_review", "ready_for_phase_exit"):
-        if not isinstance(gate.get(key), bool):
-            errors.append(f"gate.{key} must be bool")
     if (_as_str(summary.get("result")) or "").lower() not in {"pass", "fail", "blocked"}:
         errors.append("summary.result must be pass|fail|blocked")
     if (_as_str(summary.get("expectation")) or "").lower() not in VERIFICATION_EXPECTATIONS:
@@ -3494,13 +3574,9 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         evidence["verify_results"] = verify_results
         test_block = payload.get("test") if isinstance(payload.get("test"), dict) else {}
         evidence["uat_results"] = test_block.get("uat_results") if isinstance(test_block.get("uat_results"), list) else []
+        task_kind = _task_kind(task, plan_task)
         stage = _current_stage_for_task_status(_normalize_task_status(task.get("status")), _as_str(task.get("owner_slot")))
-        gapfix_target_stage: str | None = None
-        if _as_bool_field(gapfix_state.get("active")):
-            target = (_as_str(gapfix_state.get("target_gap_stage")) or "").lower()
-            if target in {"dev", "test", "review"}:
-                gapfix_target_stage = target
-        evidence_stage = gapfix_target_stage or stage
+        evidence_stage = _current_evidence_stage(task, plan_task)
         expected = _expected_for_stage(contract, evidence_stage)
         summary = payload["summary"]
         summary_result = (_as_str(summary.get("result")) or "").lower()
@@ -3570,21 +3646,21 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
 
         expectation_eval = _evaluate_evidence_expectation(payload=payload, expected=expected)
         if expectation_eval.get("progress"):
-            if gapfix_target_stage:
-                if gapfix_target_stage == "review":
-                    task["status"] = TASK_STATUS_TESTS_DONE
-                else:
-                    task["status"] = TASK_STATUS_DEV_DONE
+            if _as_bool_field(gapfix_state.get("active")):
+                task["status"] = TASK_STATUS_REVIEW_DONE
                 gapfix_state["active"] = False
                 gapfix_state["active_batch_id"] = None
                 gapfix_state["batch_last_updated_at"] = payload_updated_at
                 task["gapfix_state"] = gapfix_state
-            elif stage == "dev":
-                task["status"] = TASK_STATUS_DEV_DONE
-            elif stage == "test":
-                task["status"] = TASK_STATUS_TESTS_DONE
             else:
-                task["status"] = TASK_STATUS_REVIEW_DONE
+                if task_kind in TASK_KIND_ALLOWED:
+                    task["status"] = TASK_STATUS_REVIEW_DONE
+                elif stage == "dev":
+                    task["status"] = TASK_STATUS_DEV_DONE
+                elif stage == "test":
+                    task["status"] = TASK_STATUS_TESTS_DONE
+                else:
+                    task["status"] = TASK_STATUS_REVIEW_DONE
             task["owner_slot"] = None
             task["blocking_source"] = "none"
             task["last_progress_at"] = payload_updated_at
@@ -3933,10 +4009,6 @@ def _is_not_started_evidence_placeholder(payload: dict[str, Any], summary_result
     if any(code not in not_started_codes for code in normalized_codes):
         return False
 
-    gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
-    if _as_bool_field(gate.get("ready_for_test")) or _as_bool_field(gate.get("ready_for_review")) or _as_bool_field(gate.get("ready_for_phase_exit")):
-        return False
-
     dev = payload.get("dev") if isinstance(payload.get("dev"), dict) else {}
     test = payload.get("test") if isinstance(payload.get("test"), dict) else {}
     review = payload.get("review") if isinstance(payload.get("review"), dict) else {}
@@ -4116,15 +4188,9 @@ def _closure_task_resolved(repo_root: Path, task: dict[str, Any]) -> tuple[bool,
     phase_id = _as_str(task.get("phase_id")) or "phase-1"
     if _validate_task_evidence_payload(payload, task_id, phase_id):
         return False, None
-    review = payload.get("review") if isinstance(payload.get("review"), dict) else {}
-    gate = payload.get("gate") if isinstance(payload.get("gate"), dict) else {}
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    decision = (_as_str(review.get("decision")) or "").lower()
     result = (_as_str(summary.get("result")) or "").lower()
-    ready = _as_bool_field(gate.get("ready_for_phase_exit"))
-    if decision not in {"accepted", "approved", "ready_for_merge", "pass"}:
-        return False, None
-    if result != "pass" or not ready:
+    if result != "pass" or not _as_bool_field(summary.get("expectation_met")):
         return False, None
     return True, os.path.relpath(str(evidence_path), str(repo_root))
 
@@ -9145,6 +9211,7 @@ def _dispatch_task_packet(
         "slot": slot_name,
         "role": cfg["role"],
         "task_identifier": task_id,
+        "task_kind": _task_kind(task, plan_task),
         "repo_root": str(req.repo_root),
         "worktree_root": worktree_root,
         "branch_name": branch_name,
@@ -9481,9 +9548,9 @@ def _dispatch_next_task_from_assignments(
     slot_count = len(FIXED_WORKER_SLOTS)
     plan_id = _as_str(plan_packets.get("plan_id")) or "plan-unknown"
     stage_status_requirements = {
-        "dev": {TASK_STATUS_PENDING},
-        "test": {TASK_STATUS_DEV_DONE},
-        "review": {TASK_STATUS_TESTS_DONE},
+        "dev": {TASK_STATUS_PENDING, TASK_STATUS_BLOCKED},
+        "test": {TASK_STATUS_PENDING, TASK_STATUS_BLOCKED},
+        "review": {TASK_STATUS_PENDING, TASK_STATUS_BLOCKED},
     }
     run_id = _run_id_from_lock_id(_as_str(build_state.get("loop_lock_id")))
     dispatch_window = build_state.get("dispatch_window") if isinstance(build_state.get("dispatch_window"), dict) else {}
@@ -9659,6 +9726,29 @@ def _dispatch_next_task_from_assignments(
             )
             continue
         status = _normalize_task_status(task.get("status"))
+        expected_stage = _dispatch_stage_for_task(task, plan_task)
+        if not is_gapfix and next_stage != expected_stage:
+            _record_assignment_observation(
+                row=row,
+                status="skipped",
+                reason_code="dispatch_assignment_task_kind_stage_mismatch",
+                started_at=started,
+                warning_codes=["dispatch_assignment_task_kind_stage_mismatch"],
+            )
+            all_warnings.append(
+                {
+                    "code": "dispatch_assignment_task_kind_stage_mismatch",
+                    "message": (
+                        f"assignment stage {next_stage} does not match task_kind dispatch stage "
+                        f"{expected_stage} for {task_id}"
+                    ),
+                    "stage": "build_loop",
+                    "task_id": task_id,
+                    "expected_stage": expected_stage,
+                    "task_kind": _task_kind(task, plan_task),
+                }
+            )
+            continue
         allowed_statuses = stage_status_requirements[next_stage]
         if is_gapfix and next_stage == "dev":
             allowed_statuses = {
@@ -9795,35 +9885,42 @@ def _dispatch_next_task_from_assignments(
                 )
                 continue
         if next_stage in {"test", "review"}:
-            source_branch = _developer_source_branch(task)
-            if not source_branch:
-                all_warnings.append(
-                    {
-                        "code": "dispatch_assignment_missing_dev_branch",
-                        "message": (
-                            f"task {task_id} missing developer source branch "
-                            f"for {next_stage}-stage dispatch"
-                        ),
-                        "stage": "build_loop",
-                        "task_id": task_id,
-                        "slot": slot_name,
-                    }
-                )
-                _record_assignment_observation(
-                    row=row,
-                    status="skipped",
-                    reason_code="dispatch_assignment_missing_dev_branch",
-                    started_at=started,
-                    warning_codes=["dispatch_assignment_missing_dev_branch"],
-                )
-                continue
-            source_commit = _git_text(req.repo_root, "rev-parse", source_branch)
+            expected_stage = _dispatch_stage_for_task(task, plan_task)
+            source_branch: str | None
+            source_commit: str | None
+            if next_stage == expected_stage:
+                source_branch = _lane_base_branch_for_task(plan_packets, task, plan_task) or "RAB-BASE"
+                source_commit = _git_text(req.repo_root, "rev-parse", source_branch)
+            else:
+                source_branch = _developer_source_branch(task)
+                if not source_branch:
+                    all_warnings.append(
+                        {
+                            "code": "dispatch_assignment_missing_dev_branch",
+                            "message": (
+                                f"task {task_id} missing developer source branch "
+                                f"for {next_stage}-stage dispatch"
+                            ),
+                            "stage": "build_loop",
+                            "task_id": task_id,
+                            "slot": slot_name,
+                        }
+                    )
+                    _record_assignment_observation(
+                        row=row,
+                        status="skipped",
+                        reason_code="dispatch_assignment_missing_dev_branch",
+                        started_at=started,
+                        warning_codes=["dispatch_assignment_missing_dev_branch"],
+                    )
+                    continue
+                source_commit = _git_text(req.repo_root, "rev-parse", source_branch)
             if not source_commit:
                 all_warnings.append(
                     {
                         "code": "dispatch_assignment_missing_dev_branch",
                         "message": (
-                            f"unable to resolve HEAD commit for developer source branch {source_branch}"
+                            f"unable to resolve HEAD commit for source branch {source_branch or 'unknown'}"
                         ),
                         "stage": "build_loop",
                         "task_id": task_id,
@@ -9838,7 +9935,7 @@ def _dispatch_next_task_from_assignments(
                     warning_codes=["dispatch_assignment_missing_dev_branch"],
                 )
                 continue
-            start_from_branch_override = source_branch
+            start_from_branch_override = source_branch or "RAB-BASE"
             start_from_commit_override = source_commit
             branch_name = _branch_name_for_stage(slot_name, task_id, next_stage, run_id=run_id)
             if next_stage == "test":
@@ -10290,21 +10387,25 @@ def _dispatch_next_task(
         test_source_commit_override: str | None = None
         branch_name_override: str | None = None
         if stage_name in {"test", "review"}:
-            source_branch = _developer_source_branch(task_payload)
-            if not source_branch:
-                return {
-                    "ok": True,
-                    "status": "skipped",
-                    "reason": "dispatch_assignment_missing_dev_branch",
-                    "warning": {
-                        "code": "dispatch_assignment_missing_dev_branch",
-                        "message": (
-                            f"task {_as_str(task_payload.get('task_id')) or 'TASK-UNKNOWN'} "
-                            f"missing developer source branch for {stage_name}-stage dispatch"
-                        ),
-                        "stage": "build_loop",
-                    },
-                }
+            expected_stage = _dispatch_stage_for_task(task_payload, plan_task_payload)
+            if stage_name == expected_stage:
+                source_branch = _lane_base_branch_for_task(plan_packets, task_payload, plan_task_payload) or "RAB-BASE"
+            else:
+                source_branch = _developer_source_branch(task_payload)
+                if not source_branch:
+                    return {
+                        "ok": True,
+                        "status": "skipped",
+                        "reason": "dispatch_assignment_missing_dev_branch",
+                        "warning": {
+                            "code": "dispatch_assignment_missing_dev_branch",
+                            "message": (
+                                f"task {_as_str(task_payload.get('task_id')) or 'TASK-UNKNOWN'} "
+                                f"missing developer source branch for {stage_name}-stage dispatch"
+                            ),
+                            "stage": "build_loop",
+                        },
+                    }
             source_commit = _git_text(req.repo_root, "rev-parse", source_branch)
             if not source_commit:
                 return {
@@ -10313,7 +10414,7 @@ def _dispatch_next_task(
                     "reason": "dispatch_assignment_missing_dev_branch",
                     "warning": {
                         "code": "dispatch_assignment_missing_dev_branch",
-                        "message": f"unable to resolve HEAD commit for developer source branch {source_branch}",
+                        "message": f"unable to resolve HEAD commit for source branch {source_branch}",
                         "stage": "build_loop",
                     },
                 }
@@ -10424,8 +10525,9 @@ def _dispatch_next_task(
         if status == TASK_STATUS_REVIEW_DONE:
             continue
         build_state["current_task_pointer"] = task_id
+        dispatch_stage = _dispatch_stage_for_task(task, plan_task)
         if status == TASK_STATUS_PENDING:
-            result = _dispatch_for_stage(task, plan_task, "dev", plan_id)
+            result = _dispatch_for_stage(task, plan_task, dispatch_stage, plan_id)
             if carried_warning:
                 warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
                 warning_rows.append(carried_warning)
@@ -10497,56 +10599,6 @@ def _dispatch_next_task(
             task["status"] = TASK_STATUS_PENDING
             task["owner_slot"] = None
             result = _dispatch_for_stage(task, plan_task, "dev", plan_id)
-            if carried_warning:
-                warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
-                warning_rows.append(carried_warning)
-                result["warnings"] = warning_rows
-                if not isinstance(result.get("warning"), dict):
-                    result["warning"] = carried_warning
-            return result
-        if status == TASK_STATUS_DEV_DONE:
-            evidence_path = _task_evidence_path(req.repo_root, task)
-            if not evidence_path.exists():
-                return {
-                    "ok": False,
-                    "status": "blocked",
-                    "task_id": task_id,
-                    "reason": "missing_task_evidence",
-                }
-            payload = _read_json(evidence_path)
-            if not isinstance(payload, dict) or not _as_bool_field((payload.get("gate") or {}).get("ready_for_test")):
-                return {
-                    "ok": False,
-                    "status": "blocked",
-                    "task_id": task_id,
-                    "reason": "dev_gate_not_ready_for_test",
-                }
-            result = _dispatch_for_stage(task, plan_task, "test", plan_id)
-            if carried_warning:
-                warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
-                warning_rows.append(carried_warning)
-                result["warnings"] = warning_rows
-                if not isinstance(result.get("warning"), dict):
-                    result["warning"] = carried_warning
-            return result
-        if status == TASK_STATUS_TESTS_DONE:
-            evidence_path = _task_evidence_path(req.repo_root, task)
-            if not evidence_path.exists():
-                return {
-                    "ok": False,
-                    "status": "blocked",
-                    "task_id": task_id,
-                    "reason": "missing_task_evidence",
-                }
-            payload = _read_json(evidence_path)
-            if not isinstance(payload, dict) or not _as_bool_field((payload.get("gate") or {}).get("ready_for_review")):
-                return {
-                    "ok": False,
-                    "status": "blocked",
-                    "task_id": task_id,
-                    "reason": "test_gate_not_ready_for_review",
-                }
-            result = _dispatch_for_stage(task, plan_task, "review", plan_id)
             if carried_warning:
                 warning_rows = result.get("warnings") if isinstance(result.get("warnings"), list) else []
                 warning_rows.append(carried_warning)
@@ -11240,7 +11292,7 @@ def command_report(req: OpRequest) -> dict[str, Any]:
             continue
         plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else {}
         contract = _task_verification_contract(task, plan_task)
-        stage = _current_stage_for_task_status(_normalize_task_status(task.get("status")), _as_str(task.get("owner_slot")))
+        stage = _current_evidence_stage(task, plan_task)
         expected = _expected_for_stage(contract, stage)
         evidence_path = _task_evidence_path(req.repo_root, task)
         expectation_met = False
@@ -11389,6 +11441,21 @@ def _resume_status_from_gap_stage(stage: str, *, slot: str | None) -> str:
             return TASK_STATUS_DEV_DONE
         return TASK_STATUS_PENDING
     return TASK_STATUS_PENDING
+
+
+def _dispatch_stage_for_task(task: dict[str, Any], plan_task: dict[str, Any] | None = None) -> str:
+    return _primary_stage_for_task_kind(_task_kind(task, plan_task))
+
+
+def _lane_base_branch_for_task(
+    plan_packets: dict[str, Any],
+    task: dict[str, Any],
+    plan_task: dict[str, Any] | None = None,
+) -> str | None:
+    lane_id = _as_str(task.get("lane_id")) or _as_str((plan_task or {}).get("lane_id"))
+    lane_map = plan_packets.get("lane_base_branches") if isinstance(plan_packets.get("lane_base_branches"), dict) else {}
+    branch = lane_map.get(lane_id) if lane_id else None
+    return _as_str(branch)
 
 
 def _resume_reset_exhausted_retries(repo_root: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:

@@ -181,7 +181,8 @@
 - task fields policy:
   - `requirement_ids` field is mandatory but may be empty
   - keep old rich task shape, but drop per-task `verify_commands`
-  - `verification_contract` remains mandatory, adapted for lane-level test/review flow (not per-task dev->test->review loop)
+  - `task_kind` is mandatory on every task and determines whether runtime routes the task as implementation, lane test, lane review, deep review, fix, or merge work
+  - `verification_contract` remains mandatory, but is now task-kind oriented (`mode`, `expected_failure_reason_codes`, `infra_failure_reason_codes`) rather than per-task dev/test/review expectation fields
 - `task_execution_state` artifact policy:
   - separate from `plan_packets`
   - authoritative writer: BOSS
