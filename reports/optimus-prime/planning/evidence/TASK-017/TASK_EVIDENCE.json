@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-unknown",
+  "phase_id": "phase-1",
+  "task_id": "TASK-017",
+  "requirement_ids": [
+    "REQ-006"
+  ],
+  "updated_at": "2026-03-15T00:00:00Z",
+  "dev": {
+    "status": "pass",
+    "checks": [
+      {
+        "name": "pytest_runtime_telemetry_artifact_sweep_across_earth",
+        "command": "python3 -m pytest tests/integration/test_runtime-telemetry-artifact-sweep-across-earth.py -q",
+        "passed": true
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_runtime-telemetry-artifact-sweep-across-earth.py -q",
+        "passed": true
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/integration/test_runtime-telemetry-artifact-sweep-across-earth.py",
+      "reports/optimus-prime/planning/evidence/TASK-017/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "pending",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_006_runtime_telemetry_sweep_ready"
+    ]
+  }
+}
