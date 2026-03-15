@@ -11,6 +11,8 @@ from typing import Any, Mapping
 
 REQ_007_SCHEMA_VERSION = "req-007.ground-graph-snapshot-ingestion.v1"
 REQ_007_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-007.ground-graph-context-bundle.v1"
+REQ_015_SCHEMA_VERSION = "req-015.integration-opportunity-detection.v1"
+REQ_015_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-015.integration-opportunity-context-bundle.v1"
 REQ_016_SCHEMA_VERSION = "req-016.reuse-opportunity-detection.v1"
 
 
@@ -234,7 +236,12 @@ def _lineage_context_rows(anchors: list[dict[str, str]]) -> list[dict[str, Any]]
 
 
 def _candidate_actions_from_context(broad_sweep_context: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    for key in ("cross_project_action_candidates", "candidate_actions", "recommendation_candidates"):
+    for key in (
+        "integration_opportunity_candidates",
+        "cross_project_action_candidates",
+        "candidate_actions",
+        "recommendation_candidates",
+    ):
         value = broad_sweep_context.get(key)
         if value is None:
             continue
@@ -483,6 +490,223 @@ def process_ground_graph_snapshot(
             "recommendation": recommendation_evidence_ref_list,
         },
         "recommendation": recommendation,
+    }
+
+
+def detect_integration_opportunities(
+    snapshot: Mapping[str, Any],
+    *,
+    broad_sweep_context: Mapping[str, Any],
+    source_path: str | None = None,
+    evaluated_at: str | None = None,
+) -> dict[str, Any]:
+    canonical_ingestion = ingest_ground_graph_snapshot(
+        snapshot,
+        source_path=source_path,
+        ingested_at=_require_nonempty_str(evaluated_at or _utc_now_iso(), label="evaluated_at"),
+    )
+    anchors = canonical_ingestion["lineage_anchors"]
+    linked_project_ids = set(canonical_ingestion["lineage_index"]["linked_project_ids"])
+
+    context = _require_mapping(broad_sweep_context, label="broad_sweep_context")
+    active_project_id = _require_nonempty_str(
+        context.get("active_project_id"), label="broad_sweep_context.active_project_id"
+    )
+    earth_sweep_evidence_refs = _normalize_string_list(
+        context.get("earth_sweep_evidence_refs"), label="broad_sweep_context.earth_sweep_evidence_refs"
+    )
+    earth_ref_set = set(earth_sweep_evidence_refs)
+
+    lineage_context_rows = _lineage_context_rows(anchors)
+    lineage_context_by_project = {row["linked_project_id"]: row for row in lineage_context_rows}
+    candidate_actions = _candidate_actions_from_context(context)
+
+    supported_opportunities: list[dict[str, Any]] = []
+    deferred_opportunities: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    recommendation_evidence_refs: set[str] = set()
+
+    for idx, candidate in enumerate(candidate_actions):
+        candidate_label = f"broad_sweep_context.integration_opportunity_candidates[{idx}]"
+        linked_project_id = _require_nonempty_str(
+            candidate.get("linked_project_id"), label=f"{candidate_label}.linked_project_id"
+        )
+        action = _require_nonempty_str(candidate.get("action"), label=f"{candidate_label}.action")
+
+        candidate_evidence_refs = _normalize_string_list(
+            candidate.get("evidence_refs"), label=f"{candidate_label}.evidence_refs"
+        )
+        supported_evidence_refs = sorted(ref for ref in candidate_evidence_refs if ref in earth_ref_set)
+        missing_evidence_refs = sorted(ref for ref in candidate_evidence_refs if ref not in earth_ref_set)
+
+        if linked_project_id not in linked_project_ids:
+            open_risks.append(
+                {
+                    "risk_id": f"{linked_project_id}::{action}::not_in_ground_graph",
+                    "reason": "candidate_linked_project_missing_from_ground_graph",
+                    "reason_code": "candidate_linked_project_missing_from_ground_graph",
+                    "linked_project_id": linked_project_id,
+                    "action": action,
+                    "evidence_refs": supported_evidence_refs,
+                }
+            )
+            continue
+
+        if not supported_evidence_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"{linked_project_id}::{action}::missing_earth_evidence",
+                    "reason": "candidate_opportunity_missing_earth_sweep_evidence_refs",
+                    "reason_code": "candidate_opportunity_missing_earth_sweep_evidence_refs",
+                    "linked_project_id": linked_project_id,
+                    "action": action,
+                    "evidence_refs": [],
+                }
+            )
+            continue
+
+        interaction_contract: dict[str, Any] | None = None
+        interaction_contract_raw = candidate.get("interaction_contract")
+        if interaction_contract_raw is None:
+            contract_ref_raw = candidate.get("interaction_contract_ref")
+            if isinstance(contract_ref_raw, str) and contract_ref_raw.strip():
+                interaction_contract = {"contract_ref": contract_ref_raw.strip(), "expected_interactions": []}
+        elif isinstance(interaction_contract_raw, Mapping):
+            contract_ref = interaction_contract_raw.get("contract_ref")
+            if isinstance(contract_ref, str) and contract_ref.strip():
+                expected_interactions = _normalize_string_list_in_order(
+                    interaction_contract_raw.get("expected_interactions"),
+                    label=f"{candidate_label}.interaction_contract.expected_interactions",
+                    allow_empty=True,
+                )
+                interaction_contract = {
+                    "contract_ref": contract_ref.strip(),
+                    "expected_interactions": expected_interactions,
+                }
+
+        dependency_side_effect_notes_raw = candidate.get("dependency_side_effect_notes")
+        dependency_side_effect_notes = (
+            dependency_side_effect_notes_raw.strip()
+            if isinstance(dependency_side_effect_notes_raw, str) and dependency_side_effect_notes_raw.strip()
+            else None
+        )
+
+        missing_fields: list[str] = []
+        if interaction_contract is None:
+            missing_fields.append("interaction_contract")
+        if dependency_side_effect_notes is None:
+            missing_fields.append("dependency_side_effect_notes")
+        if missing_fields:
+            open_risks.append(
+                {
+                    "risk_id": f"{linked_project_id}::{action}::missing_required_fields::{'+'.join(missing_fields)}",
+                    "reason": "integration_opportunity_candidate_missing_required_fields",
+                    "reason_code": "integration_opportunity_candidate_missing_required_fields",
+                    "linked_project_id": linked_project_id,
+                    "action": action,
+                    "missing_fields": sorted(missing_fields),
+                    "evidence_refs": supported_evidence_refs,
+                }
+            )
+            continue
+
+        recommendation_evidence_refs.update(supported_evidence_refs)
+        opportunity_row: dict[str, Any] = {
+            "linked_project_id": linked_project_id,
+            "action": action,
+            "interaction_contract": interaction_contract,
+            "dependency_side_effect_notes": dependency_side_effect_notes,
+            "evidence_refs": supported_evidence_refs,
+            "lineage_anchor_ids": list(lineage_context_by_project[linked_project_id]["anchor_ids"]),
+        }
+        if missing_evidence_refs:
+            opportunity_row["out_of_scope_evidence_refs"] = missing_evidence_refs
+        supported_opportunities.append(opportunity_row)
+
+    open_risks.extend(
+        _hardening_open_risks(
+            canonical_ingestion=canonical_ingestion,
+            broad_sweep_context=context,
+            earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+            linked_project_ids=linked_project_ids,
+            active_project_id=active_project_id,
+        )
+    )
+
+    for row in supported_opportunities:
+        if row.get("out_of_scope_evidence_refs"):
+            deferred_opportunities.append(
+                {
+                    "linked_project_id": row["linked_project_id"],
+                    "action": row["action"],
+                    "reason": "candidate_includes_non_earth_evidence_refs",
+                    "reason_code": "candidate_includes_non_earth_evidence_refs",
+                    "out_of_scope_evidence_refs": row["out_of_scope_evidence_refs"],
+                }
+            )
+
+    supported_opportunities.sort(key=lambda row: (row["linked_project_id"], row["action"]))
+    deferred_opportunities.sort(key=lambda row: (row["linked_project_id"], row["action"], row["reason"]))
+    open_risks.sort(key=lambda row: row["risk_id"])
+    recommendation_evidence_ref_list = sorted(recommendation_evidence_refs)
+
+    if supported_opportunities:
+        decision = "ready_for_planning" if not open_risks else "planning_with_open_risks"
+    elif open_risks:
+        decision = "blocked_missing_evidence"
+    else:
+        decision = "no_integration_opportunities"
+
+    recommendation = {
+        "decision": decision,
+        "summary": (
+            f"{len(supported_opportunities)} supported integration opportunity(ies); "
+            f"{len(open_risks)} open risk(s); {len(deferred_opportunities)} deferred opportunity(ies)."
+        ),
+        "integration_opportunities": supported_opportunities,
+        "deferred_opportunities": deferred_opportunities,
+        "open_risks": open_risks,
+        "evidence_refs": recommendation_evidence_ref_list,
+    }
+
+    return {
+        "requirement_id": "REQ-015",
+        "surface": "integration_opportunity_detection",
+        "schema_version": REQ_015_SCHEMA_VERSION,
+        "evaluated_at": canonical_ingestion["ingested_at"],
+        "source_artifact": canonical_ingestion["source_artifact"],
+        "lineage_anchors": canonical_ingestion["lineage_anchors"],
+        "lineage_index": canonical_ingestion["lineage_index"],
+        "integration_context": {
+            "active_project_id": active_project_id,
+            "linked_projects": [row["linked_project_id"] for row in lineage_context_rows],
+            "linked_project_context": lineage_context_rows,
+            "active_project_anchor_count": len([row for row in anchors if row["project_id"] == active_project_id]),
+            "total_anchor_count": len(anchors),
+        },
+        "evidence_refs": {
+            "earth_sweep": earth_sweep_evidence_refs,
+            "recommendation": recommendation_evidence_ref_list,
+        },
+        "recommendation": recommendation,
+    }
+
+
+def serialize_integration_opportunity_context_bundle(payload: Mapping[str, Any]) -> dict[str, str]:
+    context_bundle = _require_mapping(payload, label="integration_opportunity_context_bundle")
+    serialized_payload = json.dumps(
+        context_bundle,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "requirement_id": "REQ-015",
+        "surface": "integration_opportunity_context_bundle",
+        "schema_version": REQ_015_CONTEXT_BUNDLE_SCHEMA_VERSION,
+        "serialization_format": "json-canonical-v1",
+        "checksum_sha256": hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest(),
+        "serialized_payload": serialized_payload,
     }
 
 
