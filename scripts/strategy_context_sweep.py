@@ -281,6 +281,7 @@ def _validate_req014_broad_sweep_context(
         projects_considered = [target_project_id]
         evidence_refs_by_project = {target_project_id: []}
         cross_project = False
+        unhappy_paths: list[dict[str, Any]] = []
     else:
         if not isinstance(raw, dict):
             raise SweepError("input_error", "broad_sweep_context must be an object", stage="input")
@@ -334,6 +335,10 @@ def _validate_req014_broad_sweep_context(
             cross_project = raw_cross_project
         else:
             raise SweepError("input_error", "broad_sweep_context.cross_project must be boolean", stage="input")
+        unhappy_paths = _validate_req014_unhappy_paths(
+            raw.get("unhappy_paths"),
+            path="broad_sweep_context.unhappy_paths",
+        )
 
     projects_with_evidence_refs = [
         project_id for project_id in projects_considered if evidence_refs_by_project.get(project_id)
@@ -356,7 +361,43 @@ def _validate_req014_broad_sweep_context(
         "projects_without_evidence_refs": projects_without_evidence_refs,
         "evidence_refs_by_project": evidence_refs_by_project,
         "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+        "unhappy_paths": unhappy_paths,
     }
+
+
+def _validate_req014_unhappy_paths(values: Any, *, path: str) -> list[dict[str, Any]]:
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise SweepError("input_error", f"{path} must be a list", stage="input")
+
+    out: list[dict[str, Any]] = []
+    for idx, row in enumerate(values):
+        row_path = f"{path}[{idx}]"
+        if not isinstance(row, dict):
+            raise SweepError("input_error", f"{row_path} must be an object", stage="input")
+
+        reason_code = _required_str(row, "reason_code")
+        evidence_refs = _normalize_string_list(
+            row.get("evidence_refs") or [],
+            path=f"{row_path}.evidence_refs",
+            allow_empty=True,
+        )
+        normalized_row = {
+            "reason_code": reason_code,
+            "project_id": _as_str(row.get("project_id")),
+            "artifact_type": _as_str(row.get("artifact_type")),
+            "source_id": _as_str(row.get("source_id")),
+            "evidence_refs": _dedupe_preserve_order(evidence_refs),
+        }
+        if reason_code == "stale_source_artifact_detected" and not normalized_row["evidence_refs"]:
+            raise SweepError(
+                "input_error",
+                f"{row_path}.evidence_refs must be non-empty for stale_source_artifact_detected",
+                stage="input",
+            )
+        out.append(normalized_row)
+    return out
 
 
 def _validate_req014_deficits(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -630,6 +671,7 @@ def _build_unhappy_path_rows(source_references: list[dict[str, Any]]) -> list[di
 def _build_context_bundle(
     *,
     checked_at_utc: str,
+    analysis_anchors: tuple[str, ...] | list[str] = ANALYSIS_ANCHORS,
     broad_sweep_context: dict[str, Any],
     recommendation: dict[str, Any],
     source_references: list[dict[str, Any]],
@@ -638,7 +680,7 @@ def _build_context_bundle(
 ) -> dict[str, Any]:
     return {
         "checked_at_utc": checked_at_utc,
-        "analysis_anchors": list(ANALYSIS_ANCHORS),
+        "analysis_anchors": [str(anchor) for anchor in analysis_anchors],
         "broad_sweep_context": broad_sweep_context,
         "recommendation_evidence_refs": list(recommendation.get("evidence_refs") or []),
         "source_reference_ids": _sorted_citation_refs(source_references),
@@ -899,6 +941,7 @@ def sweep_runtime_telemetry_artifacts(payload: dict[str, Any]) -> dict[str, Any]
 def extract_deficit_and_need_signals(payload: dict[str, Any]) -> dict[str, Any]:
     now_utc = _parse_now(payload)
     checked_at_utc = _to_iso_utc(now_utc)
+    context_docs = _validate_context_bundle_docs(payload)
     thresholds = _coerce_req014_thresholds(payload)
     max_signals = _coerce_req014_max_signals(payload)
     target_project = _validate_req014_target_project(payload)
@@ -1004,7 +1047,18 @@ def extract_deficit_and_need_signals(payload: dict[str, Any]) -> dict[str, Any]:
 
     all_evidence_refs = [str(row["citation_id"]) for row in evidence_references]
     cross_project_evidence_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
-    recommendation_evidence_refs = _dedupe_preserve_order(all_evidence_refs + cross_project_evidence_refs)
+    earth_sweep_unhappy_paths = list(broad_sweep_context["unhappy_paths"])
+    unhappy_path_evidence_refs = _dedupe_preserve_order(
+        [
+            evidence_ref
+            for row in earth_sweep_unhappy_paths
+            for evidence_ref in (row.get("evidence_refs") or [])
+            if isinstance(evidence_ref, str)
+        ]
+    )
+    recommendation_evidence_refs = _dedupe_preserve_order(
+        all_evidence_refs + cross_project_evidence_refs + unhappy_path_evidence_refs
+    )
     recommendation_decision = "prioritize_need_signals" if need_signals else "hold"
 
     obligations: list[dict[str, Any]] = []
@@ -1061,6 +1115,16 @@ def extract_deficit_and_need_signals(payload: dict[str, Any]) -> dict[str, Any]:
         "excluded": len(excluded_deficits),
         "evidence_references": len(evidence_references),
     }
+    context_bundle = _build_context_bundle(
+        checked_at_utc=checked_at_utc,
+        analysis_anchors=REQ014_ANALYSIS_ANCHORS,
+        broad_sweep_context=broad_sweep_context,
+        recommendation=recommendation,
+        source_references=evidence_references,
+        unhappy_paths=earth_sweep_unhappy_paths,
+        context_docs=context_docs,
+    )
+    context_bundle_serialized = _serialize_context_bundle(context_bundle)
 
     return {
         "ok": True,
@@ -1075,6 +1139,9 @@ def extract_deficit_and_need_signals(payload: dict[str, Any]) -> dict[str, Any]:
         "need_signals": need_signals,
         "excluded_deficits": excluded_deficits,
         "evidence_references": evidence_references,
+        "unhappy_paths": earth_sweep_unhappy_paths,
+        "context_bundle": context_bundle,
+        "context_bundle_serialized": context_bundle_serialized,
         "recommendation": recommendation,
         "totals": totals,
     }

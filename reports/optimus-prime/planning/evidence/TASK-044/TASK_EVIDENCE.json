@@ -1,0 +1,114 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-unknown",
+  "phase_id": "phase-1",
+  "task_id": "TASK-044",
+  "requirement_ids": [
+    "REQ-014"
+  ],
+  "updated_at": "2026-03-15T01:46:10Z",
+  "dev": {
+    "status": "pass",
+    "checks": [
+      {
+        "name": "pytest_contract_req_014_run1",
+        "command": "python3 -m pytest tests/contracts/test_deficit-and-need-signal-extraction.py -q",
+        "passed": true
+      },
+      {
+        "name": "pytest_integration_req_014_run1",
+        "command": "python3 -m pytest tests/integration/test_deficit-and-need-signal-extraction.py -q",
+        "passed": true
+      },
+      {
+        "name": "pytest_hardening_req_014_run1",
+        "command": "python3 -m pytest tests/hardening/test_deficit-and-need-signal-extraction_hardening.py -q",
+        "passed": true
+      },
+      {
+        "name": "pytest_contract_req_014_run2",
+        "command": "python3 -m pytest tests/contracts/test_deficit-and-need-signal-extraction.py -q",
+        "passed": true
+      },
+      {
+        "name": "pytest_integration_req_014_run2",
+        "command": "python3 -m pytest tests/integration/test_deficit-and-need-signal-extraction.py -q",
+        "passed": true
+      },
+      {
+        "name": "pytest_hardening_req_014_run2",
+        "command": "python3 -m pytest tests/hardening/test_deficit-and-need-signal-extraction_hardening.py -q",
+        "passed": true
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_deficit-and-need-signal-extraction.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_deficit-and-need-signal-extraction.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_deficit-and-need-signal-extraction_hardening.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_deficit-and-need-signal-extraction.py -q",
+        "run": 2,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_deficit-and-need-signal-extraction.py -q",
+        "run": 2,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_deficit-and-need-signal-extraction_hardening.py -q",
+        "run": 2,
+        "passed": true
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/hardening/test_deficit-and-need-signal-extraction_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-044/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "pending",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_014_stale_source_reason_codes_verified",
+      "req_014_missing_context_doc_reason_codes_verified",
+      "req_014_context_bundle_replay_stable"
+    ]
+  }
+}
