@@ -1,0 +1,89 @@
+{
+  "schema_version": "REQ-004-peer-project-mission-and-scope-ingestion-input.v1",
+  "current_project": {
+    "project_id": "optimus-prime-gsd-fusion"
+  },
+  "peer_projects": [
+    {
+      "project_id": "op-tools-strategy",
+      "documents": [
+        {
+          "document_type": "mission",
+          "source_path": "op-tools/strategy/mission.md",
+          "content": "Strategy mission baseline.\nStrategy MUST publish recommendation IDs for planner traceability.\nStrategy should reuse shared packet schema templates across projects."
+        },
+        {
+          "document_type": "scope",
+          "source_path": "op-tools/strategy/scope.md",
+          "content": "Planner SHALL ingest strategy outputs as first-class context.\nTeams can leverage common strategy packet validators to reduce drift."
+        },
+        {
+          "document_type": "roadmap",
+          "source_path": "op-tools/strategy/roadmap.md",
+          "content": "Roadmap MUST stay in sync with quarter goals."
+        }
+      ]
+    },
+    {
+      "project_id": "op-tools-research",
+      "documents": [
+        {
+          "document_type": "mission",
+          "source_path": "op-tools/research/mission.md",
+          "content": "Research mission baseline.\nResearch MUST capture provenance for each external reference."
+        },
+        {
+          "document_type": "scope",
+          "source_path": "op-tools/research/scope.md",
+          "content": "Planner should reuse shared research topic templates.\nResearch outputs need to integrate with planner context ingestion."
+        }
+      ]
+    }
+  ],
+  "earth_sweep_context": {
+    "evidence_refs": [
+      {
+        "peer_project_id": "op-tools-strategy",
+        "source_path": "op-tools/strategy/mission.md",
+        "line_number": 2,
+        "evidence_ref": "earth-sweep/op-tools-strategy/mission#L2"
+      },
+      {
+        "peer_project_id": "op-tools-strategy",
+        "source_path": "op-tools/strategy/mission.md",
+        "line_number": 3,
+        "evidence_ref": "earth-sweep/op-tools-strategy/mission#L3"
+      },
+      {
+        "peer_project_id": "op-tools-strategy",
+        "source_path": "op-tools/strategy/scope.md",
+        "line_number": 1,
+        "evidence_ref": "earth-sweep/op-tools-strategy/scope#L1"
+      },
+      {
+        "peer_project_id": "op-tools-strategy",
+        "source_path": "op-tools/strategy/scope.md",
+        "line_number": 2,
+        "evidence_ref": "earth-sweep/op-tools-strategy/scope#L2"
+      },
+      {
+        "peer_project_id": "op-tools-research",
+        "source_path": "op-tools/research/mission.md",
+        "line_number": 2,
+        "evidence_ref": "earth-sweep/op-tools-research/mission#L2"
+      },
+      {
+        "peer_project_id": "op-tools-research",
+        "source_path": "op-tools/research/scope.md",
+        "line_number": 1,
+        "evidence_ref": "earth-sweep/op-tools-research/scope#L1"
+      },
+      {
+        "peer_project_id": "op-tools-research",
+        "source_path": "op-tools/research/scope.md",
+        "line_number": 2,
+        "evidence_ref": "earth-sweep/op-tools-research/scope#L2"
+      }
+    ]
+  }
+}

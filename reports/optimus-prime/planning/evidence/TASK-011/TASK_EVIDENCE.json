@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-unknown",
+  "phase_id": "phase-1",
+  "task_id": "TASK-011",
+  "requirement_ids": [
+    "REQ-004"
+  ],
+  "updated_at": "2026-03-14T23:03:07Z",
+  "dev": {
+    "status": "done",
+    "checks": [
+      {
+        "name": "req004_peer_ingestion_behavior",
+        "passed": true,
+        "details": "REQ-004 ingestion emits deterministic recommendation fields, evidence refs, and open-risk fallback for missing Earth-sweep refs."
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_peer-project-mission-and-scope-ingestion.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/integration/test_peer-project-mission-and-scope-ingestion.py",
+      "reports/optimus-prime/planning/evidence/TASK-011/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": []
+  }
+}
