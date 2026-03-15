@@ -23,6 +23,19 @@ Each `initiatives[]` row must include:
   - `end_week` (non-negative integer, required, must be `>= start_week`)
 - `evidence_refs` (array of strings, optional)
 
+Optional broad-sweep context:
+- `broad_sweep_context.earth_sweep_evidence_refs` (array of strings, optional)
+- `broad_sweep_context.project_context[]` (array, optional)
+  - `project_id` (string, required, must be one of `related_project_ids`)
+  - `context_note` (string, optional)
+  - `evidence_refs` (array of strings, optional)
+- `broad_sweep_context.unresolved_direction_ideas[]` (array, optional)
+  - `idea_id` (string, optional; deterministic id derived when omitted)
+  - `project_id` (string, required, must be one of `related_project_ids`)
+  - `summary` (string, required)
+  - `related_conflict_ids` (array of strings, optional)
+  - `evidence_refs` (array of strings, optional)
+
 ## Output contract
 The detection output is a canonical REQ-017 surface with:
 - `requirement_id`: `REQ-017`
@@ -34,17 +47,26 @@ The detection output is a canonical REQ-017 surface with:
 - `overlap_index`: deterministic initiative/capability index
 - `overlapping_initiatives`: overlaps across related projects on shared capability tags and overlapping timeline windows
 - `conflicting_directions`: overlap rows with incompatible `direction_signal` values
-- `evidence_refs`: sorted unique evidence refs across overlaps
+- `cross_project_context`: normalized broad-sweep context usage
+- `evidence_refs`: deterministic evidence partitions for overlap detection, Earth sweep, recommendation support, and out-of-scope refs
+- `recommendation`: evidence-backed conflict resolution recommendations, cross-project obligations, and open risks
 - `decision`: `conflicts_detected`, `overlap_detected_no_direction_conflict`, or `no_overlap_or_conflict_detected`
 - `summary`: deterministic count summary
 
 Conflict row guarantees:
 - Every `conflicting_directions[]` row includes `risk_level` and `resolution_options`.
 - Every `resolution_options[]` row includes `option_id`, `summary`, and `risk_tradeoff`.
+- Every overlap/conflict row includes `earth_sweep_evidence_refs` and `out_of_scope_evidence_refs`.
+
+Recommendation guardrails:
+- `recommendation.conflict_resolution_recommendations[]` rows include `recommendation_id`, `summary`, `risk_level`, `resolution_options`, and Earth-sweep-backed `evidence_refs`.
+- `recommendation.cross_project_obligations[]` must only be emitted when `evidence_refs` intersect `broad_sweep_context.earth_sweep_evidence_refs`.
+- Unresolved ideas from broad-sweep context must be emitted under `recommendation.open_risks[]`; they are never silently promoted into obligations.
 
 ## Executable artifacts
 - Fixture input: `examples/fixtures/overlap-and-conflict-detection.json`
 - Contract test: `tests/contracts/test_overlap-and-conflict-detection.py`
+- Integration test: `tests/integration/test_overlap-and-conflict-detection.py`
 - Canonical sample output: `strategy/current/samples/REQ-017_overlap-and-conflict-detection.sample.json`
 
 ## Sample structure
@@ -65,7 +87,9 @@ Its top-level shape is:
   "overlap_index": {},
   "overlapping_initiatives": [],
   "conflicting_directions": [],
-  "evidence_refs": [],
+  "cross_project_context": {},
+  "evidence_refs": {},
+  "recommendation": {},
   "decision": "conflicts_detected",
   "summary": ""
 }

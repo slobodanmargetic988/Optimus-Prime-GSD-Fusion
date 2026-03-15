@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-canary-001",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-053",
+  "requirement_ids": [
+    "REQ-017"
+  ],
+  "updated_at": "2026-03-15T03:45:00Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "integration_overlap_and_conflict_detection_run_1",
+        "command": "python3 -m pytest tests/integration/test_overlap-and-conflict-detection.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.01s"
+      },
+      {
+        "name": "contract_overlap_and_conflict_detection_run_1",
+        "command": "python3 -m pytest tests/contracts/test_overlap-and-conflict-detection.py -q",
+        "exit_code": 0,
+        "summary": "5 passed in 0.02s"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-017",
+        "status": "pass",
+        "details": "Overlap/conflict detection now consumes broad-sweep Earth evidence, emits deterministic cross-project context usage plus recommendation fields, and records unresolved ideas as open risks instead of unsupported obligations."
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_workers/w07.py",
+      "contracts/req/REQ-017_overlap-and-conflict-detection.md",
+      "examples/fixtures/overlap-and-conflict-detection.json",
+      "strategy/current/samples/REQ-017_overlap-and-conflict-detection.sample.json",
+      "tests/contracts/test_overlap-and-conflict-detection.py",
+      "tests/integration/test_overlap-and-conflict-detection.py"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_017_integration_green",
+      "earth_evidence_refs_partitioned",
+      "cross_project_context_usage_verified",
+      "unresolved_ideas_recorded_as_open_risks"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

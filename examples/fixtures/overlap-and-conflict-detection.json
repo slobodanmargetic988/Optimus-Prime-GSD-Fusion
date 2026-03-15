@@ -4,6 +4,41 @@
     "earth-core-runtime",
     "shared-observability"
   ],
+  "broad_sweep_context": {
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
+      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+    ],
+    "project_context": [
+      {
+        "project_id": "earth-core-runtime",
+        "context_note": "Earth sweep shows runtime-signals migration pressure during the same delivery window.",
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json"
+        ]
+      },
+      {
+        "project_id": "shared-observability",
+        "context_note": "Observability budget controls intersect dispatch-safety rollout timing.",
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ]
+      }
+    ],
+    "unresolved_direction_ideas": [
+      {
+        "idea_id": "idea-shared-observability-budget-gate",
+        "project_id": "shared-observability",
+        "summary": "Confirm whether telemetry budget gating should defer dispatch-safety rollout until exporter cost controls land.",
+        "related_conflict_ids": [
+          "conflict-002"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ]
+      }
+    ]
+  },
   "initiatives": [
     {
       "initiative_id": "initiative-runtime-signal-router",
