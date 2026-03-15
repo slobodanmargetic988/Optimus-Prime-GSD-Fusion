@@ -41,6 +41,40 @@ def test_req_024_builder_serializes_expected_contract_anchors():
 
     bundle = json.loads(serialization["serialized_context_bundle"])
     assert [row["stage_id"] for row in bundle["llm_call_chain"]["stages"]] == anchors["stage_ids"]
+    processing_behavior = bundle["strategy_context"]["processing_behavior"]
+    assert processing_behavior["strategy"] == "llm-first-broad-sweep"
+    assert processing_behavior["reasoning_mode"] == module.EXECUTION_MODE
+    assert processing_behavior["heuristic_summarization_only"] is False
+    assert processing_behavior["context_usage"]["cross_project_context_used"] is True
+    assert processing_behavior["context_usage"]["cross_project_projects_considered"] == [
+        "ground-control-hub",
+        "runtime-orchestrator",
+    ]
+    recommendation = processing_behavior["recommendation"]
+    assert set(recommendation.keys()) == {
+        "decision",
+        "rationale",
+        "confidence",
+        "evidence_refs",
+        "recommended_actions",
+        "cross_project_obligations",
+        "open_risks",
+    }
+    assert recommendation["decision"] == "proceed"
+    assert recommendation["confidence"] == "high"
+    assert recommendation["evidence_refs"] == processing_behavior["context_usage"]["evidence_refs_used"]
+    assert [row["action_id"] for row in recommendation["recommended_actions"]] == [
+        "action-local-bundle-hardening",
+        "action-runtime-orchestration-alignment",
+    ]
+    assert [row["obligation_id"] for row in recommendation["cross_project_obligations"]] == [
+        "obligation-action-runtime-orchestration-alignment"
+    ]
+    assert recommendation["open_risks"] == []
+    assert bundle["strategy_context"]["open_risks"][0]["evidence_refs"] == [
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-076/TASK_EVIDENCE.json",
+    ]
 
     metadata = payload["call_metadata"]
     assert metadata["canonical_input_sha256"] == anchors["canonical_input_sha256"]
@@ -59,6 +93,14 @@ def test_req_024_builder_normalizes_stage_order_and_required_context_keys_for_re
         "strategy_runtime_entrypoint",
         "processing_behavior",
     ]
+    reordered_input["strategy_context"]["processing_behavior"]["context_inputs"]["cross_project_context"] = list(
+        reversed(reordered_input["strategy_context"]["processing_behavior"]["context_inputs"]["cross_project_context"])
+    )
+    reordered_input["strategy_context"]["processing_behavior"]["context_inputs"]["candidate_recommendations"] = list(
+        reversed(
+            reordered_input["strategy_context"]["processing_behavior"]["context_inputs"]["candidate_recommendations"]
+        )
+    )
     payload_b = module.build_req_024_strategy_context_bundle_serialization(**reordered_input)
 
     assert payload_a == payload_b

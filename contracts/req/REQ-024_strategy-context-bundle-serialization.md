@@ -36,6 +36,8 @@ Serialize strategy context into a versioned machine-readable bundle consumed by 
 
 Notes:
 - `strategy_context` must be a non-empty JSON object and JSON-serializable.
+- When `strategy_context.processing_behavior.context_inputs` is present, builder derives deterministic broad-sweep `processing_behavior.strategy`, `reasoning_mode`, `context_usage`, and `recommendation` fields from those inputs.
+- Cross-project recommendations may only serialize into `cross_project_obligations` when Earth-sweep evidence refs are present; otherwise they remain `open_risks`.
 - `llm_call_chain.stages` are normalized into deterministic order by `stage_id` and stage metadata.
 - `required_context_keys` are normalized as sorted unique strings.
 - If `bundle_generated_at_utc` is omitted, builder fallback is `1970-01-01T00:00:00Z`.
@@ -68,6 +70,7 @@ REQ-024 output shape:
 
 ## Determinism And Validator Ingestion
 - Serialized context bundle is canonical JSON (`sort_keys`, compact separators) to support replay diffing.
+- REQ-024 normalizes broad-sweep `processing_behavior.context_inputs` into deterministic field order and stable recommendation/context-usage lists for downstream validator ingestion.
 - `context_bundle_sha256` and `context_bundle_byte_length` must match serialized payload bytes.
 - Validator replays the payload from `call_metadata.canonical_input` and requires byte-for-byte payload equality.
 

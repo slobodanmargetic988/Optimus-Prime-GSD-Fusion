@@ -3044,18 +3044,164 @@ def _normalize_req_024_timestamp(raw_value: Any, *, field_name: str) -> str:
     return _normalize_req_020_timestamp(raw_value, field_name=field_name, allow_empty=False)
 
 
+def _normalize_req_024_json_value(raw_value: Any, *, field_name: str) -> Any:
+    try:
+        canonical_json = json.dumps(raw_value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    except TypeError as exc:
+        raise ValueError(f"{field_name} must be JSON-serializable: {exc}") from exc
+    return json.loads(canonical_json)
+
+
+def _normalize_req_024_strategy_runtime_entrypoint(raw_value: Any) -> dict[str, Any]:
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("strategy_context.strategy_runtime_entrypoint must be an object")
+
+    normalized = _normalize_req_024_json_value(
+        raw_value,
+        field_name="strategy_context.strategy_runtime_entrypoint",
+    )
+    if not isinstance(normalized, dict) or not normalized:
+        raise ValueError("strategy_context.strategy_runtime_entrypoint must include at least one key")
+
+    for field_name in ("runtime_mode", "execution_mode", "revision_identity"):
+        if field_name in normalized:
+            normalized[field_name] = _require_nonempty_text(
+                normalized.get(field_name),
+                field_name=f"strategy_context.strategy_runtime_entrypoint.{field_name}",
+            )
+
+    for field_name in ("target_project_root", "earth_root", "output_root"):
+        if field_name in normalized:
+            normalized[field_name] = _normalize_root(
+                normalized.get(field_name),
+                field_name=f"strategy_context.strategy_runtime_entrypoint.{field_name}",
+            )
+
+    return normalized
+
+
+def _normalize_req_024_context_inputs(raw_value: Any) -> dict[str, Any]:
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("strategy_context.processing_behavior.context_inputs must be an object")
+
+    target_project = raw_value.get("target_project")
+    if not isinstance(target_project, Mapping):
+        raise ValueError("strategy_context.processing_behavior.context_inputs.target_project must be an object")
+    normalized_target_project = {
+        "project_root": _normalize_root(
+            target_project.get("project_root"),
+            field_name="strategy_context.processing_behavior.context_inputs.target_project.project_root",
+        ),
+        "evidence_refs": _normalize_string_list(
+            target_project.get("evidence_refs"),
+            field_name="strategy_context.processing_behavior.context_inputs.target_project.evidence_refs",
+        ),
+    }
+
+    earth_sweep = raw_value.get("earth_sweep")
+    if not isinstance(earth_sweep, Mapping):
+        raise ValueError("strategy_context.processing_behavior.context_inputs.earth_sweep must be an object")
+    normalized_earth_sweep = {
+        "earth_root": _normalize_root(
+            earth_sweep.get("earth_root"),
+            field_name="strategy_context.processing_behavior.context_inputs.earth_sweep.earth_root",
+        ),
+        "evidence_refs": _normalize_string_list(
+            earth_sweep.get("evidence_refs"),
+            field_name="strategy_context.processing_behavior.context_inputs.earth_sweep.evidence_refs",
+        ),
+    }
+
+    normalized_cross_project_context = _normalize_cross_project_context(raw_value.get("cross_project_context"))
+    normalized_candidate_recommendations = _normalize_candidate_recommendations(raw_value.get("candidate_recommendations"))
+    normalized_earth_sweep_source_artifacts = _normalize_earth_sweep_source_artifacts(
+        raw_value.get("earth_sweep_source_artifacts")
+    )
+    normalized_required_context_documents = _normalize_required_context_documents(
+        raw_value.get("required_context_documents")
+    )
+
+    normalized = {
+        "target_project": normalized_target_project,
+        "earth_sweep": normalized_earth_sweep,
+        "cross_project_context": normalized_cross_project_context,
+        "candidate_recommendations": normalized_candidate_recommendations,
+    }
+    if normalized_earth_sweep_source_artifacts:
+        normalized["earth_sweep_source_artifacts"] = normalized_earth_sweep_source_artifacts
+    if normalized_required_context_documents:
+        normalized["required_context_documents"] = normalized_required_context_documents
+    return normalized
+
+
+def _normalize_req_024_processing_behavior(raw_value: Any) -> dict[str, Any]:
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("strategy_context.processing_behavior must be an object")
+
+    normalized_context_inputs = _normalize_req_024_context_inputs(raw_value.get("context_inputs"))
+    return _build_processing_behavior(
+        target_project_root=normalized_context_inputs["target_project"]["project_root"],
+        earth_root=normalized_context_inputs["earth_sweep"]["earth_root"],
+        target_project_evidence_refs=list(normalized_context_inputs["target_project"]["evidence_refs"]),
+        earth_sweep_evidence_refs=list(normalized_context_inputs["earth_sweep"]["evidence_refs"]),
+        cross_project_context=list(normalized_context_inputs["cross_project_context"]),
+        candidate_recommendations=list(normalized_context_inputs["candidate_recommendations"]),
+        earth_sweep_source_artifacts=list(normalized_context_inputs.get("earth_sweep_source_artifacts", [])),
+        required_context_documents=list(normalized_context_inputs.get("required_context_documents", [])),
+    )
+
+
+def _normalize_req_024_open_risks(raw_value: Any, *, field_name: str) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError(f"{field_name} must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"{field_name}[{index}] must be an object")
+        risk_id = _require_nonempty_text(item.get("risk_id"), field_name=f"{field_name}[{index}].risk_id")
+        summary = _require_nonempty_text(item.get("summary"), field_name=f"{field_name}[{index}].summary")
+        reason_code = _require_nonempty_text(item.get("reason_code"), field_name=f"{field_name}[{index}].reason_code")
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"{field_name}[{index}].evidence_refs",
+        )
+        if not evidence_refs:
+            raise ValueError(f"{field_name}[{index}].evidence_refs must include at least one ref")
+        normalized.append(
+            {
+                "risk_id": risk_id,
+                "summary": summary,
+                "reason_code": reason_code,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(key=lambda row: (row["risk_id"], row["summary"], row["reason_code"]))
+    return normalized
+
+
 def _normalize_req_024_strategy_context(raw_value: Any) -> dict[str, Any]:
     if not isinstance(raw_value, Mapping):
         raise ValueError("strategy_context must be an object")
     if not raw_value:
         raise ValueError("strategy_context must include at least one key")
-    try:
-        canonical_json = json.dumps(raw_value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    except TypeError as exc:
-        raise ValueError(f"strategy_context must be JSON-serializable: {exc}") from exc
-    normalized = json.loads(canonical_json)
-    if not isinstance(normalized, dict):
-        raise ValueError("strategy_context must normalize to a JSON object")
+
+    normalized: dict[str, Any] = {}
+    for key in sorted(raw_value.keys()):
+        value = raw_value.get(key)
+        if key == "processing_behavior":
+            normalized[key] = _normalize_req_024_processing_behavior(value)
+            continue
+        if key == "strategy_runtime_entrypoint":
+            normalized[key] = _normalize_req_024_strategy_runtime_entrypoint(value)
+            continue
+        if key == "open_risks":
+            normalized[key] = _normalize_req_024_open_risks(value, field_name="strategy_context.open_risks")
+            continue
+        normalized[key] = _normalize_req_024_json_value(value, field_name=f"strategy_context.{key}")
     return normalized
 
 
@@ -3294,11 +3440,17 @@ def validate_req_024_strategy_context_bundle_serialization(payload: Mapping[str,
                 "must match normalized strategy_context_bundle_serialization.llm_call_chain"
             )
         strategy_context_in_bundle = parsed_bundle.get("strategy_context")
-        if not isinstance(strategy_context_in_bundle, Mapping) or not strategy_context_in_bundle:
-            errors.append(
-                "strategy_context_bundle_serialization.serialized_context_bundle.strategy_context "
-                "must be a non-empty object"
-            )
+        try:
+            normalized_strategy_context_in_bundle = _normalize_req_024_strategy_context(strategy_context_in_bundle)
+        except ValueError as exc:
+            errors.append(str(exc))
+            normalized_strategy_context_in_bundle = None
+        else:
+            if strategy_context_in_bundle != normalized_strategy_context_in_bundle:
+                errors.append(
+                    "strategy_context_bundle_serialization.serialized_context_bundle.strategy_context "
+                    "must match normalized strategy context content"
+                )
 
         recomputed_sha256 = hashlib.sha256(serialized_context_bundle.encode("utf-8")).hexdigest()
         if context_bundle_sha256 != recomputed_sha256:

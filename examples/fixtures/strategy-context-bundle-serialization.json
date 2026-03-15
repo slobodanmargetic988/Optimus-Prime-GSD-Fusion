@@ -4,27 +4,80 @@
       "strategy_runtime_entrypoint": {
         "runtime_mode": "llm-first",
         "execution_mode": "long-thinking",
-        "revision_identity": "rev-req024-fixture-r1"
+        "target_project_root": "/workspace/projects/optimus-prime",
+        "earth_root": "/workspace/projects/Earth",
+        "output_root": "/workspace/projects/optimus-prime/strategy/current/out",
+        "revision_identity": "rev-req024-fixture-r2"
       },
       "processing_behavior": {
-        "context_usage": {
-          "target_project_context_used": true,
-          "earth_sweep_context_used": true,
-          "cross_project_context_used": true,
-          "evidence_refs_used": [
-            "reports/optimus-prime/planning/evidence/TASK-075/TASK_EVIDENCE.json",
-            "reports/optimus-prime/research/evidence/REQ-008.json"
+        "context_inputs": {
+          "target_project": {
+            "project_root": "/workspace/projects/optimus-prime",
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-076/TASK_EVIDENCE.json"
+            ]
+          },
+          "earth_sweep": {
+            "earth_root": "/workspace/projects/Earth",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/portfolio.json"
+            ]
+          },
+          "cross_project_context": [
+            {
+              "project_id": "runtime-orchestrator",
+              "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+              ],
+              "context_note": "Lease coordination constraints from Earth sweep."
+            },
+            {
+              "project_id": "ground-control-hub",
+              "project_root": "/workspace/projects/Earth/ground-control-hub",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+              ],
+              "context_note": "Shared ingestion interface evidence from Earth sweep."
+            }
+          ],
+          "candidate_recommendations": [
+            {
+              "action_id": "action-runtime-orchestration-alignment",
+              "summary": "Align bundle consumer expectations with runtime-orchestrator before rollout.",
+              "rationale": "Cross-project bundle consumption is only safe when Earth-sweep evidence confirms the peer contract.",
+              "action_scope": "cross-project",
+              "requires_earth_evidence": true,
+              "project_id": "runtime-orchestrator",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+              ],
+              "next_step": "Open linked rollout task with Earth sweep evidence attached."
+            },
+            {
+              "action_id": "action-local-bundle-hardening",
+              "summary": "Harden bundle serialization replay coverage in the local strategy pipeline.",
+              "rationale": "Local evidence confirms REQ-024 replay requirements and validator ingestion scope.",
+              "action_scope": "local",
+              "requires_earth_evidence": false,
+              "project_id": "",
+              "evidence_refs": [
+                "reports/optimus-prime/planning/evidence/TASK-076/TASK_EVIDENCE.json"
+              ],
+              "next_step": "Keep deterministic replay assertions in the integration suite."
+            }
           ]
-        },
-        "recommendation": {
-          "decision": "ready-for-llm-chain",
-          "confidence": "high"
         }
       },
       "open_risks": [
         {
           "risk_id": "risk-req024-001",
-          "reason_code": "missing_peer_signal"
+          "summary": "Confirm peer rollout window before enabling cross-project bundle consumers.",
+          "reason_code": "pending_peer_rollout_window",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/evidence/TASK-076/TASK_EVIDENCE.json"
+          ]
         }
       ]
     },
@@ -67,9 +120,9 @@
       "s01-context-ingest",
       "s02-constraint-check"
     ],
-    "context_bundle_sha256": "59c3f8a6e6cadc6b367845dac835abe9f5d6fc34470062fe3ac91cc3786cee45",
-    "context_bundle_byte_length": 1239,
-    "canonical_input_sha256": "59c3f8a6e6cadc6b367845dac835abe9f5d6fc34470062fe3ac91cc3786cee45",
-    "reproducible_call_id": "req024-59c3f8a6e6cadc6b"
+    "context_bundle_sha256": "718a1096241964ae3c4ffd894ee3493478317d5fd769ef87bec1e13d717b301a",
+    "context_bundle_byte_length": 5684,
+    "canonical_input_sha256": "718a1096241964ae3c4ffd894ee3493478317d5fd769ef87bec1e13d717b301a",
+    "reproducible_call_id": "req024-718a1096241964ae"
   }
 }
