@@ -1,0 +1,84 @@
+{
+  "task_identifier": "TASK-067",
+  "requirement_id": "REQ-021",
+  "summary": {
+    "result": "pass",
+    "reason_codes": [],
+    "checked_at": "2026-03-15T23:16:39Z",
+    "notes": "REQ-021 provenance-ledger hardening edge cases validated with deterministic reason-code behavior across two consecutive verification runs on branch op-simple-canary-20260314T214654Z-ac48393d-w03."
+  },
+  "verification_runs": [
+    {
+      "run_id": "run-1-2026-03-15T23:15Z",
+      "checks": [
+        {
+          "command": "python3 -m pytest tests/contracts/test_evidence-provenance-ledger-for-context.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/integration/test_evidence-provenance-ledger-for-context.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/hardening/test_evidence-provenance-ledger-for-context_hardening.py -q",
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "run_id": "run-2-2026-03-15T23:16Z",
+      "checks": [
+        {
+          "command": "python3 -m pytest tests/contracts/test_evidence-provenance-ledger-for-context.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/integration/test_evidence-provenance-ledger-for-context.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/hardening/test_evidence-provenance-ledger-for-context_hardening.py -q",
+          "exit_code": 0
+        }
+      ]
+    }
+  ],
+  "edge_case_rows": [
+    {
+      "edge_case": "stale_source_artifact_detected_during_earth_sweep",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "stale_earth_sweep_source_artifact"
+      ],
+      "evidence_refs": [
+        "tests/hardening/test_evidence-provenance-ledger-for-context_hardening.py::test_req_021_hardening_stale_source_artifact_detected_during_earth_sweep"
+      ]
+    },
+    {
+      "edge_case": "missing_mission_scope_or_peer_project_doc",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "missing_mission_doc",
+        "missing_scope_doc",
+        "missing_peer_project_doc"
+      ],
+      "evidence_refs": [
+        "tests/hardening/test_evidence-provenance-ledger-for-context_hardening.py::test_req_021_hardening_missing_mission_scope_or_peer_project_doc_with_explicit_reason_codes"
+      ]
+    },
+    {
+      "edge_case": "replay_stability_of_context_bundle_serialization",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "deterministic_context_bundle_serialization"
+      ],
+      "evidence_refs": [
+        "tests/hardening/test_evidence-provenance-ledger-for-context_hardening.py::test_req_021_hardening_context_bundle_serialization_replay_stable_across_repeated_runs"
+      ]
+    }
+  ],
+  "unresolved_blocker_rows": []
+}

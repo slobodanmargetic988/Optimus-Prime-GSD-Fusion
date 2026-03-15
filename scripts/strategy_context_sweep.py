@@ -42,6 +42,8 @@ REQ_013_SCHEMA_VERSION = "req-013.capability-catalog-extraction.v1"
 REQ_013_REQUIREMENT_ID = "REQ-013"
 REQ_019_SCHEMA_VERSION = "req-019.execution-resource-context-ingestion.v1"
 REQ_019_REQUIREMENT_ID = "REQ-019"
+REQ_021_SCHEMA_VERSION = "req-021.evidence-provenance-ledger-for-context.v1"
+REQ_021_REQUIREMENT_ID = "REQ-021"
 
 
 def _require_nonempty_text(value: Any, *, field_name: str) -> str:
@@ -2185,6 +2187,649 @@ def validate_req_019_execution_resource_context_ingestion(payload: Mapping[str, 
     if metadata.get("processing_input_sha256") != expected_processing_digest:
         errors.append("call_metadata.processing_input_sha256 does not match processing input")
     if metadata.get("processing_call_id") != f"req019-processing-{expected_processing_digest[:16]}":
+        errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    return errors
+
+
+def _normalize_req_021_claim_kind(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return "context"
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string when provided")
+    claim_kind = raw_value.strip().lower()
+    if claim_kind not in {
+        "context",
+        "mission",
+        "scope",
+        "peer-project",
+        "earth-sweep",
+        "recommendation",
+        "runtime",
+    }:
+        raise ValueError(
+            f"{field_name} must be one of: context, mission, scope, peer-project, earth-sweep, recommendation, runtime"
+        )
+    return claim_kind
+
+
+def _normalize_req_021_context_claims(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("context_claims must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    seen_claim_ids: set[str] = set()
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"context_claims[{index}] must be an object")
+
+        claim_id = _require_nonempty_text(item.get("claim_id"), field_name=f"context_claims[{index}].claim_id")
+        if claim_id in seen_claim_ids:
+            raise ValueError(f"context_claims[{index}].claim_id must be unique")
+        seen_claim_ids.add(claim_id)
+
+        claim_text = _require_nonempty_text(item.get("claim_text"), field_name=f"context_claims[{index}].claim_text")
+        claim_kind = _normalize_req_021_claim_kind(
+            item.get("claim_kind"),
+            field_name=f"context_claims[{index}].claim_kind",
+        )
+        source_artifact_refs = _normalize_string_list(
+            item.get("source_artifact_refs"),
+            field_name=f"context_claims[{index}].source_artifact_refs",
+        )
+        if not source_artifact_refs:
+            raise ValueError(f"context_claims[{index}].source_artifact_refs must not be empty")
+        evidence_refs = _collect_unique_refs(
+            source_artifact_refs,
+            _normalize_string_list(
+                item.get("evidence_refs"),
+                field_name=f"context_claims[{index}].evidence_refs",
+            ),
+        )
+        supporting_project_ids = _normalize_string_list(
+            item.get("supporting_project_ids"),
+            field_name=f"context_claims[{index}].supporting_project_ids",
+        )
+        context_note = _normalize_context_note(
+            item.get("context_note"),
+            field_name=f"context_claims[{index}].context_note",
+        )
+        normalized.append(
+            {
+                "claim_id": claim_id,
+                "claim_text": claim_text,
+                "claim_kind": claim_kind,
+                "source_artifact_refs": source_artifact_refs,
+                "evidence_refs": evidence_refs,
+                "supporting_project_ids": supporting_project_ids,
+                "context_note": context_note,
+            }
+        )
+
+    normalized.sort(key=lambda row: (row["claim_id"], row["claim_kind"], row["claim_text"]))
+    return normalized
+
+
+def _build_req_021_source_artifact_catalog(
+    *,
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    catalog: list[dict[str, Any]] = []
+    for row in earth_sweep_source_artifacts:
+        catalog.append(
+            {
+                "artifact_ref": row["artifact_ref"],
+                "artifact_kind": "earth-sweep-source-artifact",
+                "status": row["status"],
+                "project_id": "",
+                "evidence_refs": _collect_unique_refs([row["artifact_ref"]], row["evidence_refs"]),
+            }
+        )
+    for row in required_context_documents:
+        catalog.append(
+            {
+                "artifact_ref": row["doc_ref"],
+                "artifact_kind": f"{row['doc_kind']}-document",
+                "status": row["status"],
+                "project_id": row["project_id"],
+                "evidence_refs": _collect_unique_refs([row["doc_ref"]], row["evidence_refs"]),
+            }
+        )
+    catalog.sort(key=lambda row: (row["artifact_ref"], row["artifact_kind"], row["project_id"], row["status"]))
+    return catalog
+
+
+def _req_021_artifact_status_lookup(
+    artifact_catalog: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    lookup: dict[str, list[dict[str, Any]]] = {}
+    for row in artifact_catalog:
+        lookup.setdefault(row["artifact_ref"], []).append(row)
+    return lookup
+
+
+def _build_req_021_open_risks(
+    *,
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    open_risks: list[dict[str, Any]] = []
+    for source_artifact in earth_sweep_source_artifacts:
+        if source_artifact["status"] != "stale":
+            continue
+        open_risks.append(
+            {
+                "risk_id": f"risk-earth-source-{_stable_id_fragment(source_artifact['artifact_ref'])}",
+                "summary": f"Earth sweep source artifact is stale: {source_artifact['artifact_ref']}",
+                "reason_code": "stale_earth_sweep_source_artifact",
+                "required_evidence_refs": _collect_unique_refs(
+                    [source_artifact["artifact_ref"]],
+                    source_artifact["evidence_refs"],
+                ),
+            }
+        )
+
+    for required_doc in required_context_documents:
+        if required_doc["status"] != "missing":
+            continue
+        reason_code = {
+            "mission": "missing_mission_doc",
+            "scope": "missing_scope_doc",
+            "peer-project": "missing_peer_project_doc",
+        }[required_doc["doc_kind"]]
+        summary = (
+            f"Required peer-project document is missing for '{required_doc['project_id']}': {required_doc['doc_ref']}"
+            if required_doc["doc_kind"] == "peer-project"
+            else f"Required {required_doc['doc_kind']} document is missing: {required_doc['doc_ref']}"
+        )
+        open_risks.append(
+            {
+                "risk_id": f"risk-context-doc-{_stable_id_fragment(required_doc['doc_kind'], required_doc['project_id'], required_doc['doc_ref'])}",
+                "summary": summary,
+                "reason_code": reason_code,
+                "required_evidence_refs": _collect_unique_refs(
+                    [required_doc["doc_ref"]],
+                    required_doc["evidence_refs"],
+                ),
+            }
+        )
+
+    open_risks.sort(key=lambda row: (row["reason_code"], row["risk_id"], row["summary"]))
+    return open_risks
+
+
+def _build_req_021_provenance_ledger(
+    *,
+    context_claims: list[dict[str, Any]],
+    source_artifact_catalog: list[dict[str, Any]],
+) -> dict[str, Any]:
+    artifact_lookup = _req_021_artifact_status_lookup(source_artifact_catalog)
+    ledger_claims: list[dict[str, Any]] = []
+    for claim in context_claims:
+        source_artifacts: list[dict[str, Any]] = []
+        for artifact_ref in claim["source_artifact_refs"]:
+            catalog_rows = artifact_lookup.get(artifact_ref, [])
+            if catalog_rows:
+                for catalog_row in catalog_rows:
+                    source_artifacts.append(
+                        {
+                            "artifact_ref": artifact_ref,
+                            "artifact_kind": catalog_row["artifact_kind"],
+                            "status": catalog_row["status"],
+                            "project_id": catalog_row["project_id"],
+                            "evidence_refs": list(catalog_row["evidence_refs"]),
+                        }
+                    )
+            else:
+                source_artifacts.append(
+                    {
+                        "artifact_ref": artifact_ref,
+                        "artifact_kind": "declared-source-artifact",
+                        "status": "referenced",
+                        "project_id": "",
+                        "evidence_refs": [artifact_ref],
+                    }
+                )
+
+        source_artifacts.sort(
+            key=lambda row: (row["artifact_ref"], row["artifact_kind"], row["project_id"], row["status"])
+        )
+        ledger_claims.append(
+            {
+                "claim_id": claim["claim_id"],
+                "claim_text": claim["claim_text"],
+                "claim_kind": claim["claim_kind"],
+                "supporting_project_ids": list(claim["supporting_project_ids"]),
+                "context_note": claim["context_note"],
+                "source_artifacts": source_artifacts,
+                "evidence_refs": _collect_unique_refs(
+                    claim["evidence_refs"],
+                    *[row["evidence_refs"] for row in source_artifacts],
+                ),
+            }
+        )
+
+    ledger_claims.sort(key=lambda row: (row["claim_id"], row["claim_kind"], row["claim_text"]))
+    ledger_evidence_refs = _collect_unique_refs(
+        *[row["evidence_refs"] for row in ledger_claims],
+        *[row["evidence_refs"] for row in source_artifact_catalog],
+    )
+    return {
+        "ledger_strategy": "context-claim-to-source-artifact",
+        "claim_count": len(ledger_claims),
+        "claims": ledger_claims,
+        "source_artifact_catalog": source_artifact_catalog,
+        "claim_ids": [row["claim_id"] for row in ledger_claims],
+        "evidence_refs": ledger_evidence_refs,
+    }
+
+
+def _canonical_req_021_processing_input(
+    *,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+    context_claims: list[dict[str, Any]],
+) -> dict[str, Any]:
+    canonical = _canonical_processing_input(
+        target_project_evidence_refs=target_project_evidence_refs,
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+        candidate_recommendations=[],
+        earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+        required_context_documents=required_context_documents,
+    )
+    canonical["context_claims"] = context_claims
+    return canonical
+
+
+def _build_req_021_processing_behavior(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+    context_claims: list[dict[str, Any]],
+    provenance_ledger: Mapping[str, Any],
+) -> dict[str, Any]:
+    open_risks = _build_req_021_open_risks(
+        earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+        required_context_documents=required_context_documents,
+    )
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    source_artifact_refs = _collect_unique_refs(
+        *[
+            _collect_unique_refs([row["artifact_ref"]], row["evidence_refs"])
+            for row in earth_sweep_source_artifacts
+        ],
+        *[
+            _collect_unique_refs([row["doc_ref"]], row["evidence_refs"])
+            for row in required_context_documents
+        ],
+    )
+    recommendation_refs = _collect_unique_refs(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        source_artifact_refs,
+        list(provenance_ledger.get("evidence_refs", [])),
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    decision = "resolve-context-gaps" if open_risks else "ledger-ready"
+    recommended_actions = []
+    if provenance_ledger.get("claim_count"):
+        recommended_actions.append(
+            {
+                "action_id": "audit-provenance-ledger",
+                "summary": "Audit every context claim against its concrete source artifacts before replay.",
+                "rationale": "Evidence provenance ledger maps key context claims to deterministic artifact references.",
+                "action_scope": "local",
+                "next_step": "Use provenance_ledger.claims[].source_artifacts during replay diagnostics.",
+                "evidence_refs": list(provenance_ledger.get("evidence_refs", [])),
+            }
+        )
+
+    context_inputs: dict[str, Any] = {
+        "target_project": {
+            "project_root": target_project_root,
+            "evidence_refs": target_project_evidence_refs,
+        },
+        "earth_sweep": {
+            "earth_root": earth_root,
+            "evidence_refs": earth_sweep_evidence_refs,
+        },
+        "cross_project_context": cross_project_context,
+        "earth_sweep_source_artifacts": earth_sweep_source_artifacts,
+        "required_context_documents": required_context_documents,
+        "context_claims": context_claims,
+    }
+    context_usage = {
+        "target_project_context_used": bool(target_project_evidence_refs),
+        "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+        "cross_project_context_used": bool(cross_project_context),
+        "cross_project_projects_considered": sorted({row["project_id"] for row in cross_project_context}),
+        "provenance_claim_count": int(provenance_ledger.get("claim_count", 0)),
+        "provenance_claim_ids": list(provenance_ledger.get("claim_ids", [])),
+        "source_artifact_refs_used": source_artifact_refs,
+        "evidence_refs_used": recommendation_refs,
+        "earth_sweep_source_artifacts_used": bool(earth_sweep_source_artifacts),
+        "required_context_documents_used": bool(required_context_documents),
+    }
+    return {
+        "strategy": "evidence-provenance-ledger-for-context",
+        "reasoning_mode": EXECUTION_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": context_inputs,
+        "context_usage": context_usage,
+        "recommendation": {
+            "decision": decision,
+            "rationale": (
+                "Refresh stale or missing context artifacts before relying on the provenance ledger for replay."
+                if open_risks
+                else "Provenance ledger is ready for deterministic context replay and audit."
+            ),
+            "confidence": "medium" if open_risks else ("high" if recommended_actions else "low"),
+            "evidence_refs": recommendation_refs,
+            "recommended_actions": recommended_actions,
+            "cross_project_obligations": [],
+            "open_risks": open_risks,
+        },
+    }
+
+
+def _build_req_021_context_bundle(
+    *,
+    processing_behavior: Mapping[str, Any],
+    provenance_ledger: Mapping[str, Any],
+) -> dict[str, Any]:
+    bundle = {
+        "processing_context_inputs": processing_behavior.get("context_inputs", {}),
+        "processing_context_usage": processing_behavior.get("context_usage", {}),
+        "recommendation": processing_behavior.get("recommendation", {}),
+        "provenance_ledger": provenance_ledger,
+    }
+    canonical_json = json.dumps(bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return {
+        "schema_version": "req-021.evidence-provenance-context-bundle.v1",
+        "canonical_json": canonical_json,
+        "sha256": hashlib.sha256(canonical_json.encode("utf-8")).hexdigest(),
+    }
+
+
+def build_req_021_evidence_provenance_ledger_for_context(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    target_project_evidence_refs: list[str] | None = None,
+    earth_sweep_evidence_refs: list[str] | None = None,
+    cross_project_context: list[Mapping[str, Any]] | None = None,
+    earth_sweep_source_artifacts: list[Mapping[str, Any]] | None = None,
+    required_context_documents: list[Mapping[str, Any]] | None = None,
+    context_claims: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_nonempty_text(revision_identity, field_name="revision_identity")
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_context = _normalize_cross_project_context(cross_project_context)
+    normalized_earth_source_artifacts = _normalize_earth_sweep_source_artifacts(earth_sweep_source_artifacts)
+    normalized_required_documents = _normalize_required_context_documents(required_context_documents)
+    normalized_context_claims = _normalize_req_021_context_claims(context_claims)
+
+    canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    digest = _canonical_input_digest(canonical_input)
+    source_artifact_catalog = _build_req_021_source_artifact_catalog(
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+    )
+    provenance_ledger = _build_req_021_provenance_ledger(
+        context_claims=normalized_context_claims,
+        source_artifact_catalog=source_artifact_catalog,
+    )
+    processing_behavior = _build_req_021_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        context_claims=normalized_context_claims,
+        provenance_ledger=provenance_ledger,
+    )
+    context_bundle = _build_req_021_context_bundle(
+        processing_behavior=processing_behavior,
+        provenance_ledger=provenance_ledger,
+    )
+    canonical_processing_input = _canonical_req_021_processing_input(
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        context_claims=normalized_context_claims,
+    )
+    processing_digest = _canonical_input_digest(canonical_processing_input)
+
+    return {
+        "schema_version": REQ_021_SCHEMA_VERSION,
+        "requirement_id": REQ_021_REQUIREMENT_ID,
+        "evidence_provenance_ledger_for_context": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+        },
+        "processing_behavior": processing_behavior,
+        "provenance_ledger": provenance_ledger,
+        "context_bundle": context_bundle,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req021-{digest[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_digest,
+            "processing_call_id": f"req021-processing-{processing_digest[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+        },
+    }
+
+
+def validate_req_021_evidence_provenance_ledger_for_context(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "evidence_provenance_ledger_for_context",
+        "processing_behavior",
+        "provenance_ledger",
+        "context_bundle",
+        "call_metadata",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_021_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_021_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_021_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_021_REQUIREMENT_ID}")
+
+    extraction = payload.get("evidence_provenance_ledger_for_context")
+    if not isinstance(extraction, Mapping):
+        errors.append("evidence_provenance_ledger_for_context must be an object")
+        return errors
+
+    for required_field in (
+        "runtime_mode",
+        "execution_mode",
+        "target_project_root",
+        "earth_root",
+        "output_root",
+        "revision_identity",
+    ):
+        if required_field not in extraction:
+            errors.append(f"evidence_provenance_ledger_for_context missing {required_field}")
+
+    if extraction.get("runtime_mode") != RUNTIME_MODE:
+        errors.append(f"runtime_mode must be {RUNTIME_MODE}")
+    if extraction.get("execution_mode") != EXECUTION_MODE:
+        errors.append(f"execution_mode must be {EXECUTION_MODE}")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        return errors
+
+    target_context = context_inputs.get("target_project")
+    earth_context = context_inputs.get("earth_sweep")
+    if not isinstance(target_context, Mapping):
+        errors.append("processing_behavior.context_inputs.target_project must be an object")
+        return errors
+    if not isinstance(earth_context, Mapping):
+        errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+        return errors
+
+    try:
+        normalized_target_root = _normalize_root(
+            extraction.get("target_project_root"),
+            field_name="evidence_provenance_ledger_for_context.target_project_root",
+        )
+        normalized_earth_root = _normalize_root(
+            extraction.get("earth_root"),
+            field_name="evidence_provenance_ledger_for_context.earth_root",
+        )
+        normalized_output_root = _normalize_root(
+            extraction.get("output_root"),
+            field_name="evidence_provenance_ledger_for_context.output_root",
+        )
+        normalized_revision_identity = _require_nonempty_text(
+            extraction.get("revision_identity"),
+            field_name="evidence_provenance_ledger_for_context.revision_identity",
+        )
+        normalized_target_refs = _normalize_string_list(
+            target_context.get("evidence_refs"),
+            field_name="processing_behavior.context_inputs.target_project.evidence_refs",
+        )
+        normalized_earth_refs = _normalize_string_list(
+            earth_context.get("evidence_refs"),
+            field_name="processing_behavior.context_inputs.earth_sweep.evidence_refs",
+        )
+        normalized_cross_context = _normalize_cross_project_context(context_inputs.get("cross_project_context"))
+        normalized_earth_source_artifacts = _normalize_earth_sweep_source_artifacts(
+            context_inputs.get("earth_sweep_source_artifacts")
+        )
+        normalized_required_documents = _normalize_required_context_documents(
+            context_inputs.get("required_context_documents")
+        )
+        normalized_context_claims = _normalize_req_021_context_claims(context_inputs.get("context_claims"))
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
+
+    expected_provenance_ledger = _build_req_021_provenance_ledger(
+        context_claims=normalized_context_claims,
+        source_artifact_catalog=_build_req_021_source_artifact_catalog(
+            earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+            required_context_documents=normalized_required_documents,
+        ),
+    )
+    if payload.get("provenance_ledger") != expected_provenance_ledger:
+        errors.append("provenance_ledger must mirror deterministic claim-to-source-artifact mapping")
+
+    expected_processing_behavior = _build_req_021_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        context_claims=normalized_context_claims,
+        provenance_ledger=expected_provenance_ledger,
+    )
+    if dict(processing_behavior) != expected_processing_behavior:
+        errors.append("processing_behavior must mirror deterministic provenance-ledger processing output")
+
+    context_bundle = payload.get("context_bundle")
+    if not isinstance(context_bundle, Mapping):
+        errors.append("context_bundle must be an object")
+        return errors
+    expected_context_bundle = _build_req_021_context_bundle(
+        processing_behavior=expected_processing_behavior,
+        provenance_ledger=expected_provenance_ledger,
+    )
+    if dict(context_bundle) != expected_context_bundle:
+        errors.append("context_bundle must mirror deterministic provenance-ledger serialization")
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+    expected_canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    expected_digest = _canonical_input_digest(expected_canonical_input)
+    if metadata.get("canonical_input") != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized ingestion anchors")
+    if metadata.get("canonical_input_sha256") != expected_digest:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != f"req021-{expected_digest[:16]}":
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    expected_processing_input = _canonical_req_021_processing_input(
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        context_claims=normalized_context_claims,
+    )
+    expected_processing_digest = _canonical_input_digest(expected_processing_input)
+    if metadata.get("canonical_processing_input") != expected_processing_input:
+        errors.append("call_metadata.canonical_processing_input must mirror normalized processing input")
+    if metadata.get("processing_input_sha256") != expected_processing_digest:
+        errors.append("call_metadata.processing_input_sha256 does not match processing input")
+    if metadata.get("processing_call_id") != f"req021-processing-{expected_processing_digest[:16]}":
         errors.append("call_metadata.processing_call_id does not match processing digest")
 
     return errors

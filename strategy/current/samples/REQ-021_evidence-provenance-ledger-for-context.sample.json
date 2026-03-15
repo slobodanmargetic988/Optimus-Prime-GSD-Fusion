@@ -1,0 +1,459 @@
+{
+  "schema_version": "req-021.evidence-provenance-ledger-for-context.v1",
+  "requirement_id": "REQ-021",
+  "evidence_provenance_ledger_for_context": {
+    "runtime_mode": "llm-first",
+    "execution_mode": "long-thinking",
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req021-fixture-r1"
+  },
+  "processing_behavior": {
+    "strategy": "evidence-provenance-ledger-for-context",
+    "reasoning_mode": "long-thinking",
+    "heuristic_summarization_only": false,
+    "context_inputs": {
+      "target_project": {
+        "project_root": "/workspace/projects/optimus-prime",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json"
+        ]
+      },
+      "earth_sweep": {
+        "earth_root": "/workspace/projects/Earth",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/portfolio.json"
+        ]
+      },
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime scheduler constraints and shared budgets."
+        }
+      ],
+      "earth_sweep_source_artifacts": [
+        {
+          "artifact_ref": "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "status": "fresh",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json"
+          ]
+        }
+      ],
+      "required_context_documents": [
+        {
+          "doc_kind": "mission",
+          "doc_ref": "mission.md",
+          "status": "present",
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "doc_kind": "peer-project",
+          "doc_ref": "docs/runtime-orchestrator/overview.md",
+          "status": "present",
+          "project_id": "runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "doc_kind": "scope",
+          "doc_ref": "scope.md",
+          "status": "present",
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "context_claims": [
+        {
+          "claim_id": "claim-mission-authority",
+          "claim_text": "Mission anchors the strategy around deterministic replay and auditability.",
+          "claim_kind": "mission",
+          "source_artifact_refs": [
+            "mission.md"
+          ],
+          "evidence_refs": [
+            "mission.md",
+            "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json"
+          ],
+          "supporting_project_ids": [],
+          "context_note": ""
+        },
+        {
+          "claim_id": "claim-peer-runtime",
+          "claim_text": "Runtime orchestrator constraints shape replay-safe context assembly.",
+          "claim_kind": "peer-project",
+          "source_artifact_refs": [
+            "docs/runtime-orchestrator/overview.md",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "evidence_refs": [
+            "docs/runtime-orchestrator/overview.md",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "supporting_project_ids": [
+            "runtime-orchestrator"
+          ],
+          "context_note": ""
+        },
+        {
+          "claim_id": "claim-scope-ledger",
+          "claim_text": "Scope requires every key context claim to resolve to concrete source artifacts.",
+          "claim_kind": "scope",
+          "source_artifact_refs": [
+            "scope.md"
+          ],
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json",
+            "scope.md"
+          ],
+          "supporting_project_ids": [],
+          "context_note": ""
+        }
+      ]
+    },
+    "context_usage": {
+      "target_project_context_used": true,
+      "earth_sweep_context_used": true,
+      "cross_project_context_used": true,
+      "cross_project_projects_considered": [
+        "runtime-orchestrator"
+      ],
+      "provenance_claim_count": 3,
+      "provenance_claim_ids": [
+        "claim-mission-authority",
+        "claim-peer-runtime",
+        "claim-scope-ledger"
+      ],
+      "source_artifact_refs_used": [
+        "docs/runtime-orchestrator/overview.md",
+        "mission.md",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json",
+        "scope.md"
+      ],
+      "evidence_refs_used": [
+        "docs/runtime-orchestrator/overview.md",
+        "mission.md",
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json",
+        "scope.md"
+      ],
+      "earth_sweep_source_artifacts_used": true,
+      "required_context_documents_used": true
+    },
+    "recommendation": {
+      "decision": "ledger-ready",
+      "rationale": "Provenance ledger is ready for deterministic context replay and audit.",
+      "confidence": "high",
+      "evidence_refs": [
+        "docs/runtime-orchestrator/overview.md",
+        "mission.md",
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json",
+        "scope.md"
+      ],
+      "recommended_actions": [
+        {
+          "action_id": "audit-provenance-ledger",
+          "summary": "Audit every context claim against its concrete source artifacts before replay.",
+          "rationale": "Evidence provenance ledger maps key context claims to deterministic artifact references.",
+          "action_scope": "local",
+          "next_step": "Use provenance_ledger.claims[].source_artifacts during replay diagnostics.",
+          "evidence_refs": [
+            "docs/runtime-orchestrator/overview.md",
+            "mission.md",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json",
+            "scope.md"
+          ]
+        }
+      ],
+      "cross_project_obligations": [],
+      "open_risks": []
+    }
+  },
+  "provenance_ledger": {
+    "ledger_strategy": "context-claim-to-source-artifact",
+    "claim_count": 3,
+    "claims": [
+      {
+        "claim_id": "claim-mission-authority",
+        "claim_text": "Mission anchors the strategy around deterministic replay and auditability.",
+        "claim_kind": "mission",
+        "supporting_project_ids": [],
+        "context_note": "",
+        "source_artifacts": [
+          {
+            "artifact_ref": "mission.md",
+            "artifact_kind": "mission-document",
+            "status": "present",
+            "project_id": "",
+            "evidence_refs": [
+              "mission.md",
+              "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json"
+            ]
+          }
+        ],
+        "evidence_refs": [
+          "mission.md",
+          "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "claim_id": "claim-peer-runtime",
+        "claim_text": "Runtime orchestrator constraints shape replay-safe context assembly.",
+        "claim_kind": "peer-project",
+        "supporting_project_ids": [
+          "runtime-orchestrator"
+        ],
+        "context_note": "",
+        "source_artifacts": [
+          {
+            "artifact_ref": "docs/runtime-orchestrator/overview.md",
+            "artifact_kind": "peer-project-document",
+            "status": "present",
+            "project_id": "runtime-orchestrator",
+            "evidence_refs": [
+              "docs/runtime-orchestrator/overview.md",
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ]
+          },
+          {
+            "artifact_ref": "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+            "artifact_kind": "earth-sweep-source-artifact",
+            "status": "fresh",
+            "project_id": "",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ]
+          }
+        ],
+        "evidence_refs": [
+          "docs/runtime-orchestrator/overview.md",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ]
+      },
+      {
+        "claim_id": "claim-scope-ledger",
+        "claim_text": "Scope requires every key context claim to resolve to concrete source artifacts.",
+        "claim_kind": "scope",
+        "supporting_project_ids": [],
+        "context_note": "",
+        "source_artifacts": [
+          {
+            "artifact_ref": "scope.md",
+            "artifact_kind": "scope-document",
+            "status": "present",
+            "project_id": "",
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json",
+              "scope.md"
+            ]
+          }
+        ],
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json",
+          "scope.md"
+        ]
+      }
+    ],
+    "source_artifact_catalog": [
+      {
+        "artifact_ref": "docs/runtime-orchestrator/overview.md",
+        "artifact_kind": "peer-project-document",
+        "status": "present",
+        "project_id": "runtime-orchestrator",
+        "evidence_refs": [
+          "docs/runtime-orchestrator/overview.md",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ]
+      },
+      {
+        "artifact_ref": "mission.md",
+        "artifact_kind": "mission-document",
+        "status": "present",
+        "project_id": "",
+        "evidence_refs": [
+          "mission.md",
+          "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "artifact_ref": "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "artifact_kind": "earth-sweep-source-artifact",
+        "status": "fresh",
+        "project_id": "",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ]
+      },
+      {
+        "artifact_ref": "scope.md",
+        "artifact_kind": "scope-document",
+        "status": "present",
+        "project_id": "",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json",
+          "scope.md"
+        ]
+      }
+    ],
+    "claim_ids": [
+      "claim-mission-authority",
+      "claim-peer-runtime",
+      "claim-scope-ledger"
+    ],
+    "evidence_refs": [
+      "docs/runtime-orchestrator/overview.md",
+      "mission.md",
+      "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+      "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+      "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json",
+      "scope.md"
+    ]
+  },
+  "context_bundle": {
+    "schema_version": "req-021.evidence-provenance-context-bundle.v1",
+    "canonical_json": "{\"processing_context_inputs\":{\"context_claims\":[{\"claim_id\":\"claim-mission-authority\",\"claim_kind\":\"mission\",\"claim_text\":\"Mission anchors the strategy around deterministic replay and auditability.\",\"context_note\":\"\",\"evidence_refs\":[\"mission.md\",\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\"],\"source_artifact_refs\":[\"mission.md\"],\"supporting_project_ids\":[]},{\"claim_id\":\"claim-peer-runtime\",\"claim_kind\":\"peer-project\",\"claim_text\":\"Runtime orchestrator constraints shape replay-safe context assembly.\",\"context_note\":\"\",\"evidence_refs\":[\"docs/runtime-orchestrator/overview.md\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"source_artifact_refs\":[\"docs/runtime-orchestrator/overview.md\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"supporting_project_ids\":[\"runtime-orchestrator\"]},{\"claim_id\":\"claim-scope-ledger\",\"claim_kind\":\"scope\",\"claim_text\":\"Scope requires every key context claim to resolve to concrete source artifacts.\",\"context_note\":\"\",\"evidence_refs\":[\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\",\"scope.md\"],\"source_artifact_refs\":[\"scope.md\"],\"supporting_project_ids\":[]}],\"cross_project_context\":[{\"context_note\":\"Runtime scheduler constraints and shared budgets.\",\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"project_id\":\"runtime-orchestrator\",\"project_root\":\"/workspace/projects/Earth/runtime-orchestrator\"}],\"earth_sweep\":{\"earth_root\":\"/workspace/projects/Earth\",\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/portfolio.json\"]},\"earth_sweep_source_artifacts\":[{\"artifact_ref\":\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\",\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json\"],\"status\":\"fresh\"}],\"required_context_documents\":[{\"doc_kind\":\"mission\",\"doc_ref\":\"mission.md\",\"evidence_refs\":[\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\"],\"project_id\":\"\",\"status\":\"present\"},{\"doc_kind\":\"peer-project\",\"doc_ref\":\"docs/runtime-orchestrator/overview.md\",\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"project_id\":\"runtime-orchestrator\",\"status\":\"present\"},{\"doc_kind\":\"scope\",\"doc_ref\":\"scope.md\",\"evidence_refs\":[\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\"],\"project_id\":\"\",\"status\":\"present\"}],\"target_project\":{\"evidence_refs\":[\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\"],\"project_root\":\"/workspace/projects/optimus-prime\"}},\"processing_context_usage\":{\"cross_project_context_used\":true,\"cross_project_projects_considered\":[\"runtime-orchestrator\"],\"earth_sweep_context_used\":true,\"earth_sweep_source_artifacts_used\":true,\"evidence_refs_used\":[\"docs/runtime-orchestrator/overview.md\",\"mission.md\",\"reports/earth/sweeps/2026-03-15/portfolio.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\",\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\",\"scope.md\"],\"provenance_claim_count\":3,\"provenance_claim_ids\":[\"claim-mission-authority\",\"claim-peer-runtime\",\"claim-scope-ledger\"],\"required_context_documents_used\":true,\"source_artifact_refs_used\":[\"docs/runtime-orchestrator/overview.md\",\"mission.md\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\",\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\",\"scope.md\"],\"target_project_context_used\":true},\"provenance_ledger\":{\"claim_count\":3,\"claim_ids\":[\"claim-mission-authority\",\"claim-peer-runtime\",\"claim-scope-ledger\"],\"claims\":[{\"claim_id\":\"claim-mission-authority\",\"claim_kind\":\"mission\",\"claim_text\":\"Mission anchors the strategy around deterministic replay and auditability.\",\"context_note\":\"\",\"evidence_refs\":[\"mission.md\",\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\"],\"source_artifacts\":[{\"artifact_kind\":\"mission-document\",\"artifact_ref\":\"mission.md\",\"evidence_refs\":[\"mission.md\",\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\"],\"project_id\":\"\",\"status\":\"present\"}],\"supporting_project_ids\":[]},{\"claim_id\":\"claim-peer-runtime\",\"claim_kind\":\"peer-project\",\"claim_text\":\"Runtime orchestrator constraints shape replay-safe context assembly.\",\"context_note\":\"\",\"evidence_refs\":[\"docs/runtime-orchestrator/overview.md\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"source_artifacts\":[{\"artifact_kind\":\"peer-project-document\",\"artifact_ref\":\"docs/runtime-orchestrator/overview.md\",\"evidence_refs\":[\"docs/runtime-orchestrator/overview.md\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"project_id\":\"runtime-orchestrator\",\"status\":\"present\"},{\"artifact_kind\":\"earth-sweep-source-artifact\",\"artifact_ref\":\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\",\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"project_id\":\"\",\"status\":\"fresh\"}],\"supporting_project_ids\":[\"runtime-orchestrator\"]},{\"claim_id\":\"claim-scope-ledger\",\"claim_kind\":\"scope\",\"claim_text\":\"Scope requires every key context claim to resolve to concrete source artifacts.\",\"context_note\":\"\",\"evidence_refs\":[\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\",\"scope.md\"],\"source_artifacts\":[{\"artifact_kind\":\"scope-document\",\"artifact_ref\":\"scope.md\",\"evidence_refs\":[\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\",\"scope.md\"],\"project_id\":\"\",\"status\":\"present\"}],\"supporting_project_ids\":[]}],\"evidence_refs\":[\"docs/runtime-orchestrator/overview.md\",\"mission.md\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\",\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\",\"scope.md\"],\"ledger_strategy\":\"context-claim-to-source-artifact\",\"source_artifact_catalog\":[{\"artifact_kind\":\"peer-project-document\",\"artifact_ref\":\"docs/runtime-orchestrator/overview.md\",\"evidence_refs\":[\"docs/runtime-orchestrator/overview.md\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"project_id\":\"runtime-orchestrator\",\"status\":\"present\"},{\"artifact_kind\":\"mission-document\",\"artifact_ref\":\"mission.md\",\"evidence_refs\":[\"mission.md\",\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\"],\"project_id\":\"\",\"status\":\"present\"},{\"artifact_kind\":\"earth-sweep-source-artifact\",\"artifact_ref\":\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\",\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"project_id\":\"\",\"status\":\"fresh\"},{\"artifact_kind\":\"scope-document\",\"artifact_ref\":\"scope.md\",\"evidence_refs\":[\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\",\"scope.md\"],\"project_id\":\"\",\"status\":\"present\"}]},\"recommendation\":{\"confidence\":\"high\",\"cross_project_obligations\":[],\"decision\":\"ledger-ready\",\"evidence_refs\":[\"docs/runtime-orchestrator/overview.md\",\"mission.md\",\"reports/earth/sweeps/2026-03-15/portfolio.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\",\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\",\"scope.md\"],\"open_risks\":[],\"rationale\":\"Provenance ledger is ready for deterministic context replay and audit.\",\"recommended_actions\":[{\"action_id\":\"audit-provenance-ledger\",\"action_scope\":\"local\",\"evidence_refs\":[\"docs/runtime-orchestrator/overview.md\",\"mission.md\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\",\"reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json\",\"scope.md\"],\"next_step\":\"Use provenance_ledger.claims[].source_artifacts during replay diagnostics.\",\"rationale\":\"Evidence provenance ledger maps key context claims to deterministic artifact references.\",\"summary\":\"Audit every context claim against its concrete source artifacts before replay.\"}]}}",
+    "sha256": "c6e21b4302fc19898511821cde564c04aebbfadb317abc8cb4c3e57b4b076faf"
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "f2def9b0238985e47daf401e002c1937db8441219eea704f2fe82fa7ce2b00ae",
+    "reproducible_call_id": "req021-f2def9b0238985e4",
+    "canonical_input": {
+      "earth_root": "/workspace/projects/Earth",
+      "execution_mode": "long-thinking",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req021-fixture-r1",
+      "runtime_mode": "llm-first",
+      "target_project_root": "/workspace/projects/optimus-prime"
+    },
+    "processing_input_sha256": "321ee771dff2ab3bd639d20a84491679d44eb3abb19a8313ea404b205f0d9aa6",
+    "processing_call_id": "req021-processing-321ee771dff2ab3b",
+    "canonical_processing_input": {
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json"
+      ],
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime scheduler constraints and shared budgets."
+        }
+      ],
+      "candidate_recommendations": [],
+      "earth_sweep_source_artifacts": [
+        {
+          "artifact_ref": "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "status": "fresh",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json"
+          ]
+        }
+      ],
+      "required_context_documents": [
+        {
+          "doc_kind": "mission",
+          "doc_ref": "mission.md",
+          "status": "present",
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "doc_kind": "peer-project",
+          "doc_ref": "docs/runtime-orchestrator/overview.md",
+          "status": "present",
+          "project_id": "runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "doc_kind": "scope",
+          "doc_ref": "scope.md",
+          "status": "present",
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "context_claims": [
+        {
+          "claim_id": "claim-mission-authority",
+          "claim_text": "Mission anchors the strategy around deterministic replay and auditability.",
+          "claim_kind": "mission",
+          "source_artifact_refs": [
+            "mission.md"
+          ],
+          "evidence_refs": [
+            "mission.md",
+            "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json"
+          ],
+          "supporting_project_ids": [],
+          "context_note": ""
+        },
+        {
+          "claim_id": "claim-peer-runtime",
+          "claim_text": "Runtime orchestrator constraints shape replay-safe context assembly.",
+          "claim_kind": "peer-project",
+          "source_artifact_refs": [
+            "docs/runtime-orchestrator/overview.md",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "evidence_refs": [
+            "docs/runtime-orchestrator/overview.md",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "supporting_project_ids": [
+            "runtime-orchestrator"
+          ],
+          "context_note": ""
+        },
+        {
+          "claim_id": "claim-scope-ledger",
+          "claim_text": "Scope requires every key context claim to resolve to concrete source artifacts.",
+          "claim_kind": "scope",
+          "source_artifact_refs": [
+            "scope.md"
+          ],
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-067/TASK_EVIDENCE.json",
+            "scope.md"
+          ],
+          "supporting_project_ids": [],
+          "context_note": ""
+        }
+      ]
+    }
+  }
+}
