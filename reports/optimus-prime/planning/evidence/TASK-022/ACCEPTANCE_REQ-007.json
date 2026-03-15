@@ -1,0 +1,32 @@
+{
+  "req_id": "REQ-007",
+  "summary": "Ground graph snapshot ingestion is accepted as canonical cross-project linkage context for planning because contract, integration, and hardening checks passed and evidence anchors preserve project-era-plan-phase-run lineage.",
+  "evidence_refs": [
+    {
+      "type": "test_output",
+      "test_path": "tests/contracts/test_ground-graph-snapshot-ingestion.py",
+      "command": "python3 -m pytest tests/contracts/test_ground-graph-snapshot-ingestion.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-022/contract_ground-graph-snapshot-ingestion.output.txt",
+      "observed_output": "4 passed in 0.01s"
+    },
+    {
+      "type": "test_output",
+      "test_path": "tests/integration/test_ground-graph-snapshot-ingestion.py",
+      "command": "python3 -m pytest tests/integration/test_ground-graph-snapshot-ingestion.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-022/integration_ground-graph-snapshot-ingestion.output.txt",
+      "observed_output": "3 passed in 0.01s"
+    },
+    {
+      "type": "test_output",
+      "test_path": "tests/hardening/test_ground-graph-snapshot-ingestion_hardening.py",
+      "command": "python3 -m pytest tests/hardening/test_ground-graph-snapshot-ingestion_hardening.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-022/hardening_ground-graph-snapshot-ingestion.output.txt",
+      "observed_output": "3 passed in 0.01s"
+    }
+  ],
+  "consumability_verdict": "accepted_with_open_risks",
+  "open_risks": [
+    "Acceptance is bounded to fixture-backed evidence; production-scale graph volumes and live sweep latency are not exercised by this task evidence set.",
+    "Cross-project context remains consumable for planning, but recommendation output can legitimately contain explicit open_risks (for missing evidence or out-of-graph projects) and downstream planners must keep those unresolved risks visible."
+  ]
+}

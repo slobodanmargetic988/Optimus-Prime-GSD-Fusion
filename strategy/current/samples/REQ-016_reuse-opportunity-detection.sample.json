@@ -1,0 +1,68 @@
+{
+  "requirement_id": "REQ-016",
+  "surface": "reuse_opportunity_detection",
+  "schema_version": "req-016.reuse-opportunity-detection.v1",
+  "evaluated_at": "2026-03-15T01:30:00Z",
+  "active_project_id": "optimus-prime-gsd-fusion",
+  "reuse_index": {
+    "required_capability_ids": [
+      "ground-graph-snapshot-ingestion",
+      "reuse-signal-ranking"
+    ],
+    "source_project_ids": [
+      "earth-core-runtime",
+      "shared-observability"
+    ]
+  },
+  "reuse_recommendations": [
+    {
+      "capability_id": "ground-graph-snapshot-ingestion",
+      "intent": "Reuse stable ground-graph ingestion instead of rebuilding parsing and lineage normalization.",
+      "required_interfaces": [
+        "json-canonical-v1",
+        "lineage-anchor-index"
+      ],
+      "reuse_candidates": [
+        {
+          "source_project_id": "earth-core-runtime",
+          "capability_id": "ground-graph-snapshot-ingestion",
+          "functionality": "Canonical lineage ingestion and checksum generation for ground graph snapshots.",
+          "provided_interfaces": [
+            "cli",
+            "json-canonical-v1",
+            "lineage-anchor-index"
+          ],
+          "adoption_path": [
+            "Import scripts/strategy_context_sweep.py::ingest_ground_graph_snapshot into strategy orchestration.",
+            "Pass source snapshot path and ingested_at timestamp from active run context.",
+            "Persist canonical output as REQ-016 evidence before planning packets are emitted."
+          ],
+          "compatibility_constraints": [
+            "Input snapshot must include project_id, era_id, plan_id, phase_id, run_id, linked_project_id, relationship.",
+            "Ingestion output must preserve sorted unique lineage indexes for deterministic diffs."
+          ],
+          "evidence_refs": [
+            "contracts/req/REQ-007_ground-graph-snapshot-ingestion.md",
+            "strategy/current/samples/REQ-007_ground-graph-snapshot-ingestion.sample.json"
+          ]
+        }
+      ]
+    }
+  ],
+  "no_reuse_detected": [
+    {
+      "capability_id": "reuse-signal-ranking",
+      "intent": "Reuse ranking heuristics for cross-project recommendation ordering.",
+      "required_interfaces": [
+        "risk-weight-v2"
+      ],
+      "reason": "no_compatible_existing_functionality"
+    }
+  ],
+  "evidence_refs": [
+    "contracts/req/REQ-007_ground-graph-snapshot-ingestion.md",
+    "strategy/current/samples/REQ-007_ground-graph-snapshot-ingestion.sample.json"
+  ],
+  "decision": "partial_reuse_recommended",
+  "summary": "1 capability reuse recommendation(s); 1 capability gap(s)."
+}
