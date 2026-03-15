@@ -183,6 +183,60 @@ def _coerce_proposed_obligations(payload: dict[str, Any]) -> list[dict[str, Any]
     return obligations
 
 
+def _coerce_required_capability_ids(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("required_capability_ids")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise SweepError("input_error", "required_capability_ids must be a list", stage="input")
+    return sorted(_normalize_string_list(raw))
+
+
+def _coerce_project_capabilities(row: dict[str, Any], index: int) -> list[dict[str, str]]:
+    raw = row.get("provided_capabilities")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise SweepError(
+            "input_error",
+            f"projects[{index}].provided_capabilities must be a list",
+            stage="input",
+        )
+
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for cap_index, value in enumerate(raw):
+        if not isinstance(value, dict):
+            raise SweepError(
+                "input_error",
+                f"projects[{index}].provided_capabilities[{cap_index}] must be an object",
+                stage="input",
+            )
+        capability_id = _required_str(value, "capability_id")
+        source_version = _required_str(value, "source_version")
+        source_ref = _optional_str(value, "source_ref")
+        dedupe_key = (capability_id, source_version, source_ref)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        capability_row = {
+            "capability_id": capability_id,
+            "source_version": source_version,
+        }
+        if source_ref:
+            capability_row["source_ref"] = source_ref
+        out.append(capability_row)
+
+    out.sort(
+        key=lambda row: (
+            row["capability_id"],
+            row["source_version"],
+            str(row.get("source_ref") or ""),
+        )
+    )
+    return out
+
+
 def _resolve_artifact_path(project_root: Path, artifact_path: str) -> Path:
     candidate = Path(artifact_path).expanduser()
     if not candidate.is_absolute():
@@ -215,7 +269,7 @@ def _missing_artifact_reason_code(artifact_key: str) -> str:
     return "missing_planning_artifact"
 
 
-def _validate_project_row(row: Any, index: int) -> tuple[str, Path, dict[str, str]]:
+def _validate_project_row(row: Any, index: int) -> tuple[str, Path, dict[str, str], list[dict[str, str]]]:
     if not isinstance(row, dict):
         raise SweepError("input_error", f"projects[{index}] must be an object", stage="input")
     project_id = _required_str(row, "project_id")
@@ -227,7 +281,8 @@ def _validate_project_row(row: Any, index: int) -> tuple[str, Path, dict[str, st
         if not text:
             raise SweepError("input_error", f"projects[{index}].artifacts.{key} is required", stage="input")
         artifact_paths[key] = text
-    return project_id, root_path, artifact_paths
+    provided_capabilities = _coerce_project_capabilities(row, index)
+    return project_id, root_path, artifact_paths, provided_capabilities
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
@@ -235,10 +290,12 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     thresholds = _coerce_threshold_map(payload)
     decision_policy = _coerce_decision_policy(payload)
     proposed_obligations = _coerce_proposed_obligations(payload)
+    required_capability_ids = _coerce_required_capability_ids(payload)
     projects_in = _required_list(payload, "projects")
 
     results: list[dict[str, Any]] = []
     project_ids_in_scope: list[str] = []
+    project_capability_sources: dict[str, list[dict[str, str]]] = {}
     earth_sweep_evidence_refs: set[str] = set()
     recommendation_evidence_refs: set[str] = set()
     open_risks: list[dict[str, Any]] = []
@@ -254,8 +311,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
     for idx, project_row in enumerate(projects_in):
-        project_id, project_root, artifact_paths = _validate_project_row(project_row, idx)
+        project_id, project_root, artifact_paths, provided_capabilities = _validate_project_row(project_row, idx)
         project_ids_in_scope.append(project_id)
+        project_capability_sources[project_id] = provided_capabilities
         artifact_out: dict[str, dict[str, Any]] = {}
         project_evidence_refs: set[str] = set()
         project_counts = {"fresh": 0, "stale": 0, "missing": 0, "include": 0, "downgrade": 0, "exclude": 0}
@@ -325,6 +383,13 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             totals[decision] += 1
 
         totals["projects"] += 1
+        provided_capability_ids = sorted({row["capability_id"] for row in provided_capabilities})
+        provided_capability_id_set = set(provided_capability_ids)
+        missing_capability_ids = sorted(
+            capability_id
+            for capability_id in required_capability_ids
+            if capability_id not in provided_capability_id_set
+        )
         results.append(
             {
                 "project_id": project_id,
@@ -333,6 +398,11 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 "counts": project_counts,
                 "context_used": project_counts["include"] + project_counts["downgrade"] > 0,
                 "evidence_refs": sorted(project_evidence_refs),
+                "capability_catalog": {
+                    "provided_capabilities": provided_capabilities,
+                    "provided_capability_ids": provided_capability_ids,
+                    "missing_capability_ids": missing_capability_ids,
+                },
             }
         )
 
@@ -396,6 +466,65 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     )
     projects_with_stale_context = sorted(row["project_id"] for row in results if row["counts"]["stale"] > 0)
     context_projects_used = sorted(row["project_id"] for row in results if row.get("context_used"))
+    capability_catalog_projects: list[dict[str, Any]] = []
+    for row in results:
+        capability_catalog_projects.append(
+            {
+                "project_id": str(row["project_id"]),
+                "provided_capabilities": list(row["capability_catalog"]["provided_capabilities"]),
+                "provided_capability_ids": list(row["capability_catalog"]["provided_capability_ids"]),
+                "missing_capability_ids": list(row["capability_catalog"]["missing_capability_ids"]),
+            }
+        )
+    capability_catalog_projects.sort(key=lambda row: str(row["project_id"]))
+
+    catalog_entries: list[dict[str, Any]] = []
+    completed_capability_ids: set[str] = set()
+    missing_capability_ids: set[str] = set()
+    for capability_id in required_capability_ids:
+        providers: list[dict[str, str]] = []
+        project_ids_missing_capability: list[str] = []
+        for project_id in project_ids_in_scope:
+            source_rows = project_capability_sources.get(project_id, [])
+            matching_rows = [row for row in source_rows if row["capability_id"] == capability_id]
+            if not matching_rows:
+                project_ids_missing_capability.append(project_id)
+                continue
+            for source_row in matching_rows:
+                provider_row = {
+                    "project_id": project_id,
+                    "source_version": source_row["source_version"],
+                }
+                source_ref = _as_str(source_row.get("source_ref"))
+                if source_ref:
+                    provider_row["source_ref"] = source_ref
+                providers.append(provider_row)
+
+        providers.sort(
+            key=lambda row: (
+                row["project_id"],
+                row["source_version"],
+                str(row.get("source_ref") or ""),
+            )
+        )
+        if providers:
+            completed_capability_ids.add(capability_id)
+        else:
+            missing_capability_ids.add(capability_id)
+        catalog_entries.append(
+            {
+                "capability_id": capability_id,
+                "availability": "provided" if providers else "missing",
+                "providers": providers,
+                "source_versions": sorted({row["source_version"] for row in providers}),
+                "project_ids_missing": project_ids_missing_capability,
+                "provider_count": len(providers),
+                "projects_missing_count": len(project_ids_missing_capability),
+            }
+        )
+
+    recommended_capability_ids = sorted(missing_capability_ids)
+    already_completed_capability_ids = sorted(completed_capability_ids)
 
     return {
         "ok": True,
@@ -419,6 +548,20 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             "evidence_refs": sorted(recommendation_evidence_refs),
             "approved_cross_project_obligations": approved_obligations,
             "open_risks": open_risks,
+        },
+        "capability_catalog": {
+            "required_capability_ids": required_capability_ids,
+            "projects": capability_catalog_projects,
+            "catalog_entries": catalog_entries,
+            "already_completed_capability_ids": already_completed_capability_ids,
+            "missing_capability_ids": recommended_capability_ids,
+            "recommended_capability_ids": recommended_capability_ids,
+            "summary": {
+                "projects": len(capability_catalog_projects),
+                "required_capabilities": len(required_capability_ids),
+                "already_completed_capabilities": len(already_completed_capability_ids),
+                "missing_capabilities": len(recommended_capability_ids),
+            },
         },
         "projects": results,
         "totals": totals,
