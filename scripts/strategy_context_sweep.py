@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-002 Earth-wide repository discovery manifest surface."""
+"""REQ-002 and REQ-010 strategy context contract surfaces."""
 
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ EmitFn = Callable[[str], None]
 TOOL = "strategy-context-sweep"
 TOOL_VERSION = "1.0.0"
 MANIFEST_SCHEMA_VERSION = "req-002.earth-wide-repository-discovery-manifest.v1"
+CHANGE_DETECTION_SCHEMA_VERSION = "req-010.change-detection-since-previous-strategy-revision.v1"
+REQ010_SECTION_KEYS = ("mission_scope", "runtime_data", "ecosystem_signals")
+REQ010_CHANGE_TYPES = ("added", "removed", "updated")
 ARCHIVED_NAME_TOKENS = ("archive", "archives", "archived")
 EXCLUDE_REASON_CODES = (
     "exclude_non_directory",
@@ -852,6 +855,415 @@ def validate_earth_repository_discovery_manifest(payload: dict[str, Any]) -> lis
         expected_fingerprint = _discovery_fingerprint([row for row in projects if isinstance(row, dict)])
         if fingerprint != expected_fingerprint:
             errors.append("discovery_fingerprint must match canonical projects payload")
+
+    return errors
+
+
+_MISSING = object()
+
+
+def _canonical_json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _canonical_json_value(val) for key, val in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, list):
+        return [_canonical_json_value(item) for item in value]
+    return value
+
+
+def _join_pointer(base: str, segment: str) -> str:
+    escaped = segment.replace("~", "~0").replace("/", "~1")
+    if base == "/":
+        return f"/{escaped}"
+    return f"{base}/{escaped}"
+
+
+def _req010_change_id(
+    section_key: str,
+    path: str,
+    change_type: str,
+    previous_value: Any,
+    current_value: Any,
+) -> str:
+    payload = {
+        "section_key": section_key,
+        "path": path,
+        "change_type": change_type,
+        "previous_value": _canonical_json_value(previous_value),
+        "current_value": _canonical_json_value(current_value),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()[:16]
+    return f"chg.{section_key}.{digest}"
+
+
+def _collect_req010_section_changes(section_key: str, previous_value: Any, current_value: Any) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+
+    def _add_change(path: str, change_type: str, before: Any, after: Any) -> None:
+        changes.append(
+            {
+                "change_id": _req010_change_id(section_key, path, change_type, before, after),
+                "section_key": section_key,
+                "path": path,
+                "change_type": change_type,
+                "previous_value": _canonical_json_value(before),
+                "current_value": _canonical_json_value(after),
+            }
+        )
+
+    def _walk(before: Any, after: Any, path: str) -> None:
+        if before is _MISSING:
+            _add_change(path, "added", None, after)
+            return
+        if after is _MISSING:
+            _add_change(path, "removed", before, None)
+            return
+        if isinstance(before, dict) and isinstance(after, dict):
+            keyset = sorted(set(before.keys()) | set(after.keys()))
+            for key in keyset:
+                _walk(before.get(key, _MISSING), after.get(key, _MISSING), _join_pointer(path, str(key)))
+            return
+        if isinstance(before, list) and isinstance(after, list):
+            for idx in range(max(len(before), len(after))):
+                before_item = before[idx] if idx < len(before) else _MISSING
+                after_item = after[idx] if idx < len(after) else _MISSING
+                _walk(before_item, after_item, _join_pointer(path, str(idx)))
+            return
+        if before != after:
+            _add_change(path, "updated", before, after)
+
+    _walk(_canonical_json_value(previous_value), _canonical_json_value(current_value), "/")
+    changes.sort(key=lambda row: row["change_id"])
+    return changes
+
+
+def _normalize_req010_anchors(raw_anchors: Any) -> list[str]:
+    if not isinstance(raw_anchors, list):
+        return []
+    anchor_set = {_as_str(anchor) for anchor in raw_anchors if _as_str(anchor) in REQ010_SECTION_KEYS}
+    return [section_key for section_key in REQ010_SECTION_KEYS if section_key in anchor_set]
+
+
+def _recommendation_delta_type(previous_row: dict[str, Any] | None, summary: str, anchors: list[str]) -> str:
+    if previous_row is None:
+        return "new"
+    previous_summary = _as_str(previous_row.get("summary") or previous_row.get("title"))
+    previous_anchors = _normalize_req010_anchors(previous_row.get("anchors"))
+    if previous_summary != summary or previous_anchors != anchors:
+        return "updated"
+    return "retained"
+
+
+def _build_req010_recommendation_deltas(
+    *,
+    previous_revision: dict[str, Any],
+    current_revision: dict[str, Any],
+    section_change_ids: dict[str, list[str]],
+    all_change_ids: list[str],
+) -> list[dict[str, Any]]:
+    current_recommendations = (
+        current_revision.get("recommendations") if isinstance(current_revision.get("recommendations"), list) else []
+    )
+    previous_recommendations = (
+        previous_revision.get("recommendations") if isinstance(previous_revision.get("recommendations"), list) else []
+    )
+    previous_by_id: dict[str, dict[str, Any]] = {}
+    for row in previous_recommendations:
+        if not isinstance(row, dict):
+            continue
+        recommendation_id = _as_str(row.get("recommendation_id") or row.get("id"))
+        if recommendation_id and recommendation_id not in previous_by_id:
+            previous_by_id[recommendation_id] = row
+
+    deltas: list[dict[str, Any]] = []
+    for row in current_recommendations:
+        if not isinstance(row, dict):
+            continue
+        recommendation_id = _as_str(row.get("recommendation_id") or row.get("id"))
+        if not recommendation_id:
+            continue
+        anchors = _normalize_req010_anchors(row.get("anchors"))
+        if not anchors:
+            continue
+        change_ids = _sorted_unique_strings(
+            [
+                change_id
+                for anchor in anchors
+                for change_id in section_change_ids.get(anchor, [])
+            ]
+        )
+        if not change_ids:
+            continue
+        summary = _as_str(row.get("summary") or row.get("title")) or f"Adjust {recommendation_id} to current revision."
+        deltas.append(
+            {
+                "recommendation_id": recommendation_id,
+                "summary": summary,
+                "anchors": anchors,
+                "change_ids": change_ids,
+                "delta_type": _recommendation_delta_type(previous_by_id.get(recommendation_id), summary, anchors),
+            }
+        )
+
+    if not deltas and all_change_ids:
+        changed_anchors = [section_key for section_key in REQ010_SECTION_KEYS if section_change_ids.get(section_key)]
+        deltas.append(
+            {
+                "recommendation_id": "rec.strategy-revision-delta",
+                "summary": "Align strategy recommendations with detected revision changes.",
+                "anchors": changed_anchors,
+                "change_ids": all_change_ids,
+                "delta_type": "derived",
+            }
+        )
+
+    deltas.sort(key=lambda row: row["recommendation_id"])
+    return deltas
+
+
+def build_change_detection_since_previous_strategy_revision(
+    previous_revision: dict[str, Any],
+    current_revision: dict[str, Any],
+) -> dict[str, Any]:
+    previous_revision_id = _as_str(previous_revision.get("revision_id")) or "revision.previous.unknown"
+    current_revision_id = _as_str(current_revision.get("revision_id")) or "revision.current.unknown"
+
+    detection_sections: dict[str, dict[str, Any]] = {}
+    section_change_ids: dict[str, list[str]] = {}
+    all_changes: list[dict[str, Any]] = []
+    for section_key in REQ010_SECTION_KEYS:
+        section_changes = _collect_req010_section_changes(
+            section_key,
+            previous_revision.get(section_key),
+            current_revision.get(section_key),
+        )
+        detection_sections[section_key] = {
+            "changed": bool(section_changes),
+            "change_count": len(section_changes),
+            "changes": section_changes,
+        }
+        section_change_ids[section_key] = [row["change_id"] for row in section_changes]
+        all_changes.extend(section_changes)
+
+    all_changes.sort(key=lambda row: row["change_id"])
+    all_change_ids = [row["change_id"] for row in all_changes]
+    recommendation_deltas = _build_req010_recommendation_deltas(
+        previous_revision=previous_revision,
+        current_revision=current_revision,
+        section_change_ids=section_change_ids,
+        all_change_ids=all_change_ids,
+    )
+    evidence_refs = _sorted_unique_strings(
+        [
+            _as_str(ref)
+            for ref in [
+                *(
+                    previous_revision.get("evidence_refs")
+                    if isinstance(previous_revision.get("evidence_refs"), list)
+                    else []
+                ),
+                *(
+                    current_revision.get("evidence_refs")
+                    if isinstance(current_revision.get("evidence_refs"), list)
+                    else []
+                ),
+            ]
+            if _as_str(ref)
+        ]
+    )
+
+    return {
+        "schema_version": CHANGE_DETECTION_SCHEMA_VERSION,
+        "revision_pair": {
+            "previous_revision_id": previous_revision_id,
+            "current_revision_id": current_revision_id,
+        },
+        "change_detection": detection_sections,
+        "change_summary": {
+            "total_change_count": len(all_changes),
+            "changed_sections": [section_key for section_key in REQ010_SECTION_KEYS if section_change_ids.get(section_key)],
+            "change_ids": all_change_ids,
+        },
+        "recommendation_deltas": recommendation_deltas,
+        "evidence_refs": evidence_refs,
+    }
+
+
+def validate_change_detection_since_previous_strategy_revision(payload: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, dict):
+        return ["payload must be an object"]
+
+    if _as_str(payload.get("schema_version")) != CHANGE_DETECTION_SCHEMA_VERSION:
+        errors.append(f"schema_version must equal {CHANGE_DETECTION_SCHEMA_VERSION}")
+
+    revision_pair = payload.get("revision_pair")
+    if not isinstance(revision_pair, dict):
+        errors.append("revision_pair must be an object")
+    else:
+        previous_revision_id = _as_str(revision_pair.get("previous_revision_id"))
+        current_revision_id = _as_str(revision_pair.get("current_revision_id"))
+        if not previous_revision_id:
+            errors.append("revision_pair.previous_revision_id is required")
+        if not current_revision_id:
+            errors.append("revision_pair.current_revision_id is required")
+        if previous_revision_id and current_revision_id and previous_revision_id == current_revision_id:
+            errors.append("revision_pair.previous_revision_id and current_revision_id must differ")
+
+    detection = payload.get("change_detection")
+    all_change_ids: list[str] = []
+    section_change_ids: dict[str, list[str]] = {}
+    if not isinstance(detection, dict):
+        errors.append("change_detection must be an object")
+        detection = {}
+    for section_key in REQ010_SECTION_KEYS:
+        section_payload = detection.get(section_key)
+        if not isinstance(section_payload, dict):
+            errors.append(f"change_detection.{section_key} must be an object")
+            section_change_ids[section_key] = []
+            continue
+        changed = section_payload.get("changed")
+        if not isinstance(changed, bool):
+            errors.append(f"change_detection.{section_key}.changed must be a boolean")
+        change_count = section_payload.get("change_count")
+        if not isinstance(change_count, int):
+            errors.append(f"change_detection.{section_key}.change_count must be an integer")
+        changes = section_payload.get("changes")
+        if not isinstance(changes, list):
+            errors.append(f"change_detection.{section_key}.changes must be a list")
+            section_change_ids[section_key] = []
+            continue
+        section_ids: list[str] = []
+        for idx, row in enumerate(changes):
+            if not isinstance(row, dict):
+                errors.append(f"change_detection.{section_key}.changes[{idx}] must be an object")
+                continue
+            change_id = _as_str(row.get("change_id"))
+            if not re.fullmatch(rf"chg\.{section_key}\.[a-f0-9]{{16}}", change_id):
+                errors.append(f"change_detection.{section_key}.changes[{idx}].change_id is invalid")
+            section_value = _as_str(row.get("section_key"))
+            if section_value != section_key:
+                errors.append(f"change_detection.{section_key}.changes[{idx}].section_key must equal {section_key}")
+            path_value = _as_str(row.get("path"))
+            if not path_value.startswith("/"):
+                errors.append(f"change_detection.{section_key}.changes[{idx}].path must be a JSON pointer")
+            change_type = _as_str(row.get("change_type"))
+            if change_type not in REQ010_CHANGE_TYPES:
+                errors.append(f"change_detection.{section_key}.changes[{idx}].change_type is invalid")
+            section_ids.append(change_id)
+        if isinstance(change_count, int) and change_count != len(changes):
+            errors.append(f"change_detection.{section_key}.change_count must equal len(changes)")
+        if isinstance(changed, bool) and changed != bool(changes):
+            errors.append(f"change_detection.{section_key}.changed must match whether changes are present")
+        raw_change_ids = [_as_str(row.get("change_id")) if isinstance(row, dict) else "" for row in changes]
+        if raw_change_ids != sorted(raw_change_ids):
+            errors.append(f"change_detection.{section_key}.changes must be sorted by change_id")
+        section_ids = [change_id for change_id in section_ids if change_id]
+        if len(set(section_ids)) != len(section_ids):
+            errors.append(f"change_detection.{section_key}.changes change_id values must be unique")
+        section_change_ids[section_key] = section_ids
+        all_change_ids.extend(section_ids)
+
+    if set(detection.keys()) != set(REQ010_SECTION_KEYS):
+        errors.append(
+            "change_detection must contain exactly mission_scope, runtime_data, and ecosystem_signals sections"
+        )
+    if len(set(all_change_ids)) != len(all_change_ids):
+        errors.append("change_detection change_id values must be globally unique")
+
+    change_summary = payload.get("change_summary")
+    if not isinstance(change_summary, dict):
+        errors.append("change_summary must be an object")
+    else:
+        total_change_count = change_summary.get("total_change_count")
+        if not isinstance(total_change_count, int):
+            errors.append("change_summary.total_change_count must be an integer")
+        elif total_change_count != len(all_change_ids):
+            errors.append("change_summary.total_change_count must equal total detected changes")
+
+        changed_sections = change_summary.get("changed_sections")
+        expected_changed_sections = [section_key for section_key in REQ010_SECTION_KEYS if section_change_ids.get(section_key)]
+        if not isinstance(changed_sections, list):
+            errors.append("change_summary.changed_sections must be a list")
+        else:
+            if changed_sections != expected_changed_sections:
+                errors.append("change_summary.changed_sections must match sections with detected changes")
+
+        summary_change_ids = change_summary.get("change_ids")
+        if not isinstance(summary_change_ids, list):
+            errors.append("change_summary.change_ids must be a list")
+        else:
+            if summary_change_ids != sorted(all_change_ids):
+                errors.append("change_summary.change_ids must equal sorted detected change_ids")
+
+    recommendation_deltas = payload.get("recommendation_deltas")
+    referenced_change_ids: list[str] = []
+    if not isinstance(recommendation_deltas, list):
+        errors.append("recommendation_deltas must be a list")
+    else:
+        for idx, row in enumerate(recommendation_deltas):
+            if not isinstance(row, dict):
+                errors.append(f"recommendation_deltas[{idx}] must be an object")
+                continue
+            recommendation_id = _as_str(row.get("recommendation_id"))
+            if not recommendation_id:
+                errors.append(f"recommendation_deltas[{idx}].recommendation_id is required")
+            summary = _as_str(row.get("summary"))
+            if not summary:
+                errors.append(f"recommendation_deltas[{idx}].summary is required")
+            anchors = row.get("anchors")
+            if not isinstance(anchors, list) or not anchors:
+                errors.append(f"recommendation_deltas[{idx}].anchors must be a non-empty list")
+            else:
+                normalized_anchors = _normalize_req010_anchors(anchors)
+                if anchors != normalized_anchors:
+                    errors.append(
+                        f"recommendation_deltas[{idx}].anchors must be ordered subset of {', '.join(REQ010_SECTION_KEYS)}"
+                    )
+            change_ids = row.get("change_ids")
+            if not isinstance(change_ids, list) or not change_ids:
+                errors.append(f"recommendation_deltas[{idx}].change_ids must be a non-empty list")
+                continue
+            normalized_change_ids = [_as_str(change_id) for change_id in change_ids]
+            if normalized_change_ids != sorted(normalized_change_ids):
+                errors.append(f"recommendation_deltas[{idx}].change_ids must be sorted")
+            if len(set(normalized_change_ids)) != len(normalized_change_ids):
+                errors.append(f"recommendation_deltas[{idx}].change_ids must be unique")
+            for change_idx, change_id in enumerate(change_ids):
+                value = _as_str(change_id)
+                if not value:
+                    errors.append(f"recommendation_deltas[{idx}].change_ids[{change_idx}] must be non-empty string")
+                    continue
+                if value not in all_change_ids:
+                    errors.append(
+                        f"recommendation_deltas[{idx}].change_ids[{change_idx}] must reference change_detection change_id values"
+                    )
+                referenced_change_ids.append(value)
+            delta_type = _as_str(row.get("delta_type"))
+            if delta_type not in {"new", "updated", "retained", "derived"}:
+                errors.append(
+                    f"recommendation_deltas[{idx}].delta_type must be one of new, updated, retained, derived"
+                )
+
+    if all_change_ids:
+        if not referenced_change_ids:
+            errors.append("recommendation_deltas must reference detected changes")
+        missing_references = sorted(set(all_change_ids) - set(referenced_change_ids))
+        if missing_references:
+            errors.append("recommendation_deltas must reference every detected change_id")
+
+    evidence_refs = payload.get("evidence_refs")
+    if not isinstance(evidence_refs, list) or not evidence_refs:
+        errors.append("evidence_refs must be a non-empty list")
+    else:
+        normalized_evidence_refs = [_as_str(ref) for ref in evidence_refs]
+        for idx, ref in enumerate(evidence_refs):
+            if not _as_str(ref):
+                errors.append(f"evidence_refs[{idx}] must be non-empty string")
+        if normalized_evidence_refs != sorted(normalized_evidence_refs):
+            errors.append("evidence_refs must be sorted")
+        if len(set(normalized_evidence_refs)) != len(normalized_evidence_refs):
+            errors.append("evidence_refs must be unique")
 
     return errors
 

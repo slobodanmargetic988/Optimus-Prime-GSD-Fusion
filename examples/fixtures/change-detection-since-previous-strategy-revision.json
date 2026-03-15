@@ -1,0 +1,156 @@
+{
+  "schema_version": "req-010.change-detection-since-previous-strategy-revision.v1",
+  "revision_pair": {
+    "previous_revision_id": "strategy-2026-03-14T08:00:00Z",
+    "current_revision_id": "strategy-2026-03-15T08:00:00Z"
+  },
+  "change_detection": {
+    "mission_scope": {
+      "changed": true,
+      "change_count": 2,
+      "changes": [
+        {
+          "change_id": "chg.mission_scope.5f2f5f52269b6ad5",
+          "section_key": "mission_scope",
+          "path": "/constraints/change_budget",
+          "change_type": "updated",
+          "previous_value": "medium",
+          "current_value": "tight"
+        },
+        {
+          "change_id": "chg.mission_scope.ec9f21adae6a52e1",
+          "section_key": "mission_scope",
+          "path": "/focus_areas/2",
+          "change_type": "added",
+          "previous_value": null,
+          "current_value": "delta traceability"
+        }
+      ]
+    },
+    "runtime_data": {
+      "changed": true,
+      "change_count": 4,
+      "changes": [
+        {
+          "change_id": "chg.runtime_data.2afe416b1aed5fa0",
+          "section_key": "runtime_data",
+          "path": "/blocked_cycles",
+          "change_type": "updated",
+          "previous_value": 0,
+          "current_value": 2
+        },
+        {
+          "change_id": "chg.runtime_data.57541eeb6ce3e086",
+          "section_key": "runtime_data",
+          "path": "/queue_backlog",
+          "change_type": "updated",
+          "previous_value": 3,
+          "current_value": 5
+        },
+        {
+          "change_id": "chg.runtime_data.863eccf16da01da0",
+          "section_key": "runtime_data",
+          "path": "/active_incidents/0",
+          "change_type": "added",
+          "previous_value": null,
+          "current_value": "runtime_contention"
+        },
+        {
+          "change_id": "chg.runtime_data.99c895fab60b1c7a",
+          "section_key": "runtime_data",
+          "path": "/runtime_mode",
+          "change_type": "updated",
+          "previous_value": "shared",
+          "current_value": "isolated"
+        }
+      ]
+    },
+    "ecosystem_signals": {
+      "changed": true,
+      "change_count": 2,
+      "changes": [
+        {
+          "change_id": "chg.ecosystem_signals.1eab0ddbd9f0aa85",
+          "section_key": "ecosystem_signals",
+          "path": "/risk_flags/1",
+          "change_type": "added",
+          "previous_value": null,
+          "current_value": "integration_latency"
+        },
+        {
+          "change_id": "chg.ecosystem_signals.62d78ea162862ac6",
+          "section_key": "ecosystem_signals",
+          "path": "/upstream_projects/0/signal",
+          "change_type": "updated",
+          "previous_value": "stable",
+          "current_value": "degraded"
+        }
+      ]
+    }
+  },
+  "change_summary": {
+    "total_change_count": 8,
+    "changed_sections": [
+      "mission_scope",
+      "runtime_data",
+      "ecosystem_signals"
+    ],
+    "change_ids": [
+      "chg.ecosystem_signals.1eab0ddbd9f0aa85",
+      "chg.ecosystem_signals.62d78ea162862ac6",
+      "chg.mission_scope.5f2f5f52269b6ad5",
+      "chg.mission_scope.ec9f21adae6a52e1",
+      "chg.runtime_data.2afe416b1aed5fa0",
+      "chg.runtime_data.57541eeb6ce3e086",
+      "chg.runtime_data.863eccf16da01da0",
+      "chg.runtime_data.99c895fab60b1c7a"
+    ]
+  },
+  "recommendation_deltas": [
+    {
+      "recommendation_id": "rec.ecosystem-signal-response",
+      "summary": "Adjust integration priorities based on upstream signals.",
+      "anchors": [
+        "ecosystem_signals"
+      ],
+      "change_ids": [
+        "chg.ecosystem_signals.1eab0ddbd9f0aa85",
+        "chg.ecosystem_signals.62d78ea162862ac6"
+      ],
+      "delta_type": "retained"
+    },
+    {
+      "recommendation_id": "rec.runtime-hardening",
+      "summary": "Increase isolation to recover planner throughput.",
+      "anchors": [
+        "runtime_data"
+      ],
+      "change_ids": [
+        "chg.runtime_data.2afe416b1aed5fa0",
+        "chg.runtime_data.57541eeb6ce3e086",
+        "chg.runtime_data.863eccf16da01da0",
+        "chg.runtime_data.99c895fab60b1c7a"
+      ],
+      "delta_type": "updated"
+    },
+    {
+      "recommendation_id": "rec.scope-refresh",
+      "summary": "Refresh mission/scope alignment with ecosystem evidence.",
+      "anchors": [
+        "mission_scope"
+      ],
+      "change_ids": [
+        "chg.mission_scope.5f2f5f52269b6ad5",
+        "chg.mission_scope.ec9f21adae6a52e1"
+      ],
+      "delta_type": "retained"
+    }
+  ],
+  "evidence_refs": [
+    "reports/ecosystem/signals-2026-03-15.json",
+    "reports/runtime/runtime-status-2026-03-14.json",
+    "reports/runtime/runtime-status-2026-03-15.json",
+    "strategy/current/STRATEGY.json",
+    "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+  ]
+}
