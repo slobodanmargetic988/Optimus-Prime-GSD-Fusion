@@ -1,0 +1,245 @@
+{
+  "schema_version": "req-009.prior-strategy-revision-ingestion.v1",
+  "requirement_id": "REQ-009",
+  "prior_strategy_revision_ingestion": {
+    "current_revision_identity": "rev-req009-fixture-r4",
+    "prior_strategy_revisions": [
+      {
+        "revision_identity": "rev-req009-r1",
+        "summary": "Initial baseline for strategy continuity tracking.",
+        "recommended_action_ids": [
+          "action-audit-prior-revisions",
+          "action-preserve-runtime-mode"
+        ],
+        "evidence_refs": [
+          "reports/strategy/revisions/rev-req009-r1.json"
+        ]
+      },
+      {
+        "revision_identity": "rev-req009-r2",
+        "summary": "Second revision introduced drift instrumentation.",
+        "recommended_action_ids": [
+          "action-audit-prior-revisions",
+          "action-preserve-runtime-mode",
+          "action-track-drift-signals"
+        ],
+        "evidence_refs": [
+          "reports/strategy/revisions/rev-req009-r2.json"
+        ]
+      },
+      {
+        "revision_identity": "rev-req009-r3",
+        "summary": "Latest prior revision switched to explicit changelog ingestion.",
+        "recommended_action_ids": [
+          "action-audit-prior-revisions",
+          "action-ingest-changelog-history",
+          "action-track-drift-signals"
+        ],
+        "evidence_refs": [
+          "reports/strategy/revisions/rev-req009-r3.json"
+        ]
+      }
+    ],
+    "changelog_history": [
+      {
+        "change_id": "chg-103",
+        "revision_identity": "rev-req009-r2",
+        "action_id": "action-link-evidence",
+        "change_type": "updated",
+        "change_summary": "Backfilled evidence-linking guidance for cross-check.",
+        "changed_at": "2026-03-13T22:15:00Z",
+        "evidence_refs": [
+          "CHANGELOG.md#req-009-r2"
+        ]
+      },
+      {
+        "change_id": "chg-100",
+        "revision_identity": "rev-req009-r3",
+        "action_id": "action-ingest-changelog-history",
+        "change_type": "added",
+        "change_summary": "Changelog ingestion became a hard recommendation anchor.",
+        "changed_at": "2026-03-14T09:00:00Z",
+        "evidence_refs": [
+          "CHANGELOG.md#req-009-r3"
+        ]
+      },
+      {
+        "change_id": "chg-101",
+        "revision_identity": "rev-req009-r3",
+        "action_id": "action-preserve-runtime-mode",
+        "change_type": "removed",
+        "change_summary": "Removed stale runtime-mode recommendation from latest prior revision.",
+        "changed_at": "2026-03-14T09:05:00Z",
+        "evidence_refs": [
+          "CHANGELOG.md#req-009-r3"
+        ]
+      },
+      {
+        "change_id": "chg-102",
+        "revision_identity": "rev-req009-r3",
+        "action_id": "action-track-drift-signals",
+        "change_type": "updated",
+        "change_summary": "Expanded drift signal capture from optional to required.",
+        "changed_at": "2026-03-14T09:10:00Z",
+        "evidence_refs": [
+          "CHANGELOG.md#req-009-r3"
+        ]
+      }
+    ],
+    "analysis": {
+      "continuity": {
+        "latest_prior_revision_id": "rev-req009-r3",
+        "ingested_revision_ids": [
+          "rev-req009-r1",
+          "rev-req009-r2",
+          "rev-req009-r3"
+        ],
+        "continuing_action_ids": [
+          "action-audit-prior-revisions",
+          "action-track-drift-signals"
+        ],
+        "retired_action_ids": [
+          "action-preserve-runtime-mode"
+        ]
+      },
+      "drift": {
+        "new_action_ids": [
+          "action-ingest-changelog-history"
+        ],
+        "drift_action_ids": [
+          "action-ingest-changelog-history",
+          "action-link-evidence",
+          "action-preserve-runtime-mode",
+          "action-track-drift-signals"
+        ],
+        "changelog_change_ids": [
+          "chg-103",
+          "chg-100",
+          "chg-101",
+          "chg-102"
+        ],
+        "changelog_action_ids": [
+          "action-ingest-changelog-history",
+          "action-link-evidence",
+          "action-preserve-runtime-mode",
+          "action-track-drift-signals"
+        ],
+        "changelog_added_action_ids": [
+          "action-ingest-changelog-history"
+        ],
+        "changelog_updated_action_ids": [
+          "action-link-evidence",
+          "action-track-drift-signals"
+        ],
+        "changelog_removed_action_ids": [
+          "action-preserve-runtime-mode"
+        ],
+        "changelog_only_action_ids": [
+          "action-link-evidence"
+        ]
+      },
+      "composition_context": {
+        "prior_revision_count": 3,
+        "changelog_entry_count": 4,
+        "recommendation_anchor_action_ids": [
+          "action-audit-prior-revisions",
+          "action-ingest-changelog-history",
+          "action-link-evidence",
+          "action-preserve-runtime-mode",
+          "action-track-drift-signals"
+        ]
+      }
+    }
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "9e10ed482ad099eebdc74626c9b51d038839a5c75047f5941e1121886d3cb10b",
+    "reproducible_call_id": "req009-9e10ed482ad099ee",
+    "canonical_input": {
+      "current_revision_identity": "rev-req009-fixture-r4",
+      "prior_strategy_revisions": [
+        {
+          "revision_identity": "rev-req009-r1",
+          "summary": "Initial baseline for strategy continuity tracking.",
+          "recommended_action_ids": [
+            "action-audit-prior-revisions",
+            "action-preserve-runtime-mode"
+          ],
+          "evidence_refs": [
+            "reports/strategy/revisions/rev-req009-r1.json"
+          ]
+        },
+        {
+          "revision_identity": "rev-req009-r2",
+          "summary": "Second revision introduced drift instrumentation.",
+          "recommended_action_ids": [
+            "action-audit-prior-revisions",
+            "action-preserve-runtime-mode",
+            "action-track-drift-signals"
+          ],
+          "evidence_refs": [
+            "reports/strategy/revisions/rev-req009-r2.json"
+          ]
+        },
+        {
+          "revision_identity": "rev-req009-r3",
+          "summary": "Latest prior revision switched to explicit changelog ingestion.",
+          "recommended_action_ids": [
+            "action-audit-prior-revisions",
+            "action-ingest-changelog-history",
+            "action-track-drift-signals"
+          ],
+          "evidence_refs": [
+            "reports/strategy/revisions/rev-req009-r3.json"
+          ]
+        }
+      ],
+      "changelog_history": [
+        {
+          "change_id": "chg-103",
+          "revision_identity": "rev-req009-r2",
+          "action_id": "action-link-evidence",
+          "change_type": "updated",
+          "change_summary": "Backfilled evidence-linking guidance for cross-check.",
+          "changed_at": "2026-03-13T22:15:00Z",
+          "evidence_refs": [
+            "CHANGELOG.md#req-009-r2"
+          ]
+        },
+        {
+          "change_id": "chg-100",
+          "revision_identity": "rev-req009-r3",
+          "action_id": "action-ingest-changelog-history",
+          "change_type": "added",
+          "change_summary": "Changelog ingestion became a hard recommendation anchor.",
+          "changed_at": "2026-03-14T09:00:00Z",
+          "evidence_refs": [
+            "CHANGELOG.md#req-009-r3"
+          ]
+        },
+        {
+          "change_id": "chg-101",
+          "revision_identity": "rev-req009-r3",
+          "action_id": "action-preserve-runtime-mode",
+          "change_type": "removed",
+          "change_summary": "Removed stale runtime-mode recommendation from latest prior revision.",
+          "changed_at": "2026-03-14T09:05:00Z",
+          "evidence_refs": [
+            "CHANGELOG.md#req-009-r3"
+          ]
+        },
+        {
+          "change_id": "chg-102",
+          "revision_identity": "rev-req009-r3",
+          "action_id": "action-track-drift-signals",
+          "change_type": "updated",
+          "change_summary": "Expanded drift signal capture from optional to required.",
+          "changed_at": "2026-03-14T09:10:00Z",
+          "evidence_refs": [
+            "CHANGELOG.md#req-009-r3"
+          ]
+        }
+      ]
+    }
+  }
+}

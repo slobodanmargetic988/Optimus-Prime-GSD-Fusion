@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-001 contract surface for the LLM-first strategy runtime entrypoint."""
+"""REQ-001 and REQ-009 contract surfaces for strategy context sweep processing."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ SCHEMA_VERSION = "req-001.llm-first-strategy-runtime-entrypoint.v1"
 REQUIREMENT_ID = "REQ-001"
 RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
+REQ_009_SCHEMA_VERSION = "req-009.prior-strategy-revision-ingestion.v1"
+REQ_009_REQUIREMENT_ID = "REQ-009"
 
 
 def _require_nonempty_text(value: Any, *, field_name: str) -> str:
@@ -867,6 +869,418 @@ def validate_req_001_runtime_entrypoint(payload: Mapping[str, Any]) -> list[str]
         errors.append("call_metadata.processing_input_sha256 does not match processing input")
     if metadata.get("processing_call_id") != expected_processing_call_id:
         errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    return errors
+
+
+def _normalize_change_type(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return "updated"
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string when provided")
+    change_type = raw_value.strip().lower()
+    if change_type not in {"added", "updated", "removed"}:
+        raise ValueError(f"{field_name} must be one of: added, updated, removed")
+    return change_type
+
+
+def _normalize_prior_strategy_revisions(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("prior_strategy_revisions must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    seen_revision_ids: set[str] = set()
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"prior_strategy_revisions[{index}] must be an object")
+
+        revision_identity = _require_nonempty_text(
+            item.get("revision_identity"),
+            field_name=f"prior_strategy_revisions[{index}].revision_identity",
+        )
+        if revision_identity in seen_revision_ids:
+            raise ValueError(f"prior_strategy_revisions[{index}].revision_identity must be unique")
+        seen_revision_ids.add(revision_identity)
+
+        summary = _normalize_context_note(
+            item.get("summary"),
+            field_name=f"prior_strategy_revisions[{index}].summary",
+        )
+        recommended_action_ids = _normalize_string_list(
+            item.get("recommended_action_ids"),
+            field_name=f"prior_strategy_revisions[{index}].recommended_action_ids",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"prior_strategy_revisions[{index}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "revision_identity": revision_identity,
+                "summary": summary,
+                "recommended_action_ids": recommended_action_ids,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(key=lambda row: row["revision_identity"])
+    return normalized
+
+
+def _normalize_changelog_history(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("changelog_history must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    seen_change_ids: set[str] = set()
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"changelog_history[{index}] must be an object")
+
+        change_id = _require_nonempty_text(item.get("change_id"), field_name=f"changelog_history[{index}].change_id")
+        if change_id in seen_change_ids:
+            raise ValueError(f"changelog_history[{index}].change_id must be unique")
+        seen_change_ids.add(change_id)
+
+        revision_identity = _require_nonempty_text(
+            item.get("revision_identity"),
+            field_name=f"changelog_history[{index}].revision_identity",
+        )
+        action_id = _normalize_context_note(item.get("action_id"), field_name=f"changelog_history[{index}].action_id")
+        change_type = _normalize_change_type(
+            item.get("change_type"),
+            field_name=f"changelog_history[{index}].change_type",
+        )
+        change_summary = _require_nonempty_text(
+            item.get("change_summary"),
+            field_name=f"changelog_history[{index}].change_summary",
+        )
+        changed_at = _normalize_context_note(item.get("changed_at"), field_name=f"changelog_history[{index}].changed_at")
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"changelog_history[{index}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "change_id": change_id,
+                "revision_identity": revision_identity,
+                "action_id": action_id,
+                "change_type": change_type,
+                "change_summary": change_summary,
+                "changed_at": changed_at,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(
+        key=lambda row: (
+            row["revision_identity"],
+            row["changed_at"],
+            row["change_id"],
+            row["action_id"],
+            row["change_type"],
+        )
+    )
+    return normalized
+
+
+def _canonical_req_009_input(
+    *,
+    current_revision_identity: str,
+    prior_strategy_revisions: list[dict[str, Any]],
+    changelog_history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "current_revision_identity": current_revision_identity,
+        "prior_strategy_revisions": prior_strategy_revisions,
+        "changelog_history": changelog_history,
+    }
+
+
+def _build_req_009_analysis(
+    *,
+    prior_strategy_revisions: list[dict[str, Any]],
+    changelog_history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    revision_ids = [row["revision_identity"] for row in prior_strategy_revisions]
+    latest_prior_revision_id = revision_ids[-1] if revision_ids else ""
+
+    latest_actions: set[str] = set()
+    historical_actions: set[str] = set()
+    for index, row in enumerate(prior_strategy_revisions):
+        action_ids = set(row["recommended_action_ids"])
+        if index == len(prior_strategy_revisions) - 1:
+            latest_actions = action_ids
+        else:
+            historical_actions.update(action_ids)
+
+    all_prior_action_ids = sorted(historical_actions | latest_actions)
+    continuing_action_ids = sorted(latest_actions & historical_actions)
+    new_action_ids = sorted(latest_actions - historical_actions)
+    retired_action_ids = sorted(historical_actions - latest_actions)
+
+    changelog_change_ids = [row["change_id"] for row in changelog_history]
+    changelog_action_ids = sorted({row["action_id"] for row in changelog_history if row["action_id"]})
+    changelog_added_action_ids = sorted(
+        {row["action_id"] for row in changelog_history if row["change_type"] == "added" and row["action_id"]}
+    )
+    changelog_updated_action_ids = sorted(
+        {row["action_id"] for row in changelog_history if row["change_type"] == "updated" and row["action_id"]}
+    )
+    changelog_removed_action_ids = sorted(
+        {row["action_id"] for row in changelog_history if row["change_type"] == "removed" and row["action_id"]}
+    )
+    changelog_only_action_ids = sorted(set(changelog_action_ids) - set(all_prior_action_ids))
+
+    drift_action_ids = sorted(set(new_action_ids) | set(retired_action_ids) | set(changelog_action_ids))
+    recommendation_anchor_action_ids = sorted(
+        set(continuing_action_ids) | set(new_action_ids) | set(retired_action_ids) | set(changelog_action_ids)
+    )
+
+    return {
+        "continuity": {
+            "latest_prior_revision_id": latest_prior_revision_id,
+            "ingested_revision_ids": revision_ids,
+            "continuing_action_ids": continuing_action_ids,
+            "retired_action_ids": retired_action_ids,
+        },
+        "drift": {
+            "new_action_ids": new_action_ids,
+            "drift_action_ids": drift_action_ids,
+            "changelog_change_ids": changelog_change_ids,
+            "changelog_action_ids": changelog_action_ids,
+            "changelog_added_action_ids": changelog_added_action_ids,
+            "changelog_updated_action_ids": changelog_updated_action_ids,
+            "changelog_removed_action_ids": changelog_removed_action_ids,
+            "changelog_only_action_ids": changelog_only_action_ids,
+        },
+        "composition_context": {
+            "prior_revision_count": len(prior_strategy_revisions),
+            "changelog_entry_count": len(changelog_history),
+            "recommendation_anchor_action_ids": recommendation_anchor_action_ids,
+        },
+    }
+
+
+def build_req_009_prior_strategy_revision_ingestion(
+    *,
+    current_revision_identity: str,
+    prior_strategy_revisions: list[Mapping[str, Any]] | None = None,
+    changelog_history: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the REQ-009 prior strategy revision ingestion contract payload."""
+    normalized_current_revision_identity = _require_nonempty_text(
+        current_revision_identity,
+        field_name="current_revision_identity",
+    )
+    normalized_prior_strategy_revisions = _normalize_prior_strategy_revisions(prior_strategy_revisions)
+    normalized_changelog_history = _normalize_changelog_history(changelog_history)
+
+    canonical_input = _canonical_req_009_input(
+        current_revision_identity=normalized_current_revision_identity,
+        prior_strategy_revisions=normalized_prior_strategy_revisions,
+        changelog_history=normalized_changelog_history,
+    )
+    digest = _canonical_input_digest(canonical_input)
+    analysis = _build_req_009_analysis(
+        prior_strategy_revisions=normalized_prior_strategy_revisions,
+        changelog_history=normalized_changelog_history,
+    )
+
+    return {
+        "schema_version": REQ_009_SCHEMA_VERSION,
+        "requirement_id": REQ_009_REQUIREMENT_ID,
+        "prior_strategy_revision_ingestion": {
+            "current_revision_identity": normalized_current_revision_identity,
+            "prior_strategy_revisions": normalized_prior_strategy_revisions,
+            "changelog_history": normalized_changelog_history,
+            "analysis": analysis,
+        },
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req009-{digest[:16]}",
+            "canonical_input": canonical_input,
+        },
+    }
+
+
+def validate_req_009_prior_strategy_revision_ingestion(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-009 payload shape and deterministic call metadata."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    top_keys = set(payload.keys())
+    required_top = {"schema_version", "requirement_id", "prior_strategy_revision_ingestion", "call_metadata"}
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_009_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_009_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_009_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_009_REQUIREMENT_ID}")
+
+    ingestion = payload.get("prior_strategy_revision_ingestion")
+    if not isinstance(ingestion, Mapping):
+        errors.append("prior_strategy_revision_ingestion must be an object")
+        return errors
+
+    required_ingestion = {"current_revision_identity", "prior_strategy_revisions", "changelog_history", "analysis"}
+    ingestion_keys = set(ingestion.keys())
+    missing_ingestion = sorted(required_ingestion - ingestion_keys)
+    if missing_ingestion:
+        errors.append(f"prior_strategy_revision_ingestion missing keys: {missing_ingestion}")
+    unexpected_ingestion = sorted(ingestion_keys - required_ingestion)
+    if unexpected_ingestion:
+        errors.append(f"prior_strategy_revision_ingestion has unexpected keys: {unexpected_ingestion}")
+
+    current_revision_identity = ingestion.get("current_revision_identity")
+    if not isinstance(current_revision_identity, str) or not current_revision_identity.strip():
+        errors.append("prior_strategy_revision_ingestion.current_revision_identity must be non-empty string")
+
+    prior_strategy_revisions = ingestion.get("prior_strategy_revisions")
+    if not isinstance(prior_strategy_revisions, list):
+        errors.append("prior_strategy_revision_ingestion.prior_strategy_revisions must be a list")
+    else:
+        for index, row in enumerate(prior_strategy_revisions):
+            if not isinstance(row, Mapping):
+                errors.append(f"prior_strategy_revision_ingestion.prior_strategy_revisions[{index}] must be an object")
+                continue
+            for required_field in ("revision_identity", "summary", "recommended_action_ids", "evidence_refs"):
+                if required_field not in row:
+                    errors.append(
+                        "prior_strategy_revision_ingestion.prior_strategy_revisions"
+                        f"[{index}] missing {required_field}"
+                    )
+
+    changelog_history = ingestion.get("changelog_history")
+    if not isinstance(changelog_history, list):
+        errors.append("prior_strategy_revision_ingestion.changelog_history must be a list")
+    else:
+        for index, row in enumerate(changelog_history):
+            if not isinstance(row, Mapping):
+                errors.append(f"prior_strategy_revision_ingestion.changelog_history[{index}] must be an object")
+                continue
+            for required_field in (
+                "change_id",
+                "revision_identity",
+                "action_id",
+                "change_type",
+                "change_summary",
+                "changed_at",
+                "evidence_refs",
+            ):
+                if required_field not in row:
+                    errors.append(f"prior_strategy_revision_ingestion.changelog_history[{index}] missing {required_field}")
+
+    analysis = ingestion.get("analysis")
+    if not isinstance(analysis, Mapping):
+        errors.append("prior_strategy_revision_ingestion.analysis must be an object")
+    else:
+        continuity = analysis.get("continuity")
+        drift = analysis.get("drift")
+        composition_context = analysis.get("composition_context")
+        if not isinstance(continuity, Mapping):
+            errors.append("prior_strategy_revision_ingestion.analysis.continuity must be an object")
+        else:
+            for required_field in (
+                "latest_prior_revision_id",
+                "ingested_revision_ids",
+                "continuing_action_ids",
+                "retired_action_ids",
+            ):
+                if required_field not in continuity:
+                    errors.append(f"prior_strategy_revision_ingestion.analysis.continuity missing {required_field}")
+        if not isinstance(drift, Mapping):
+            errors.append("prior_strategy_revision_ingestion.analysis.drift must be an object")
+        else:
+            for required_field in (
+                "new_action_ids",
+                "drift_action_ids",
+                "changelog_change_ids",
+                "changelog_action_ids",
+                "changelog_added_action_ids",
+                "changelog_updated_action_ids",
+                "changelog_removed_action_ids",
+                "changelog_only_action_ids",
+            ):
+                if required_field not in drift:
+                    errors.append(f"prior_strategy_revision_ingestion.analysis.drift missing {required_field}")
+        if not isinstance(composition_context, Mapping):
+            errors.append("prior_strategy_revision_ingestion.analysis.composition_context must be an object")
+        else:
+            for required_field in ("prior_revision_count", "changelog_entry_count", "recommendation_anchor_action_ids"):
+                if required_field not in composition_context:
+                    errors.append(
+                        "prior_strategy_revision_ingestion.analysis.composition_context "
+                        f"missing {required_field}"
+                    )
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+
+    required_metadata = {"reproducibility", "canonical_input_sha256", "reproducible_call_id", "canonical_input"}
+    metadata_keys = set(metadata.keys())
+    missing_metadata = sorted(required_metadata - metadata_keys)
+    if missing_metadata:
+        errors.append(f"call_metadata missing keys: {missing_metadata}")
+    unexpected_metadata = sorted(metadata_keys - required_metadata)
+    if unexpected_metadata:
+        errors.append(f"call_metadata has unexpected keys: {unexpected_metadata}")
+
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+
+    try:
+        normalized_current_revision_identity = _require_nonempty_text(
+            ingestion.get("current_revision_identity"),
+            field_name="prior_strategy_revision_ingestion.current_revision_identity",
+        )
+        normalized_prior_strategy_revisions = _normalize_prior_strategy_revisions(
+            list(ingestion.get("prior_strategy_revisions", []))
+        )
+        normalized_changelog_history = _normalize_changelog_history(list(ingestion.get("changelog_history", [])))
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
+
+    expected_canonical_input = _canonical_req_009_input(
+        current_revision_identity=normalized_current_revision_identity,
+        prior_strategy_revisions=normalized_prior_strategy_revisions,
+        changelog_history=normalized_changelog_history,
+    )
+    if dict(canonical_input) != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized ingestion input")
+
+    expected_digest = _canonical_input_digest(expected_canonical_input)
+    expected_call_id = f"req009-{expected_digest[:16]}"
+    if metadata.get("canonical_input_sha256") != expected_digest:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != expected_call_id:
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    expected_analysis = _build_req_009_analysis(
+        prior_strategy_revisions=normalized_prior_strategy_revisions,
+        changelog_history=normalized_changelog_history,
+    )
+    if ingestion.get("analysis") != expected_analysis:
+        errors.append("prior_strategy_revision_ingestion.analysis must mirror deterministic ingestion analysis")
 
     return errors
 
