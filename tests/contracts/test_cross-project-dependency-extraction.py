@@ -90,6 +90,50 @@ def test_req011_call_metadata_is_reproducible_for_identical_invocations() -> Non
     assert changed_edges[provider_project_id]["confidence"] == probe["changed_confidence"]
 
 
+def test_req011_replay_is_stable_for_reversed_equal_key_signal_rows() -> None:
+    fixture = _load_fixture()
+    probe_rows = fixture["determinism_probe"]["reversed_equal_key_contract_signals"]
+
+    forward_input = {
+        **fixture["input"],
+        "contract_signals": [
+            *fixture["input"]["contract_signals"],
+            *probe_rows,
+        ],
+    }
+    reversed_probe_rows = list(reversed(probe_rows))
+    reversed_input = {
+        **fixture["input"],
+        "contract_signals": [
+            *fixture["input"]["contract_signals"],
+            *reversed_probe_rows,
+        ],
+    }
+
+    forward_payload = sweep.build_req_011_cross_project_dependency_extraction(**forward_input)
+    reversed_payload = sweep.build_req_011_cross_project_dependency_extraction(**reversed_input)
+
+    assert forward_payload == reversed_payload
+
+    normalized_probe_rows = sweep._normalize_req_011_signal_rows(
+        probe_rows,
+        field_name="contract_signals",
+        source_kind="contract",
+        default_strength="strong",
+    )
+    sorted_reversed_probe_rows = sorted(
+        sweep._normalize_req_011_signal_rows(
+            reversed_probe_rows,
+            field_name="contract_signals",
+            source_kind="contract",
+            default_strength="strong",
+        ),
+        key=sweep._req_011_signal_sort_key,
+    )
+
+    assert sorted_reversed_probe_rows == normalized_probe_rows
+
+
 def test_req011_fixture_and_sample_validate_against_contract() -> None:
     fixture_payload = sweep.build_req_011_cross_project_dependency_extraction(**_load_fixture()["input"])
     sample_payload = json.loads(SAMPLE_PATH.read_text(encoding="utf-8"))

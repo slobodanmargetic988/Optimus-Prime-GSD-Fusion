@@ -140,6 +140,30 @@
     ],
     "expected_changed_provider_project_id": "prj.runtime-observability",
     "baseline_confidence": "low",
-    "changed_confidence": "medium"
+    "changed_confidence": "medium",
+    "reversed_equal_key_contract_signals": [
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-core",
+        "dependency_ref": "contracts/runtime-heartbeat.v1",
+        "summary": "Runtime lease heartbeat contract binds dispatch cadence.",
+        "signal_strength": "strong",
+        "evidence_refs": [
+          "contracts/runtime-heartbeat.md#L11",
+          "reports/earth/contracts-index.json#runtime-heartbeat-v1-secondary"
+        ]
+      },
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-core",
+        "dependency_ref": "contracts/runtime-heartbeat.v1",
+        "summary": "Runtime lease heartbeat contract binds dispatch cadence.",
+        "signal_strength": "strong",
+        "evidence_refs": [
+          "contracts/runtime-heartbeat.md#L12",
+          "reports/earth/contracts-index.json#runtime-heartbeat-v1-tertiary"
+        ]
+      }
+    ]
   }
 }

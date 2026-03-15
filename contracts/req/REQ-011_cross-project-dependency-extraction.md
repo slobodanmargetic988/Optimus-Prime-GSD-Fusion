@@ -90,6 +90,7 @@ Soft edges (`medium`/`low`) are surfaced as risks with:
 - Extraction is deterministic for identical normalized inputs.
 - Edge IDs are stable for the same consumer/provider pair.
 - Edge and risk evidence refs are sorted and unique.
+- Normalized signal rows and tied edge-support rows must use `evidence_refs[]` as a canonical tie-breaker when other ordering fields match.
 - `call_metadata.canonical_input` must include the normalized `target_project_id` plus the normalized `contract_signals`, `trace_signals`, and `integration_point_signals`.
 - `call_metadata` canonical hashes and IDs are reproducible and must change when materially different normalized dependency signal sets are supplied.
 

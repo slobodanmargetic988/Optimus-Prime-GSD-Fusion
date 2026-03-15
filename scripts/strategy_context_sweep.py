@@ -2509,15 +2509,7 @@ def _normalize_req_011_signal_rows(
             }
         )
 
-    normalized.sort(
-        key=lambda row: (
-            row["consumer_project_id"],
-            row["provider_project_id"],
-            row["dependency_ref"],
-            row["summary"],
-            row["signal_strength"],
-        )
-    )
+    normalized.sort(key=_req_011_normalized_signal_sort_key)
     return normalized
 
 
@@ -2549,13 +2541,35 @@ def _canonical_req_011_processing_input(
     }
 
 
-def _req_011_signal_sort_key(signal: Mapping[str, Any]) -> tuple[int, int, str]:
+def _req_011_signal_evidence_sort_key(signal: Mapping[str, Any]) -> tuple[str, ...]:
+    evidence_refs = signal.get("evidence_refs")
+    if not isinstance(evidence_refs, list):
+        return ()
+    return tuple(str(item) for item in evidence_refs)
+
+
+def _req_011_normalized_signal_sort_key(signal: Mapping[str, Any]) -> tuple[str, str, str, str, str, tuple[str, ...]]:
+    return (
+        str(signal.get("consumer_project_id", "")),
+        str(signal.get("provider_project_id", "")),
+        str(signal.get("dependency_ref", "")),
+        str(signal.get("summary", "")),
+        str(signal.get("signal_strength", "")),
+        _req_011_signal_evidence_sort_key(signal),
+    )
+
+
+def _req_011_signal_sort_key(signal: Mapping[str, Any]) -> tuple[int, int, str, str, str, str, tuple[str, ...]]:
     source_kind_order = {"contract": 0, "integration_point": 1, "trace": 2}
     signal_strength_order = {"strong": 0, "moderate": 1, "weak": 2}
     return (
         source_kind_order.get(str(signal.get("source_kind")), 99),
         signal_strength_order.get(str(signal.get("signal_strength")), 99),
         str(signal.get("dependency_ref", "")),
+        str(signal.get("summary", "")),
+        str(signal.get("consumer_project_id", "")),
+        str(signal.get("provider_project_id", "")),
+        _req_011_signal_evidence_sort_key(signal),
     )
 
 
