@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-001 and REQ-009 contract surfaces for strategy context sweep processing."""
+"""Contract surfaces for strategy context sweep processing."""
 
 from __future__ import annotations
 
@@ -38,6 +38,13 @@ REQ_009_SCHEMA_VERSION = "req-009.prior-strategy-revision-ingestion.v1"
 REQ_009_REQUIREMENT_ID = "REQ-009"
 REQ_013_SCHEMA_VERSION = "req-013.capability-catalog-extraction.v1"
 REQ_013_REQUIREMENT_ID = "REQ-013"
+REQ_023_SCHEMA_VERSION = "req-023.context-compaction-for-llm-call-budget.v1"
+REQ_023_REQUIREMENT_ID = "REQ-023"
+REQ_023_DEFAULT_LLM_CALL_BUDGET = {
+    "max_context_packets": 3,
+    "max_focus_points_per_packet": 2,
+    "max_evidence_refs_per_packet": 3,
+}
 
 
 def _require_nonempty_text(value: Any, *, field_name: str) -> str:
@@ -96,6 +103,14 @@ def _normalize_context_note(raw_value: Any, *, field_name: str) -> str:
     if not isinstance(raw_value, str):
         raise ValueError(f"{field_name} must be a string when provided")
     return raw_value.strip()
+
+
+def _normalize_positive_int(raw_value: Any, *, field_name: str) -> int:
+    if not isinstance(raw_value, int) or isinstance(raw_value, bool):
+        raise ValueError(f"{field_name} must be a positive integer")
+    if raw_value < 1:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return raw_value
 
 
 def _stable_id_fragment(*parts: str) -> str:
@@ -1463,6 +1478,730 @@ def validate_req_013_capability_catalog_extraction(payload: Mapping[str, Any]) -
 
     expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
     expected_processing_call_id = f"req013-processing-{expected_processing_digest[:16]}"
+    if metadata.get("processing_input_sha256") != expected_processing_digest:
+        errors.append("call_metadata.processing_input_sha256 does not match processing input")
+    if metadata.get("processing_call_id") != expected_processing_call_id:
+        errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    return errors
+
+
+def _normalize_req_023_hard_constraints(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("hard_constraints must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    seen_constraint_ids: set[str] = set()
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"hard_constraints[{index}] must be an object")
+        constraint_id = _require_nonempty_text(
+            item.get("constraint_id"),
+            field_name=f"hard_constraints[{index}].constraint_id",
+        )
+        if constraint_id in seen_constraint_ids:
+            raise ValueError(f"hard_constraints[{index}].constraint_id must be unique")
+        seen_constraint_ids.add(constraint_id)
+        statement = _require_nonempty_text(
+            item.get("statement"),
+            field_name=f"hard_constraints[{index}].statement",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"hard_constraints[{index}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "constraint_id": constraint_id,
+                "statement": statement,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(key=lambda row: row["constraint_id"])
+    return normalized
+
+
+def _normalize_req_023_llm_call_budget(raw_value: Any) -> dict[str, int]:
+    if raw_value is None:
+        return dict(REQ_023_DEFAULT_LLM_CALL_BUDGET)
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("llm_call_budget must be an object")
+
+    budget = dict(REQ_023_DEFAULT_LLM_CALL_BUDGET)
+    for field_name in REQ_023_DEFAULT_LLM_CALL_BUDGET:
+        if field_name in raw_value and raw_value[field_name] is not None:
+            budget[field_name] = _normalize_positive_int(
+                raw_value[field_name],
+                field_name=f"llm_call_budget.{field_name}",
+            )
+    return budget
+
+
+def _canonical_req_023_processing_input(
+    *,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    candidate_recommendations: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+    hard_constraints: list[dict[str, Any]],
+    llm_call_budget: Mapping[str, int],
+) -> dict[str, Any]:
+    canonical = _canonical_processing_input(
+        target_project_evidence_refs=target_project_evidence_refs,
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+        candidate_recommendations=candidate_recommendations,
+        earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+        required_context_documents=required_context_documents,
+    )
+    canonical["hard_constraints"] = hard_constraints
+    canonical["llm_call_budget"] = dict(llm_call_budget)
+    return canonical
+
+
+def _dedupe_preserving_order(items: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def _req_023_obligation_action_id(obligation_id: str) -> str:
+    return obligation_id.removeprefix("obligation-")
+
+
+def _build_req_023_group_specs(
+    *,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    recommended_actions: list[dict[str, Any]],
+    cross_project_obligations: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    obligation_by_action_id = {
+        _req_023_obligation_action_id(str(row["obligation_id"])): row for row in cross_project_obligations
+    }
+
+    if open_risks:
+        groups.append(
+            {
+                "group_kind": "risk",
+                "summary": f"Resolve {len(open_risks)} open risk(s) before broad replay expansion.",
+                "focus_points": [str(row["summary"]) for row in open_risks],
+                "next_steps": [
+                    f"Resolve {row['risk_id']} and refresh required evidence refs." for row in open_risks
+                ],
+                "project_ids": [],
+                "source_action_ids": [],
+                "source_obligation_ids": [],
+                "source_risk_ids": [str(row["risk_id"]) for row in open_risks],
+                "traceability_refs": _collect_unique_refs(
+                    target_project_evidence_refs,
+                    earth_sweep_evidence_refs,
+                    *[list(row["required_evidence_refs"]) for row in open_risks],
+                ),
+            }
+        )
+
+    cross_project_actions: dict[str, list[dict[str, Any]]] = {}
+    for action in recommended_actions:
+        if action["action_scope"] != "cross-project":
+            continue
+        obligation = obligation_by_action_id.get(str(action["action_id"]))
+        if obligation is None:
+            project_id = "earth"
+        else:
+            project_id = str(obligation["project_id"])
+        cross_project_actions.setdefault(project_id, []).append(action)
+
+    for project_id in sorted(cross_project_actions):
+        actions = sorted(cross_project_actions[project_id], key=lambda row: row["action_id"])
+        obligations = [
+            obligation_by_action_id[str(action["action_id"])]
+            for action in actions
+            if str(action["action_id"]) in obligation_by_action_id
+        ]
+        groups.append(
+            {
+                "group_kind": "cross-project",
+                "summary": f"Cross-project packet for '{project_id}' covering {len(actions)} action(s).",
+                "focus_points": [str(row["summary"]) for row in actions],
+                "next_steps": [str(row["next_step"]) for row in actions],
+                "project_ids": [project_id],
+                "source_action_ids": [str(row["action_id"]) for row in actions],
+                "source_obligation_ids": [str(row["obligation_id"]) for row in obligations],
+                "source_risk_ids": [],
+                "traceability_refs": _collect_unique_refs(
+                    earth_sweep_evidence_refs,
+                    *[list(row["evidence_refs"]) for row in actions],
+                    *[list(row["evidence_refs"]) for row in obligations],
+                ),
+            }
+        )
+
+    local_actions = sorted(
+        [row for row in recommended_actions if row["action_scope"] != "cross-project"],
+        key=lambda row: row["action_id"],
+    )
+    if local_actions:
+        groups.append(
+            {
+                "group_kind": "target-project",
+                "summary": f"Target-project packet covering {len(local_actions)} action(s).",
+                "focus_points": [str(row["summary"]) for row in local_actions],
+                "next_steps": [str(row["next_step"]) for row in local_actions],
+                "project_ids": [],
+                "source_action_ids": [str(row["action_id"]) for row in local_actions],
+                "source_obligation_ids": [],
+                "source_risk_ids": [],
+                "traceability_refs": _collect_unique_refs(
+                    target_project_evidence_refs,
+                    *[list(row["evidence_refs"]) for row in local_actions],
+                ),
+            }
+        )
+
+    return groups
+
+
+def _build_req_023_compacted_packets(
+    *,
+    group_specs: list[dict[str, Any]],
+    hard_constraints: list[dict[str, Any]],
+    llm_call_budget: Mapping[str, int],
+) -> list[dict[str, Any]]:
+    if not group_specs:
+        return []
+
+    max_context_packets = int(llm_call_budget["max_context_packets"])
+    if len(group_specs) <= max_context_packets:
+        packet_groups = [[group_spec] for group_spec in group_specs]
+    elif max_context_packets == 1:
+        packet_groups = [group_specs]
+    else:
+        packet_groups = [[group_spec] for group_spec in group_specs[: max_context_packets - 1]]
+        packet_groups.append(group_specs[max_context_packets - 1 :])
+
+    hard_constraint_ids = [row["constraint_id"] for row in hard_constraints]
+    hard_constraint_refs = _collect_unique_refs(*[row["evidence_refs"] for row in hard_constraints])
+    max_focus_points = int(llm_call_budget["max_focus_points_per_packet"])
+    max_evidence_refs = int(llm_call_budget["max_evidence_refs_per_packet"])
+
+    packets: list[dict[str, Any]] = []
+    for index, packet_group in enumerate(packet_groups, start=1):
+        packet_kinds = sorted({str(row["group_kind"]) for row in packet_group})
+        packet_kind = packet_kinds[0] if len(packet_kinds) == 1 else "mixed"
+        summary = (
+            packet_group[0]["summary"]
+            if len(packet_group) == 1
+            else f"Merged {len(packet_group)} high-signal groups for LLM call budget fit."
+        )
+        focus_points = _dedupe_preserving_order(
+            [point for row in packet_group for point in list(row["focus_points"])]
+        )[:max_focus_points]
+        next_steps = _dedupe_preserving_order(
+            [step for row in packet_group for step in list(row["next_steps"])]
+        )[:max_focus_points]
+        traceability_refs = _collect_unique_refs(
+            hard_constraint_refs,
+            *[list(row["traceability_refs"]) for row in packet_group],
+        )
+        packets.append(
+            {
+                "packet_id": f"packet-{index:02d}",
+                "packet_kind": packet_kind,
+                "summary": summary,
+                "focus_points": focus_points,
+                "project_ids": sorted(
+                    {
+                        project_id
+                        for row in packet_group
+                        for project_id in list(row["project_ids"])
+                        if project_id
+                    }
+                ),
+                "source_action_ids": sorted(
+                    {
+                        action_id
+                        for row in packet_group
+                        for action_id in list(row["source_action_ids"])
+                    }
+                ),
+                "source_obligation_ids": sorted(
+                    {
+                        obligation_id
+                        for row in packet_group
+                        for obligation_id in list(row["source_obligation_ids"])
+                    }
+                ),
+                "source_risk_ids": sorted(
+                    {
+                        risk_id
+                        for row in packet_group
+                        for risk_id in list(row["source_risk_ids"])
+                    }
+                ),
+                "hard_constraint_ids": hard_constraint_ids,
+                "traceability_refs": traceability_refs,
+                "evidence_focus_refs": traceability_refs[:max_evidence_refs],
+                "next_steps": next_steps,
+            }
+        )
+
+    return packets
+
+
+def _build_req_023_context_compaction(
+    *,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    hard_constraints: list[dict[str, Any]],
+    llm_call_budget: Mapping[str, int],
+    recommended_actions: list[dict[str, Any]],
+    cross_project_obligations: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+    recommendation_evidence_refs: list[str],
+) -> dict[str, Any]:
+    group_specs = _build_req_023_group_specs(
+        target_project_evidence_refs=target_project_evidence_refs,
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        recommended_actions=recommended_actions,
+        cross_project_obligations=cross_project_obligations,
+        open_risks=open_risks,
+    )
+    compacted_packets = _build_req_023_compacted_packets(
+        group_specs=group_specs,
+        hard_constraints=hard_constraints,
+        llm_call_budget=llm_call_budget,
+    )
+
+    hard_constraint_refs = _collect_unique_refs(*[row["evidence_refs"] for row in hard_constraints])
+    mandatory_traceability_refs = _collect_unique_refs(recommendation_evidence_refs, hard_constraint_refs)
+    expected_action_ids = sorted({str(row["action_id"]) for row in recommended_actions})
+    expected_obligation_ids = sorted({str(row["obligation_id"]) for row in cross_project_obligations})
+    expected_risk_ids = sorted({str(row["risk_id"]) for row in open_risks})
+    expected_hard_constraint_ids = sorted({str(row["constraint_id"]) for row in hard_constraints})
+
+    covered_action_ids = sorted(
+        {
+            action_id
+            for packet in compacted_packets
+            for action_id in list(packet["source_action_ids"])
+        }
+    )
+    covered_obligation_ids = sorted(
+        {
+            obligation_id
+            for packet in compacted_packets
+            for obligation_id in list(packet["source_obligation_ids"])
+        }
+    )
+    covered_risk_ids = sorted(
+        {
+            risk_id
+            for packet in compacted_packets
+            for risk_id in list(packet["source_risk_ids"])
+        }
+    )
+    covered_hard_constraint_ids = sorted(
+        {
+            constraint_id
+            for packet in compacted_packets
+            for constraint_id in list(packet["hard_constraint_ids"])
+        }
+    )
+
+    return {
+        "compaction_strategy": "high-signal-packets-for-multi-call-reasoning",
+        "llm_call_budget": dict(llm_call_budget),
+        "mandatory_traceability_refs": mandatory_traceability_refs,
+        "hard_constraints": hard_constraints,
+        "compacted_packets": compacted_packets,
+        "coverage": {
+            "recommended_action_ids": expected_action_ids,
+            "covered_action_ids": covered_action_ids,
+            "uncovered_action_ids": sorted(set(expected_action_ids) - set(covered_action_ids)),
+            "cross_project_obligation_ids": expected_obligation_ids,
+            "covered_obligation_ids": covered_obligation_ids,
+            "uncovered_obligation_ids": sorted(set(expected_obligation_ids) - set(covered_obligation_ids)),
+            "open_risk_ids": expected_risk_ids,
+            "covered_risk_ids": covered_risk_ids,
+            "uncovered_risk_ids": sorted(set(expected_risk_ids) - set(covered_risk_ids)),
+            "hard_constraint_ids": expected_hard_constraint_ids,
+            "covered_hard_constraint_ids": covered_hard_constraint_ids,
+            "uncovered_hard_constraint_ids": sorted(
+                set(expected_hard_constraint_ids) - set(covered_hard_constraint_ids)
+            ),
+        },
+    }
+
+
+def _req_023_recommendation_decision(*, compacted_packets: list[dict[str, Any]], coverage: Mapping[str, Any]) -> str:
+    if compacted_packets and not any(list(coverage.get(field_name, [])) for field_name in (
+        "uncovered_action_ids",
+        "uncovered_obligation_ids",
+        "uncovered_risk_ids",
+        "uncovered_hard_constraint_ids",
+    )):
+        return "compact-ready"
+    if coverage.get("hard_constraint_ids"):
+        return "constraints-only"
+    return "insufficient-context"
+
+
+def _build_req_023_processing_behavior(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    candidate_recommendations: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+    hard_constraints: list[dict[str, Any]],
+    llm_call_budget: Mapping[str, int],
+) -> dict[str, Any]:
+    base_behavior = _build_processing_behavior(
+        target_project_root=target_project_root,
+        earth_root=earth_root,
+        target_project_evidence_refs=target_project_evidence_refs,
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+        candidate_recommendations=candidate_recommendations,
+        earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+        required_context_documents=required_context_documents,
+    )
+    recommendation = dict(base_behavior["recommendation"])
+    context_compaction = _build_req_023_context_compaction(
+        target_project_evidence_refs=target_project_evidence_refs,
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        hard_constraints=hard_constraints,
+        llm_call_budget=llm_call_budget,
+        recommended_actions=list(recommendation["recommended_actions"]),
+        cross_project_obligations=list(recommendation["cross_project_obligations"]),
+        open_risks=list(recommendation["open_risks"]),
+        recommendation_evidence_refs=list(recommendation["evidence_refs"]),
+    )
+
+    coverage = context_compaction["coverage"]
+    compacted_packets = context_compaction["compacted_packets"]
+    recommendation["decision"] = _req_023_recommendation_decision(
+        compacted_packets=compacted_packets,
+        coverage=coverage,
+    )
+    recommendation["rationale"] = (
+        f"Compacted {len(compacted_packets)} packet(s) covering "
+        f"{len(coverage['covered_action_ids'])} action(s), "
+        f"{len(coverage['covered_obligation_ids'])} obligation(s), "
+        f"{len(coverage['covered_risk_ids'])} risk(s), and "
+        f"{len(coverage['covered_hard_constraint_ids'])} hard constraint(s)."
+    )
+    recommendation["confidence"] = _recommendation_confidence(
+        evidence_refs=context_compaction["mandatory_traceability_refs"],
+        open_risks=list(recommendation["open_risks"]),
+    )
+    recommendation["evidence_refs"] = context_compaction["mandatory_traceability_refs"]
+
+    context_inputs = dict(base_behavior["context_inputs"])
+    context_inputs["hard_constraints"] = hard_constraints
+    context_inputs["llm_call_budget"] = dict(llm_call_budget)
+
+    context_usage = dict(base_behavior["context_usage"])
+    context_usage["context_compaction_used"] = True
+    context_usage["context_compaction_packet_ids"] = [row["packet_id"] for row in compacted_packets]
+    context_usage["context_compaction_traceability_refs_used"] = context_compaction["mandatory_traceability_refs"]
+    context_usage["context_compaction_hard_constraint_ids"] = coverage["hard_constraint_ids"]
+    context_usage["context_compaction_covered_action_ids"] = coverage["covered_action_ids"]
+    context_usage["context_compaction_covered_obligation_ids"] = coverage["covered_obligation_ids"]
+    context_usage["context_compaction_covered_risk_ids"] = coverage["covered_risk_ids"]
+    context_usage["evidence_refs_used"] = context_compaction["mandatory_traceability_refs"]
+
+    return {
+        "strategy": "context-compaction-broad-sweep",
+        "reasoning_mode": EXECUTION_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": context_inputs,
+        "context_usage": context_usage,
+        "context_compaction": context_compaction,
+        "recommendation": recommendation,
+    }
+
+
+def build_req_023_context_compaction_for_llm_call_budget(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    target_project_evidence_refs: list[str] | None = None,
+    earth_sweep_evidence_refs: list[str] | None = None,
+    cross_project_context: list[Mapping[str, Any]] | None = None,
+    candidate_recommendations: list[Mapping[str, Any]] | None = None,
+    earth_sweep_source_artifacts: list[Mapping[str, Any]] | None = None,
+    required_context_documents: list[Mapping[str, Any]] | None = None,
+    hard_constraints: list[Mapping[str, Any]] | None = None,
+    llm_call_budget: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_nonempty_text(revision_identity, field_name="revision_identity")
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_context = _normalize_cross_project_context(cross_project_context)
+    normalized_candidates = _normalize_candidate_recommendations(candidate_recommendations)
+    normalized_earth_source_artifacts = _normalize_earth_sweep_source_artifacts(earth_sweep_source_artifacts)
+    normalized_required_documents = _normalize_required_context_documents(required_context_documents)
+    normalized_hard_constraints = _normalize_req_023_hard_constraints(hard_constraints)
+    normalized_llm_call_budget = _normalize_req_023_llm_call_budget(llm_call_budget)
+
+    canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    digest = _canonical_input_digest(canonical_input)
+    canonical_processing_input = _canonical_req_023_processing_input(
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        hard_constraints=normalized_hard_constraints,
+        llm_call_budget=normalized_llm_call_budget,
+    )
+    processing_digest = _canonical_input_digest(canonical_processing_input)
+    processing_behavior = _build_req_023_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        hard_constraints=normalized_hard_constraints,
+        llm_call_budget=normalized_llm_call_budget,
+    )
+
+    return {
+        "schema_version": REQ_023_SCHEMA_VERSION,
+        "requirement_id": REQ_023_REQUIREMENT_ID,
+        "context_compaction_for_llm_call_budget": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+        },
+        "processing_behavior": processing_behavior,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req023-{digest[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_digest,
+            "processing_call_id": f"req023-processing-{processing_digest[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+        },
+    }
+
+
+def validate_req_023_context_compaction_for_llm_call_budget(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    top_keys = set(payload.keys())
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "context_compaction_for_llm_call_budget",
+        "processing_behavior",
+        "call_metadata",
+    }
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_023_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_023_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_023_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_023_REQUIREMENT_ID}")
+
+    compaction_surface = payload.get("context_compaction_for_llm_call_budget")
+    if not isinstance(compaction_surface, Mapping):
+        errors.append("context_compaction_for_llm_call_budget must be an object")
+        return errors
+
+    required_surface = {
+        "runtime_mode",
+        "execution_mode",
+        "target_project_root",
+        "earth_root",
+        "output_root",
+        "revision_identity",
+    }
+    surface_keys = set(compaction_surface.keys())
+    missing_surface = sorted(required_surface - surface_keys)
+    if missing_surface:
+        errors.append(f"context_compaction_for_llm_call_budget missing keys: {missing_surface}")
+    unexpected_surface = sorted(surface_keys - required_surface)
+    if unexpected_surface:
+        errors.append(f"context_compaction_for_llm_call_budget has unexpected keys: {unexpected_surface}")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+
+    required_processing_behavior = {
+        "strategy",
+        "reasoning_mode",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "context_compaction",
+        "recommendation",
+    }
+    processing_keys = set(processing_behavior.keys())
+    missing_processing = sorted(required_processing_behavior - processing_keys)
+    if missing_processing:
+        errors.append(f"processing_behavior missing keys: {missing_processing}")
+    unexpected_processing = sorted(processing_keys - required_processing_behavior)
+    if unexpected_processing:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected_processing}")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        return errors
+    target_project_context = context_inputs.get("target_project")
+    earth_context = context_inputs.get("earth_sweep")
+    if not isinstance(target_project_context, Mapping):
+        errors.append("processing_behavior.context_inputs.target_project must be an object")
+        return errors
+    if not isinstance(earth_context, Mapping):
+        errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+        return errors
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+
+    try:
+        normalized_target_root = _normalize_root(
+            compaction_surface.get("target_project_root"),
+            field_name="context_compaction_for_llm_call_budget.target_project_root",
+        )
+        normalized_earth_root = _normalize_root(
+            compaction_surface.get("earth_root"),
+            field_name="context_compaction_for_llm_call_budget.earth_root",
+        )
+        normalized_output_root = _normalize_root(
+            compaction_surface.get("output_root"),
+            field_name="context_compaction_for_llm_call_budget.output_root",
+        )
+        normalized_revision_identity = _require_nonempty_text(
+            compaction_surface.get("revision_identity"),
+            field_name="context_compaction_for_llm_call_budget.revision_identity",
+        )
+        normalized_target_refs = _normalize_string_list(
+            target_project_context.get("evidence_refs"),
+            field_name="processing_behavior.context_inputs.target_project.evidence_refs",
+        )
+        normalized_earth_refs = _normalize_string_list(
+            earth_context.get("evidence_refs"),
+            field_name="processing_behavior.context_inputs.earth_sweep.evidence_refs",
+        )
+        normalized_cross_context = _normalize_cross_project_context(context_inputs.get("cross_project_context"))
+        normalized_candidates = _normalize_candidate_recommendations(context_inputs.get("candidate_recommendations"))
+        normalized_earth_source_artifacts = _normalize_earth_sweep_source_artifacts(
+            context_inputs.get("earth_sweep_source_artifacts")
+        )
+        normalized_required_documents = _normalize_required_context_documents(
+            context_inputs.get("required_context_documents")
+        )
+        normalized_hard_constraints = _normalize_req_023_hard_constraints(
+            context_inputs.get("hard_constraints")
+        )
+        normalized_llm_call_budget = _normalize_req_023_llm_call_budget(
+            context_inputs.get("llm_call_budget")
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
+
+    expected_canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    if metadata.get("canonical_input") != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized compaction anchors")
+
+    expected_digest = _canonical_input_digest(expected_canonical_input)
+    expected_call_id = f"req023-{expected_digest[:16]}"
+    if metadata.get("canonical_input_sha256") != expected_digest:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != expected_call_id:
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    expected_processing_behavior = _build_req_023_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        hard_constraints=normalized_hard_constraints,
+        llm_call_budget=normalized_llm_call_budget,
+    )
+    if dict(processing_behavior) != expected_processing_behavior:
+        errors.append("processing_behavior must mirror deterministic context compaction output")
+
+    expected_canonical_processing_input = _canonical_req_023_processing_input(
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+        hard_constraints=normalized_hard_constraints,
+        llm_call_budget=normalized_llm_call_budget,
+    )
+    if metadata.get("canonical_processing_input") != expected_canonical_processing_input:
+        errors.append("call_metadata.canonical_processing_input must mirror normalized processing input")
+
+    expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
+    expected_processing_call_id = f"req023-processing-{expected_processing_digest[:16]}"
     if metadata.get("processing_input_sha256") != expected_processing_digest:
         errors.append("call_metadata.processing_input_sha256 does not match processing input")
     if metadata.get("processing_call_id") != expected_processing_call_id:

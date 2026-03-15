@@ -1,0 +1,110 @@
+{
+  "input": {
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/current/out",
+    "revision_identity": "rev-req023-sample-r1",
+    "target_project_evidence_refs": [
+      "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-15/portfolio.json"
+    ],
+    "cross_project_context": [
+      {
+        "project_id": "ground-control-hub",
+        "project_root": "/workspace/projects/Earth/ground-control-hub",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+        ],
+        "context_note": "Shared packet dependency from Earth sweep."
+      },
+      {
+        "project_id": "runtime-orchestrator",
+        "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "context_note": "Runtime budgeting signals from Earth sweep."
+      }
+    ],
+    "candidate_recommendations": [
+      {
+        "action_id": "compact-context-traceability",
+        "summary": "Preserve traceability refs inside compacted context packets.",
+        "rationale": "Every compacted packet still needs source evidence anchors.",
+        "action_scope": "cross-project",
+        "requires_earth_evidence": true,
+        "project_id": "ground-control-hub",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+        ],
+        "next_step": "Carry evidence refs into the compacted packet envelope."
+      },
+      {
+        "action_id": "compact-constraint-preservation",
+        "summary": "Retain hard constraints when context is compacted for multiple LLM calls.",
+        "rationale": "Compaction cannot drop non-negotiable planning constraints.",
+        "action_scope": "cross-project",
+        "requires_earth_evidence": true,
+        "project_id": "runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "next_step": "Attach hard-constraint ids to every compacted packet."
+      },
+      {
+        "action_id": "compact-req-023-contract",
+        "summary": "Implement the REQ-023 contract and sample packet surface.",
+        "rationale": "Local contract coverage must match the compacted packet output.",
+        "action_scope": "local",
+        "requires_earth_evidence": false,
+        "project_id": "",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+        ],
+        "next_step": "Ship builder, validator, fixture, and sample updates together."
+      }
+    ],
+    "earth_sweep_source_artifacts": [
+      {
+        "artifact_ref": "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "status": "stale",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json"
+        ]
+      }
+    ],
+    "required_context_documents": [
+      {
+        "doc_kind": "mission",
+        "doc_ref": "mission.md",
+        "status": "missing",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "hard_constraints": [
+      {
+        "constraint_id": "preserve-traceability-pointers",
+        "statement": "Preserve evidence refs needed to trace each compacted packet back to the original sweep.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "constraint_id": "keep-hard-constraints-visible",
+        "statement": "Do not remove hard constraints when compressing context for multi-call reasoning.",
+        "evidence_refs": [
+          "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md"
+        ]
+      }
+    ],
+    "llm_call_budget": {
+      "max_context_packets": 3,
+      "max_focus_points_per_packet": 2,
+      "max_evidence_refs_per_packet": 3
+    }
+  }
+}
