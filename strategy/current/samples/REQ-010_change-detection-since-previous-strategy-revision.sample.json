@@ -4,6 +4,30 @@
     "previous_revision_id": "strategy-2026-03-14T08:00:00Z",
     "current_revision_id": "strategy-2026-03-15T08:00:00Z"
   },
+  "context_inputs": {
+    "broad_sweep_inputs": {
+      "include_rule": "direct_child_repository_roots_only",
+      "direct_child_count": 0,
+      "discovered_project_ids": [],
+      "source_ref_coverage": {
+        "project_count": 0,
+        "complete_project_count": 0,
+        "partial_project_count": 0,
+        "mission_ref_count": 0,
+        "scope_ref_count": 0
+      },
+      "excluded_reason_counts": {
+        "exclude_non_directory": 0,
+        "exclude_hidden_path": 0,
+        "exclude_archived_path": 0,
+        "exclude_non_owner_path": 0,
+        "exclude_non_repository_path": 0
+      }
+    },
+    "cross_project_context": [],
+    "earth_sweep_evidence_refs": [],
+    "evidence_refs": []
+  },
   "change_detection": {
     "mission_scope": {
       "changed": true,
@@ -117,7 +141,15 @@
         "chg.ecosystem_signals.1eab0ddbd9f0aa85",
         "chg.ecosystem_signals.62d78ea162862ac6"
       ],
-      "delta_type": "retained"
+      "delta_type": "retained",
+      "evidence_refs": [
+        "reports/ecosystem/signals-2026-03-15.json",
+        "reports/runtime/runtime-status-2026-03-14.json",
+        "reports/runtime/runtime-status-2026-03-15.json",
+        "strategy/current/STRATEGY.json",
+        "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+      ],
+      "linked_context_project_ids": []
     },
     {
       "recommendation_id": "rec.runtime-hardening",
@@ -131,7 +163,15 @@
         "chg.runtime_data.863eccf16da01da0",
         "chg.runtime_data.99c895fab60b1c7a"
       ],
-      "delta_type": "updated"
+      "delta_type": "updated",
+      "evidence_refs": [
+        "reports/ecosystem/signals-2026-03-15.json",
+        "reports/runtime/runtime-status-2026-03-14.json",
+        "reports/runtime/runtime-status-2026-03-15.json",
+        "strategy/current/STRATEGY.json",
+        "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+      ],
+      "linked_context_project_ids": []
     },
     {
       "recommendation_id": "rec.scope-refresh",
@@ -143,9 +183,23 @@
         "chg.mission_scope.5f2f5f52269b6ad5",
         "chg.mission_scope.ec9f21adae6a52e1"
       ],
-      "delta_type": "retained"
+      "delta_type": "retained",
+      "evidence_refs": [
+        "reports/ecosystem/signals-2026-03-15.json",
+        "reports/runtime/runtime-status-2026-03-14.json",
+        "reports/runtime/runtime-status-2026-03-15.json",
+        "strategy/current/STRATEGY.json",
+        "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+      ],
+      "linked_context_project_ids": []
     }
   ],
+  "cross_project_context_usage": {
+    "context_project_ids": [],
+    "obligations": [],
+    "open_risks": [],
+    "evidence_refs": []
+  },
   "evidence_refs": [
     "reports/ecosystem/signals-2026-03-15.json",
     "reports/runtime/runtime-status-2026-03-14.json",

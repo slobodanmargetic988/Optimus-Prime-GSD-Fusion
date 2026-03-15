@@ -954,12 +954,407 @@ def _recommendation_delta_type(previous_row: dict[str, Any] | None, summary: str
     return "retained"
 
 
+def _safe_nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value if value >= 0 else 0
+    if isinstance(value, float) and value.is_integer():
+        integer_value = int(value)
+        return integer_value if integer_value >= 0 else 0
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            try:
+                parsed = int(stripped)
+            except ValueError:
+                return 0
+            return parsed if parsed >= 0 else 0
+    return 0
+
+
+def _first_mapping(*values: Any) -> dict[str, Any]:
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _first_list(*values: Any) -> list[Any]:
+    for value in values:
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def _normalize_req010_broad_sweep_inputs(raw_value: Any) -> dict[str, Any]:
+    payload = raw_value if isinstance(raw_value, dict) else {}
+    source_ref_coverage = (
+        payload.get("source_ref_coverage") if isinstance(payload.get("source_ref_coverage"), dict) else {}
+    )
+    excluded_reason_counts = (
+        payload.get("excluded_reason_counts") if isinstance(payload.get("excluded_reason_counts"), dict) else {}
+    )
+    discovered_project_ids = _sorted_unique_strings(
+        [
+            _as_str(project_id)
+            for project_id in (payload.get("discovered_project_ids") if isinstance(payload.get("discovered_project_ids"), list) else [])
+            if _as_str(project_id)
+        ]
+    )
+    return {
+        "include_rule": _as_str(payload.get("include_rule")) or "direct_child_repository_roots_only",
+        "direct_child_count": _safe_nonnegative_int(payload.get("direct_child_count")),
+        "discovered_project_ids": discovered_project_ids,
+        "source_ref_coverage": {
+            "project_count": _safe_nonnegative_int(source_ref_coverage.get("project_count")),
+            "complete_project_count": _safe_nonnegative_int(source_ref_coverage.get("complete_project_count")),
+            "partial_project_count": _safe_nonnegative_int(source_ref_coverage.get("partial_project_count")),
+            "mission_ref_count": _safe_nonnegative_int(source_ref_coverage.get("mission_ref_count")),
+            "scope_ref_count": _safe_nonnegative_int(source_ref_coverage.get("scope_ref_count")),
+        },
+        "excluded_reason_counts": {
+            reason_code: _safe_nonnegative_int(excluded_reason_counts.get(reason_code))
+            for reason_code in EXCLUDE_REASON_CODES
+        },
+    }
+
+
+def _normalize_req010_cross_project_context(raw_rows: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_rows, list):
+        return []
+
+    merged_rows: dict[str, dict[str, Any]] = {}
+    status_rank = {"complete": 2, "partial": 1, "unknown": 0}
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            continue
+        project_id = _as_str(row.get("project_id"))
+        if not project_id:
+            continue
+        context_status = _as_str(row.get("context_status")).lower()
+        if context_status not in {"complete", "partial"}:
+            context_status = "unknown"
+        summary = _as_str(row.get("summary")) or f"{project_id} context status is {context_status}."
+        reason_codes = _sorted_unique_strings(
+            [
+                _as_str(value)
+                for value in (row.get("reason_codes") if isinstance(row.get("reason_codes"), list) else [])
+                if _as_str(value)
+            ]
+        )
+        row_evidence_refs = _sorted_unique_strings(
+            [
+                _as_str(ref)
+                for ref in (
+                    (row.get("evidence_refs") if isinstance(row.get("evidence_refs"), list) else [])
+                    + [_as_str(row.get("mission_ref")), _as_str(row.get("scope_ref"))]
+                )
+                if _as_str(ref)
+            ]
+        )
+        if not row_evidence_refs:
+            row_evidence_refs = [f"context:{project_id}#context_status={context_status}"]
+
+        existing = merged_rows.get(project_id)
+        if existing is None:
+            merged_rows[project_id] = {
+                "project_id": project_id,
+                "context_status": context_status,
+                "summary": summary,
+                "reason_codes": reason_codes,
+                "evidence_refs": row_evidence_refs,
+            }
+            continue
+
+        existing_status = _as_str(existing.get("context_status")) or "unknown"
+        if status_rank.get(context_status, 0) > status_rank.get(existing_status, 0):
+            existing["context_status"] = context_status
+        existing["reason_codes"] = _sorted_unique_strings(
+            [
+                _as_str(code)
+                for code in [*existing.get("reason_codes", []), *reason_codes]
+                if _as_str(code)
+            ]
+        )
+        existing["evidence_refs"] = _sorted_unique_strings(
+            [
+                _as_str(ref)
+                for ref in [*existing.get("evidence_refs", []), *row_evidence_refs]
+                if _as_str(ref)
+            ]
+        )
+
+    return [merged_rows[project_id] for project_id in sorted(merged_rows.keys())]
+
+
+def _extract_req010_context_inputs(
+    previous_revision: dict[str, Any],
+    current_revision: dict[str, Any],
+) -> dict[str, Any]:
+    current_context_inputs = (
+        current_revision.get("context_inputs") if isinstance(current_revision.get("context_inputs"), dict) else {}
+    )
+    previous_context_inputs = (
+        previous_revision.get("context_inputs") if isinstance(previous_revision.get("context_inputs"), dict) else {}
+    )
+    current_manifest = _first_mapping(
+        current_revision.get("earth_repository_discovery_manifest"),
+        current_context_inputs.get("earth_repository_discovery_manifest"),
+    )
+    previous_manifest = _first_mapping(
+        previous_revision.get("earth_repository_discovery_manifest"),
+        previous_context_inputs.get("earth_repository_discovery_manifest"),
+    )
+
+    broad_sweep_inputs = _normalize_req010_broad_sweep_inputs(
+        _first_mapping(
+            current_context_inputs.get("broad_sweep_inputs"),
+            current_revision.get("broad_sweep_inputs"),
+            current_context_inputs.get("earth_sweep"),
+            current_manifest.get("broad_sweep_inputs"),
+            previous_context_inputs.get("broad_sweep_inputs"),
+            previous_revision.get("broad_sweep_inputs"),
+            previous_context_inputs.get("earth_sweep"),
+            previous_manifest.get("broad_sweep_inputs"),
+        )
+    )
+
+    cross_project_context = _normalize_req010_cross_project_context(
+        _first_list(
+            current_context_inputs.get("cross_project_context"),
+            current_revision.get("cross_project_context"),
+            current_context_inputs.get("projects"),
+            current_manifest.get("cross_project_context"),
+            previous_context_inputs.get("cross_project_context"),
+            previous_revision.get("cross_project_context"),
+            previous_context_inputs.get("projects"),
+            previous_manifest.get("cross_project_context"),
+        )
+    )
+
+    earth_sweep_evidence_refs = _sorted_unique_strings(
+        [
+            _as_str(ref)
+            for ref in [
+                *(
+                    current_context_inputs.get("earth_sweep_evidence_refs")
+                    if isinstance(current_context_inputs.get("earth_sweep_evidence_refs"), list)
+                    else []
+                ),
+                *(
+                    current_revision.get("earth_sweep_evidence_refs")
+                    if isinstance(current_revision.get("earth_sweep_evidence_refs"), list)
+                    else []
+                ),
+                *(
+                    current_context_inputs.get("evidence_refs")
+                    if isinstance(current_context_inputs.get("evidence_refs"), list)
+                    else []
+                ),
+                *(current_manifest.get("evidence_refs") if isinstance(current_manifest.get("evidence_refs"), list) else []),
+                *(
+                    previous_context_inputs.get("earth_sweep_evidence_refs")
+                    if isinstance(previous_context_inputs.get("earth_sweep_evidence_refs"), list)
+                    else []
+                ),
+                *(
+                    previous_revision.get("earth_sweep_evidence_refs")
+                    if isinstance(previous_revision.get("earth_sweep_evidence_refs"), list)
+                    else []
+                ),
+                *(
+                    previous_context_inputs.get("evidence_refs")
+                    if isinstance(previous_context_inputs.get("evidence_refs"), list)
+                    else []
+                ),
+                *(previous_manifest.get("evidence_refs") if isinstance(previous_manifest.get("evidence_refs"), list) else []),
+                *[ref for row in cross_project_context for ref in row.get("evidence_refs", [])],
+            ]
+            if _as_str(ref)
+        ]
+    )
+
+    context_project_ids = _sorted_unique_strings(
+        [
+            *broad_sweep_inputs.get("discovered_project_ids", []),
+            *[row["project_id"] for row in cross_project_context],
+        ]
+    )
+
+    context_evidence_refs = _sorted_unique_strings(
+        [
+            *earth_sweep_evidence_refs,
+            *[ref for row in cross_project_context for ref in row.get("evidence_refs", [])],
+        ]
+    )
+
+    return {
+        "broad_sweep_inputs": broad_sweep_inputs,
+        "cross_project_context": cross_project_context,
+        "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+        "context_project_ids": context_project_ids,
+        "evidence_refs": context_evidence_refs,
+    }
+
+
+def _normalize_req010_candidate_cross_project_obligations(
+    current_revision: dict[str, Any],
+    context_project_ids: list[str],
+) -> list[dict[str, Any]]:
+    recommendation_payload = (
+        current_revision.get("recommendation") if isinstance(current_revision.get("recommendation"), dict) else {}
+    )
+    context_inputs = current_revision.get("context_inputs") if isinstance(current_revision.get("context_inputs"), dict) else {}
+    raw_rows = _first_list(
+        current_revision.get("proposed_cross_project_obligations"),
+        recommendation_payload.get("proposed_cross_project_obligations"),
+        context_inputs.get("cross_project_obligations"),
+        context_inputs.get("proposed_cross_project_obligations"),
+        current_revision.get("cross_project_obligations"),
+    )
+    obligations: list[dict[str, Any]] = []
+    for idx, row in enumerate(raw_rows):
+        if not isinstance(row, dict):
+            continue
+        obligation_id = _as_str(row.get("obligation_id")) or f"obl.cross-project.{idx + 1:03d}"
+        title = _as_str(row.get("title") or row.get("summary")) or f"Cross-project obligation {idx + 1}."
+        project_ids = _sorted_unique_strings(
+            [
+                _as_str(project_id)
+                for project_id in (row.get("project_ids") if isinstance(row.get("project_ids"), list) else [])
+                if _as_str(project_id)
+            ]
+        )
+        if not project_ids:
+            project_ids = list(context_project_ids)
+        evidence_refs = _sorted_unique_strings(
+            [
+                _as_str(ref)
+                for ref in (row.get("evidence_refs") if isinstance(row.get("evidence_refs"), list) else [])
+                if _as_str(ref)
+            ]
+        )
+        obligations.append(
+            {
+                "obligation_id": obligation_id,
+                "title": title,
+                "project_ids": project_ids,
+                "evidence_refs": evidence_refs,
+            }
+        )
+    obligations.sort(key=lambda row: row["obligation_id"])
+    return obligations
+
+
+def _build_req010_cross_project_context_usage(
+    *,
+    context_inputs: dict[str, Any],
+    candidate_obligations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    context_project_ids = context_inputs.get("context_project_ids") if isinstance(context_inputs.get("context_project_ids"), list) else []
+    cross_project_context = (
+        context_inputs.get("cross_project_context") if isinstance(context_inputs.get("cross_project_context"), list) else []
+    )
+    earth_sweep_evidence_refs = (
+        context_inputs.get("earth_sweep_evidence_refs")
+        if isinstance(context_inputs.get("earth_sweep_evidence_refs"), list)
+        else []
+    )
+    earth_sweep_ref_set = set(earth_sweep_evidence_refs)
+
+    obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    for row in candidate_obligations:
+        evidence_refs = row.get("evidence_refs") if isinstance(row.get("evidence_refs"), list) else []
+        has_earth_sweep_evidence = bool(evidence_refs) and all(ref in earth_sweep_ref_set for ref in evidence_refs)
+        if has_earth_sweep_evidence:
+            obligations.append(
+                {
+                    "obligation_id": _as_str(row.get("obligation_id")),
+                    "title": _as_str(row.get("title")),
+                    "project_ids": _sorted_unique_strings(
+                        [_as_str(project_id) for project_id in row.get("project_ids", []) if _as_str(project_id)]
+                    ),
+                    "evidence_refs": _sorted_unique_strings([_as_str(ref) for ref in evidence_refs if _as_str(ref)]),
+                }
+            )
+            continue
+
+        obligation_id = _as_str(row.get("obligation_id")) or "obligation.unknown"
+        obligation_projects = _sorted_unique_strings(
+            [_as_str(project_id) for project_id in row.get("project_ids", []) if _as_str(project_id)]
+        )
+        risk_evidence_refs = _sorted_unique_strings(
+            [_as_str(ref) for ref in evidence_refs if _as_str(ref)]
+            + [ref for row in cross_project_context for ref in row.get("evidence_refs", [])]
+            + list(earth_sweep_evidence_refs)
+        )
+        if not risk_evidence_refs:
+            risk_evidence_refs = [f"missing:earth-sweep-evidence#{obligation_id}"]
+        open_risks.append(
+            {
+                "risk_id": f"risk.req010.cross-project-obligation.{obligation_id}",
+                "reason_code": "missing_peer_project_doc",
+                "summary": (
+                    f"{obligation_id} cannot be promoted to a cross-project obligation because Earth-sweep evidence refs are incomplete."
+                ),
+                "project_ids": obligation_projects or list(context_project_ids),
+                "evidence_refs": risk_evidence_refs,
+            }
+        )
+
+    partial_project_ids = _sorted_unique_strings(
+        [_as_str(row.get("project_id")) for row in cross_project_context if _as_str(row.get("context_status")) == "partial"]
+    )
+    if partial_project_ids:
+        open_risks.append(
+            {
+                "risk_id": "risk.req010.cross-project-context-partial",
+                "reason_code": "missing_peer_project_doc",
+                "summary": "Cross-project context remains partial for one or more projects; unresolved ideas remain open risks.",
+                "project_ids": partial_project_ids,
+                "evidence_refs": _sorted_unique_strings(
+                    [
+                        ref
+                        for row in cross_project_context
+                        if _as_str(row.get("project_id")) in partial_project_ids
+                        for ref in row.get("evidence_refs", [])
+                    ]
+                )
+                or [f"context:partial#{','.join(partial_project_ids)}"],
+            }
+        )
+
+    obligations.sort(key=lambda row: row["obligation_id"])
+    open_risks.sort(key=lambda row: row["risk_id"])
+    usage_evidence_refs = _sorted_unique_strings(
+        [
+            *[ref for row in cross_project_context for ref in row.get("evidence_refs", [])],
+            *earth_sweep_evidence_refs,
+            *[ref for row in obligations for ref in row.get("evidence_refs", [])],
+            *[ref for row in open_risks for ref in row.get("evidence_refs", [])],
+        ]
+    )
+    usage_project_ids = _sorted_unique_strings(
+        [*context_project_ids, *[project_id for row in obligations for project_id in row.get("project_ids", [])]]
+    )
+    return {
+        "context_project_ids": usage_project_ids,
+        "obligations": obligations,
+        "open_risks": open_risks,
+        "evidence_refs": usage_evidence_refs,
+    }
+
+
 def _build_req010_recommendation_deltas(
     *,
     previous_revision: dict[str, Any],
     current_revision: dict[str, Any],
     section_change_ids: dict[str, list[str]],
     all_change_ids: list[str],
+    shared_evidence_refs: list[str],
+    context_project_ids: list[str],
 ) -> list[dict[str, Any]]:
     current_recommendations = (
         current_revision.get("recommendations") if isinstance(current_revision.get("recommendations"), list) else []
@@ -1002,6 +1397,8 @@ def _build_req010_recommendation_deltas(
                 "anchors": anchors,
                 "change_ids": change_ids,
                 "delta_type": _recommendation_delta_type(previous_by_id.get(recommendation_id), summary, anchors),
+                "evidence_refs": list(shared_evidence_refs),
+                "linked_context_project_ids": list(context_project_ids),
             }
         )
 
@@ -1036,6 +1433,8 @@ def _build_req010_recommendation_deltas(
                 "anchors": changed_anchors,
                 "change_ids": missing_change_ids,
                 "delta_type": "derived",
+                "evidence_refs": list(shared_evidence_refs),
+                "linked_context_project_ids": list(context_project_ids),
             }
         )
 
@@ -1049,6 +1448,14 @@ def build_change_detection_since_previous_strategy_revision(
 ) -> dict[str, Any]:
     previous_revision_id = _as_str(previous_revision.get("revision_id")) or "revision.previous.unknown"
     current_revision_id = _as_str(current_revision.get("revision_id")) or "revision.current.unknown"
+    context_inputs = _extract_req010_context_inputs(previous_revision, current_revision)
+    cross_project_context_usage = _build_req010_cross_project_context_usage(
+        context_inputs=context_inputs,
+        candidate_obligations=_normalize_req010_candidate_cross_project_obligations(
+            current_revision,
+            context_inputs.get("context_project_ids", []),
+        ),
+    )
 
     detection_sections: dict[str, dict[str, Any]] = {}
     section_change_ids: dict[str, list[str]] = {}
@@ -1069,13 +1476,7 @@ def build_change_detection_since_previous_strategy_revision(
 
     all_changes.sort(key=lambda row: row["change_id"])
     all_change_ids = [row["change_id"] for row in all_changes]
-    recommendation_deltas = _build_req010_recommendation_deltas(
-        previous_revision=previous_revision,
-        current_revision=current_revision,
-        section_change_ids=section_change_ids,
-        all_change_ids=all_change_ids,
-    )
-    evidence_refs = _sorted_unique_strings(
+    shared_evidence_refs = _sorted_unique_strings(
         [
             _as_str(ref)
             for ref in [
@@ -1089,8 +1490,37 @@ def build_change_detection_since_previous_strategy_revision(
                     if isinstance(current_revision.get("evidence_refs"), list)
                     else []
                 ),
+                *(context_inputs.get("evidence_refs") if isinstance(context_inputs.get("evidence_refs"), list) else []),
+                *(
+                    cross_project_context_usage.get("evidence_refs")
+                    if isinstance(cross_project_context_usage.get("evidence_refs"), list)
+                    else []
+                ),
             ]
             if _as_str(ref)
+        ]
+    )
+    recommendation_deltas = _build_req010_recommendation_deltas(
+        previous_revision=previous_revision,
+        current_revision=current_revision,
+        section_change_ids=section_change_ids,
+        all_change_ids=all_change_ids,
+        shared_evidence_refs=shared_evidence_refs,
+        context_project_ids=(
+            cross_project_context_usage.get("context_project_ids")
+            if isinstance(cross_project_context_usage.get("context_project_ids"), list)
+            else []
+        ),
+    )
+    evidence_refs = _sorted_unique_strings(
+        [
+            *shared_evidence_refs,
+            *[
+                _as_str(ref)
+                for row in recommendation_deltas
+                for ref in (row.get("evidence_refs") if isinstance(row.get("evidence_refs"), list) else [])
+                if _as_str(ref)
+            ],
         ]
     )
 
@@ -1100,6 +1530,12 @@ def build_change_detection_since_previous_strategy_revision(
             "previous_revision_id": previous_revision_id,
             "current_revision_id": current_revision_id,
         },
+        "context_inputs": {
+            "broad_sweep_inputs": context_inputs.get("broad_sweep_inputs", {}),
+            "cross_project_context": context_inputs.get("cross_project_context", []),
+            "earth_sweep_evidence_refs": context_inputs.get("earth_sweep_evidence_refs", []),
+            "evidence_refs": context_inputs.get("evidence_refs", []),
+        },
         "change_detection": detection_sections,
         "change_summary": {
             "total_change_count": len(all_changes),
@@ -1107,6 +1543,7 @@ def build_change_detection_since_previous_strategy_revision(
             "change_ids": all_change_ids,
         },
         "recommendation_deltas": recommendation_deltas,
+        "cross_project_context_usage": cross_project_context_usage,
         "evidence_refs": evidence_refs,
     }
 
@@ -1131,6 +1568,113 @@ def validate_change_detection_since_previous_strategy_revision(payload: dict[str
             errors.append("revision_pair.current_revision_id is required")
         if previous_revision_id and current_revision_id and previous_revision_id == current_revision_id:
             errors.append("revision_pair.previous_revision_id and current_revision_id must differ")
+
+    context_inputs = payload.get("context_inputs")
+    context_project_ids: list[str] = []
+    earth_sweep_evidence_refs: list[str] = []
+    context_evidence_refs: list[str] = []
+    if not isinstance(context_inputs, dict):
+        errors.append("context_inputs must be an object")
+        context_inputs = {}
+    else:
+        broad_sweep_inputs = context_inputs.get("broad_sweep_inputs")
+        if not isinstance(broad_sweep_inputs, dict):
+            errors.append("context_inputs.broad_sweep_inputs must be an object")
+            broad_sweep_inputs = {}
+        discovered_project_ids = broad_sweep_inputs.get("discovered_project_ids")
+        if discovered_project_ids is not None:
+            if not isinstance(discovered_project_ids, list):
+                errors.append("context_inputs.broad_sweep_inputs.discovered_project_ids must be a list")
+            else:
+                normalized_discovered_project_ids = [_as_str(project_id) for project_id in discovered_project_ids]
+                if normalized_discovered_project_ids != sorted(normalized_discovered_project_ids):
+                    errors.append("context_inputs.broad_sweep_inputs.discovered_project_ids must be sorted")
+                if len(set(normalized_discovered_project_ids)) != len(normalized_discovered_project_ids):
+                    errors.append("context_inputs.broad_sweep_inputs.discovered_project_ids must be unique")
+                context_project_ids.extend(
+                    [project_id for project_id in normalized_discovered_project_ids if project_id]
+                )
+
+        cross_project_context = context_inputs.get("cross_project_context")
+        if not isinstance(cross_project_context, list):
+            errors.append("context_inputs.cross_project_context must be a list")
+            cross_project_context = []
+        else:
+            row_project_ids: list[str] = []
+            for idx, row in enumerate(cross_project_context):
+                if not isinstance(row, dict):
+                    errors.append(f"context_inputs.cross_project_context[{idx}] must be an object")
+                    continue
+                project_id = _as_str(row.get("project_id"))
+                if not project_id:
+                    errors.append(f"context_inputs.cross_project_context[{idx}].project_id is required")
+                row_project_ids.append(project_id)
+                context_project_ids.append(project_id)
+                context_status = _as_str(row.get("context_status"))
+                if context_status not in {"complete", "partial", "unknown"}:
+                    errors.append(
+                        f"context_inputs.cross_project_context[{idx}].context_status must be complete|partial|unknown"
+                    )
+                if not _as_str(row.get("summary")):
+                    errors.append(f"context_inputs.cross_project_context[{idx}].summary is required")
+                row_evidence_refs = row.get("evidence_refs")
+                if not isinstance(row_evidence_refs, list) or not row_evidence_refs:
+                    errors.append(f"context_inputs.cross_project_context[{idx}].evidence_refs must be a non-empty list")
+                else:
+                    normalized_row_refs = [_as_str(ref) for ref in row_evidence_refs]
+                    if normalized_row_refs != sorted(normalized_row_refs):
+                        errors.append(
+                            f"context_inputs.cross_project_context[{idx}].evidence_refs must be sorted"
+                        )
+                    if len(set(normalized_row_refs)) != len(normalized_row_refs):
+                        errors.append(
+                            f"context_inputs.cross_project_context[{idx}].evidence_refs must be unique"
+                        )
+                    context_evidence_refs.extend([ref for ref in normalized_row_refs if ref])
+                row_reason_codes = row.get("reason_codes")
+                if row_reason_codes is not None:
+                    if not isinstance(row_reason_codes, list):
+                        errors.append(f"context_inputs.cross_project_context[{idx}].reason_codes must be a list")
+                    else:
+                        for code_idx, code in enumerate(row_reason_codes):
+                            if not _as_str(code):
+                                errors.append(
+                                    f"context_inputs.cross_project_context[{idx}].reason_codes[{code_idx}] "
+                                    "must be non-empty string"
+                                )
+            if row_project_ids != sorted(row_project_ids):
+                errors.append("context_inputs.cross_project_context must be sorted by project_id")
+            if len(set(row_project_ids)) != len(row_project_ids):
+                errors.append("context_inputs.cross_project_context.project_id values must be unique")
+
+        earth_sweep_evidence_refs_value = context_inputs.get("earth_sweep_evidence_refs")
+        if not isinstance(earth_sweep_evidence_refs_value, list):
+            errors.append("context_inputs.earth_sweep_evidence_refs must be a list")
+        else:
+            normalized_earth_refs = [_as_str(ref) for ref in earth_sweep_evidence_refs_value]
+            if normalized_earth_refs != sorted(normalized_earth_refs):
+                errors.append("context_inputs.earth_sweep_evidence_refs must be sorted")
+            if len(set(normalized_earth_refs)) != len(normalized_earth_refs):
+                errors.append("context_inputs.earth_sweep_evidence_refs must be unique")
+            earth_sweep_evidence_refs = [ref for ref in normalized_earth_refs if ref]
+            context_evidence_refs.extend(earth_sweep_evidence_refs)
+
+        context_evidence_refs_value = context_inputs.get("evidence_refs")
+        if not isinstance(context_evidence_refs_value, list):
+            errors.append("context_inputs.evidence_refs must be a list")
+        else:
+            normalized_context_refs = [_as_str(ref) for ref in context_evidence_refs_value]
+            if normalized_context_refs != sorted(normalized_context_refs):
+                errors.append("context_inputs.evidence_refs must be sorted")
+            if len(set(normalized_context_refs)) != len(normalized_context_refs):
+                errors.append("context_inputs.evidence_refs must be unique")
+            for idx, ref in enumerate(normalized_context_refs):
+                if not ref:
+                    errors.append(f"context_inputs.evidence_refs[{idx}] must be non-empty string")
+            context_evidence_refs.extend([ref for ref in normalized_context_refs if ref])
+
+    context_project_ids = _sorted_unique_strings([_as_str(project_id) for project_id in context_project_ids if _as_str(project_id)])
+    context_evidence_refs = _sorted_unique_strings([_as_str(ref) for ref in context_evidence_refs if _as_str(ref)])
 
     detection = payload.get("change_detection")
     all_change_ids: list[str] = []
@@ -1218,6 +1762,157 @@ def validate_change_detection_since_previous_strategy_revision(payload: dict[str
             if summary_change_ids != sorted(all_change_ids):
                 errors.append("change_summary.change_ids must equal sorted detected change_ids")
 
+    evidence_refs = payload.get("evidence_refs")
+    normalized_evidence_refs: list[str] = []
+    if not isinstance(evidence_refs, list) or not evidence_refs:
+        errors.append("evidence_refs must be a non-empty list")
+    else:
+        normalized_evidence_refs = [_as_str(ref) for ref in evidence_refs]
+        for idx, ref in enumerate(evidence_refs):
+            if not _as_str(ref):
+                errors.append(f"evidence_refs[{idx}] must be non-empty string")
+        if normalized_evidence_refs != sorted(normalized_evidence_refs):
+            errors.append("evidence_refs must be sorted")
+        if len(set(normalized_evidence_refs)) != len(normalized_evidence_refs):
+            errors.append("evidence_refs must be unique")
+
+    cross_project_context_usage = payload.get("cross_project_context_usage")
+    usage_context_project_ids: list[str] = []
+    if not isinstance(cross_project_context_usage, dict):
+        errors.append("cross_project_context_usage must be an object")
+        cross_project_context_usage = {}
+    else:
+        usage_project_ids = cross_project_context_usage.get("context_project_ids")
+        if not isinstance(usage_project_ids, list):
+            errors.append("cross_project_context_usage.context_project_ids must be a list")
+        else:
+            usage_context_project_ids = [_as_str(project_id) for project_id in usage_project_ids if _as_str(project_id)]
+            if usage_context_project_ids != sorted(usage_context_project_ids):
+                errors.append("cross_project_context_usage.context_project_ids must be sorted")
+            if len(set(usage_context_project_ids)) != len(usage_context_project_ids):
+                errors.append("cross_project_context_usage.context_project_ids must be unique")
+            if context_project_ids and usage_context_project_ids != context_project_ids:
+                errors.append("cross_project_context_usage.context_project_ids must match context_inputs project ids")
+
+        obligations = cross_project_context_usage.get("obligations")
+        if not isinstance(obligations, list):
+            errors.append("cross_project_context_usage.obligations must be a list")
+            obligations = []
+        else:
+            for idx, row in enumerate(obligations):
+                if not isinstance(row, dict):
+                    errors.append(f"cross_project_context_usage.obligations[{idx}] must be an object")
+                    continue
+                if not _as_str(row.get("obligation_id")):
+                    errors.append(f"cross_project_context_usage.obligations[{idx}].obligation_id is required")
+                if not _as_str(row.get("title")):
+                    errors.append(f"cross_project_context_usage.obligations[{idx}].title is required")
+                row_project_ids = row.get("project_ids")
+                if not isinstance(row_project_ids, list) or not row_project_ids:
+                    errors.append(
+                        f"cross_project_context_usage.obligations[{idx}].project_ids must be a non-empty list"
+                    )
+                else:
+                    for project_idx, project_id in enumerate(row_project_ids):
+                        value = _as_str(project_id)
+                        if not value:
+                            errors.append(
+                                f"cross_project_context_usage.obligations[{idx}].project_ids[{project_idx}] must be non-empty string"
+                            )
+                        if usage_context_project_ids and value not in usage_context_project_ids:
+                            errors.append(
+                                f"cross_project_context_usage.obligations[{idx}].project_ids[{project_idx}] "
+                                "must reference context_project_ids"
+                            )
+                row_evidence_refs = row.get("evidence_refs")
+                if not isinstance(row_evidence_refs, list) or not row_evidence_refs:
+                    errors.append(
+                        f"cross_project_context_usage.obligations[{idx}].evidence_refs must be a non-empty list"
+                    )
+                else:
+                    normalized_row_refs = [_as_str(ref) for ref in row_evidence_refs]
+                    if normalized_row_refs != sorted(normalized_row_refs):
+                        errors.append(
+                            f"cross_project_context_usage.obligations[{idx}].evidence_refs must be sorted"
+                        )
+                    if len(set(normalized_row_refs)) != len(normalized_row_refs):
+                        errors.append(
+                            f"cross_project_context_usage.obligations[{idx}].evidence_refs must be unique"
+                        )
+                    for ref_idx, ref in enumerate(normalized_row_refs):
+                        if not ref:
+                            errors.append(
+                                f"cross_project_context_usage.obligations[{idx}].evidence_refs[{ref_idx}] "
+                                "must be non-empty string"
+                            )
+                        if ref and earth_sweep_evidence_refs and ref not in earth_sweep_evidence_refs:
+                            errors.append(
+                                f"cross_project_context_usage.obligations[{idx}].evidence_refs[{ref_idx}] "
+                                "must be Earth-sweep backed"
+                            )
+
+        open_risks = cross_project_context_usage.get("open_risks")
+        if not isinstance(open_risks, list):
+            errors.append("cross_project_context_usage.open_risks must be a list")
+            open_risks = []
+        else:
+            for idx, row in enumerate(open_risks):
+                if not isinstance(row, dict):
+                    errors.append(f"cross_project_context_usage.open_risks[{idx}] must be an object")
+                    continue
+                if not _as_str(row.get("risk_id")):
+                    errors.append(f"cross_project_context_usage.open_risks[{idx}].risk_id is required")
+                if not _as_str(row.get("summary")):
+                    errors.append(f"cross_project_context_usage.open_risks[{idx}].summary is required")
+                if _as_str(row.get("reason_code")) not in OPEN_RISK_REASON_CODES:
+                    errors.append(
+                        f"cross_project_context_usage.open_risks[{idx}].reason_code must be one of {', '.join(OPEN_RISK_REASON_CODES)}"
+                    )
+                row_evidence_refs = row.get("evidence_refs")
+                if not isinstance(row_evidence_refs, list) or not row_evidence_refs:
+                    errors.append(
+                        f"cross_project_context_usage.open_risks[{idx}].evidence_refs must be a non-empty list"
+                    )
+                else:
+                    normalized_row_refs = [_as_str(ref) for ref in row_evidence_refs]
+                    if normalized_row_refs != sorted(normalized_row_refs):
+                        errors.append(
+                            f"cross_project_context_usage.open_risks[{idx}].evidence_refs must be sorted"
+                        )
+                    if len(set(normalized_row_refs)) != len(normalized_row_refs):
+                        errors.append(
+                            f"cross_project_context_usage.open_risks[{idx}].evidence_refs must be unique"
+                        )
+                row_project_ids = row.get("project_ids")
+                if row_project_ids is not None:
+                    if not isinstance(row_project_ids, list):
+                        errors.append(f"cross_project_context_usage.open_risks[{idx}].project_ids must be a list")
+                    else:
+                        for project_idx, project_id in enumerate(row_project_ids):
+                            value = _as_str(project_id)
+                            if not value:
+                                errors.append(
+                                    f"cross_project_context_usage.open_risks[{idx}].project_ids[{project_idx}] must be non-empty string"
+                                )
+                            elif usage_context_project_ids and value not in usage_context_project_ids:
+                                errors.append(
+                                    f"cross_project_context_usage.open_risks[{idx}].project_ids[{project_idx}] "
+                                    "must reference context_project_ids"
+                                )
+
+        usage_evidence_refs = cross_project_context_usage.get("evidence_refs")
+        if not isinstance(usage_evidence_refs, list):
+            errors.append("cross_project_context_usage.evidence_refs must be a list")
+        else:
+            normalized_usage_refs = [_as_str(ref) for ref in usage_evidence_refs]
+            if normalized_usage_refs != sorted(normalized_usage_refs):
+                errors.append("cross_project_context_usage.evidence_refs must be sorted")
+            if len(set(normalized_usage_refs)) != len(normalized_usage_refs):
+                errors.append("cross_project_context_usage.evidence_refs must be unique")
+            for idx, ref in enumerate(normalized_usage_refs):
+                if not ref:
+                    errors.append(f"cross_project_context_usage.evidence_refs[{idx}] must be non-empty string")
+
     recommendation_deltas = payload.get("recommendation_deltas")
     referenced_change_ids: list[str] = []
     if not isinstance(recommendation_deltas, list):
@@ -1266,6 +1961,42 @@ def validate_change_detection_since_previous_strategy_revision(payload: dict[str
                 errors.append(
                     f"recommendation_deltas[{idx}].delta_type must be one of new, updated, retained, derived"
                 )
+            delta_evidence_refs = row.get("evidence_refs")
+            if not isinstance(delta_evidence_refs, list) or not delta_evidence_refs:
+                errors.append(f"recommendation_deltas[{idx}].evidence_refs must be a non-empty list")
+            else:
+                normalized_delta_refs = [_as_str(ref) for ref in delta_evidence_refs]
+                if normalized_delta_refs != sorted(normalized_delta_refs):
+                    errors.append(f"recommendation_deltas[{idx}].evidence_refs must be sorted")
+                if len(set(normalized_delta_refs)) != len(normalized_delta_refs):
+                    errors.append(f"recommendation_deltas[{idx}].evidence_refs must be unique")
+                for ref_idx, ref in enumerate(normalized_delta_refs):
+                    if not ref:
+                        errors.append(
+                            f"recommendation_deltas[{idx}].evidence_refs[{ref_idx}] must be non-empty string"
+                        )
+                    elif normalized_evidence_refs and ref not in normalized_evidence_refs:
+                        errors.append(
+                            f"recommendation_deltas[{idx}].evidence_refs[{ref_idx}] must exist in top-level evidence_refs"
+                        )
+            linked_context_project_ids = row.get("linked_context_project_ids")
+            if not isinstance(linked_context_project_ids, list):
+                errors.append(f"recommendation_deltas[{idx}].linked_context_project_ids must be a list")
+            else:
+                normalized_linked_project_ids = [_as_str(project_id) for project_id in linked_context_project_ids if _as_str(project_id)]
+                if normalized_linked_project_ids != sorted(normalized_linked_project_ids):
+                    errors.append(
+                        f"recommendation_deltas[{idx}].linked_context_project_ids must be sorted"
+                    )
+                if len(set(normalized_linked_project_ids)) != len(normalized_linked_project_ids):
+                    errors.append(
+                        f"recommendation_deltas[{idx}].linked_context_project_ids must be unique"
+                    )
+                expected_project_ids = usage_context_project_ids or context_project_ids
+                if expected_project_ids and normalized_linked_project_ids != expected_project_ids:
+                    errors.append(
+                        f"recommendation_deltas[{idx}].linked_context_project_ids must match context project ids"
+                    )
 
     if all_change_ids:
         if not referenced_change_ids:
@@ -1273,19 +2004,6 @@ def validate_change_detection_since_previous_strategy_revision(payload: dict[str
         missing_references = sorted(set(all_change_ids) - set(referenced_change_ids))
         if missing_references:
             errors.append("recommendation_deltas must reference every detected change_id")
-
-    evidence_refs = payload.get("evidence_refs")
-    if not isinstance(evidence_refs, list) or not evidence_refs:
-        errors.append("evidence_refs must be a non-empty list")
-    else:
-        normalized_evidence_refs = [_as_str(ref) for ref in evidence_refs]
-        for idx, ref in enumerate(evidence_refs):
-            if not _as_str(ref):
-                errors.append(f"evidence_refs[{idx}] must be non-empty string")
-        if normalized_evidence_refs != sorted(normalized_evidence_refs):
-            errors.append("evidence_refs must be sorted")
-        if len(set(normalized_evidence_refs)) != len(normalized_evidence_refs):
-            errors.append("evidence_refs must be unique")
 
     return errors
 
