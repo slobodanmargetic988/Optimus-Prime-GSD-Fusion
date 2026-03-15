@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -41,6 +42,7 @@ REQ_013_REQUIREMENT_ID = "REQ-013"
 REQ_021_SCHEMA_VERSION = "req-021.evidence-provenance-ledger-for-context.v1"
 REQ_021_REQUIREMENT_ID = "REQ-021"
 REQ_021_LEDGER_SCOPE = "strategy_context_sweep.processing_behavior"
+REQ_021_CLAIM_ID_PATTERN = re.compile(r"^claim-[0-9a-f]{12}$")
 
 
 def _require_nonempty_text(value: Any, *, field_name: str) -> str:
@@ -1140,6 +1142,10 @@ def validate_req_021_evidence_provenance_ledger_for_context(payload: Mapping[str
             if not isinstance(claim_id, str) or not claim_id.strip():
                 errors.append(f"evidence_provenance_ledger_for_context.context_claims[{index}].claim_id must be a string")
             else:
+                if not REQ_021_CLAIM_ID_PATTERN.fullmatch(claim_id):
+                    errors.append(
+                        f"evidence_provenance_ledger_for_context.context_claims[{index}].claim_id must match claim-<12 hex>"
+                    )
                 if claim_id in seen_ids:
                     errors.append(f"duplicate claim_id: {claim_id}")
                 seen_ids.add(claim_id)
@@ -1157,6 +1163,15 @@ def validate_req_021_evidence_provenance_ledger_for_context(payload: Mapping[str
                 errors.append(
                     f"evidence_provenance_ledger_for_context.context_claims[{index}].source_artifact_refs must be sorted unique"
                 )
+            if isinstance(claim_id, str) and claim_id.strip() and isinstance(claim_key, str) and claim_key.strip():
+                expected_claim_id = _req_021_claim_id(
+                    claim_key=claim_key.strip(),
+                    source_artifact_refs=normalized_sources,
+                )
+                if claim_id != expected_claim_id:
+                    errors.append(
+                        f"evidence_provenance_ledger_for_context.context_claims[{index}].claim_id must equal deterministic digest of claim_key plus normalized source_artifact_refs"
+                    )
 
     claim_count = ledger.get("claim_count")
     if not isinstance(claim_count, int):

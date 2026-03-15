@@ -58,3 +58,29 @@ def test_req_021_validator_rejects_missing_artifact_refs_index_union_when_empty(
 
     errors = module.validate_req_021_evidence_provenance_ledger_for_context(mutated)
     assert "evidence_provenance_ledger_for_context.artifact_refs_index must equal union of claim sources" in errors
+
+
+def test_req_021_validator_rejects_tampered_claim_id_even_when_format_looks_valid():
+    fixture = _read_json(FIXTURE_PATH)
+    mutated = json.loads(json.dumps(fixture["expected_payload"]))
+    first_claim = mutated["evidence_provenance_ledger_for_context"]["context_claims"][0]
+    assert first_claim["claim_id"].startswith("claim-")
+    first_claim["claim_id"] = "claim-000000000000"
+
+    errors = module.validate_req_021_evidence_provenance_ledger_for_context(mutated)
+    assert (
+        "evidence_provenance_ledger_for_context.context_claims[0].claim_id must equal deterministic digest of claim_key plus normalized source_artifact_refs"
+        in errors
+    )
+
+
+def test_req_021_validator_rejects_claim_id_that_does_not_match_contract_format():
+    fixture = _read_json(FIXTURE_PATH)
+    mutated = json.loads(json.dumps(fixture["expected_payload"]))
+    mutated["evidence_provenance_ledger_for_context"]["context_claims"][0]["claim_id"] = "not-deterministic"
+
+    errors = module.validate_req_021_evidence_provenance_ledger_for_context(mutated)
+    assert (
+        "evidence_provenance_ledger_for_context.context_claims[0].claim_id must match claim-<12 hex>"
+        in errors
+    )

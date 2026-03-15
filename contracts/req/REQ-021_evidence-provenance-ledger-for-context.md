@@ -43,9 +43,15 @@ Top-level required keys:
 
 Each `context_claims[]` entry required keys:
 
-- `claim_id` (stable deterministic id; `claim-` + 12 hex chars)
+- `claim_id` (stable deterministic id; `claim-` + 12 hex chars, derived from `claim_key` plus normalized `source_artifact_refs`)
 - `claim_key` (string key identifying the context claim surface)
 - `source_artifact_refs` (sorted unique list of artifact refs supporting the claim)
+
+Deterministic `claim_id` derivation rule:
+
+- Normalize `source_artifact_refs` to a sorted unique list.
+- Compute sha256 over `{"claim_key": ..., "source_artifact_refs": [...]}` using JSON with sorted keys and compact separators.
+- Truncate the digest to 12 lowercase hex characters and prefix it with `claim-`.
 
 `call_metadata` required keys:
 
