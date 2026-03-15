@@ -113,6 +113,39 @@ def test_req010_change_detection_build_and_contract_validation():
     assert referenced_change_ids == detected_change_ids
 
 
+def test_req010_builder_backfills_missing_change_ids_for_partial_anchors():
+    previous_revision = _previous_revision_payload()
+    current_revision = _current_revision_payload()
+    current_revision["recommendations"] = [
+        {
+            "recommendation_id": "rec.scope-refresh",
+            "summary": "Refresh mission/scope alignment with ecosystem evidence.",
+            "anchors": ["mission_scope"],
+        }
+    ]
+
+    payload = sweep.build_change_detection_since_previous_strategy_revision(previous_revision, current_revision)
+
+    assert sweep.validate_change_detection_since_previous_strategy_revision(payload) == []
+    detected_change_ids = set(payload["change_summary"]["change_ids"])
+    non_derived_change_ids = {
+        change_id
+        for row in payload["recommendation_deltas"]
+        if row["delta_type"] != "derived"
+        for change_id in row["change_ids"]
+    }
+    missing_change_ids = detected_change_ids - non_derived_change_ids
+
+    assert missing_change_ids
+    derived_rows = [row for row in payload["recommendation_deltas"] if row["delta_type"] == "derived"]
+    assert derived_rows
+    derived_change_ids = {change_id for row in derived_rows for change_id in row["change_ids"]}
+    assert missing_change_ids <= derived_change_ids
+
+    referenced_change_ids = {change_id for row in payload["recommendation_deltas"] for change_id in row["change_ids"]}
+    assert referenced_change_ids == detected_change_ids
+
+
 def test_req010_fixture_and_sample_validate_against_contract():
     repo_root = Path(__file__).resolve().parents[2]
     fixture_path = repo_root / "examples" / "fixtures" / "change-detection-since-previous-strategy-revision.json"

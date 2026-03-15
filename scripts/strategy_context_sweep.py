@@ -1005,14 +1005,36 @@ def _build_req010_recommendation_deltas(
             }
         )
 
-    if not deltas and all_change_ids:
-        changed_anchors = [section_key for section_key in REQ010_SECTION_KEYS if section_change_ids.get(section_key)]
+    referenced_change_ids = {
+        change_id
+        for row in deltas
+        for change_id in row.get("change_ids", [])
+        if _as_str(change_id)
+    }
+    missing_change_ids = [change_id for change_id in all_change_ids if change_id not in referenced_change_ids]
+    if missing_change_ids:
+        missing_change_id_set = set(missing_change_ids)
+        changed_anchors = [
+            section_key
+            for section_key in REQ010_SECTION_KEYS
+            if any(change_id in missing_change_id_set for change_id in section_change_ids.get(section_key, []))
+        ]
+        if not changed_anchors:
+            changed_anchors = [section_key for section_key in REQ010_SECTION_KEYS if section_change_ids.get(section_key)]
+        reserved_ids = {_as_str(row.get("recommendation_id")) for row in deltas}
+        recommendation_id = "rec.strategy-revision-delta"
+        if recommendation_id in reserved_ids:
+            recommendation_id = "rec.strategy-revision-delta-coverage"
+            sequence = 2
+            while recommendation_id in reserved_ids:
+                recommendation_id = f"rec.strategy-revision-delta-coverage-{sequence}"
+                sequence += 1
         deltas.append(
             {
-                "recommendation_id": "rec.strategy-revision-delta",
-                "summary": "Align strategy recommendations with detected revision changes.",
+                "recommendation_id": recommendation_id,
+                "summary": "Backfill recommendation coverage for detected revision changes.",
                 "anchors": changed_anchors,
-                "change_ids": all_change_ids,
+                "change_ids": missing_change_ids,
                 "delta_type": "derived",
             }
         )

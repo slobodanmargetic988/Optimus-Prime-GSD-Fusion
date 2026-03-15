@@ -54,6 +54,8 @@ Each `changes[]` item contains:
 - `delta_type`: `new` | `updated` | `retained` | `derived`
 
 `recommendation_deltas` must reference every detected `change_id` so recommendation deltas remain directly traceable to strategy changes.
+When explicit recommendation anchors cover only a subset of changed sections, the builder must append a deterministic `derived`
+delta that backfills the missing `change_id` references.
 
 ## Stability Requirements
 
