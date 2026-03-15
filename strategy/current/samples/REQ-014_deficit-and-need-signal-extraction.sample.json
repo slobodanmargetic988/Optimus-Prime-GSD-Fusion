@@ -1,0 +1,139 @@
+{
+  "ok": true,
+  "tool": "strategy-context-sweep",
+  "tool_version": "1.1.0",
+  "analysis_type": "deficit_and_need_signal_extraction",
+  "checked_at_utc": "2026-03-14T21:00:00Z",
+  "analysis_anchors": [
+    "unmet_ecosystem_needs",
+    "high_leverage_fit",
+    "impact",
+    "urgency"
+  ],
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "capability_tags": [
+      "telemetry",
+      "orchestration",
+      "contracts",
+      "planning"
+    ]
+  },
+  "thresholds": {
+    "min_impact_score": 6.0,
+    "min_urgency_score": 6.0,
+    "min_leverage_ratio": 0.5
+  },
+  "max_signals": 5,
+  "need_signals": [
+    {
+      "signal_id": "NEED-0001",
+      "deficit_id": "DEF-001",
+      "summary": "Runtime telemetry freshness blind spots slow blocker remediation.",
+      "impact_score": 9.0,
+      "urgency_score": 8.0,
+      "priority_score": 72.0,
+      "required_capability_tags": [
+        "telemetry",
+        "orchestration"
+      ],
+      "matched_capability_tags": [
+        "telemetry",
+        "orchestration"
+      ],
+      "leverage_ratio": 1.0,
+      "evidence_refs": [
+        "EVD-0001",
+        "EVD-0002"
+      ],
+      "reason_code": "eligible_need_signal"
+    },
+    {
+      "signal_id": "NEED-0002",
+      "deficit_id": "DEF-002",
+      "summary": "Strategy packet contract drift is not detected before planning starts.",
+      "impact_score": 7.0,
+      "urgency_score": 9.0,
+      "priority_score": 63.0,
+      "required_capability_tags": [
+        "contracts",
+        "planning"
+      ],
+      "matched_capability_tags": [
+        "contracts",
+        "planning"
+      ],
+      "leverage_ratio": 1.0,
+      "evidence_refs": [
+        "EVD-0003"
+      ],
+      "reason_code": "eligible_need_signal"
+    }
+  ],
+  "excluded_deficits": [
+    {
+      "deficit_id": "DEF-003",
+      "summary": "Earth-wide release visibility is fragmented across projects.",
+      "impact_score": 8.0,
+      "urgency_score": 7.0,
+      "leverage_ratio": 0.0,
+      "failed_criteria": [
+        "leverage_below_threshold"
+      ],
+      "reason_code": "leverage_below_threshold"
+    },
+    {
+      "deficit_id": "DEF-004",
+      "summary": "Contributor onboarding docs are stale and inconsistent.",
+      "impact_score": 4.0,
+      "urgency_score": 5.0,
+      "leverage_ratio": 0.0,
+      "failed_criteria": [
+        "impact_below_threshold",
+        "urgency_below_threshold",
+        "leverage_below_threshold"
+      ],
+      "reason_code": "multiple_threshold_failures"
+    }
+  ],
+  "evidence_references": [
+    {
+      "citation_id": "EVD-0001",
+      "signal_id": "NEED-0001",
+      "deficit_id": "DEF-001",
+      "upstream_evidence_ref": "OBS-TELEM-001",
+      "reason_code": "need_signal_supporting_evidence"
+    },
+    {
+      "citation_id": "EVD-0002",
+      "signal_id": "NEED-0001",
+      "deficit_id": "DEF-001",
+      "upstream_evidence_ref": "DOC-OPS-002",
+      "reason_code": "need_signal_supporting_evidence"
+    },
+    {
+      "citation_id": "EVD-0003",
+      "signal_id": "NEED-0002",
+      "deficit_id": "DEF-002",
+      "upstream_evidence_ref": "OBS-CONTRACT-011",
+      "reason_code": "need_signal_supporting_evidence"
+    }
+  ],
+  "recommendation": {
+    "decision": "prioritize_need_signals",
+    "rationale": "Need-signal extraction evaluated 4 deficit(s), selected 2 high-leverage signal(s), and excluded 2 deficit(s).",
+    "top_signal_id": "NEED-0001",
+    "evidence_refs": [
+      "EVD-0001",
+      "EVD-0002",
+      "EVD-0003"
+    ]
+  },
+  "totals": {
+    "deficits": 4,
+    "eligible": 2,
+    "signals": 2,
+    "excluded": 2,
+    "evidence_references": 3
+  }
+}

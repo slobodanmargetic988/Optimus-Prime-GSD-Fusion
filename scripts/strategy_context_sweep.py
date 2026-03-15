@@ -25,6 +25,14 @@ REASON_CODE_BY_FRESHNESS = {
     "stale": "stale_source_artifact_detected",
     "missing": "source_artifact_missing",
 }
+REQ014_ANALYSIS_TYPE = "deficit_and_need_signal_extraction"
+REQ014_ANALYSIS_ANCHORS = ("unmet_ecosystem_needs", "high_leverage_fit", "impact", "urgency")
+REQ014_DEFAULT_THRESHOLDS = {
+    "min_impact_score": 6.0,
+    "min_urgency_score": 6.0,
+    "min_leverage_ratio": 0.5,
+}
+REQ014_DEFAULT_MAX_SIGNALS = 5
 
 
 class SweepError(Exception):
@@ -70,6 +78,13 @@ def _required_str(payload: dict[str, Any], key: str) -> str:
     if not text:
         raise SweepError("input_error", f"{key} is required", stage="input")
     return text
+
+
+def _required_number(payload: dict[str, Any], key: str) -> float:
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SweepError("input_error", f"{key} must be a number", stage="input")
+    return float(value)
 
 
 def _parse_input(path: str) -> dict[str, Any]:
@@ -170,6 +185,132 @@ def _doc_evidence_ref(kind: str, path: Path, *, project_id: str | None = None) -
     if project_id:
         return f"DOCREF:{kind}:{project_id}:{path}"
     return f"DOCREF:{kind}:{path}"
+
+
+def _normalize_string_list(values: Any, *, path: str, allow_empty: bool = False) -> list[str]:
+    if not isinstance(values, list):
+        raise SweepError("input_error", f"{path} must be a list", stage="input")
+    out: list[str] = []
+    for idx, raw in enumerate(values):
+        text = _as_str(raw)
+        if not text:
+            raise SweepError("input_error", f"{path}[{idx}] must be a non-empty string", stage="input")
+        out.append(text)
+    if not allow_empty and not out:
+        raise SweepError("input_error", f"{path} must be non-empty", stage="input")
+    return out
+
+
+def _normalize_capability_tags(values: Any, *, path: str) -> list[str]:
+    tags = _normalize_string_list(values, path=path, allow_empty=False)
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        normalized = tag.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def _coerce_req014_thresholds(payload: dict[str, Any]) -> dict[str, float]:
+    raw = payload.get("thresholds")
+    if raw is None:
+        return dict(REQ014_DEFAULT_THRESHOLDS)
+    if not isinstance(raw, dict):
+        raise SweepError("input_error", "thresholds must be an object", stage="input")
+
+    out = dict(REQ014_DEFAULT_THRESHOLDS)
+    for key in REQ014_DEFAULT_THRESHOLDS:
+        if key not in raw:
+            continue
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise SweepError("input_error", f"thresholds.{key} must be numeric", stage="input")
+        out[key] = float(value)
+
+    if out["min_impact_score"] < 0 or out["min_impact_score"] > 10:
+        raise SweepError("input_error", "thresholds.min_impact_score must be between 0 and 10", stage="input")
+    if out["min_urgency_score"] < 0 or out["min_urgency_score"] > 10:
+        raise SweepError("input_error", "thresholds.min_urgency_score must be between 0 and 10", stage="input")
+    if out["min_leverage_ratio"] < 0 or out["min_leverage_ratio"] > 1:
+        raise SweepError("input_error", "thresholds.min_leverage_ratio must be between 0 and 1", stage="input")
+    return out
+
+
+def _coerce_req014_max_signals(payload: dict[str, Any]) -> int:
+    raw = payload.get("max_signals")
+    if raw is None:
+        return REQ014_DEFAULT_MAX_SIGNALS
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise SweepError("input_error", "max_signals must be an integer", stage="input")
+    if raw <= 0:
+        raise SweepError("input_error", "max_signals must be > 0", stage="input")
+    return raw
+
+
+def _validate_req014_target_project(payload: dict[str, Any]) -> dict[str, Any]:
+    target = _required_object(payload, "target_project")
+    project_id = _required_str(target, "project_id")
+    capability_tags = _normalize_capability_tags(target.get("capability_tags"), path="target_project.capability_tags")
+    return {
+        "project_id": project_id,
+        "capability_tags": capability_tags,
+    }
+
+
+def _validate_req014_deficits(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = _required_list(payload, "deficits")
+    out: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise SweepError("input_error", f"deficits[{idx}] must be an object", stage="input")
+        deficit_id = _required_str(row, "deficit_id")
+        summary = _required_str(row, "summary")
+        impact_score = _required_number(row, "impact_score")
+        urgency_score = _required_number(row, "urgency_score")
+        if impact_score < 0 or impact_score > 10:
+            raise SweepError("input_error", f"deficits[{idx}].impact_score must be between 0 and 10", stage="input")
+        if urgency_score < 0 or urgency_score > 10:
+            raise SweepError("input_error", f"deficits[{idx}].urgency_score must be between 0 and 10", stage="input")
+        required_tags = _normalize_capability_tags(
+            row.get("required_capability_tags"),
+            path=f"deficits[{idx}].required_capability_tags",
+        )
+        upstream_refs = _normalize_string_list(
+            row.get("evidence_refs"),
+            path=f"deficits[{idx}].evidence_refs",
+            allow_empty=False,
+        )
+        out.append(
+            {
+                "deficit_id": deficit_id,
+                "summary": summary,
+                "impact_score": impact_score,
+                "urgency_score": urgency_score,
+                "required_capability_tags": required_tags,
+                "upstream_evidence_refs": upstream_refs,
+            }
+        )
+    return out
+
+
+def _classify_req014_failed_criteria(
+    *,
+    impact_score: float,
+    urgency_score: float,
+    leverage_ratio: float,
+    thresholds: dict[str, float],
+) -> list[str]:
+    failed: list[str] = []
+    if impact_score < thresholds["min_impact_score"]:
+        failed.append("impact_below_threshold")
+    if urgency_score < thresholds["min_urgency_score"]:
+        failed.append("urgency_below_threshold")
+    if leverage_ratio < thresholds["min_leverage_ratio"]:
+        failed.append("leverage_below_threshold")
+    return failed
 
 
 def _validate_context_bundle_docs(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -656,7 +797,155 @@ def sweep_runtime_telemetry_artifacts(payload: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def extract_deficit_and_need_signals(payload: dict[str, Any]) -> dict[str, Any]:
+    now_utc = _parse_now(payload)
+    checked_at_utc = _to_iso_utc(now_utc)
+    thresholds = _coerce_req014_thresholds(payload)
+    max_signals = _coerce_req014_max_signals(payload)
+    target_project = _validate_req014_target_project(payload)
+    deficits = _validate_req014_deficits(payload)
+
+    target_tags = set(target_project["capability_tags"])
+    scored_rows: list[dict[str, Any]] = []
+    for row in deficits:
+        matched_tags = [tag for tag in row["required_capability_tags"] if tag in target_tags]
+        leverage_ratio = round(len(matched_tags) / len(row["required_capability_tags"]), 4)
+        priority_score = round(row["impact_score"] * row["urgency_score"], 4)
+        failed_criteria = _classify_req014_failed_criteria(
+            impact_score=row["impact_score"],
+            urgency_score=row["urgency_score"],
+            leverage_ratio=leverage_ratio,
+            thresholds=thresholds,
+        )
+        scored_rows.append(
+            {
+                **row,
+                "matched_capability_tags": matched_tags,
+                "leverage_ratio": leverage_ratio,
+                "priority_score": priority_score,
+                "failed_criteria": failed_criteria,
+                "eligible": not failed_criteria,
+            }
+        )
+
+    eligible_rows = sorted(
+        [row for row in scored_rows if row["eligible"]],
+        key=lambda row: (
+            -float(row["priority_score"]),
+            -float(row["impact_score"]),
+            -float(row["urgency_score"]),
+            str(row["deficit_id"]),
+        ),
+    )
+
+    selected_rows = eligible_rows[:max_signals]
+    selected_ids = {str(row["deficit_id"]) for row in selected_rows}
+
+    need_signals: list[dict[str, Any]] = []
+    evidence_references: list[dict[str, Any]] = []
+    citation_counter = 0
+    for idx, row in enumerate(selected_rows, start=1):
+        signal_id = f"NEED-{idx:04d}"
+        signal_evidence_refs: list[str] = []
+        for upstream_ref in row["upstream_evidence_refs"]:
+            citation_counter += 1
+            citation_id = f"EVD-{citation_counter:04d}"
+            signal_evidence_refs.append(citation_id)
+            evidence_references.append(
+                {
+                    "citation_id": citation_id,
+                    "signal_id": signal_id,
+                    "deficit_id": row["deficit_id"],
+                    "upstream_evidence_ref": upstream_ref,
+                    "reason_code": "need_signal_supporting_evidence",
+                }
+            )
+        need_signals.append(
+            {
+                "signal_id": signal_id,
+                "deficit_id": row["deficit_id"],
+                "summary": row["summary"],
+                "impact_score": row["impact_score"],
+                "urgency_score": row["urgency_score"],
+                "priority_score": row["priority_score"],
+                "required_capability_tags": row["required_capability_tags"],
+                "matched_capability_tags": row["matched_capability_tags"],
+                "leverage_ratio": row["leverage_ratio"],
+                "evidence_refs": signal_evidence_refs,
+                "reason_code": "eligible_need_signal",
+            }
+        )
+
+    excluded_deficits: list[dict[str, Any]] = []
+    for row in scored_rows:
+        deficit_id = str(row["deficit_id"])
+        if deficit_id in selected_ids:
+            continue
+        if row["eligible"]:
+            failed_criteria = ["max_signals_cap_reached"]
+            reason_code = "max_signals_cap_reached"
+        else:
+            failed_criteria = list(row["failed_criteria"])
+            reason_code = failed_criteria[0] if len(failed_criteria) == 1 else "multiple_threshold_failures"
+        excluded_deficits.append(
+            {
+                "deficit_id": deficit_id,
+                "summary": row["summary"],
+                "impact_score": row["impact_score"],
+                "urgency_score": row["urgency_score"],
+                "leverage_ratio": row["leverage_ratio"],
+                "failed_criteria": failed_criteria,
+                "reason_code": reason_code,
+            }
+        )
+
+    all_evidence_refs = [str(row["citation_id"]) for row in evidence_references]
+    recommendation_decision = "prioritize_need_signals" if need_signals else "hold"
+    recommendation = {
+        "decision": recommendation_decision,
+        "rationale": (
+            f"Need-signal extraction evaluated {len(scored_rows)} deficit(s), "
+            f"selected {len(need_signals)} high-leverage signal(s), and excluded "
+            f"{len(excluded_deficits)} deficit(s)."
+        ),
+        "top_signal_id": need_signals[0]["signal_id"] if need_signals else None,
+        "evidence_refs": all_evidence_refs,
+    }
+
+    totals = {
+        "deficits": len(scored_rows),
+        "eligible": len(eligible_rows),
+        "signals": len(need_signals),
+        "excluded": len(excluded_deficits),
+        "evidence_references": len(evidence_references),
+    }
+
+    return {
+        "ok": True,
+        "tool": TOOL,
+        "tool_version": TOOL_VERSION,
+        "analysis_type": REQ014_ANALYSIS_TYPE,
+        "checked_at_utc": checked_at_utc,
+        "analysis_anchors": list(REQ014_ANALYSIS_ANCHORS),
+        "target_project": target_project,
+        "thresholds": thresholds,
+        "max_signals": max_signals,
+        "need_signals": need_signals,
+        "excluded_deficits": excluded_deficits,
+        "evidence_references": evidence_references,
+        "recommendation": recommendation,
+        "totals": totals,
+    }
+
+
 def run(payload: dict[str, Any]) -> dict[str, Any]:
+    analysis_type = _as_str(payload.get("analysis_type"))
+    if (
+        analysis_type == REQ014_ANALYSIS_TYPE
+        or isinstance(payload.get("deficits"), list)
+        or isinstance(payload.get("target_project"), dict)
+    ):
+        return extract_deficit_and_need_signals(payload)
     return sweep_runtime_telemetry_artifacts(payload)
 
 
