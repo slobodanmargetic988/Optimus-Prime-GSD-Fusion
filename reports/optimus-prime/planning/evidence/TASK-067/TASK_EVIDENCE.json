@@ -4,12 +4,12 @@
   "summary": {
     "result": "pass",
     "reason_codes": [],
-    "checked_at": "2026-03-15T23:16:39Z",
-    "notes": "REQ-021 provenance-ledger hardening edge cases validated with deterministic reason-code behavior across two consecutive verification runs on branch op-simple-canary-20260314T214654Z-ac48393d-w03."
+    "checked_at": "2026-03-15T23:30:38Z",
+    "notes": "REQ-021 provenance-ledger hardening edge cases validated with deterministic reason-code behavior across two consecutive branch-head verification runs on branch op-simple-canary-20260314T214654Z-ac48393d-w03."
   },
   "verification_runs": [
     {
-      "run_id": "run-1-2026-03-15T23:15Z",
+      "run_id": "run-1-2026-03-15T23:30:29Z",
       "checks": [
         {
           "command": "python3 -m pytest tests/contracts/test_evidence-provenance-ledger-for-context.py -q",
@@ -26,7 +26,7 @@
       ]
     },
     {
-      "run_id": "run-2-2026-03-15T23:16Z",
+      "run_id": "run-2-2026-03-15T23:30:38Z",
       "checks": [
         {
           "command": "python3 -m pytest tests/contracts/test_evidence-provenance-ledger-for-context.py -q",
