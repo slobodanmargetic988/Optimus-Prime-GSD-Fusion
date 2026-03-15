@@ -14,6 +14,15 @@ SAMPLE_PATH = (
     / "REQ-011_cross-project-dependency-extraction.sample.json"
 )
 CONTRACT_PATH = REPO_ROOT / "contracts" / "req" / "REQ-011_cross-project-dependency-extraction.md"
+TASK_EVIDENCE_PATH = (
+    REPO_ROOT
+    / "reports"
+    / "optimus-prime"
+    / "planning"
+    / "evidence"
+    / "TASK-033"
+    / "TASK_EVIDENCE.json"
+)
 
 
 def _load_fixture() -> dict:
@@ -86,3 +95,23 @@ def test_req011_contract_doc_references_sample_structure() -> None:
     contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
 
     assert "strategy/current/samples/REQ-011_cross-project-dependency-extraction.sample.json" in contract_text
+
+
+def test_req011_task_evidence_machine_readable_blockers_shape() -> None:
+    payload = json.loads(TASK_EVIDENCE_PATH.read_text(encoding="utf-8"))
+
+    assert payload["task_id"] == "TASK-033"
+    assert payload["requirement_ids"] == ["REQ-011"]
+    assert payload["summary"]["result"] == "pass"
+    assert payload["summary"]["expectation_met"] is True
+    assert payload["gate"]["ready_for_test"] is True
+    assert payload["dev"]["blockers"] == []
+    assert payload["test"]["blockers"] == []
+    assert payload["review"]["blockers"] == []
+
+    checks = payload["dev"]["checks"]
+    assert checks and all(isinstance(row, dict) and isinstance(row.get("passed"), bool) for row in checks)
+
+    edge_case_blockers = payload["dev"]["edge_case_blockers"]
+    assert isinstance(edge_case_blockers, list) and edge_case_blockers
+    assert all(isinstance(row, dict) and row.get("unresolved_blockers") == [] for row in edge_case_blockers)
