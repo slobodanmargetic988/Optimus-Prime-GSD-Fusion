@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 REQ_007_SCHEMA_VERSION = "req-007.ground-graph-snapshot-ingestion.v1"
 REQ_007_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-007.ground-graph-context-bundle.v1"
+REQ_016_SCHEMA_VERSION = "req-016.reuse-opportunity-detection.v1"
 
 
 def _utc_now_iso() -> str:
@@ -47,6 +48,26 @@ def _normalize_string_list(value: Any, *, label: str) -> list[str]:
         seen.add(item_str)
         out.append(item_str)
     out.sort()
+    return out
+
+
+def _normalize_string_list_in_order(value: Any, *, label: str, allow_empty: bool = True) -> list[str]:
+    if value is None:
+        if allow_empty:
+            return []
+        raise ValueError(f"{label} must be a non-empty list")
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+    out: list[str] = []
+    seen: set[str] = set()
+    for idx, item in enumerate(value):
+        item_str = _require_nonempty_str(item, label=f"{label}[{idx}]")
+        if item_str in seen:
+            continue
+        seen.add(item_str)
+        out.append(item_str)
+    if not allow_empty and not out:
+        raise ValueError(f"{label} must be a non-empty list")
     return out
 
 
@@ -462,6 +483,189 @@ def process_ground_graph_snapshot(
             "recommendation": recommendation_evidence_ref_list,
         },
         "recommendation": recommendation,
+    }
+
+
+def detect_reuse_opportunities(
+    payload: Mapping[str, Any],
+    *,
+    evaluated_at: str | None = None,
+) -> dict[str, Any]:
+    context = _require_mapping(payload, label="reuse_opportunity_detection")
+    active_project_id = _require_nonempty_str(
+        context.get("active_project_id"),
+        label="reuse_opportunity_detection.active_project_id",
+    )
+
+    required_capabilities_raw = context.get("required_capabilities")
+    if not isinstance(required_capabilities_raw, list) or not required_capabilities_raw:
+        raise ValueError("reuse_opportunity_detection.required_capabilities must be a non-empty list")
+
+    required_capabilities: list[dict[str, Any]] = []
+    required_by_capability: dict[str, dict[str, Any]] = {}
+    for idx, row in enumerate(required_capabilities_raw):
+        item = _require_mapping(row, label=f"reuse_opportunity_detection.required_capabilities[{idx}]")
+        capability_id = _require_nonempty_str(
+            item.get("capability_id"),
+            label=f"reuse_opportunity_detection.required_capabilities[{idx}].capability_id",
+        )
+        intent = _require_nonempty_str(
+            item.get("intent"),
+            label=f"reuse_opportunity_detection.required_capabilities[{idx}].intent",
+        )
+        required_interfaces = _normalize_string_list(
+            item.get("required_interfaces"),
+            label=f"reuse_opportunity_detection.required_capabilities[{idx}].required_interfaces",
+        )
+
+        existing = required_by_capability.get(capability_id)
+        if existing is not None:
+            existing_interfaces = set(existing["required_interfaces"])
+            existing_interfaces.update(required_interfaces)
+            existing["required_interfaces"] = sorted(existing_interfaces)
+            continue
+
+        required = {
+            "capability_id": capability_id,
+            "intent": intent,
+            "required_interfaces": required_interfaces,
+        }
+        required_capabilities.append(required)
+        required_by_capability[capability_id] = required
+
+    existing_functionality_raw = context.get("existing_functionality")
+    if not isinstance(existing_functionality_raw, list) or not existing_functionality_raw:
+        raise ValueError("reuse_opportunity_detection.existing_functionality must be a non-empty list")
+
+    existing_by_capability: dict[str, list[dict[str, Any]]] = {}
+    seen_functionality_keys: set[str] = set()
+    source_project_ids: set[str] = set()
+
+    for idx, row in enumerate(existing_functionality_raw):
+        item = _require_mapping(row, label=f"reuse_opportunity_detection.existing_functionality[{idx}]")
+        source_project_id = _require_nonempty_str(
+            item.get("source_project_id"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].source_project_id",
+        )
+        if source_project_id == active_project_id:
+            raise ValueError(
+                "reuse_opportunity_detection.existing_functionality contains active_project_id; "
+                "reuse candidates must come from other apps"
+            )
+        capability_id = _require_nonempty_str(
+            item.get("capability_id"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].capability_id",
+        )
+        functionality = _require_nonempty_str(
+            item.get("functionality"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].functionality",
+        )
+        adoption_path = _normalize_string_list_in_order(
+            item.get("adoption_path"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].adoption_path",
+            allow_empty=False,
+        )
+        compatibility_constraints = _normalize_string_list_in_order(
+            item.get("compatibility_constraints"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].compatibility_constraints",
+            allow_empty=False,
+        )
+        provided_interfaces = _normalize_string_list(
+            item.get("provided_interfaces"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].provided_interfaces",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].evidence_refs",
+        )
+        key = f"{source_project_id}::{capability_id}::{functionality}"
+        if key in seen_functionality_keys:
+            continue
+        seen_functionality_keys.add(key)
+
+        source_project_ids.add(source_project_id)
+        existing_by_capability.setdefault(capability_id, []).append(
+            {
+                "source_project_id": source_project_id,
+                "capability_id": capability_id,
+                "functionality": functionality,
+                "provided_interfaces": provided_interfaces,
+                "adoption_path": adoption_path,
+                "compatibility_constraints": compatibility_constraints,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    for capability_id in existing_by_capability:
+        existing_by_capability[capability_id].sort(
+            key=lambda row: (row["source_project_id"], row["functionality"]),
+        )
+
+    reuse_recommendations: list[dict[str, Any]] = []
+    no_reuse_detected: list[dict[str, Any]] = []
+    recommendation_evidence_refs: set[str] = set()
+
+    for required in required_capabilities:
+        capability_id = required["capability_id"]
+        required_interfaces = set(required["required_interfaces"])
+        compatible_candidates: list[dict[str, Any]] = []
+
+        for candidate in existing_by_capability.get(capability_id, []):
+            provided_interfaces = set(candidate["provided_interfaces"])
+            if required_interfaces and not required_interfaces.issubset(provided_interfaces):
+                continue
+            recommendation_evidence_refs.update(candidate["evidence_refs"])
+            compatible_candidates.append(candidate)
+
+        if compatible_candidates:
+            reuse_recommendations.append(
+                {
+                    "capability_id": capability_id,
+                    "intent": required["intent"],
+                    "required_interfaces": required["required_interfaces"],
+                    "reuse_candidates": compatible_candidates,
+                }
+            )
+        else:
+            no_reuse_detected.append(
+                {
+                    "capability_id": capability_id,
+                    "intent": required["intent"],
+                    "required_interfaces": required["required_interfaces"],
+                    "reason": "no_compatible_existing_functionality",
+                }
+            )
+
+    reuse_recommendations.sort(key=lambda row: row["capability_id"])
+    no_reuse_detected.sort(key=lambda row: row["capability_id"])
+    source_project_id_list = sorted(source_project_ids)
+    recommendation_evidence_ref_list = sorted(recommendation_evidence_refs)
+
+    if reuse_recommendations and not no_reuse_detected:
+        decision = "reuse_before_reimplement"
+    elif reuse_recommendations:
+        decision = "partial_reuse_recommended"
+    else:
+        decision = "no_reuse_opportunity_detected"
+
+    return {
+        "requirement_id": "REQ-016",
+        "surface": "reuse_opportunity_detection",
+        "schema_version": REQ_016_SCHEMA_VERSION,
+        "evaluated_at": _require_nonempty_str(evaluated_at or _utc_now_iso(), label="evaluated_at"),
+        "active_project_id": active_project_id,
+        "reuse_index": {
+            "required_capability_ids": [row["capability_id"] for row in required_capabilities],
+            "source_project_ids": source_project_id_list,
+        },
+        "reuse_recommendations": reuse_recommendations,
+        "no_reuse_detected": no_reuse_detected,
+        "evidence_refs": recommendation_evidence_ref_list,
+        "decision": decision,
+        "summary": (
+            f"{len(reuse_recommendations)} capability reuse recommendation(s); "
+            f"{len(no_reuse_detected)} capability gap(s)."
+        ),
     }
 
 
