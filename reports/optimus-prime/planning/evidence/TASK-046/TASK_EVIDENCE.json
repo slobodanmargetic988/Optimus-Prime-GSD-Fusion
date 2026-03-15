@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-6",
+  "task_id": "TASK-046",
+  "requirement_ids": [
+    "REQ-015"
+  ],
+  "updated_at": "2026-03-15T01:13:22Z",
+  "dev": {
+    "status": "done",
+    "checks": [
+      "Implement REQ-015 broad-sweep integration opportunity detection with deterministic opportunity and open-risk outputs",
+      "Enforce Earth-sweep evidence gating so missing obligation evidence is recorded as open_risks"
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_integration-opportunity-detection.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/integration/test_integration-opportunity-detection.py",
+      "examples/fixtures/integration-opportunity-detection.json",
+      "strategy/current/samples/REQ-015_integration-opportunity-detection.sample.json",
+      "contracts/req/REQ-015_integration-opportunity-detection.md"
+    ]
+  },
+  "test": {
+    "status": "done",
+    "checks": [
+      "REQ-015 integration acceptance checks for evidence refs, recommendation field completeness, and cross-project context usage"
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_integration-opportunity-detection.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-015",
+        "passed": true,
+        "notes": "Integration opportunities are produced only from evidenced broad-sweep obligations while unresolved or under-evidenced ideas are emitted as open_risks."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-046/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "acceptance_criteria_met"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

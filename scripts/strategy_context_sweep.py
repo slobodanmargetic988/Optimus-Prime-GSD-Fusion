@@ -24,6 +24,9 @@ REASON_CODE_EARTH_SWEEP_EVIDENCE_MISSING = "earth_sweep_evidence_missing"
 REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT = "earth_sweep_stale_source_artifact"
 REASON_CODE_CONTEXT_DOC_MISSING = "context_doc_missing"
 REASON_CODE_PEER_PROJECT_DOC_MISSING = "peer_project_doc_missing"
+REASON_CODE_REQ_015_INTERACTION_CONTRACT_MISSING = "interaction_contract_missing"
+REASON_CODE_REQ_015_SIDE_EFFECT_NOTES_MISSING = "dependency_side_effect_notes_missing"
+REASON_CODE_REQ_015_RECOMMENDATION_CONTEXT_MISSING = "recommendation_context_missing"
 
 LOG_ROOT = Path("/Users/slobodan/projects/LOGS")
 LOG_PATH = LOG_ROOT / "strategy_context_sweep.log"
@@ -1541,10 +1544,634 @@ def _normalize_req_015_side_effect_notes(raw_value: Any, *, field_name: str) -> 
     return notes
 
 
+def _default_req_015_recommendation_fields() -> dict[str, str]:
+    return {
+        "summary": "Not provided in input recommendation metadata.",
+        "rationale": "Not provided in input recommendation metadata.",
+        "expected_impact": "Not provided in input recommendation metadata.",
+        "risk_level": "medium",
+    }
+
+
+def _normalize_req_015_recommendations(
+    recommendations: Sequence[Any] | None,
+) -> tuple[list[str], dict[str, dict[str, str]]]:
+    if recommendations is None:
+        return [], {}
+
+    rows = _require_sequence_req_015(recommendations, field_name="recommendations")
+    if not rows:
+        return [], {}
+
+    ordered_ids: list[str] = []
+    fields_by_id: dict[str, dict[str, str]] = {}
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping_req_015(raw_row, field_name=f"recommendations[{index}]")
+        recommendation_id = _require_text_req_015(
+            row.get("recommendation_id"),
+            field_name=f"recommendations[{index}].recommendation_id",
+        )
+        if recommendation_id in fields_by_id:
+            raise Req015Error(f"recommendations[{index}].recommendation_id duplicates {recommendation_id}")
+        risk_level = _require_text_req_015(
+            row.get("risk_level"),
+            field_name=f"recommendations[{index}].risk_level",
+        )
+        if risk_level not in ALLOWED_RISK_LEVELS:
+            raise Req015Error(f"recommendations[{index}].risk_level must be one of {sorted(ALLOWED_RISK_LEVELS)}")
+
+        fields_by_id[recommendation_id] = {
+            "summary": _require_text_req_015(
+                row.get("summary"),
+                field_name=f"recommendations[{index}].summary",
+            ),
+            "rationale": _require_text_req_015(
+                row.get("rationale"),
+                field_name=f"recommendations[{index}].rationale",
+            ),
+            "expected_impact": _require_text_req_015(
+                row.get("expected_impact"),
+                field_name=f"recommendations[{index}].expected_impact",
+            ),
+            "risk_level": risk_level,
+        }
+        ordered_ids.append(recommendation_id)
+    return ordered_ids, fields_by_id
+
+
+def _resolve_req_015_recommendation_links(
+    *,
+    value: Any,
+    known_recommendation_ids: Sequence[str],
+    field_name: str,
+) -> list[str]:
+    known = set(known_recommendation_ids)
+    if value is None:
+        return list(known_recommendation_ids)
+
+    rows = _require_sequence_req_015(value, field_name=field_name)
+    links: list[str] = []
+    seen: set[str] = set()
+    for index, raw_link in enumerate(rows):
+        recommendation_id = _require_text_req_015(raw_link, field_name=f"{field_name}[{index}]")
+        if recommendation_id in seen:
+            continue
+        if known and recommendation_id not in known:
+            raise Req015Error(f"{field_name}[{index}] references unknown recommendation_id {recommendation_id}")
+        seen.add(recommendation_id)
+        links.append(recommendation_id)
+    return links
+
+
+def _resolve_req_015_artifact_id_candidates(
+    raw_values: Sequence[Any],
+    *,
+    field_name: str,
+    evidence_by_id: dict[str, dict[str, Any]],
+) -> list[str]:
+    artifact_ids: list[str] = []
+    seen: set[str] = set()
+    for index, raw_value in enumerate(raw_values):
+        artifact_id = ""
+        if isinstance(raw_value, Mapping):
+            artifact_id = _as_text(raw_value.get("artifact_id")) or _as_text(raw_value.get("id"))
+            if not artifact_id:
+                raise Req015Error(f"{field_name}[{index}].artifact_id or {field_name}[{index}].id is required")
+            kind = _as_text(raw_value.get("kind"))
+            uri = _as_text(raw_value.get("uri"))
+            if kind or uri:
+                if not kind or not uri:
+                    raise Req015Error(f"{field_name}[{index}] must include both kind and uri when either is set")
+                normalized_row: dict[str, Any] = {
+                    "artifact_id": artifact_id,
+                    "kind": kind,
+                    "uri": uri,
+                }
+                notes = _as_text(raw_value.get("notes"))
+                if notes:
+                    normalized_row["notes"] = notes
+                if _is_stale_evidence_row(raw_value):
+                    normalized_row["stale"] = True
+                evidence_by_id[artifact_id] = normalized_row
+        else:
+            artifact_id = _require_text_req_015(raw_value, field_name=f"{field_name}[{index}]")
+
+        if artifact_id in seen:
+            continue
+        seen.add(artifact_id)
+        artifact_ids.append(artifact_id)
+    return artifact_ids
+
+
+def _normalize_req_015_evidence_catalog(evidence_refs: Sequence[Any] | None) -> list[dict[str, Any]]:
+    if evidence_refs is None:
+        return []
+    rows = _require_sequence_req_015(evidence_refs, field_name="evidence_refs")
+    return _normalize_req_015_evidence_refs(rows, field_name="evidence_refs")
+
+
+def _resolve_req_015_evidence_refs(
+    *,
+    artifact_ids: Sequence[str],
+    evidence_by_id: Mapping[str, Mapping[str, Any]],
+    field_name: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for index, artifact_id in enumerate(artifact_ids):
+        evidence_row = evidence_by_id.get(artifact_id)
+        if evidence_row is None:
+            raise Req015Error(f"{field_name}[{index}] references unknown artifact_id {artifact_id}")
+        rows.append(dict(evidence_row))
+    return rows
+
+
+def _fallback_req_015_evidence_refs(
+    *,
+    preferred_artifact_ids: Sequence[str],
+    evidence_by_id: Mapping[str, Mapping[str, Any]],
+    fallback_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for artifact_id in preferred_artifact_ids:
+        row = evidence_by_id.get(artifact_id)
+        if row is None or artifact_id in seen:
+            continue
+        selected.append(dict(row))
+        seen.add(artifact_id)
+
+    if selected:
+        return selected
+
+    for row in fallback_rows:
+        artifact_id = _as_text(row.get("artifact_id"))
+        if not artifact_id or artifact_id in seen:
+            continue
+        selected.append(dict(row))
+        seen.add(artifact_id)
+
+    if not selected:
+        selected.append(
+            {
+                "artifact_id": "artifact.req-015.synthetic-detection-observation",
+                "kind": "normalization_observation",
+                "uri": "strategy-context-sweep://req-015/synthetic-observation",
+                "notes": "Synthetic evidence row emitted when source Earth-sweep evidence is missing.",
+            }
+        )
+    return selected
+
+
+def _append_req_015_open_risk(
+    *,
+    open_risks: list[dict[str, Any]],
+    open_risk_index: int,
+    reason_code: str,
+    risk_level: str,
+    risk_statement: str,
+    source_fields: Sequence[str],
+    recommendation_ids: Sequence[str],
+    evidence_rows: Sequence[Mapping[str, Any]],
+    target_project_id: str = "",
+    research_event_id: str = "",
+) -> str:
+    open_risk_id = f"open-risk.{open_risk_index:03d}.{_normalize_slug(target_project_id or reason_code)}"
+    row: dict[str, Any] = {
+        "open_risk_id": open_risk_id,
+        "reason_code": reason_code,
+        "risk_level": risk_level,
+        "risk_statement": risk_statement,
+        "recommendation_ids": list(recommendation_ids),
+        "evidence_refs": [dict(item) for item in evidence_rows],
+        "provenance": {
+            "source_fields": list(source_fields),
+        },
+    }
+    if target_project_id:
+        row["target_project_id"] = target_project_id
+    if _as_text(research_event_id):
+        row["provenance"]["research_event_id"] = research_event_id
+    open_risks.append(row)
+    return open_risk_id
+
+
+def _build_req_015_opportunity_row(
+    *,
+    opportunity_index: int,
+    target_project_id: str,
+    peer_project_id: str,
+    opportunity_summary: str,
+    recommendation_links: Sequence[str],
+    recommendation_fields_by_id: Mapping[str, Mapping[str, str]],
+    expected_interaction_contract: Mapping[str, str],
+    dependency_side_effect_notes: Sequence[str],
+    evidence_refs: Sequence[Mapping[str, Any]],
+    source_fields: Sequence[str],
+    research_event_id: str,
+) -> dict[str, Any]:
+    primary_recommendation_id = (
+        recommendation_links[0]
+        if recommendation_links
+        else f"rec.synthetic.{_normalize_slug(peer_project_id)}"
+    )
+    recommendation_fields = dict(
+        recommendation_fields_by_id.get(
+            primary_recommendation_id,
+            _default_req_015_recommendation_fields(),
+        )
+    )
+
+    provenance: dict[str, Any] = {"source_fields": list(source_fields)}
+    if _as_text(research_event_id):
+        provenance["research_event_id"] = research_event_id
+
+    return {
+        "integration_opportunity_id": f"integration-opportunity.{opportunity_index:03d}.{_normalize_slug(peer_project_id)}",
+        "target_project_id": target_project_id,
+        "peer_project_id": peer_project_id,
+        "opportunity_summary": opportunity_summary,
+        "recommendation_id": primary_recommendation_id,
+        "linked_recommendation_ids": list(recommendation_links) if recommendation_links else [primary_recommendation_id],
+        "recommendation_fields": recommendation_fields,
+        "expected_interaction_contract": dict(expected_interaction_contract),
+        "dependency_side_effect_notes": list(dependency_side_effect_notes),
+        "evidence_refs": [dict(item) for item in evidence_refs],
+        "provenance": provenance,
+    }
+
+
+def _normalize_req_015_broad_sweep_context(
+    *,
+    target_project_id: str,
+    broad_sweep_context: Mapping[str, Any],
+    evidence_by_id: dict[str, dict[str, Any]],
+    evidence_catalog_rows: Sequence[Mapping[str, Any]],
+    recommendation_ids: Sequence[str],
+    recommendation_fields_by_id: Mapping[str, Mapping[str, str]],
+    opportunity_start_index: int,
+    open_risk_start_index: int,
+    research_event_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
+    opportunities: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    opportunity_index = opportunity_start_index
+    open_risk_index = open_risk_start_index
+
+    global_evidence_raw = _mapping_value_by_alias(
+        broad_sweep_context,
+        ("earth_sweep_evidence_refs", "earth_sweep_artifact_ids", "evidence_artifact_ids", "evidence_refs"),
+    )
+    global_evidence_artifact_ids: list[str] = []
+    if global_evidence_raw is not None:
+        global_evidence_artifact_ids = _resolve_req_015_artifact_id_candidates(
+            _require_sequence_req_015(
+                global_evidence_raw,
+                field_name="broad_sweep_context.earth_sweep_evidence_refs",
+            ),
+            field_name="broad_sweep_context.earth_sweep_evidence_refs",
+            evidence_by_id=evidence_by_id,
+        )
+        _resolve_req_015_evidence_refs(
+            artifact_ids=global_evidence_artifact_ids,
+            evidence_by_id=evidence_by_id,
+            field_name="broad_sweep_context.earth_sweep_evidence_refs",
+        )
+
+    baseline_evidence_refs = _fallback_req_015_evidence_refs(
+        preferred_artifact_ids=global_evidence_artifact_ids,
+        evidence_by_id=evidence_by_id,
+        fallback_rows=evidence_catalog_rows,
+    )
+
+    cross_project_raw = _mapping_value_by_alias(
+        broad_sweep_context,
+        ("cross_project_obligations", "cross_project_context", "projects"),
+    )
+    if cross_project_raw is not None:
+        cross_project_rows = _require_sequence_req_015(
+            cross_project_raw,
+            field_name="broad_sweep_context.cross_project_obligations",
+        )
+        for index, raw_row in enumerate(cross_project_rows):
+            row = _require_mapping_req_015(
+                raw_row,
+                field_name=f"broad_sweep_context.cross_project_obligations[{index}]",
+            )
+            peer_project_id = _require_text_req_015(
+                _mapping_value_by_alias(row, ("target_project_id", "peer_project_id", "project_id")),
+                field_name=f"broad_sweep_context.cross_project_obligations[{index}].target_project_id",
+            )
+            if peer_project_id == target_project_id:
+                raise Req015Error(
+                    f"broad_sweep_context.cross_project_obligations[{index}].target_project_id must differ from target_project.project_id"
+                )
+            summary = _require_text_req_015(
+                _mapping_value_by_alias(row, ("summary", "opportunity_summary", "rationale", "statement")),
+                field_name=f"broad_sweep_context.cross_project_obligations[{index}].summary",
+            )
+
+            recommendation_links = _resolve_req_015_recommendation_links(
+                value=_mapping_value_by_alias(row, ("recommendation_ids", "linked_recommendation_ids")),
+                known_recommendation_ids=recommendation_ids,
+                field_name=f"broad_sweep_context.cross_project_obligations[{index}].recommendation_ids",
+            )
+            if not recommendation_links:
+                open_risk_index += 1
+                _append_req_015_open_risk(
+                    open_risks=open_risks,
+                    open_risk_index=open_risk_index,
+                    reason_code=REASON_CODE_REQ_015_RECOMMENDATION_CONTEXT_MISSING,
+                    risk_level="high",
+                    risk_statement=(
+                        "Cross-project obligation omitted because recommendation context is missing: "
+                        f"{summary}"
+                    ),
+                    source_fields=[
+                        "broad_sweep_context.cross_project_obligations[].recommendation_ids[]",
+                        "recommendations[]",
+                    ],
+                    recommendation_ids=[],
+                    evidence_rows=baseline_evidence_refs,
+                    target_project_id=peer_project_id,
+                    research_event_id=research_event_id,
+                )
+                continue
+
+            interaction_contract_raw = _mapping_value_by_alias(
+                row,
+                ("expected_interaction_contract", "interaction_contract"),
+            )
+            if interaction_contract_raw is None:
+                open_risk_index += 1
+                _append_req_015_open_risk(
+                    open_risks=open_risks,
+                    open_risk_index=open_risk_index,
+                    reason_code=REASON_CODE_REQ_015_INTERACTION_CONTRACT_MISSING,
+                    risk_level="high",
+                    risk_statement=(
+                        "Cross-project obligation omitted because expected interaction contract is missing: "
+                        f"{summary}"
+                    ),
+                    source_fields=["broad_sweep_context.cross_project_obligations[].expected_interaction_contract"],
+                    recommendation_ids=recommendation_links,
+                    evidence_rows=baseline_evidence_refs,
+                    target_project_id=peer_project_id,
+                    research_event_id=research_event_id,
+                )
+                continue
+            try:
+                expected_interaction_contract = _normalize_req_015_expected_interaction_contract(
+                    interaction_contract_raw,
+                    field_name=f"broad_sweep_context.cross_project_obligations[{index}].expected_interaction_contract",
+                )
+            except Req015Error:
+                open_risk_index += 1
+                _append_req_015_open_risk(
+                    open_risks=open_risks,
+                    open_risk_index=open_risk_index,
+                    reason_code=REASON_CODE_REQ_015_INTERACTION_CONTRACT_MISSING,
+                    risk_level="high",
+                    risk_statement=(
+                        "Cross-project obligation omitted because expected interaction contract is incomplete: "
+                        f"{summary}"
+                    ),
+                    source_fields=["broad_sweep_context.cross_project_obligations[].expected_interaction_contract"],
+                    recommendation_ids=recommendation_links,
+                    evidence_rows=baseline_evidence_refs,
+                    target_project_id=peer_project_id,
+                    research_event_id=research_event_id,
+                )
+                continue
+
+            side_effect_notes_raw = _mapping_value_by_alias(
+                row,
+                ("dependency_side_effect_notes", "side_effect_notes", "dependency_notes"),
+            )
+            if side_effect_notes_raw is None:
+                open_risk_index += 1
+                _append_req_015_open_risk(
+                    open_risks=open_risks,
+                    open_risk_index=open_risk_index,
+                    reason_code=REASON_CODE_REQ_015_SIDE_EFFECT_NOTES_MISSING,
+                    risk_level="high",
+                    risk_statement=(
+                        "Cross-project obligation omitted because dependency side-effect notes are missing: "
+                        f"{summary}"
+                    ),
+                    source_fields=["broad_sweep_context.cross_project_obligations[].dependency_side_effect_notes[]"],
+                    recommendation_ids=recommendation_links,
+                    evidence_rows=baseline_evidence_refs,
+                    target_project_id=peer_project_id,
+                    research_event_id=research_event_id,
+                )
+                continue
+            try:
+                dependency_side_effect_notes = _normalize_req_015_side_effect_notes(
+                    side_effect_notes_raw,
+                    field_name=f"broad_sweep_context.cross_project_obligations[{index}].dependency_side_effect_notes",
+                )
+            except Req015Error:
+                open_risk_index += 1
+                _append_req_015_open_risk(
+                    open_risks=open_risks,
+                    open_risk_index=open_risk_index,
+                    reason_code=REASON_CODE_REQ_015_SIDE_EFFECT_NOTES_MISSING,
+                    risk_level="high",
+                    risk_statement=(
+                        "Cross-project obligation omitted because dependency side-effect notes are empty: "
+                        f"{summary}"
+                    ),
+                    source_fields=["broad_sweep_context.cross_project_obligations[].dependency_side_effect_notes[]"],
+                    recommendation_ids=recommendation_links,
+                    evidence_rows=baseline_evidence_refs,
+                    target_project_id=peer_project_id,
+                    research_event_id=research_event_id,
+                )
+                continue
+
+            evidence_refs_raw = _mapping_value_by_alias(
+                row,
+                ("earth_sweep_evidence_refs", "earth_sweep_artifact_ids", "evidence_artifact_ids", "evidence_refs"),
+            )
+            if evidence_refs_raw is None:
+                open_risk_index += 1
+                _append_req_015_open_risk(
+                    open_risks=open_risks,
+                    open_risk_index=open_risk_index,
+                    reason_code=REASON_CODE_EARTH_SWEEP_EVIDENCE_MISSING,
+                    risk_level="high",
+                    risk_statement=(
+                        "Cross-project obligation omitted until Earth-sweep evidence is attached: "
+                        f"{summary}"
+                    ),
+                    source_fields=["broad_sweep_context.cross_project_obligations[].earth_sweep_evidence_refs[]"],
+                    recommendation_ids=recommendation_links,
+                    evidence_rows=baseline_evidence_refs,
+                    target_project_id=peer_project_id,
+                    research_event_id=research_event_id,
+                )
+                continue
+
+            evidence_artifact_ids = _resolve_req_015_artifact_id_candidates(
+                _require_sequence_req_015(
+                    evidence_refs_raw,
+                    field_name=f"broad_sweep_context.cross_project_obligations[{index}].earth_sweep_evidence_refs",
+                ),
+                field_name=f"broad_sweep_context.cross_project_obligations[{index}].earth_sweep_evidence_refs",
+                evidence_by_id=evidence_by_id,
+            )
+            if not evidence_artifact_ids:
+                open_risk_index += 1
+                _append_req_015_open_risk(
+                    open_risks=open_risks,
+                    open_risk_index=open_risk_index,
+                    reason_code=REASON_CODE_EARTH_SWEEP_EVIDENCE_MISSING,
+                    risk_level="high",
+                    risk_statement=(
+                        "Cross-project obligation omitted until Earth-sweep evidence is attached: "
+                        f"{summary}"
+                    ),
+                    source_fields=["broad_sweep_context.cross_project_obligations[].earth_sweep_evidence_refs[]"],
+                    recommendation_ids=recommendation_links,
+                    evidence_rows=baseline_evidence_refs,
+                    target_project_id=peer_project_id,
+                    research_event_id=research_event_id,
+                )
+                continue
+
+            normalized_evidence_refs = _resolve_req_015_evidence_refs(
+                artifact_ids=evidence_artifact_ids,
+                evidence_by_id=evidence_by_id,
+                field_name=f"broad_sweep_context.cross_project_obligations[{index}].earth_sweep_evidence_refs",
+            )
+            stale_evidence_refs = [dict(item) for item in normalized_evidence_refs if _to_bool(item.get("stale"))]
+            if stale_evidence_refs:
+                open_risk_index += 1
+                _append_req_015_open_risk(
+                    open_risks=open_risks,
+                    open_risk_index=open_risk_index,
+                    reason_code=REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT,
+                    risk_level="high",
+                    risk_statement=(
+                        "Cross-project obligation omitted because Earth-sweep source artifacts are stale: "
+                        f"{summary}"
+                    ),
+                    source_fields=[
+                        "broad_sweep_context.cross_project_obligations[].earth_sweep_evidence_refs[]",
+                        "evidence_refs[]",
+                    ],
+                    recommendation_ids=recommendation_links,
+                    evidence_rows=stale_evidence_refs,
+                    target_project_id=peer_project_id,
+                    research_event_id=research_event_id,
+                )
+                continue
+
+            opportunity_index += 1
+            opportunities.append(
+                _build_req_015_opportunity_row(
+                    opportunity_index=opportunity_index,
+                    target_project_id=target_project_id,
+                    peer_project_id=peer_project_id,
+                    opportunity_summary=summary,
+                    recommendation_links=recommendation_links,
+                    recommendation_fields_by_id=recommendation_fields_by_id,
+                    expected_interaction_contract=expected_interaction_contract,
+                    dependency_side_effect_notes=dependency_side_effect_notes,
+                    evidence_refs=normalized_evidence_refs,
+                    source_fields=[
+                        "broad_sweep_context.cross_project_obligations[]",
+                        "broad_sweep_context.cross_project_obligations[].expected_interaction_contract",
+                        "broad_sweep_context.cross_project_obligations[].dependency_side_effect_notes[]",
+                        "broad_sweep_context.cross_project_obligations[].earth_sweep_evidence_refs[]",
+                        "recommendations[]",
+                    ],
+                    research_event_id=research_event_id,
+                )
+            )
+
+    unresolved_raw = _mapping_value_by_alias(
+        broad_sweep_context,
+        ("unresolved_ideas", "open_risks", "unresolved"),
+    )
+    if unresolved_raw is not None:
+        unresolved_rows = _require_sequence_req_015(
+            unresolved_raw,
+            field_name="broad_sweep_context.unresolved_ideas",
+        )
+        for index, raw_row in enumerate(unresolved_rows):
+            summary = ""
+            risk_level = "medium"
+            peer_project_id = ""
+            recommendation_links: list[str] = []
+            evidence_artifact_ids: list[str] = []
+
+            if isinstance(raw_row, Mapping):
+                summary = _require_text_req_015(
+                    _mapping_value_by_alias(raw_row, ("summary", "idea", "risk_statement", "question", "statement")),
+                    field_name=f"broad_sweep_context.unresolved_ideas[{index}].summary",
+                )
+                peer_project_id = _as_text(_mapping_value_by_alias(raw_row, ("target_project_id", "peer_project_id", "project_id")))
+                risk_level_value = _as_text(raw_row.get("risk_level"))
+                if risk_level_value:
+                    if risk_level_value not in ALLOWED_RISK_LEVELS:
+                        raise Req015Error(
+                            f"broad_sweep_context.unresolved_ideas[{index}].risk_level must be one of {sorted(ALLOWED_RISK_LEVELS)}"
+                        )
+                    risk_level = risk_level_value
+                recommendation_links = _resolve_req_015_recommendation_links(
+                    value=_mapping_value_by_alias(raw_row, ("recommendation_ids", "linked_recommendation_ids")),
+                    known_recommendation_ids=recommendation_ids,
+                    field_name=f"broad_sweep_context.unresolved_ideas[{index}].recommendation_ids",
+                )
+                evidence_raw = _mapping_value_by_alias(
+                    raw_row,
+                    ("earth_sweep_evidence_refs", "earth_sweep_artifact_ids", "evidence_artifact_ids", "evidence_refs"),
+                )
+                if evidence_raw is not None:
+                    evidence_artifact_ids = _resolve_req_015_artifact_id_candidates(
+                        _require_sequence_req_015(
+                            evidence_raw,
+                            field_name=f"broad_sweep_context.unresolved_ideas[{index}].earth_sweep_evidence_refs",
+                        ),
+                        field_name=f"broad_sweep_context.unresolved_ideas[{index}].earth_sweep_evidence_refs",
+                        evidence_by_id=evidence_by_id,
+                    )
+            else:
+                summary = _require_text_req_015(
+                    raw_row,
+                    field_name=f"broad_sweep_context.unresolved_ideas[{index}]",
+                )
+
+            evidence_rows = _resolve_req_015_evidence_refs(
+                artifact_ids=evidence_artifact_ids,
+                evidence_by_id=evidence_by_id,
+                field_name=f"broad_sweep_context.unresolved_ideas[{index}].earth_sweep_evidence_refs",
+            ) if evidence_artifact_ids else baseline_evidence_refs
+
+            open_risk_index += 1
+            _append_req_015_open_risk(
+                open_risks=open_risks,
+                open_risk_index=open_risk_index,
+                reason_code="unresolved_idea_open_risk",
+                risk_level=risk_level,
+                risk_statement=summary,
+                source_fields=["broad_sweep_context.unresolved_ideas[]"],
+                recommendation_ids=recommendation_links,
+                evidence_rows=evidence_rows,
+                target_project_id=peer_project_id,
+                research_event_id=research_event_id,
+            )
+
+    return opportunities, open_risks, opportunity_index, open_risk_index
+
+
 def serialize_req_015_integration_opportunity_bundle(payload: Mapping[str, Any]) -> str:
     bundle = {
         "target_project": payload.get("target_project", {}),
         "integration_opportunities": payload.get("integration_opportunities", []),
+        "open_risks": payload.get("open_risks", []),
     }
     return json.dumps(bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -1556,7 +2183,11 @@ def _req_015_bundle_sha256(payload: Mapping[str, Any]) -> str:
 def build_req_015_integration_opportunity_detection(
     *,
     target_project: Mapping[str, Any],
-    integration_candidates: Sequence[Any],
+    integration_candidates: Sequence[Any] | None = None,
+    broad_sweep_context: Mapping[str, Any] | None = None,
+    evidence_refs: Sequence[Any] | None = None,
+    recommendations: Sequence[Any] | None = None,
+    research_event_id: str = "",
     normalized_at_utc: str | None = None,
 ) -> dict[str, Any]:
     """Build REQ-015 integration opportunity data-model payload."""
@@ -1570,59 +2201,109 @@ def build_req_015_integration_opportunity_detection(
     if target_project_name:
         normalized_target_project["project_name"] = target_project_name
 
-    normalized_candidates = _require_sequence_req_015(
-        integration_candidates,
-        field_name="integration_candidates",
-    )
-    if not normalized_candidates:
-        raise Req015Error("integration_candidates must contain at least one candidate")
+    recommendation_ids, recommendation_fields_by_id = _normalize_req_015_recommendations(recommendations)
+    evidence_catalog = _normalize_req_015_evidence_catalog(evidence_refs)
+    evidence_by_id = {row["artifact_id"]: dict(row) for row in evidence_catalog}
 
     opportunities: list[dict[str, Any]] = []
-    for index, row in enumerate(normalized_candidates, start=1):
-        candidate = _require_mapping_req_015(row, field_name=f"integration_candidates[{index - 1}]")
+    open_risks: list[dict[str, Any]] = []
+    opportunity_index = 0
+    open_risk_index = 0
+
+    if broad_sweep_context is not None:
+        normalized_broad_sweep = _require_mapping_req_015(
+            broad_sweep_context,
+            field_name="broad_sweep_context",
+        )
+        (
+            broad_sweep_opportunities,
+            broad_sweep_open_risks,
+            opportunity_index,
+            open_risk_index,
+        ) = _normalize_req_015_broad_sweep_context(
+            target_project_id=normalized_target_project["project_id"],
+            broad_sweep_context=normalized_broad_sweep,
+            evidence_by_id=evidence_by_id,
+            evidence_catalog_rows=evidence_catalog,
+            recommendation_ids=recommendation_ids,
+            recommendation_fields_by_id=recommendation_fields_by_id,
+            opportunity_start_index=opportunity_index,
+            open_risk_start_index=open_risk_index,
+            research_event_id=_as_text(research_event_id),
+        )
+        opportunities.extend(broad_sweep_opportunities)
+        open_risks.extend(broad_sweep_open_risks)
+
+    normalized_candidates: Sequence[Any] = []
+    if integration_candidates is not None:
+        normalized_candidates = _require_sequence_req_015(
+            integration_candidates,
+            field_name="integration_candidates",
+        )
+    if not opportunities and not normalized_candidates and not open_risks:
+        raise Req015Error(
+            "at least one integration candidate source is required: integration_candidates[] or broad_sweep_context.cross_project_obligations[]"
+        )
+
+    for index, row in enumerate(normalized_candidates):
+        candidate = _require_mapping_req_015(row, field_name=f"integration_candidates[{index}]")
         peer_project_id = _require_text_req_015(
             candidate.get("peer_project_id"),
-            field_name=f"integration_candidates[{index - 1}].peer_project_id",
+            field_name=f"integration_candidates[{index}].peer_project_id",
         )
         if peer_project_id == normalized_target_project["project_id"]:
             raise Req015Error(
-                f"integration_candidates[{index - 1}].peer_project_id must differ from target_project.project_id"
+                f"integration_candidates[{index}].peer_project_id must differ from target_project.project_id"
             )
 
-        opportunity_id = f"integration-opportunity.{index:03d}.{_normalize_slug(peer_project_id)}"
+        recommendation_links = _resolve_req_015_recommendation_links(
+            value=_mapping_value_by_alias(candidate, ("recommendation_ids", "linked_recommendation_ids")),
+            known_recommendation_ids=recommendation_ids,
+            field_name=f"integration_candidates[{index}].recommendation_ids",
+        )
+        if not recommendation_links and recommendation_ids:
+            recommendation_links = list(recommendation_ids)
+
+        evidence_rows = _normalize_req_015_evidence_refs(
+            _require_sequence_req_015(
+                candidate.get("evidence_refs"),
+                field_name=f"integration_candidates[{index}].evidence_refs",
+            ),
+            field_name=f"integration_candidates[{index}].evidence_refs",
+        )
+        for evidence_row in evidence_rows:
+            evidence_by_id[evidence_row["artifact_id"]] = dict(evidence_row)
+
+        opportunity_index += 1
         opportunities.append(
-            {
-                "integration_opportunity_id": opportunity_id,
-                "target_project_id": normalized_target_project["project_id"],
-                "peer_project_id": peer_project_id,
-                "opportunity_summary": _require_text_req_015(
+            _build_req_015_opportunity_row(
+                opportunity_index=opportunity_index,
+                target_project_id=normalized_target_project["project_id"],
+                peer_project_id=peer_project_id,
+                opportunity_summary=_require_text_req_015(
                     candidate.get("opportunity_summary"),
-                    field_name=f"integration_candidates[{index - 1}].opportunity_summary",
+                    field_name=f"integration_candidates[{index}].opportunity_summary",
                 ),
-                "expected_interaction_contract": _normalize_req_015_expected_interaction_contract(
+                recommendation_links=recommendation_links,
+                recommendation_fields_by_id=recommendation_fields_by_id,
+                expected_interaction_contract=_normalize_req_015_expected_interaction_contract(
                     candidate.get("expected_interaction_contract"),
-                    field_name=f"integration_candidates[{index - 1}].expected_interaction_contract",
+                    field_name=f"integration_candidates[{index}].expected_interaction_contract",
                 ),
-                "dependency_side_effect_notes": _normalize_req_015_side_effect_notes(
+                dependency_side_effect_notes=_normalize_req_015_side_effect_notes(
                     candidate.get("dependency_side_effect_notes"),
-                    field_name=f"integration_candidates[{index - 1}].dependency_side_effect_notes",
+                    field_name=f"integration_candidates[{index}].dependency_side_effect_notes",
                 ),
-                "evidence_refs": _normalize_req_015_evidence_refs(
-                    _require_sequence_req_015(
-                        candidate.get("evidence_refs"),
-                        field_name=f"integration_candidates[{index - 1}].evidence_refs",
-                    ),
-                    field_name=f"integration_candidates[{index - 1}].evidence_refs",
-                ),
-                "provenance": {
-                    "source_fields": [
-                        "integration_candidates[].opportunity_summary",
-                        "integration_candidates[].expected_interaction_contract",
-                        "integration_candidates[].dependency_side_effect_notes[]",
-                        "integration_candidates[].evidence_refs[]",
-                    ],
-                },
-            }
+                evidence_refs=evidence_rows,
+                source_fields=[
+                    "integration_candidates[].opportunity_summary",
+                    "integration_candidates[].expected_interaction_contract",
+                    "integration_candidates[].dependency_side_effect_notes[]",
+                    "integration_candidates[].evidence_refs[]",
+                    "recommendations[]",
+                ],
+                research_event_id=_as_text(research_event_id),
+            )
         )
 
     output_payload = {
@@ -1630,6 +2311,7 @@ def build_req_015_integration_opportunity_detection(
         "requirement_id": REQ_015_REQUIREMENT_ID,
         "target_project": normalized_target_project,
         "integration_opportunities": opportunities,
+        "open_risks": open_risks,
         "source": {
             "normalized_at_utc": _normalize_timestamp(normalized_at_utc),
             "tool": TOOL,
@@ -1651,6 +2333,7 @@ def validate_req_015_integration_opportunity_detection(payload: Mapping[str, Any
         "requirement_id",
         "target_project",
         "integration_opportunities",
+        "open_risks",
         "source",
     }
     top_keys = set(payload.keys())
@@ -1680,10 +2363,9 @@ def validate_req_015_integration_opportunity_detection(payload: Mapping[str, Any
     ):
         errors.append("integration_opportunities must be an array")
         integration_opportunities = []
-    elif not integration_opportunities:
-        errors.append("integration_opportunities must not be empty")
 
     opportunity_ids: set[str] = set()
+    open_risk_ids: set[str] = set()
     evidence_ids: set[str] = set()
     for index, row in enumerate(integration_opportunities):
         if not isinstance(row, Mapping):
@@ -1693,6 +2375,9 @@ def validate_req_015_integration_opportunity_detection(payload: Mapping[str, Any
         row_target_project_id = _as_text(row.get("target_project_id"))
         peer_project_id = _as_text(row.get("peer_project_id"))
         opportunity_summary = _as_text(row.get("opportunity_summary"))
+        recommendation_id = _as_text(row.get("recommendation_id"))
+        linked_recommendation_ids = row.get("linked_recommendation_ids")
+        recommendation_fields = row.get("recommendation_fields")
         expected_interaction_contract = row.get("expected_interaction_contract")
         dependency_side_effect_notes = row.get("dependency_side_effect_notes")
         evidence_refs = row.get("evidence_refs")
@@ -1721,6 +2406,42 @@ def validate_req_015_integration_opportunity_detection(payload: Mapping[str, Any
 
         if not opportunity_summary:
             errors.append(f"integration_opportunities[{index}].opportunity_summary is required")
+
+        if not recommendation_id:
+            errors.append(f"integration_opportunities[{index}].recommendation_id is required")
+
+        if not isinstance(linked_recommendation_ids, Sequence) or isinstance(
+            linked_recommendation_ids,
+            (str, bytes, bytearray),
+        ):
+            errors.append(f"integration_opportunities[{index}].linked_recommendation_ids must be an array")
+        elif not linked_recommendation_ids:
+            errors.append(f"integration_opportunities[{index}].linked_recommendation_ids must not be empty")
+        else:
+            normalized_links = []
+            for link_index, raw_link in enumerate(linked_recommendation_ids):
+                link = _as_text(raw_link)
+                if not link:
+                    errors.append(
+                        f"integration_opportunities[{index}].linked_recommendation_ids[{link_index}] must be non-empty"
+                    )
+                    continue
+                normalized_links.append(link)
+            if recommendation_id and normalized_links and recommendation_id not in normalized_links:
+                errors.append(
+                    f"integration_opportunities[{index}].recommendation_id must appear in linked_recommendation_ids"
+                )
+
+        if not isinstance(recommendation_fields, Mapping):
+            errors.append(f"integration_opportunities[{index}].recommendation_fields must be an object")
+        else:
+            for key in ("summary", "rationale", "expected_impact"):
+                if not _as_text(recommendation_fields.get(key)):
+                    errors.append(f"integration_opportunities[{index}].recommendation_fields.{key} is required")
+            if _as_text(recommendation_fields.get("risk_level")) not in ALLOWED_RISK_LEVELS:
+                errors.append(
+                    f"integration_opportunities[{index}].recommendation_fields.risk_level must be one of {sorted(ALLOWED_RISK_LEVELS)}"
+                )
 
         if not isinstance(expected_interaction_contract, Mapping):
             errors.append(f"integration_opportunities[{index}].expected_interaction_contract must be an object")
@@ -1774,6 +2495,67 @@ def validate_req_015_integration_opportunity_detection(payload: Mapping[str, Any
                         errors.append(
                             f"integration_opportunities[{index}].provenance.source_fields[{source_index}] must be non-empty"
                         )
+
+    open_risks = payload.get("open_risks")
+    if not isinstance(open_risks, Sequence) or isinstance(open_risks, (str, bytes, bytearray)):
+        errors.append("open_risks must be an array")
+        open_risks = []
+    elif not open_risks and not integration_opportunities:
+        errors.append("integration_opportunities or open_risks must not both be empty")
+
+    for index, row in enumerate(open_risks):
+        if not isinstance(row, Mapping):
+            errors.append(f"open_risks[{index}] must be an object")
+            continue
+        open_risk_id = _as_text(row.get("open_risk_id"))
+        reason_code = _as_text(row.get("reason_code"))
+        risk_level = _as_text(row.get("risk_level"))
+        risk_statement = _as_text(row.get("risk_statement"))
+        recommendation_ids = row.get("recommendation_ids")
+        evidence_refs = row.get("evidence_refs")
+        provenance = row.get("provenance")
+
+        if not open_risk_id:
+            errors.append(f"open_risks[{index}].open_risk_id is required")
+        elif open_risk_id in open_risk_ids:
+            errors.append(f"open_risks[{index}].open_risk_id duplicates {open_risk_id}")
+        else:
+            open_risk_ids.add(open_risk_id)
+
+        if not reason_code:
+            errors.append(f"open_risks[{index}].reason_code is required")
+        if risk_level not in ALLOWED_RISK_LEVELS:
+            errors.append(f"open_risks[{index}].risk_level must be one of {sorted(ALLOWED_RISK_LEVELS)}")
+        if not risk_statement:
+            errors.append(f"open_risks[{index}].risk_statement is required")
+
+        if not isinstance(recommendation_ids, Sequence) or isinstance(recommendation_ids, (str, bytes, bytearray)):
+            errors.append(f"open_risks[{index}].recommendation_ids must be an array")
+        else:
+            for link_index, raw_link in enumerate(recommendation_ids):
+                if not _as_text(raw_link):
+                    errors.append(f"open_risks[{index}].recommendation_ids[{link_index}] must be non-empty")
+
+        _validate_evidence_refs_array(
+            evidence_refs=evidence_refs,
+            field_name=f"open_risks[{index}].evidence_refs",
+            errors=errors,
+            evidence_ids=evidence_ids,
+            require_non_empty=True,
+        )
+
+        if not isinstance(provenance, Mapping):
+            errors.append(f"open_risks[{index}].provenance must be an object")
+        else:
+            source_fields = provenance.get("source_fields")
+            if not isinstance(source_fields, Sequence) or isinstance(source_fields, (str, bytes, bytearray)):
+                errors.append(f"open_risks[{index}].provenance.source_fields must be an array")
+            elif not source_fields:
+                errors.append(f"open_risks[{index}].provenance.source_fields must not be empty")
+            else:
+                for source_index, source_field in enumerate(source_fields):
+                    if not _as_text(source_field):
+                        errors.append(f"open_risks[{index}].provenance.source_fields[{source_index}] must be non-empty")
 
     source = payload.get("source")
     if not isinstance(source, Mapping):

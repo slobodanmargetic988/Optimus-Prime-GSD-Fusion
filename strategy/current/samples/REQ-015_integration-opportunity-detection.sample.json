@@ -11,6 +11,16 @@
       "target_project_id": "prj.optimus-prime-gsd-fusion",
       "peer_project_id": "prj.runtime-core",
       "opportunity_summary": "Reuse runtime-core lease heartbeat signals to improve stale worker detection inside strategy sweep decisions.",
+      "recommendation_id": "rec.dispatch-signal-watcher",
+      "linked_recommendation_ids": [
+        "rec.dispatch-signal-watcher"
+      ],
+      "recommendation_fields": {
+        "summary": "Gate cycle release through watcher signals before fallback timeout reset.",
+        "rationale": "This keeps cycle execution deterministic while preserving autonomous worker throughput.",
+        "expected_impact": "Lower idle redispatches and better schedule continuity under variable worker latency.",
+        "risk_level": "medium"
+      },
       "expected_interaction_contract": {
         "interaction_type": "event_ingestion",
         "producer_component": "runtime-core lease heartbeat emitter",
@@ -32,51 +42,76 @@
       ],
       "provenance": {
         "source_fields": [
-          "integration_candidates[].opportunity_summary",
-          "integration_candidates[].expected_interaction_contract",
-          "integration_candidates[].dependency_side_effect_notes[]",
-          "integration_candidates[].evidence_refs[]"
-        ]
+          "broad_sweep_context.cross_project_obligations[]",
+          "broad_sweep_context.cross_project_obligations[].expected_interaction_contract",
+          "broad_sweep_context.cross_project_obligations[].dependency_side_effect_notes[]",
+          "broad_sweep_context.cross_project_obligations[].earth_sweep_evidence_refs[]",
+          "recommendations[]"
+        ],
+        "research_event_id": "event.20260315t004000z-req-015"
       }
-    },
+    }
+  ],
+  "open_risks": [
     {
-      "integration_opportunity_id": "integration-opportunity.002.prj-analytics-hub",
-      "target_project_id": "prj.optimus-prime-gsd-fusion",
-      "peer_project_id": "prj.analytics-hub",
-      "opportunity_summary": "Forward per-cycle dispatch diagnostics into analytics-hub for cross-project throughput regression baselines.",
-      "expected_interaction_contract": {
-        "interaction_type": "batch_export",
-        "producer_component": "strategy dispatch diagnostics exporter",
-        "consumer_component": "analytics-hub throughput baseline loader",
-        "interface": "analytics-hub ingestion contract v2",
-        "data_contract": "cycle_id, queue_depth, dispatch_latency_ms_p95, profile_budget_remaining"
-      },
-      "dependency_side_effect_notes": [
-        "Analytics schema drift can invalidate downstream trend reports until mappings are refreshed.",
-        "Additional export traffic increases cycle-end I/O pressure for dispatch workers."
+      "open_risk_id": "open-risk.001.prj-analytics-hub",
+      "reason_code": "earth_sweep_evidence_missing",
+      "risk_level": "high",
+      "risk_statement": "Cross-project obligation omitted until Earth-sweep evidence is attached: Forward per-cycle dispatch diagnostics into analytics-hub for cross-project throughput regression baselines.",
+      "recommendation_ids": [
+        "rec.rate-limit-safety-lane"
       ],
       "evidence_refs": [
         {
-          "artifact_id": "artifact.analytics-hub-contract-20260315",
-          "kind": "contract_doc",
-          "uri": "op-tools/strategy/contracts/analytics-hub-ingestion-v2.md",
-          "notes": "Analytics-hub ingestion fields required for baseline ingestion."
+          "artifact_id": "artifact.runtime-core-state-20260315",
+          "kind": "state_snapshot",
+          "uri": "reports/optimus-prime/planning/STATE.md",
+          "notes": "Runtime-core lease telemetry observed during canary cycle."
+        },
+        {
+          "artifact_id": "artifact.rate-snapshot-20260315",
+          "kind": "rate_snapshot",
+          "uri": "reports/optimus-prime/planning/STATE.md",
+          "notes": "Rate snapshot used for cross-project throughput and throttling diagnostics."
         }
       ],
       "provenance": {
         "source_fields": [
-          "integration_candidates[].opportunity_summary",
-          "integration_candidates[].expected_interaction_contract",
-          "integration_candidates[].dependency_side_effect_notes[]",
-          "integration_candidates[].evidence_refs[]"
-        ]
-      }
+          "broad_sweep_context.cross_project_obligations[].earth_sweep_evidence_refs[]"
+        ],
+        "research_event_id": "event.20260315t004000z-req-015"
+      },
+      "target_project_id": "prj.analytics-hub"
+    },
+    {
+      "open_risk_id": "open-risk.002.prj-runtime-observability",
+      "reason_code": "unresolved_idea_open_risk",
+      "risk_level": "high",
+      "risk_statement": "Confirm whether shared rate snapshots can drive cross-repo throttling policy without starvation.",
+      "recommendation_ids": [
+        "rec.rate-limit-safety-lane"
+      ],
+      "evidence_refs": [
+        {
+          "artifact_id": "artifact.rate-snapshot-20260315",
+          "kind": "rate_snapshot",
+          "uri": "reports/optimus-prime/planning/STATE.md",
+          "notes": "Rate snapshot used for cross-project throughput and throttling diagnostics."
+        }
+      ],
+      "provenance": {
+        "source_fields": [
+          "broad_sweep_context.unresolved_ideas[]"
+        ],
+        "research_event_id": "event.20260315t004000z-req-015"
+      },
+      "target_project_id": "prj.runtime-observability"
     }
   ],
   "source": {
     "normalized_at_utc": "2026-03-15T00:40:00Z",
     "tool": "strategy-context-sweep",
     "tool_version": "1.0.0",
-    "context_bundle_sha256": "8a6aa44af4e04b3b3d20cb763693912b2d2bae58571b4e8ece300c0022a5b775"
+    "context_bundle_sha256": "900d3cab6a4082357cf854d2d57df2fa0b294f645050864d350596cab6ceaca8"
   }
 }
