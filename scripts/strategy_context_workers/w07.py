@@ -14,6 +14,7 @@ REQ_007_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-007.ground-graph-context-bundle.v1"
 REQ_015_SCHEMA_VERSION = "req-015.integration-opportunity-detection.v1"
 REQ_015_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-015.integration-opportunity-context-bundle.v1"
 REQ_016_SCHEMA_VERSION = "req-016.reuse-opportunity-detection.v1"
+REQ_016_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-016.reuse-opportunity-context-bundle.v1"
 
 
 def _utc_now_iso() -> str:
@@ -71,6 +72,37 @@ def _normalize_string_list_in_order(value: Any, *, label: str, allow_empty: bool
     if not allow_empty and not out:
         raise ValueError(f"{label} must be a non-empty list")
     return out
+
+
+def _normalize_source_artifact_status(value: Any, *, label: str) -> str:
+    if value is None:
+        return "fresh"
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string when provided")
+    status = value.strip().lower()
+    if status not in {"fresh", "stale"}:
+        raise ValueError(f"{label} must be either 'fresh' or 'stale'")
+    return status
+
+
+def _normalize_required_doc_kind(value: Any, *, label: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string")
+    doc_kind = value.strip().lower()
+    if doc_kind not in {"mission", "scope", "peer-project"}:
+        raise ValueError(f"{label} must be one of: mission, scope, peer-project")
+    return doc_kind
+
+
+def _normalize_required_doc_status(value: Any, *, label: str) -> str:
+    if value is None:
+        return "present"
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string when provided")
+    status = value.strip().lower()
+    if status not in {"present", "missing"}:
+        raise ValueError(f"{label} must be either 'present' or 'missing'")
+    return status
 
 
 def _parse_iso8601_utc(value: Any, *, label: str) -> datetime:
@@ -252,6 +284,276 @@ def _candidate_actions_from_context(broad_sweep_context: Mapping[str, Any]) -> l
             out.append(_require_mapping(row, label=f"broad_sweep_context.{key}[{idx}]"))
         return out
     return []
+
+
+def _normalize_reuse_required_capabilities(raw_value: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, list) or not raw_value:
+        raise ValueError("reuse_opportunity_detection.required_capabilities must be a non-empty list")
+
+    normalized: list[dict[str, Any]] = []
+    required_by_capability: dict[str, dict[str, Any]] = {}
+    for idx, row in enumerate(raw_value):
+        item = _require_mapping(row, label=f"reuse_opportunity_detection.required_capabilities[{idx}]")
+        capability_id = _require_nonempty_str(
+            item.get("capability_id"),
+            label=f"reuse_opportunity_detection.required_capabilities[{idx}].capability_id",
+        )
+        intent = _require_nonempty_str(
+            item.get("intent"),
+            label=f"reuse_opportunity_detection.required_capabilities[{idx}].intent",
+        )
+        required_interfaces = _normalize_string_list(
+            item.get("required_interfaces"),
+            label=f"reuse_opportunity_detection.required_capabilities[{idx}].required_interfaces",
+        )
+
+        existing = required_by_capability.get(capability_id)
+        if existing is None:
+            required = {
+                "capability_id": capability_id,
+                "intent": intent,
+                "required_interfaces": required_interfaces,
+            }
+            required_by_capability[capability_id] = required
+            normalized.append(required)
+            continue
+
+        if existing["intent"] != intent:
+            raise ValueError(
+                "reuse_opportunity_detection.required_capabilities contains conflicting intent values "
+                f"for capability_id '{capability_id}'"
+            )
+        existing_interfaces = set(existing["required_interfaces"])
+        existing_interfaces.update(required_interfaces)
+        existing["required_interfaces"] = sorted(existing_interfaces)
+
+    normalized.sort(key=lambda row: row["capability_id"])
+    return normalized
+
+
+def _normalize_reuse_existing_functionality(
+    raw_value: Any,
+    *,
+    active_project_id: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if not isinstance(raw_value, list) or not raw_value:
+        raise ValueError("reuse_opportunity_detection.existing_functionality must be a non-empty list")
+
+    normalized: list[dict[str, Any]] = []
+    seen_functionality_keys: set[str] = set()
+    source_project_ids: set[str] = set()
+
+    for idx, row in enumerate(raw_value):
+        item = _require_mapping(row, label=f"reuse_opportunity_detection.existing_functionality[{idx}]")
+        source_project_id = _require_nonempty_str(
+            item.get("source_project_id"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].source_project_id",
+        )
+        if source_project_id == active_project_id:
+            raise ValueError(
+                "reuse_opportunity_detection.existing_functionality contains active_project_id; "
+                "reuse candidates must come from other apps"
+            )
+        capability_id = _require_nonempty_str(
+            item.get("capability_id"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].capability_id",
+        )
+        functionality = _require_nonempty_str(
+            item.get("functionality"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].functionality",
+        )
+        adoption_path = _normalize_string_list_in_order(
+            item.get("adoption_path"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].adoption_path",
+            allow_empty=False,
+        )
+        compatibility_constraints = _normalize_string_list_in_order(
+            item.get("compatibility_constraints"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].compatibility_constraints",
+            allow_empty=False,
+        )
+        provided_interfaces = _normalize_string_list(
+            item.get("provided_interfaces"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].provided_interfaces",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            label=f"reuse_opportunity_detection.existing_functionality[{idx}].evidence_refs",
+        )
+        key = f"{source_project_id}::{capability_id}::{functionality}"
+        if key in seen_functionality_keys:
+            continue
+        seen_functionality_keys.add(key)
+        source_project_ids.add(source_project_id)
+        normalized.append(
+            {
+                "source_project_id": source_project_id,
+                "capability_id": capability_id,
+                "functionality": functionality,
+                "provided_interfaces": provided_interfaces,
+                "adoption_path": adoption_path,
+                "compatibility_constraints": compatibility_constraints,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(key=lambda row: (row["source_project_id"], row["capability_id"], row["functionality"]))
+    return normalized, sorted(source_project_ids)
+
+
+def _normalize_reuse_earth_sweep_source_artifacts(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("reuse_opportunity_detection.earth_sweep_source_artifacts must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for idx, row in enumerate(raw_value):
+        item = _require_mapping(row, label=f"reuse_opportunity_detection.earth_sweep_source_artifacts[{idx}]")
+        artifact_ref = _require_nonempty_str(
+            item.get("artifact_ref"),
+            label=f"reuse_opportunity_detection.earth_sweep_source_artifacts[{idx}].artifact_ref",
+        )
+        status = _normalize_source_artifact_status(
+            item.get("status"),
+            label=f"reuse_opportunity_detection.earth_sweep_source_artifacts[{idx}].status",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            label=f"reuse_opportunity_detection.earth_sweep_source_artifacts[{idx}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "artifact_ref": artifact_ref,
+                "status": status,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(key=lambda row: (row["artifact_ref"], row["status"]))
+    return normalized
+
+
+def _normalize_reuse_required_context_documents(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("reuse_opportunity_detection.required_context_documents must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for idx, row in enumerate(raw_value):
+        item = _require_mapping(row, label=f"reuse_opportunity_detection.required_context_documents[{idx}]")
+        doc_kind = _normalize_required_doc_kind(
+            item.get("doc_kind"),
+            label=f"reuse_opportunity_detection.required_context_documents[{idx}].doc_kind",
+        )
+        doc_ref = _require_nonempty_str(
+            item.get("doc_ref"),
+            label=f"reuse_opportunity_detection.required_context_documents[{idx}].doc_ref",
+        )
+        status = _normalize_required_doc_status(
+            item.get("status"),
+            label=f"reuse_opportunity_detection.required_context_documents[{idx}].status",
+        )
+        project_id = (
+            _require_nonempty_str(
+                item.get("project_id"),
+                label=f"reuse_opportunity_detection.required_context_documents[{idx}].project_id",
+            )
+            if doc_kind == "peer-project"
+            else ""
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            label=f"reuse_opportunity_detection.required_context_documents[{idx}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "doc_kind": doc_kind,
+                "doc_ref": doc_ref,
+                "status": status,
+                "project_id": project_id,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(key=lambda row: (row["doc_kind"], row["project_id"], row["doc_ref"], row["status"]))
+    return normalized
+
+
+def _stable_fragment(*parts: str) -> str:
+    joined = "::".join(part.strip() for part in parts if part and part.strip())
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:12]
+
+
+def _build_reuse_open_risks(
+    *,
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    open_risks: list[dict[str, Any]] = []
+
+    for source_artifact in earth_sweep_source_artifacts:
+        if source_artifact["status"] != "stale":
+            continue
+        open_risks.append(
+            {
+                "risk_id": f"risk-earth-source-{_stable_fragment(source_artifact['artifact_ref'])}",
+                "summary": f"Earth sweep source artifact is stale: {source_artifact['artifact_ref']}",
+                "reason_code": "stale_earth_sweep_source_artifact",
+                "required_evidence_refs": sorted(
+                    {source_artifact["artifact_ref"], *source_artifact["evidence_refs"]}
+                ),
+            }
+        )
+
+    for required_doc in required_context_documents:
+        if required_doc["status"] != "missing":
+            continue
+        reason_code = {
+            "mission": "missing_mission_doc",
+            "scope": "missing_scope_doc",
+            "peer-project": "missing_peer_project_doc",
+        }[required_doc["doc_kind"]]
+        summary = (
+            f"Required peer-project document is missing for '{required_doc['project_id']}': {required_doc['doc_ref']}"
+            if required_doc["doc_kind"] == "peer-project"
+            else f"Required {required_doc['doc_kind']} document is missing: {required_doc['doc_ref']}"
+        )
+        open_risks.append(
+            {
+                "risk_id": (
+                    "risk-context-doc-"
+                    f"{_stable_fragment(required_doc['doc_kind'], required_doc['project_id'], required_doc['doc_ref'])}"
+                ),
+                "summary": summary,
+                "reason_code": reason_code,
+                "required_evidence_refs": sorted({required_doc["doc_ref"], *required_doc["evidence_refs"]}),
+            }
+        )
+
+    open_risks.sort(key=lambda row: row["risk_id"])
+    return open_risks
+
+
+def _canonical_reuse_opportunity_context_bundle(
+    *,
+    active_project_id: str,
+    required_capabilities: list[dict[str, Any]],
+    existing_functionality: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+) -> dict[str, Any]:
+    canonical: dict[str, Any] = {
+        "active_project_id": active_project_id,
+        "required_capabilities": required_capabilities,
+        "existing_functionality": existing_functionality,
+    }
+    if earth_sweep_source_artifacts:
+        canonical["earth_sweep_source_artifacts"] = earth_sweep_source_artifacts
+    if required_context_documents:
+        canonical["required_context_documents"] = required_context_documents
+    return canonical
 
 
 def _hardening_open_risks(
@@ -720,110 +1022,21 @@ def detect_reuse_opportunities(
         context.get("active_project_id"),
         label="reuse_opportunity_detection.active_project_id",
     )
-
-    required_capabilities_raw = context.get("required_capabilities")
-    if not isinstance(required_capabilities_raw, list) or not required_capabilities_raw:
-        raise ValueError("reuse_opportunity_detection.required_capabilities must be a non-empty list")
-
-    required_capabilities: list[dict[str, Any]] = []
-    required_by_capability: dict[str, dict[str, Any]] = {}
-    for idx, row in enumerate(required_capabilities_raw):
-        item = _require_mapping(row, label=f"reuse_opportunity_detection.required_capabilities[{idx}]")
-        capability_id = _require_nonempty_str(
-            item.get("capability_id"),
-            label=f"reuse_opportunity_detection.required_capabilities[{idx}].capability_id",
-        )
-        intent = _require_nonempty_str(
-            item.get("intent"),
-            label=f"reuse_opportunity_detection.required_capabilities[{idx}].intent",
-        )
-        required_interfaces = _normalize_string_list(
-            item.get("required_interfaces"),
-            label=f"reuse_opportunity_detection.required_capabilities[{idx}].required_interfaces",
-        )
-
-        existing = required_by_capability.get(capability_id)
-        if existing is not None:
-            existing_interfaces = set(existing["required_interfaces"])
-            existing_interfaces.update(required_interfaces)
-            existing["required_interfaces"] = sorted(existing_interfaces)
-            continue
-
-        required = {
-            "capability_id": capability_id,
-            "intent": intent,
-            "required_interfaces": required_interfaces,
-        }
-        required_capabilities.append(required)
-        required_by_capability[capability_id] = required
-
-    existing_functionality_raw = context.get("existing_functionality")
-    if not isinstance(existing_functionality_raw, list) or not existing_functionality_raw:
-        raise ValueError("reuse_opportunity_detection.existing_functionality must be a non-empty list")
+    required_capabilities = _normalize_reuse_required_capabilities(context.get("required_capabilities"))
+    existing_functionality, source_project_id_list = _normalize_reuse_existing_functionality(
+        context.get("existing_functionality"),
+        active_project_id=active_project_id,
+    )
+    earth_sweep_source_artifacts = _normalize_reuse_earth_sweep_source_artifacts(
+        context.get("earth_sweep_source_artifacts")
+    )
+    required_context_documents = _normalize_reuse_required_context_documents(
+        context.get("required_context_documents")
+    )
 
     existing_by_capability: dict[str, list[dict[str, Any]]] = {}
-    seen_functionality_keys: set[str] = set()
-    source_project_ids: set[str] = set()
-
-    for idx, row in enumerate(existing_functionality_raw):
-        item = _require_mapping(row, label=f"reuse_opportunity_detection.existing_functionality[{idx}]")
-        source_project_id = _require_nonempty_str(
-            item.get("source_project_id"),
-            label=f"reuse_opportunity_detection.existing_functionality[{idx}].source_project_id",
-        )
-        if source_project_id == active_project_id:
-            raise ValueError(
-                "reuse_opportunity_detection.existing_functionality contains active_project_id; "
-                "reuse candidates must come from other apps"
-            )
-        capability_id = _require_nonempty_str(
-            item.get("capability_id"),
-            label=f"reuse_opportunity_detection.existing_functionality[{idx}].capability_id",
-        )
-        functionality = _require_nonempty_str(
-            item.get("functionality"),
-            label=f"reuse_opportunity_detection.existing_functionality[{idx}].functionality",
-        )
-        adoption_path = _normalize_string_list_in_order(
-            item.get("adoption_path"),
-            label=f"reuse_opportunity_detection.existing_functionality[{idx}].adoption_path",
-            allow_empty=False,
-        )
-        compatibility_constraints = _normalize_string_list_in_order(
-            item.get("compatibility_constraints"),
-            label=f"reuse_opportunity_detection.existing_functionality[{idx}].compatibility_constraints",
-            allow_empty=False,
-        )
-        provided_interfaces = _normalize_string_list(
-            item.get("provided_interfaces"),
-            label=f"reuse_opportunity_detection.existing_functionality[{idx}].provided_interfaces",
-        )
-        evidence_refs = _normalize_string_list(
-            item.get("evidence_refs"),
-            label=f"reuse_opportunity_detection.existing_functionality[{idx}].evidence_refs",
-        )
-        key = f"{source_project_id}::{capability_id}::{functionality}"
-        if key in seen_functionality_keys:
-            continue
-        seen_functionality_keys.add(key)
-
-        source_project_ids.add(source_project_id)
-        existing_by_capability.setdefault(capability_id, []).append(
-            {
-                "source_project_id": source_project_id,
-                "capability_id": capability_id,
-                "functionality": functionality,
-                "provided_interfaces": provided_interfaces,
-                "adoption_path": adoption_path,
-                "compatibility_constraints": compatibility_constraints,
-                "evidence_refs": evidence_refs,
-            }
-        )
-
-    for capability_id in existing_by_capability:
-        existing_by_capability[capability_id].sort(
-            key=lambda row: (row["source_project_id"], row["functionality"]),
-        )
+    for row in existing_functionality:
+        existing_by_capability.setdefault(row["capability_id"], []).append(row)
 
     reuse_recommendations: list[dict[str, Any]] = []
     no_reuse_detected: list[dict[str, Any]] = []
@@ -862,13 +1075,24 @@ def detect_reuse_opportunities(
 
     reuse_recommendations.sort(key=lambda row: row["capability_id"])
     no_reuse_detected.sort(key=lambda row: row["capability_id"])
-    source_project_id_list = sorted(source_project_ids)
-    recommendation_evidence_ref_list = sorted(recommendation_evidence_refs)
+    open_risks = _build_reuse_open_risks(
+        earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+        required_context_documents=required_context_documents,
+    )
+    recommendation_evidence_ref_list = sorted(
+        recommendation_evidence_refs.union(
+            ref for row in open_risks for ref in row["required_evidence_refs"]
+        )
+    )
 
-    if reuse_recommendations and not no_reuse_detected:
+    if reuse_recommendations and not no_reuse_detected and not open_risks:
         decision = "reuse_before_reimplement"
-    elif reuse_recommendations:
+    elif reuse_recommendations and not open_risks:
         decision = "partial_reuse_recommended"
+    elif reuse_recommendations:
+        decision = "partial_reuse_recommended_with_open_risks"
+    elif open_risks:
+        decision = "blocked_context_gaps"
     else:
         decision = "no_reuse_opportunity_detected"
 
@@ -884,12 +1108,54 @@ def detect_reuse_opportunities(
         },
         "reuse_recommendations": reuse_recommendations,
         "no_reuse_detected": no_reuse_detected,
+        "open_risks": open_risks,
         "evidence_refs": recommendation_evidence_ref_list,
         "decision": decision,
         "summary": (
             f"{len(reuse_recommendations)} capability reuse recommendation(s); "
-            f"{len(no_reuse_detected)} capability gap(s)."
+            f"{len(no_reuse_detected)} capability gap(s); "
+            f"{len(open_risks)} open risk(s)."
         ),
+    }
+
+
+def serialize_reuse_opportunity_context_bundle(payload: Mapping[str, Any]) -> dict[str, str]:
+    context = _require_mapping(payload, label="reuse_opportunity_context_bundle")
+    active_project_id = _require_nonempty_str(
+        context.get("active_project_id"),
+        label="reuse_opportunity_context_bundle.active_project_id",
+    )
+    required_capabilities = _normalize_reuse_required_capabilities(context.get("required_capabilities"))
+    existing_functionality, _ = _normalize_reuse_existing_functionality(
+        context.get("existing_functionality"),
+        active_project_id=active_project_id,
+    )
+    earth_sweep_source_artifacts = _normalize_reuse_earth_sweep_source_artifacts(
+        context.get("earth_sweep_source_artifacts")
+    )
+    required_context_documents = _normalize_reuse_required_context_documents(
+        context.get("required_context_documents")
+    )
+    canonical_bundle = _canonical_reuse_opportunity_context_bundle(
+        active_project_id=active_project_id,
+        required_capabilities=required_capabilities,
+        existing_functionality=existing_functionality,
+        earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+        required_context_documents=required_context_documents,
+    )
+    serialized_payload = json.dumps(
+        canonical_bundle,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "requirement_id": "REQ-016",
+        "surface": "reuse_opportunity_context_bundle",
+        "schema_version": REQ_016_CONTEXT_BUNDLE_SCHEMA_VERSION,
+        "serialization_format": "json-canonical-v1",
+        "checksum_sha256": hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest(),
+        "serialized_payload": serialized_payload,
     }
 
 

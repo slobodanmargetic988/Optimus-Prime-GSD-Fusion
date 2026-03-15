@@ -59,10 +59,11 @@
       "reason": "no_compatible_existing_functionality"
     }
   ],
+  "open_risks": [],
   "evidence_refs": [
     "contracts/req/REQ-007_ground-graph-snapshot-ingestion.md",
     "strategy/current/samples/REQ-007_ground-graph-snapshot-ingestion.sample.json"
   ],
   "decision": "partial_reuse_recommended",
-  "summary": "1 capability reuse recommendation(s); 1 capability gap(s)."
+  "summary": "1 capability reuse recommendation(s); 1 capability gap(s); 0 open risk(s)."
 }
