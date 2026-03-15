@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OP Command Arguments Reference</title>
+  <style>
+    :root {
+      --bg: #f7f7f5;
+      --panel: #ffffff;
+      --ink: #151515;
+      --muted: #4a4a4a;
+      --line: #d8d6cf;
+      --accent: #0f4c81;
+      --accent-soft: #e7f1fb;
+      --ok: #1f6f43;
+      --warn: #8b5d00;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 5% 5%, #eef3f8 0%, transparent 42%),
+        radial-gradient(circle at 95% 10%, #f4efe8 0%, transparent 37%),
+        var(--bg);
+      line-height: 1.48;
+    }
+
+    .shell {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 26px 18px 44px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #12212f 0%, #1d3a56 52%, #2b4f72 100%);
+      color: #f9fcff;
+      border-radius: 16px;
+      padding: 22px 22px 18px;
+      box-shadow: 0 12px 30px rgba(18, 33, 47, 0.18);
+    }
+
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: 1.72rem;
+      letter-spacing: 0.2px;
+    }
+
+    .hero p {
+      margin: 0;
+      color: #e3edf7;
+      font-size: 0.98rem;
+    }
+
+    .meta {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: 0.84rem;
+    }
+
+    .meta span {
+      background: rgba(255, 255, 255, 0.13);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 999px;
+      padding: 4px 10px;
+      white-space: nowrap;
+    }
+
+    .card {
+      margin-top: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.04);
+    }
+
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 1.22rem;
+      color: #10263a;
+    }
+
+    .callout {
+      margin: 10px 0;
+      padding: 10px 12px;
+      border-left: 4px solid var(--accent);
+      background: var(--accent-soft);
+      border-radius: 8px;
+      color: #10324f;
+      font-size: 0.94rem;
+    }
+
+    .warn {
+      border-left-color: var(--warn);
+      background: #fff8e7;
+      color: #4f3a10;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 0.9rem;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      display: block;
+      overflow-x: auto;
+    }
+
+    thead th {
+      text-align: left;
+      background: #f1f5f8;
+      color: #1a3147;
+      border-bottom: 1px solid var(--line);
+      padding: 9px 10px;
+      white-space: nowrap;
+      font-size: 0.84rem;
+      letter-spacing: 0.1px;
+    }
+
+    tbody td {
+      border-bottom: 1px solid #eceae4;
+      padding: 8px 10px;
+      vertical-align: top;
+    }
+
+    tbody tr:last-child td { border-bottom: none; }
+
+    code {
+      background: #f2f4f7;
+      border: 1px solid #d9dee7;
+      border-radius: 6px;
+      padding: 1px 5px;
+      font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 0.82rem;
+      color: #1f3550;
+      white-space: nowrap;
+    }
+
+    pre {
+      margin: 10px 0 0;
+      background: #111a22;
+      color: #edf5ff;
+      border-radius: 10px;
+      padding: 12px;
+      overflow-x: auto;
+      border: 1px solid #2f3e4d;
+      font-size: 0.83rem;
+      line-height: 1.45;
+    }
+
+    .ok { color: var(--ok); font-weight: 600; }
+    .warn-t { color: var(--warn); font-weight: 600; }
+
+    .mini {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 0.87rem;
+    }
+
+    @media (max-width: 760px) {
+      .shell { padding: 14px 10px 24px; }
+      .hero { border-radius: 12px; padding: 16px 14px; }
+      .hero h1 { font-size: 1.35rem; }
+      .card { padding: 12px; border-radius: 12px; }
+      table { font-size: 0.84rem; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <h1>OP Command Arguments Reference</h1>
+      <p>Command-level argument behavior for <code>/op-build</code>, <code>/op-simple-build</code>, <code>/op-resume</code>, <code>/op-initialize</code>, and <code>/op-plan</code>.</p>
+      <div class="meta">
+        <span>Date: 2026-03-15</span>
+        <span>Source: <code>scripts/op/opctl.py</code> + <code>scripts/op/op_core.py</code></span>
+        <span>Runtime: OP Simple path</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Command Semantics Snapshot</h2>
+      <div class="callout">
+        <strong>/op-build</strong> is the one-command entrypoint. It runs <code>/op-initialize</code> first only when mission/scope is supplied, <code>--override-old-plan</code> is set, or required planning baseline artifacts are missing.
+      </div>
+      <div class="callout">
+        <strong>/op-resume</strong> requires <code>.op-simple/current/initialize_state.json</code>. If that marker is missing, resume is blocked.
+      </div>
+      <div class="callout warn">
+        <strong>Run-base note:</strong> <code>--run-base-source-branch</code> sets the source for a new run-base branch in fresh <code>/op-build</code>. It does not invoke resume semantics.
+      </div>
+      <div class="callout">
+        <strong>/op-simple-build</strong> runs the OP Simple runtime directly (no initialize pre-step).
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>/op-build Arguments</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Argument</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>--repo-root</code></td><td>path</td><td>cwd</td><td>Target repository root.</td></tr>
+          <tr><td><code>--mission</code>, <code>--mission-file</code></td><td>string/path</td><td>unset</td><td>Supplying mission input triggers initialize pre-step before build loop.</td></tr>
+          <tr><td><code>--scope</code>, <code>--scope-file</code></td><td>string/path</td><td>unset</td><td>Supplying scope input triggers initialize pre-step before build loop.</td></tr>
+          <tr><td><code>--override-old-plan</code></td><td>flag</td><td>false</td><td>Forces reinitialize/replan flow before runtime.</td></tr>
+          <tr><td><code>--constraint</code></td><td>repeatable string</td><td>[]</td><td>Planning constraints forwarded to planner when initialize/plan runs.</td></tr>
+          <tr><td><code>--max-build-cycles</code></td><td>int</td><td>unbounded</td><td>Stop after N cycles for bounded/canary runs.</td></tr>
+          <tr><td><code>--max-parallel-workers</code></td><td>int</td><td>config/default</td><td>Worker parallelism cap.</td></tr>
+          <tr><td><code>--worktrees-parent</code></td><td>path</td><td>derived</td><td>Overrides worker worktree parent directory.</td></tr>
+          <tr><td><code>--sleep-minutes</code></td><td>float</td><td>2.0</td><td>Cycle sleep interval.</td></tr>
+          <tr><td><code>--run-base-source-branch</code></td><td>string</td><td><code>main</code></td><td>Source branch used to create a new <code>op-simple-canary-*</code> run-base branch.</td></tr>
+          <tr><td><code>--executor-provider</code></td><td>enum</td><td><code>codex</code></td><td>Worker executor backend: <code>codex</code>, <code>openrouter</code>, <code>blackbox</code>.</td></tr>
+          <tr><td><code>--selected-aliases</code></td><td>CSV string</td><td>autodiscover for codex backend</td><td>Codex alias/home pool for profile selection.</td></tr>
+          <tr><td><code>--profile</code></td><td>string</td><td>unset</td><td>Codex config profile name inside selected alias home; not alias selector.</td></tr>
+          <tr><td><code>--executor-model</code></td><td>string</td><td>runtime default</td><td>Model override for selected provider.</td></tr>
+          <tr><td><code>--blackbox-lane</code></td><td>enum</td><td><code>free</code></td><td>Blackbox lane: <code>free</code> or <code>api_key</code>.</td></tr>
+          <tr><td><code>--allow-worker-executor-override</code></td><td>flag</td><td>false</td><td>Allows worker-level executor override from task packets.</td></tr>
+          <tr><td><code>--cycle-release-mode</code></td><td>enum</td><td><code>token_conservative</code></td><td>End-of-cycle release gate strategy (<code>token_conservative</code> or <code>max_work</code>).</td></tr>
+          <tr><td><code>--cycle-release-timeout-seconds</code></td><td>int</td><td>900</td><td>Upper bound for cycle release wait.</td></tr>
+          <tr><td><code>--cycle-release-poll-seconds</code></td><td>int</td><td>5</td><td>PID/watch polling interval.</td></tr>
+          <tr><td><code>--boss-model</code></td><td>string</td><td><code>gpt-5.3-codex</code></td><td>BOSS manager model override.</td></tr>
+          <tr><td><code>--boss-reasoning-effort</code></td><td>string</td><td><code>xhigh</code></td><td>BOSS reasoning effort setting.</td></tr>
+          <tr><td><code>--dry-run</code></td><td>flag</td><td>false</td><td>Dry-run mode where applicable in runtime operations.</td></tr>
+          <tr><td><code>--reset-exhausted-retries</code></td><td>flag</td><td>false</td><td><span class="warn-t">Currently accepted but not wired into active /op-build execution path.</span></td></tr>
+          <tr><td><code>--non-interactive</code>, <code>--output-mode</code>, <code>--json-pretty</code>, <code>--input-json</code></td><td>output/input controls</td><td>set by opctl defaults</td><td>CLI transport/format controls.</td></tr>
+        </tbody>
+      </table>
+      <pre>caffeinate -dimsu opctl /op-build --repo-root /absolute/path/to/repo --json-pretty</pre>
+    </section>
+
+    <section class="card">
+      <h2>/op-simple-build Arguments</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Argument</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>--repo-root</code></td><td>path</td><td>cwd</td><td>Target repository root.</td></tr>
+          <tr><td><code>--max-build-cycles</code></td><td>int</td><td>unbounded</td><td>Stop after N runtime cycles.</td></tr>
+          <tr><td><code>--max-parallel-workers</code></td><td>int</td><td>8</td><td>Worker parallelism cap for direct OP Simple runtime.</td></tr>
+          <tr><td><code>--worktrees-parent</code></td><td>path</td><td>derived</td><td>Overrides worker worktree parent directory.</td></tr>
+          <tr><td><code>--sleep-minutes</code></td><td>float</td><td>5.0</td><td>Cycle sleep interval for direct OP Simple runs.</td></tr>
+          <tr><td><code>--run-base-source-branch</code></td><td>string</td><td><code>main</code></td><td>Source branch used to create a new <code>op-simple-canary-*</code> run-base branch.</td></tr>
+          <tr><td><code>--executor-provider</code></td><td>enum</td><td><code>codex</code></td><td>Worker executor backend: <code>codex</code>, <code>openrouter</code>, <code>blackbox</code>.</td></tr>
+          <tr><td><code>--selected-aliases</code></td><td>CSV string</td><td>autodiscover for codex backend</td><td>Codex alias/home pool for profile selection.</td></tr>
+          <tr><td><code>--profile</code></td><td>string</td><td>unset</td><td>Codex config profile name inside selected alias home; not alias selector.</td></tr>
+          <tr><td><code>--executor-model</code></td><td>string</td><td>runtime default</td><td>Model override for selected provider.</td></tr>
+          <tr><td><code>--blackbox-lane</code></td><td>enum</td><td><code>free</code></td><td>Blackbox lane: <code>free</code> or <code>api_key</code>.</td></tr>
+          <tr><td><code>--allow-worker-executor-override</code></td><td>flag</td><td>false</td><td>Allows worker-level executor override from task packets.</td></tr>
+          <tr><td><code>--cycle-release-mode</code></td><td>enum</td><td><code>token_conservative</code></td><td>End-of-cycle release gate strategy (<code>token_conservative</code> or <code>max_work</code>).</td></tr>
+          <tr><td><code>--cycle-release-timeout-seconds</code></td><td>int</td><td>900</td><td>Upper bound for cycle release wait.</td></tr>
+          <tr><td><code>--cycle-release-poll-seconds</code></td><td>int</td><td>5</td><td>PID/watch polling interval.</td></tr>
+          <tr><td><code>--boss-model</code></td><td>string</td><td><code>gpt-5.3-codex</code></td><td>BOSS manager model override.</td></tr>
+          <tr><td><code>--boss-reasoning-effort</code></td><td>string</td><td><code>xhigh</code></td><td>BOSS reasoning effort setting.</td></tr>
+          <tr><td><code>--dry-run</code></td><td>flag</td><td>false</td><td>Dry-run mode where applicable in runtime operations.</td></tr>
+          <tr><td><code>--mission</code>, <code>--mission-file</code>, <code>--scope</code>, <code>--scope-file</code>, <code>--override-old-plan</code>, <code>--constraint</code></td><td>planning inputs</td><td>accepted by parser</td><td><span class="warn-t">Not used by direct <code>/op-simple-build</code> runtime path.</span></td></tr>
+          <tr><td><code>--non-interactive</code>, <code>--output-mode</code>, <code>--json-pretty</code>, <code>--input-json</code></td><td>output/input controls</td><td>set by opctl defaults</td><td>CLI transport/format controls.</td></tr>
+        </tbody>
+      </table>
+      <pre>caffeinate -dimsu opctl /op-simple-build --repo-root /absolute/path/to/repo --json-pretty</pre>
+    </section>
+
+    <section class="card">
+      <h2>/op-resume Arguments</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Argument</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>--repo-root</code></td><td>path</td><td>cwd</td><td>Target repository root with existing <code>.op-simple/current</code> state.</td></tr>
+          <tr><td><code>--max-build-cycles</code></td><td>int</td><td>unbounded</td><td>Bounds resume loop by cycle count.</td></tr>
+          <tr><td><code>--max-parallel-workers</code></td><td>int</td><td>config/default</td><td>Resume-time worker parallelism cap.</td></tr>
+          <tr><td><code>--worktrees-parent</code></td><td>path</td><td>derived</td><td>Worker worktree parent override.</td></tr>
+          <tr><td><code>--sleep-minutes</code></td><td>float</td><td>2.0</td><td>Cycle sleep interval during resume run.</td></tr>
+          <tr><td><code>--executor-provider</code>, <code>--selected-aliases</code>, <code>--profile</code>, <code>--executor-model</code>, <code>--blackbox-lane</code>, <code>--allow-worker-executor-override</code></td><td>runtime routing</td><td>same defaults as build</td><td>Controls profile/executor behavior during resumed cycles.</td></tr>
+          <tr><td><code>--cycle-release-mode</code>, <code>--cycle-release-timeout-seconds</code>, <code>--cycle-release-poll-seconds</code></td><td>release controls</td><td><code>token_conservative</code>, 900, 5</td><td>Cycle release watcher behavior during resume.</td></tr>
+          <tr><td><code>--boss-model</code>, <code>--boss-reasoning-effort</code></td><td>string</td><td><code>gpt-5.3-codex</code>, <code>xhigh</code></td><td>BOSS manager overrides in resumed runtime.</td></tr>
+          <tr><td><code>--dry-run</code></td><td>flag</td><td>false</td><td>Dry-run mode where applicable.</td></tr>
+          <tr><td><code>--reset-exhausted-retries</code></td><td>flag</td><td>false</td><td><span class="warn-t">Accepted by parser; reset helper exists but is not currently called by active /op-resume command path.</span></td></tr>
+          <tr><td><code>--run-base-source-branch</code></td><td>string</td><td><code>main</code></td><td>Resume path ignores new branch creation; value is only fallback metadata if older run_context is incomplete.</td></tr>
+          <tr><td><code>--non-interactive</code>, <code>--output-mode</code>, <code>--json-pretty</code>, <code>--input-json</code></td><td>output/input controls</td><td>set by opctl defaults</td><td>CLI transport/format controls.</td></tr>
+        </tbody>
+      </table>
+      <pre>caffeinate -dimsu opctl /op-resume --repo-root /absolute/path/to/repo --json-pretty</pre>
+      <p class="mini">Preflight requirement: <code>.op-simple/current/initialize_state.json</code> must exist.</p>
+    </section>
+
+    <section class="card">
+      <h2>/op-initialize Arguments</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Argument</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>--repo-root</code></td><td>path</td><td>cwd</td><td>Target repository root.</td></tr>
+          <tr><td><code>--mission</code> or <code>--mission-file</code></td><td>string/path</td><td>required</td><td>Required mission input for initialization.</td></tr>
+          <tr><td><code>--scope</code> or <code>--scope-file</code></td><td>string/path</td><td>required</td><td>Required scope input for initialization.</td></tr>
+          <tr><td><code>--override-old-plan</code></td><td>flag</td><td>false</td><td>Required when existing planning artifacts already exist (strict guard).</td></tr>
+          <tr><td><code>--constraint</code></td><td>repeatable string</td><td>[]</td><td>Forwarded into planner during initialize -> plan chain.</td></tr>
+          <tr><td><code>--run-base-source-branch</code></td><td>string</td><td>unset</td><td>Recorded into lifecycle era metadata as run context source.</td></tr>
+          <tr><td><code>--non-interactive</code>, <code>--output-mode</code>, <code>--json-pretty</code>, <code>--input-json</code></td><td>output/input controls</td><td>set by opctl defaults</td><td>CLI transport/format controls.</td></tr>
+        </tbody>
+      </table>
+      <div class="mini">Initialize runs: map-codebase -> new-project -> plan -> profile selection/rate seed wiring.</div>
+      <pre>caffeinate -dimsu opctl /op-initialize --repo-root /absolute/path/to/repo --mission-file /abs/mission.md --scope-file /abs/scope.md --json-pretty</pre>
+    </section>
+
+    <section class="card">
+      <h2>/op-plan Arguments</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Argument</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>--repo-root</code></td><td>path</td><td>cwd</td><td>Target repository root containing planning state baseline.</td></tr>
+          <tr><td><code>--mission</code> or <code>--mission-file</code></td><td>string/path</td><td>optional if already in state</td><td>Overrides or supplies mission for planning call.</td></tr>
+          <tr><td><code>--scope</code> or <code>--scope-file</code></td><td>string/path</td><td>optional if already in state</td><td>Overrides or supplies scope for planning call.</td></tr>
+          <tr><td><code>--override-old-plan</code></td><td>flag</td><td>false</td><td>Required to replace/archive existing planning artifacts in direct <code>/op-plan</code> usage.</td></tr>
+          <tr><td><code>--constraint</code></td><td>repeatable string</td><td>[]</td><td>Planner constraints included in bundle generation.</td></tr>
+          <tr><td><code>--non-interactive</code>, <code>--output-mode</code>, <code>--json-pretty</code>, <code>--input-json</code></td><td>output/input controls</td><td>set by opctl defaults</td><td>CLI transport/format controls.</td></tr>
+        </tbody>
+      </table>
+      <pre>caffeinate -dimsu opctl /op-plan --repo-root /absolute/path/to/repo --mission-file /abs/mission.md --scope-file /abs/scope.md --override-old-plan --json-pretty</pre>
+    </section>
+
+    <section class="card">
+      <h2>Cross-Command Notes</h2>
+      <ul>
+        <li><span class="ok">/op-build default source branch:</span> if <code>--run-base-source-branch</code> is omitted, runtime uses <code>main</code> as run-base source for new runs.</li>
+        <li><span class="ok">/op-resume and /op-build share OP Simple runtime:</span> both execute through <code>/op-simple-build</code>; resume toggles <code>resume_mode</code>.</li>
+        <li><span class="warn-t">Accepted vs effective:</span> opctl accepts a broad parser surface globally; command handlers use only relevant subsets listed above.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
