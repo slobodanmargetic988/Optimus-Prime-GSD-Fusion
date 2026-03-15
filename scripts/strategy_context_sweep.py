@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-002 and REQ-010 strategy context contract surfaces."""
+"""REQ-002, REQ-010, and REQ-014 strategy context contract surfaces."""
 
 from __future__ import annotations
 
@@ -17,9 +17,17 @@ from typing import Any, Callable
 EmitFn = Callable[[str], None]
 
 TOOL = "strategy-context-sweep"
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.1.0"
 MANIFEST_SCHEMA_VERSION = "req-002.earth-wide-repository-discovery-manifest.v1"
 CHANGE_DETECTION_SCHEMA_VERSION = "req-010.change-detection-since-previous-strategy-revision.v1"
+REQ014_ANALYSIS_TYPE = "deficit_and_need_signal_extraction"
+REQ014_ANALYSIS_ANCHORS = ("unmet_ecosystem_needs", "high_leverage_fit", "impact", "urgency")
+REQ014_DEFAULT_THRESHOLDS = {
+    "min_impact_score": 6.0,
+    "min_urgency_score": 6.0,
+    "min_leverage_ratio": 0.5,
+}
+REQ014_DEFAULT_MAX_SIGNALS = 5
 REQ010_SECTION_KEYS = ("mission_scope", "runtime_data", "ecosystem_signals")
 REQ010_CHANGE_TYPES = ("added", "removed", "updated")
 ARCHIVED_NAME_TOKENS = ("archive", "archives", "archived")
@@ -47,6 +55,22 @@ LOG_PATH = LOG_ROOT / "strategy_context_sweep.log"
 LOG_BUDGET_CHECK_STAMP = LOG_ROOT / ".log_budget_check.strategy_context_sweep"
 LOG_BUDGET_CHECK_INTERVAL_SECONDS = 15 * 60
 LOG_BUDGET_MAX_BYTES = 3 * 1024 * 1024 * 1024
+
+
+class SweepError(Exception):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        stage: str = "runtime",
+        evidence_refs: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.stage = stage
+        self.evidence_refs = list(evidence_refs or [])
 
 
 def utc_now_iso() -> str:
@@ -2008,6 +2032,703 @@ def validate_change_detection_since_previous_strategy_revision(payload: dict[str
     return errors
 
 
+def _required_object(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        raise SweepError("input_error", f"{key} must be an object", stage="input")
+    return value
+
+
+def _required_list(payload: dict[str, Any], key: str) -> list[Any]:
+    value = payload.get(key)
+    if not isinstance(value, list):
+        raise SweepError("input_error", f"{key} must be a list", stage="input")
+    return value
+
+
+def _required_str(payload: dict[str, Any], key: str) -> str:
+    text = _as_str(payload.get(key))
+    if not text:
+        raise SweepError("input_error", f"{key} is required", stage="input")
+    return text
+
+
+def _required_number(payload: dict[str, Any], key: str) -> float:
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SweepError("input_error", f"{key} must be a number", stage="input")
+    return float(value)
+
+
+def _parse_req014_now(payload: dict[str, Any]) -> datetime:
+    raw = payload.get("now_utc")
+    if raw is None:
+        return datetime.now(timezone.utc)
+    text = _as_str(raw)
+    if not text:
+        raise SweepError("input_error", "now_utc must be non-empty when provided", stage="input")
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise SweepError("input_error", f"invalid now_utc timestamp: {exc}", stage="input") from exc
+    if dt.tzinfo is None:
+        raise SweepError("input_error", "now_utc must include timezone offset", stage="input")
+    return dt.astimezone(timezone.utc)
+
+
+def _to_iso_utc(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _normalize_string_list(values: Any, *, path: str, allow_empty: bool = False) -> list[str]:
+    if not isinstance(values, list):
+        raise SweepError("input_error", f"{path} must be a list", stage="input")
+    out: list[str] = []
+    for idx, raw in enumerate(values):
+        text = _as_str(raw)
+        if not text:
+            raise SweepError("input_error", f"{path}[{idx}] must be a non-empty string", stage="input")
+        out.append(text)
+    if not allow_empty and not out:
+        raise SweepError("input_error", f"{path} must be non-empty", stage="input")
+    return out
+
+
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _normalize_capability_tags(values: Any, *, path: str) -> list[str]:
+    tags = _normalize_string_list(values, path=path, allow_empty=False)
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        normalized = tag.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def _resolve_context_doc_path(raw_path: str, *, base_dir: Path) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = base_dir / candidate
+    return candidate.resolve()
+
+
+def _doc_evidence_ref(kind: str, path: Path, *, project_id: str | None = None) -> str:
+    if project_id:
+        return f"DOCREF:{kind}:{project_id}:{path}"
+    return f"DOCREF:{kind}:{path}"
+
+
+def _coerce_req014_thresholds(payload: dict[str, Any]) -> dict[str, float]:
+    raw = payload.get("thresholds")
+    if raw is None:
+        return dict(REQ014_DEFAULT_THRESHOLDS)
+    if not isinstance(raw, dict):
+        raise SweepError("input_error", "thresholds must be an object", stage="input")
+
+    out = dict(REQ014_DEFAULT_THRESHOLDS)
+    for key in REQ014_DEFAULT_THRESHOLDS:
+        if key not in raw:
+            continue
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise SweepError("input_error", f"thresholds.{key} must be numeric", stage="input")
+        out[key] = float(value)
+
+    if out["min_impact_score"] < 0 or out["min_impact_score"] > 10:
+        raise SweepError("input_error", "thresholds.min_impact_score must be between 0 and 10", stage="input")
+    if out["min_urgency_score"] < 0 or out["min_urgency_score"] > 10:
+        raise SweepError("input_error", "thresholds.min_urgency_score must be between 0 and 10", stage="input")
+    if out["min_leverage_ratio"] < 0 or out["min_leverage_ratio"] > 1:
+        raise SweepError("input_error", "thresholds.min_leverage_ratio must be between 0 and 1", stage="input")
+    return out
+
+
+def _coerce_req014_max_signals(payload: dict[str, Any]) -> int:
+    raw = payload.get("max_signals")
+    if raw is None:
+        return REQ014_DEFAULT_MAX_SIGNALS
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise SweepError("input_error", "max_signals must be an integer", stage="input")
+    if raw <= 0:
+        raise SweepError("input_error", "max_signals must be > 0", stage="input")
+    return raw
+
+
+def _validate_req014_target_project(payload: dict[str, Any]) -> dict[str, Any]:
+    target = _required_object(payload, "target_project")
+    project_id = _required_str(target, "project_id")
+    capability_tags = _normalize_capability_tags(target.get("capability_tags"), path="target_project.capability_tags")
+    return {
+        "project_id": project_id,
+        "capability_tags": capability_tags,
+    }
+
+
+def _validate_req014_unhappy_paths(values: Any, *, path: str) -> list[dict[str, Any]]:
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise SweepError("input_error", f"{path} must be a list", stage="input")
+
+    out: list[dict[str, Any]] = []
+    for idx, row in enumerate(values):
+        row_path = f"{path}[{idx}]"
+        if not isinstance(row, dict):
+            raise SweepError("input_error", f"{row_path} must be an object", stage="input")
+
+        reason_code = _required_str(row, "reason_code")
+        evidence_refs = _normalize_string_list(
+            row.get("evidence_refs") or [],
+            path=f"{row_path}.evidence_refs",
+            allow_empty=True,
+        )
+        normalized_row = {
+            "reason_code": reason_code,
+            "project_id": _as_str(row.get("project_id")),
+            "artifact_type": _as_str(row.get("artifact_type")),
+            "source_id": _as_str(row.get("source_id")),
+            "evidence_refs": _dedupe_preserve_order(evidence_refs),
+        }
+        if reason_code == "stale_source_artifact_detected" and not normalized_row["evidence_refs"]:
+            raise SweepError(
+                "input_error",
+                f"{row_path}.evidence_refs must be non-empty for stale_source_artifact_detected",
+                stage="input",
+            )
+        out.append(normalized_row)
+    return out
+
+
+def _validate_req014_broad_sweep_context(
+    payload: dict[str, Any],
+    *,
+    target_project_id: str,
+) -> dict[str, Any]:
+    raw = payload.get("broad_sweep_context")
+    if raw is None:
+        projects_considered = [target_project_id]
+        evidence_refs_by_project = {target_project_id: []}
+        cross_project = False
+        unhappy_paths: list[dict[str, Any]] = []
+    else:
+        if not isinstance(raw, dict):
+            raise SweepError("input_error", "broad_sweep_context must be an object", stage="input")
+
+        raw_evidence_refs = raw.get("evidence_refs_by_project")
+        if raw_evidence_refs is None:
+            raw_evidence_refs = {}
+        if not isinstance(raw_evidence_refs, dict):
+            raise SweepError("input_error", "broad_sweep_context.evidence_refs_by_project must be an object", stage="input")
+
+        evidence_refs_by_project: dict[str, list[str]] = {}
+        for raw_project_id, raw_refs in raw_evidence_refs.items():
+            project_id = _as_str(raw_project_id)
+            if not project_id:
+                raise SweepError(
+                    "input_error",
+                    "broad_sweep_context.evidence_refs_by_project keys must be non-empty strings",
+                    stage="input",
+                )
+            refs = _normalize_string_list(
+                raw_refs,
+                path=f"broad_sweep_context.evidence_refs_by_project.{project_id}",
+                allow_empty=True,
+            )
+            evidence_refs_by_project[project_id] = _dedupe_preserve_order(refs)
+
+        raw_projects_considered = raw.get("projects_considered")
+        if raw_projects_considered is None:
+            projects_considered = list(evidence_refs_by_project.keys())
+        else:
+            projects_considered = _normalize_string_list(
+                raw_projects_considered,
+                path="broad_sweep_context.projects_considered",
+                allow_empty=True,
+            )
+            projects_considered = _dedupe_preserve_order(projects_considered)
+
+        for project_id in evidence_refs_by_project:
+            if project_id not in projects_considered:
+                projects_considered.append(project_id)
+
+        if not projects_considered:
+            projects_considered = [target_project_id]
+        for project_id in projects_considered:
+            evidence_refs_by_project.setdefault(project_id, [])
+
+        raw_cross_project = raw.get("cross_project")
+        if raw_cross_project is None:
+            cross_project = len(projects_considered) > 1
+        elif isinstance(raw_cross_project, bool):
+            cross_project = raw_cross_project
+        else:
+            raise SweepError("input_error", "broad_sweep_context.cross_project must be boolean", stage="input")
+        unhappy_paths = _validate_req014_unhappy_paths(
+            raw.get("unhappy_paths"),
+            path="broad_sweep_context.unhappy_paths",
+        )
+
+    projects_with_evidence_refs = [
+        project_id for project_id in projects_considered if evidence_refs_by_project.get(project_id)
+    ]
+    projects_without_evidence_refs = [
+        project_id for project_id in projects_considered if not evidence_refs_by_project.get(project_id)
+    ]
+    earth_sweep_evidence_refs = _dedupe_preserve_order(
+        [
+            evidence_ref
+            for project_id in projects_considered
+            for evidence_ref in evidence_refs_by_project.get(project_id, [])
+        ]
+    )
+
+    return {
+        "cross_project": cross_project,
+        "projects_considered": projects_considered,
+        "projects_with_evidence_refs": projects_with_evidence_refs,
+        "projects_without_evidence_refs": projects_without_evidence_refs,
+        "evidence_refs_by_project": evidence_refs_by_project,
+        "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+        "unhappy_paths": unhappy_paths,
+    }
+
+
+def _validate_req014_deficits(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = _required_list(payload, "deficits")
+    out: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise SweepError("input_error", f"deficits[{idx}] must be an object", stage="input")
+        deficit_id = _required_str(row, "deficit_id")
+        summary = _required_str(row, "summary")
+        impact_score = _required_number(row, "impact_score")
+        urgency_score = _required_number(row, "urgency_score")
+        if impact_score < 0 or impact_score > 10:
+            raise SweepError("input_error", f"deficits[{idx}].impact_score must be between 0 and 10", stage="input")
+        if urgency_score < 0 or urgency_score > 10:
+            raise SweepError("input_error", f"deficits[{idx}].urgency_score must be between 0 and 10", stage="input")
+        required_tags = _normalize_capability_tags(
+            row.get("required_capability_tags"),
+            path=f"deficits[{idx}].required_capability_tags",
+        )
+        upstream_refs = _normalize_string_list(
+            row.get("evidence_refs"),
+            path=f"deficits[{idx}].evidence_refs",
+            allow_empty=False,
+        )
+        out.append(
+            {
+                "deficit_id": deficit_id,
+                "summary": summary,
+                "impact_score": impact_score,
+                "urgency_score": urgency_score,
+                "required_capability_tags": required_tags,
+                "upstream_evidence_refs": upstream_refs,
+            }
+        )
+    return out
+
+
+def _classify_req014_failed_criteria(
+    *,
+    impact_score: float,
+    urgency_score: float,
+    leverage_ratio: float,
+    thresholds: dict[str, float],
+) -> list[str]:
+    failed: list[str] = []
+    if impact_score < thresholds["min_impact_score"]:
+        failed.append("impact_below_threshold")
+    if urgency_score < thresholds["min_urgency_score"]:
+        failed.append("urgency_below_threshold")
+    if leverage_ratio < thresholds["min_leverage_ratio"]:
+        failed.append("leverage_below_threshold")
+    return failed
+
+
+def _validate_context_bundle_docs(payload: dict[str, Any]) -> dict[str, Any] | None:
+    raw = payload.get("context_bundle_docs")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise SweepError("input_error", "context_bundle_docs must be an object", stage="input")
+
+    base_dir_raw = _as_str(raw.get("base_dir"))
+    base_dir = Path(base_dir_raw).expanduser() if base_dir_raw else Path.cwd()
+    if not base_dir.is_absolute():
+        base_dir = (Path.cwd() / base_dir).resolve()
+    else:
+        base_dir = base_dir.resolve()
+
+    mission_raw = _as_str(raw.get("mission_path"))
+    scope_raw = _as_str(raw.get("scope_path"))
+    if not mission_raw or not scope_raw:
+        raise SweepError(
+            "input_error",
+            "context_bundle_docs.mission_path and context_bundle_docs.scope_path are required",
+            stage="input",
+        )
+
+    mission_path = _resolve_context_doc_path(mission_raw, base_dir=base_dir)
+    scope_path = _resolve_context_doc_path(scope_raw, base_dir=base_dir)
+    missing_mission_scope_refs: list[str] = []
+    if not mission_path.is_file():
+        missing_mission_scope_refs.append(_doc_evidence_ref("mission", mission_path))
+    if not scope_path.is_file():
+        missing_mission_scope_refs.append(_doc_evidence_ref("scope", scope_path))
+    if missing_mission_scope_refs:
+        raise SweepError(
+            "mission_scope_doc_missing",
+            "mission/scope context docs must exist for context bundle serialization",
+            stage="input",
+            evidence_refs=missing_mission_scope_refs,
+        )
+
+    peer_docs_raw = raw.get("peer_project_docs")
+    if peer_docs_raw is None:
+        peer_docs_raw = []
+    if not isinstance(peer_docs_raw, list):
+        raise SweepError("input_error", "context_bundle_docs.peer_project_docs must be a list", stage="input")
+    peer_docs: list[dict[str, str]] = []
+    for idx, peer_row in enumerate(peer_docs_raw):
+        if not isinstance(peer_row, dict):
+            raise SweepError(
+                "input_error",
+                f"context_bundle_docs.peer_project_docs[{idx}] must be an object",
+                stage="input",
+            )
+        project_id = _as_str(peer_row.get("project_id"))
+        peer_path_raw = _as_str(peer_row.get("path"))
+        if not project_id or not peer_path_raw:
+            raise SweepError(
+                "input_error",
+                f"context_bundle_docs.peer_project_docs[{idx}] requires project_id and path",
+                stage="input",
+            )
+        peer_path = _resolve_context_doc_path(peer_path_raw, base_dir=base_dir)
+        peer_evidence_ref = _doc_evidence_ref("peer", peer_path, project_id=project_id)
+        if not peer_path.is_file():
+            raise SweepError(
+                "peer_project_doc_missing",
+                f"peer-project context doc missing for {project_id}: {peer_path}",
+                stage="input",
+                evidence_refs=[peer_evidence_ref],
+            )
+        peer_docs.append(
+            {
+                "project_id": project_id,
+                "path": str(peer_path),
+                "evidence_ref": peer_evidence_ref,
+            }
+        )
+
+    return {
+        "mission": {
+            "path": str(mission_path),
+            "evidence_ref": _doc_evidence_ref("mission", mission_path),
+        },
+        "scope": {
+            "path": str(scope_path),
+            "evidence_ref": _doc_evidence_ref("scope", scope_path),
+        },
+        "peer_project_docs": peer_docs,
+    }
+
+
+def _sorted_citation_refs(rows: list[dict[str, Any]]) -> list[str]:
+    return [str(row["citation_id"]) for row in rows if isinstance(row.get("citation_id"), str)]
+
+
+def _append_obligation_or_open_risk(
+    *,
+    obligations: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+    obligation_id: str,
+    summary: str,
+    evidence_refs: list[str],
+    risk_id: str,
+    risk_summary: str,
+) -> None:
+    if evidence_refs:
+        obligations.append(
+            {
+                "obligation_id": obligation_id,
+                "summary": summary,
+                "evidence_refs": evidence_refs,
+            }
+        )
+        return
+    open_risks.append(
+        {
+            "risk_id": risk_id,
+            "summary": risk_summary,
+            "evidence_refs": [],
+        }
+    )
+
+
+def _build_context_bundle(
+    *,
+    checked_at_utc: str,
+    analysis_anchors: tuple[str, ...] | list[str],
+    broad_sweep_context: dict[str, Any],
+    recommendation: dict[str, Any],
+    source_references: list[dict[str, Any]],
+    unhappy_paths: list[dict[str, Any]],
+    context_docs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "checked_at_utc": checked_at_utc,
+        "analysis_anchors": [str(anchor) for anchor in analysis_anchors],
+        "broad_sweep_context": broad_sweep_context,
+        "recommendation_evidence_refs": list(recommendation.get("evidence_refs") or []),
+        "source_reference_ids": _sorted_citation_refs(source_references),
+        "unhappy_paths": unhappy_paths,
+        "context_docs": context_docs,
+    }
+
+
+def _serialize_context_bundle(bundle: dict[str, Any]) -> str:
+    return json.dumps(bundle, sort_keys=True, separators=(",", ":"))
+
+
+def extract_deficit_and_need_signals(payload: dict[str, Any]) -> dict[str, Any]:
+    now_utc = _parse_req014_now(payload)
+    checked_at_utc = _to_iso_utc(now_utc)
+    context_docs = _validate_context_bundle_docs(payload)
+    thresholds = _coerce_req014_thresholds(payload)
+    max_signals = _coerce_req014_max_signals(payload)
+    target_project = _validate_req014_target_project(payload)
+    broad_sweep_context = _validate_req014_broad_sweep_context(
+        payload,
+        target_project_id=target_project["project_id"],
+    )
+    deficits = _validate_req014_deficits(payload)
+
+    target_tags = set(target_project["capability_tags"])
+    scored_rows: list[dict[str, Any]] = []
+    for row in deficits:
+        matched_tags = [tag for tag in row["required_capability_tags"] if tag in target_tags]
+        leverage_ratio = round(len(matched_tags) / len(row["required_capability_tags"]), 4)
+        priority_score = round(row["impact_score"] * row["urgency_score"], 4)
+        failed_criteria = _classify_req014_failed_criteria(
+            impact_score=row["impact_score"],
+            urgency_score=row["urgency_score"],
+            leverage_ratio=leverage_ratio,
+            thresholds=thresholds,
+        )
+        scored_rows.append(
+            {
+                **row,
+                "matched_capability_tags": matched_tags,
+                "leverage_ratio": leverage_ratio,
+                "priority_score": priority_score,
+                "failed_criteria": failed_criteria,
+                "eligible": not failed_criteria,
+            }
+        )
+
+    eligible_rows = sorted(
+        [row for row in scored_rows if row["eligible"]],
+        key=lambda row: (
+            -float(row["priority_score"]),
+            -float(row["impact_score"]),
+            -float(row["urgency_score"]),
+            str(row["deficit_id"]),
+        ),
+    )
+
+    selected_rows = eligible_rows[:max_signals]
+    selected_ids = {str(row["deficit_id"]) for row in selected_rows}
+
+    need_signals: list[dict[str, Any]] = []
+    evidence_references: list[dict[str, Any]] = []
+    citation_counter = 0
+    for idx, row in enumerate(selected_rows, start=1):
+        signal_id = f"NEED-{idx:04d}"
+        signal_evidence_refs: list[str] = []
+        for upstream_ref in row["upstream_evidence_refs"]:
+            citation_counter += 1
+            citation_id = f"EVD-{citation_counter:04d}"
+            signal_evidence_refs.append(citation_id)
+            evidence_references.append(
+                {
+                    "citation_id": citation_id,
+                    "signal_id": signal_id,
+                    "deficit_id": row["deficit_id"],
+                    "upstream_evidence_ref": upstream_ref,
+                    "reason_code": "need_signal_supporting_evidence",
+                }
+            )
+        need_signals.append(
+            {
+                "signal_id": signal_id,
+                "deficit_id": row["deficit_id"],
+                "summary": row["summary"],
+                "impact_score": row["impact_score"],
+                "urgency_score": row["urgency_score"],
+                "priority_score": row["priority_score"],
+                "required_capability_tags": row["required_capability_tags"],
+                "matched_capability_tags": row["matched_capability_tags"],
+                "leverage_ratio": row["leverage_ratio"],
+                "evidence_refs": signal_evidence_refs,
+                "reason_code": "eligible_need_signal",
+            }
+        )
+
+    excluded_deficits: list[dict[str, Any]] = []
+    for row in scored_rows:
+        deficit_id = str(row["deficit_id"])
+        if deficit_id in selected_ids:
+            continue
+        if row["eligible"]:
+            failed_criteria = ["max_signals_cap_reached"]
+            reason_code = "max_signals_cap_reached"
+        else:
+            failed_criteria = list(row["failed_criteria"])
+            reason_code = failed_criteria[0] if len(failed_criteria) == 1 else "multiple_threshold_failures"
+        excluded_deficits.append(
+            {
+                "deficit_id": deficit_id,
+                "summary": row["summary"],
+                "impact_score": row["impact_score"],
+                "urgency_score": row["urgency_score"],
+                "leverage_ratio": row["leverage_ratio"],
+                "failed_criteria": failed_criteria,
+                "reason_code": reason_code,
+            }
+        )
+
+    all_evidence_refs = [str(row["citation_id"]) for row in evidence_references]
+    cross_project_evidence_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
+    earth_sweep_unhappy_paths = list(broad_sweep_context["unhappy_paths"])
+    unhappy_path_evidence_refs = _dedupe_preserve_order(
+        [
+            evidence_ref
+            for row in earth_sweep_unhappy_paths
+            for evidence_ref in (row.get("evidence_refs") or [])
+            if isinstance(evidence_ref, str)
+        ]
+    )
+    recommendation_evidence_refs = _dedupe_preserve_order(
+        all_evidence_refs + cross_project_evidence_refs + unhappy_path_evidence_refs
+    )
+    recommendation_decision = "prioritize_need_signals" if need_signals else "hold"
+
+    obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    if broad_sweep_context["cross_project"]:
+        _append_obligation_or_open_risk(
+            obligations=obligations,
+            open_risks=open_risks,
+            obligation_id="OBL-NEED-0001",
+            summary="Validate prioritized need signals against Earth-sweep cross-project evidence before execution.",
+            evidence_refs=cross_project_evidence_refs,
+            risk_id="RISK-NEED-0001",
+            risk_summary="Cross-project need validation is unresolved because Earth-sweep evidence refs are missing.",
+        )
+        missing_projects = list(broad_sweep_context["projects_without_evidence_refs"])
+        if missing_projects:
+            open_risks.append(
+                {
+                    "risk_id": "RISK-NEED-0002",
+                    "summary": (
+                        "Earth-sweep evidence refs are missing for cross-project context rows: "
+                        + ", ".join(missing_projects)
+                    ),
+                    "evidence_refs": [],
+                }
+            )
+    else:
+        open_risks.append(
+            {
+                "risk_id": "RISK-NEED-0003",
+                "summary": "Cross-project inference is unresolved because fewer than two projects were provided.",
+                "evidence_refs": [],
+            }
+        )
+
+    recommendation = {
+        "decision": recommendation_decision,
+        "rationale": (
+            f"Need-signal extraction evaluated {len(scored_rows)} deficit(s), "
+            f"selected {len(need_signals)} high-leverage signal(s), and excluded "
+            f"{len(excluded_deficits)} deficit(s)."
+        ),
+        "top_signal_id": need_signals[0]["signal_id"] if need_signals else None,
+        "evidence_refs": recommendation_evidence_refs,
+        "cross_project_context": broad_sweep_context,
+        "obligations": obligations,
+        "open_risks": open_risks,
+    }
+
+    totals = {
+        "deficits": len(scored_rows),
+        "eligible": len(eligible_rows),
+        "signals": len(need_signals),
+        "excluded": len(excluded_deficits),
+        "evidence_references": len(evidence_references),
+    }
+    context_bundle = _build_context_bundle(
+        checked_at_utc=checked_at_utc,
+        analysis_anchors=REQ014_ANALYSIS_ANCHORS,
+        broad_sweep_context=broad_sweep_context,
+        recommendation=recommendation,
+        source_references=evidence_references,
+        unhappy_paths=earth_sweep_unhappy_paths,
+        context_docs=context_docs,
+    )
+    context_bundle_serialized = _serialize_context_bundle(context_bundle)
+
+    return {
+        "ok": True,
+        "tool": TOOL,
+        "tool_version": TOOL_VERSION,
+        "analysis_type": REQ014_ANALYSIS_TYPE,
+        "checked_at_utc": checked_at_utc,
+        "analysis_anchors": list(REQ014_ANALYSIS_ANCHORS),
+        "target_project": target_project,
+        "thresholds": thresholds,
+        "max_signals": max_signals,
+        "need_signals": need_signals,
+        "excluded_deficits": excluded_deficits,
+        "evidence_references": evidence_references,
+        "unhappy_paths": earth_sweep_unhappy_paths,
+        "context_bundle": context_bundle,
+        "context_bundle_serialized": context_bundle_serialized,
+        "recommendation": recommendation,
+        "totals": totals,
+    }
+
+
+def run(payload: dict[str, Any]) -> dict[str, Any]:
+    analysis_type = _as_str(payload.get("analysis_type"))
+    if (
+        analysis_type == REQ014_ANALYSIS_TYPE
+        or isinstance(payload.get("deficits"), list)
+        or isinstance(payload.get("target_project"), dict)
+    ):
+        return extract_deficit_and_need_signals(payload)
+    raise SweepError(
+        "input_error",
+        "input-json mode currently supports only REQ-014 deficit and need signal extraction payloads",
+        stage="input",
+    )
+
+
 def _json_dumps(payload: dict[str, Any], pretty: bool) -> str:
     if pretty:
         return json.dumps(payload, indent=2, sort_keys=False) + "\n"
@@ -2049,21 +2770,62 @@ def _make_cli_emit(log_path: Path) -> EmitFn:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate REQ-002 Earth-wide repository discovery manifest.")
-    parser.add_argument("--earth-root", required=True, help="Earth ecosystem root path.")
+    parser = argparse.ArgumentParser(
+        description="Generate REQ-002/REQ-010 artifacts or run REQ-014 deficit-and-need signal extraction."
+    )
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--earth-root", help="Earth ecosystem root path for REQ-002 manifest mode.")
+    mode.add_argument("--input-json", help="REQ-014 JSON payload path or '-' for stdin.")
     parser.add_argument("--owner-username", default="", help="Owner username for non-owner path policy.")
     parser.add_argument("--output-json", default="", help="Optional output file path for manifest.")
     parser.add_argument("--json-pretty", action="store_true")
     return parser.parse_args(argv)
 
 
+def _parse_input_json_payload(path: str) -> dict[str, Any]:
+    raw = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise SweepError("input_error", "input must be a JSON object", stage="input")
+    return payload
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if _as_str(args.input_json):
+        try:
+            payload = _parse_input_json_payload(_as_str(args.input_json))
+            out = run(payload)
+            sys.stdout.write(_json_dumps(out, args.json_pretty))
+            return 0 if out.get("ok") else 1
+        except SweepError as exc:
+            out = {
+                "ok": False,
+                "tool": TOOL,
+                "tool_version": TOOL_VERSION,
+                "reason_code": exc.code,
+                "evidence_refs": exc.evidence_refs,
+                "error": {"code": exc.code, "message": exc.message, "stage": exc.stage},
+            }
+            sys.stdout.write(_json_dumps(out, args.json_pretty))
+            return 1
+        except json.JSONDecodeError as exc:
+            out = {
+                "ok": False,
+                "tool": TOOL,
+                "tool_version": TOOL_VERSION,
+                "reason_code": "input_error",
+                "evidence_refs": [],
+                "error": {"code": "input_error", "message": f"invalid JSON input: {exc}", "stage": "input"},
+            }
+            sys.stdout.write(_json_dumps(out, args.json_pretty))
+            return 1
+
     _enforce_log_budget(LOG_ROOT)
     emit = _make_cli_emit(LOG_PATH)
 
     manifest = build_earth_repository_discovery_manifest(
-        Path(args.earth_root),
+        Path(_as_str(args.earth_root)),
         owner_username=_as_str(args.owner_username) or None,
         emit=emit,
     )
