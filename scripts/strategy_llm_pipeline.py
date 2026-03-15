@@ -14,14 +14,17 @@ from typing import Any, Mapping, Sequence
 
 TOOL = "strategy-llm-pipeline"
 TOOL_VERSION = "1.0.0"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 REQ_025_REQUIREMENT_ID = "REQ-025"
 REQ_025_SCHEMA_VERSION = "req-025.multi-call-strategy-pipeline-planner.v1"
+REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION = "req-025.llm-call-trace-row.v1"
 RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 PIPELINE_STRATEGY = "multi-call-strategy-pipeline-planner"
 MIN_CALL_DEPTH = 1
 MAX_CALL_DEPTH = 8
 DEFAULT_CALL_DEPTH = 4
+LLM_CALL_TRACE_RELATIVE_PATH = "strategy/current/llm_call_trace.jsonl"
 
 DEFAULT_STAGE_BLUEPRINTS = (
     {
@@ -256,8 +259,12 @@ def _normalize_stage_blueprints(raw_value: Any, *, call_depth: int) -> list[dict
     return normalized
 
 
-def _canonical_digest(payload: Mapping[str, Any]) -> str:
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _canonical_digest(payload: Any) -> str:
+    raw = _canonical_json(payload)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -370,6 +377,95 @@ def _canonical_processing_input(
         ],
         "stage_blueprints": [{"purpose": row["purpose"], "expected_output": row["expected_output"]} for row in stage_blueprints],
     }
+
+
+def _build_call_output_ref(*, plan_id: str, call_id: str, expected_output: str) -> str:
+    return f"{plan_id}::call::{call_id}::output::{expected_output}"
+
+
+def _build_trace_handoff_summary(
+    *,
+    sequence: int,
+    expected_output: str,
+    output_ref: str,
+    input_ref_count: int,
+    next_call_id: str,
+    recommendation_decision: str,
+) -> str:
+    if next_call_id:
+        return (
+            f"Call {sequence} hands off {expected_output} via {output_ref} to {next_call_id} "
+            f"after consuming {input_ref_count} input refs."
+        )
+    return (
+        f"Call {sequence} hands off {expected_output} via {output_ref} as the terminal planner output "
+        f"with recommendation decision {recommendation_decision}."
+    )
+
+
+def _build_llm_call_trace_rows(
+    *,
+    plan_id: str,
+    processing_call_id: str,
+    required_evidence_refs: Sequence[str],
+    calls: Sequence[Mapping[str, Any]],
+    recommendation_decision: str,
+) -> list[dict[str, Any]]:
+    output_ref_by_call_id: dict[str, str] = {}
+    for call in calls:
+        call_id = _require_text(call.get("call_id"), field_name="pipeline_plan.calls[].call_id")
+        expected_output = _require_text(call.get("expected_output"), field_name="pipeline_plan.calls[].expected_output")
+        output_ref_by_call_id[call_id] = _build_call_output_ref(
+            plan_id=plan_id,
+            call_id=call_id,
+            expected_output=expected_output,
+        )
+
+    trace_rows: list[dict[str, Any]] = []
+    for index, call in enumerate(calls):
+        call_id = _require_text(call.get("call_id"), field_name=f"pipeline_plan.calls[{index}].call_id")
+        sequence = call.get("sequence")
+        if not isinstance(sequence, int):
+            raise ValueError(f"pipeline_plan.calls[{index}].sequence must be an integer")
+        call_objective = _require_text(call.get("purpose"), field_name=f"pipeline_plan.calls[{index}].purpose")
+        expected_output = _require_text(
+            call.get("expected_output"),
+            field_name=f"pipeline_plan.calls[{index}].expected_output",
+        )
+        depends_on = [
+            _require_text(dep_call_id, field_name=f"pipeline_plan.calls[{index}].depends_on[{dep_index}]")
+            for dep_index, dep_call_id in enumerate(call.get("depends_on", []))
+        ]
+        dependency_output_refs = [output_ref_by_call_id[dep_call_id] for dep_call_id in depends_on]
+        input_refs = list(required_evidence_refs) + dependency_output_refs
+        output_ref = output_ref_by_call_id[call_id]
+        next_call_id = ""
+        if index + 1 < len(calls):
+            next_call_id = _as_text(calls[index + 1].get("call_id"))
+        trace_rows.append(
+            {
+                "schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+                "requirement_id": REQ_025_REQUIREMENT_ID,
+                "plan_id": plan_id,
+                "processing_call_id": processing_call_id,
+                "call_id": call_id,
+                "sequence": sequence,
+                "call_objective": call_objective,
+                "depends_on": depends_on,
+                "expected_output": expected_output,
+                "input_refs": input_refs,
+                "output_refs": [output_ref],
+                "handoff_summary": _build_trace_handoff_summary(
+                    sequence=sequence,
+                    expected_output=expected_output,
+                    output_ref=output_ref,
+                    input_ref_count=len(input_refs),
+                    next_call_id=next_call_id,
+                    recommendation_decision=recommendation_decision,
+                ),
+            }
+        )
+    return trace_rows
 
 
 def _build_req_025_processing_behavior(
@@ -594,6 +690,15 @@ def build_req_025_multi_call_strategy_pipeline_planner(
         cross_project_context=normalized_cross_project_context,
         candidate_recommendations=normalized_candidate_recommendations,
     )
+    processing_call_id = f"req025-processing-{processing_sha[:16]}"
+    llm_call_trace_rows = _build_llm_call_trace_rows(
+        plan_id=pipeline_plan["plan_id"],
+        processing_call_id=processing_call_id,
+        required_evidence_refs=pipeline_plan["required_evidence_refs"],
+        calls=pipeline_plan["calls"],
+        recommendation_decision=_as_text(processing_behavior["recommendation"]["decision"]),
+    )
+    llm_call_trace_sha = _canonical_digest(llm_call_trace_rows)
 
     return {
         "schema_version": REQ_025_SCHEMA_VERSION,
@@ -615,8 +720,12 @@ def build_req_025_multi_call_strategy_pipeline_planner(
             "reproducible_call_id": f"req025-{canonical_input_sha[:16]}",
             "canonical_input": canonical_input,
             "processing_input_sha256": processing_sha,
-            "processing_call_id": f"req025-processing-{processing_sha[:16]}",
+            "processing_call_id": processing_call_id,
             "canonical_processing_input": canonical_processing_input,
+            "llm_call_trace_schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": llm_call_trace_sha,
+            "llm_call_trace_rows": llm_call_trace_rows,
         },
     }
 
@@ -1062,6 +1171,10 @@ def validate_req_025_multi_call_strategy_pipeline_planner(payload: Mapping[str, 
         "processing_input_sha256",
         "processing_call_id",
         "canonical_processing_input",
+        "llm_call_trace_schema_version",
+        "llm_call_trace_path",
+        "llm_call_trace_sha256",
+        "llm_call_trace_rows",
     }
     metadata_keys = set(metadata.keys())
     missing_metadata = sorted(required_metadata - metadata_keys)
@@ -1124,10 +1237,39 @@ def validate_req_025_multi_call_strategy_pipeline_planner(payload: Mapping[str, 
     expected_processing_sha = _canonical_digest(expected_processing_input)
     if metadata.get("processing_input_sha256") != expected_processing_sha:
         errors.append("call_metadata.processing_input_sha256 does not match processing input")
-    if metadata.get("processing_call_id") != f"req025-processing-{expected_processing_sha[:16]}":
+    expected_processing_call_id = f"req025-processing-{expected_processing_sha[:16]}"
+    if metadata.get("processing_call_id") != expected_processing_call_id:
         errors.append("call_metadata.processing_call_id does not match processing digest")
     if pipeline_plan.get("plan_id") != f"req025-plan-{expected_processing_sha[:16]}":
         errors.append("processing_behavior.pipeline_plan.plan_id must derive from processing digest")
+
+    if metadata.get("llm_call_trace_schema_version") != REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION:
+        errors.append(
+            f"call_metadata.llm_call_trace_schema_version must be {REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION}"
+        )
+    if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+        errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+    llm_call_trace_rows = metadata.get("llm_call_trace_rows")
+    if not isinstance(llm_call_trace_rows, list):
+        errors.append("call_metadata.llm_call_trace_rows must be a list")
+        llm_call_trace_rows = []
+    expected_trace_rows: list[dict[str, Any]] = []
+    try:
+        expected_trace_rows = _build_llm_call_trace_rows(
+            plan_id=_as_text(pipeline_plan.get("plan_id")),
+            processing_call_id=expected_processing_call_id,
+            required_evidence_refs=sorted(set(_as_text(ref) for ref in required_evidence_refs if _as_text(ref))),
+            calls=call_rows,
+            recommendation_decision=_as_text(recommendation.get("decision")) if isinstance(recommendation, Mapping) else "",
+        )
+    except ValueError as exc:
+        errors.append(f"call_metadata.llm_call_trace_rows could not be reconstructed: {exc}")
+    else:
+        if llm_call_trace_rows != expected_trace_rows:
+            errors.append("call_metadata.llm_call_trace_rows must mirror the deterministic per-call trace rows")
+        expected_trace_sha = _canonical_digest(expected_trace_rows)
+        if metadata.get("llm_call_trace_sha256") != expected_trace_sha:
+            errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
 
     return errors
 
@@ -1136,6 +1278,22 @@ def _json_dumps(payload: Mapping[str, Any], *, pretty: bool) -> str:
     if pretty:
         return json.dumps(payload, indent=2, sort_keys=False) + "\n"
     return json.dumps(payload, separators=(",", ":"), sort_keys=False) + "\n"
+
+
+def _jsonl_dumps(rows: Sequence[Mapping[str, Any]]) -> str:
+    return "".join(f"{_canonical_json(row)}\n" for row in rows)
+
+
+def _write_llm_call_trace(payload: Mapping[str, Any]) -> Path:
+    metadata = _require_mapping(payload.get("call_metadata"), field_name="call_metadata")
+    trace_path = REPO_ROOT / _require_text(metadata.get("llm_call_trace_path"), field_name="call_metadata.llm_call_trace_path")
+    trace_rows = metadata.get("llm_call_trace_rows")
+    if not isinstance(trace_rows, Sequence) or isinstance(trace_rows, (str, bytes, bytearray)):
+        raise ValueError("call_metadata.llm_call_trace_rows must be an array before trace serialization")
+    serialized_rows = _jsonl_dumps([_require_mapping(row, field_name=f"llm_call_trace_rows[{index}]") for index, row in enumerate(trace_rows)])
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_path.write_text(serialized_rows, encoding="utf-8")
+    return trace_path
 
 
 def _enforce_log_budget(log_root: Path) -> None:
@@ -1240,6 +1398,8 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     serialized_output = _json_dumps(output_payload, pretty=args.json_pretty)
+    trace_output_path = _write_llm_call_trace(output_payload)
+    _timestamped_print(f"Wrote REQ-025 call trace to {trace_output_path}")
     if args.output_json:
         output_path = Path(args.output_json)
         output_path.parent.mkdir(parents=True, exist_ok=True)

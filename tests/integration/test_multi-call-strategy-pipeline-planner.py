@@ -140,3 +140,64 @@ def test_multi_call_strategy_pipeline_planner_records_open_risk_when_cross_proje
             ],
         }
     ]
+
+
+def test_multi_call_strategy_pipeline_planner_emits_replay_stable_trace_rows() -> None:
+    payload = module.build_req_025_multi_call_strategy_pipeline_planner(
+        target_project_root="/workspace/projects/optimus-prime",
+        earth_root="/workspace/projects/Earth",
+        output_root="/workspace/projects/optimus-prime/strategy/out",
+        revision_identity="rev-req025-integration-r3",
+        strategy_goal="Audit per-call orchestration trace stability for REQ-025.",
+        call_depth=4,
+        evidence_refs=[
+            "reports/optimus-prime/planning/evidence/TASK-080/TASK_EVIDENCE.json",
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+        ],
+        target_project_evidence_refs=[
+            "reports/optimus-prime/planning/evidence/TASK-080/TASK_EVIDENCE.json",
+        ],
+        earth_sweep_evidence_refs=[
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+        ],
+    )
+
+    assert module.validate_req_025_multi_call_strategy_pipeline_planner(payload) == []
+
+    plan_calls = payload["processing_behavior"]["pipeline_plan"]["calls"]
+    trace_rows = payload["call_metadata"]["llm_call_trace_rows"]
+
+    assert payload["call_metadata"]["llm_call_trace_path"] == module.LLM_CALL_TRACE_RELATIVE_PATH
+    assert len(trace_rows) == len(plan_calls) == 4
+    assert trace_rows[0]["call_objective"] == plan_calls[0]["purpose"]
+    assert trace_rows[0]["input_refs"] == payload["processing_behavior"]["pipeline_plan"]["required_evidence_refs"]
+    assert trace_rows[1]["input_refs"][-1] == trace_rows[0]["output_refs"][0]
+    assert trace_rows[-1]["output_refs"] == [
+        module._build_call_output_ref(
+            plan_id=payload["processing_behavior"]["pipeline_plan"]["plan_id"],
+            call_id=plan_calls[-1]["call_id"],
+            expected_output=plan_calls[-1]["expected_output"],
+        )
+    ]
+    assert payload["processing_behavior"]["recommendation"]["decision"] in trace_rows[-1]["handoff_summary"]
+
+    second_payload = module.build_req_025_multi_call_strategy_pipeline_planner(
+        target_project_root="/workspace/projects/optimus-prime",
+        earth_root="/workspace/projects/Earth",
+        output_root="/workspace/projects/optimus-prime/strategy/out",
+        revision_identity="rev-req025-integration-r3",
+        strategy_goal="Audit per-call orchestration trace stability for REQ-025.",
+        call_depth=4,
+        evidence_refs=[
+            "reports/optimus-prime/planning/evidence/TASK-080/TASK_EVIDENCE.json",
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+        ],
+        target_project_evidence_refs=[
+            "reports/optimus-prime/planning/evidence/TASK-080/TASK_EVIDENCE.json",
+        ],
+        earth_sweep_evidence_refs=[
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+        ],
+    )
+    assert second_payload["call_metadata"]["llm_call_trace_rows"] == trace_rows
+    assert second_payload["call_metadata"]["llm_call_trace_sha256"] == payload["call_metadata"]["llm_call_trace_sha256"]
