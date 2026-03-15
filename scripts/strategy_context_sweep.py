@@ -1032,6 +1032,12 @@ def _normalize_req_011_broad_sweep_context(raw_value: Any) -> dict[str, Any]:
             field_name="broad_sweep_context.declared_integration_points",
             signal_type="declared-integration-point",
         ),
+        "earth_sweep_source_artifacts": _normalize_earth_sweep_source_artifacts(
+            raw_value.get("earth_sweep_source_artifacts")
+        ),
+        "required_context_documents": _normalize_required_context_documents(
+            raw_value.get("required_context_documents")
+        ),
     }
 
 
@@ -1154,6 +1160,8 @@ def _req_011_recommendation_decision(
         return "proceed-with-open-risks"
     if dependency_edges and open_risks:
         return "record-open-risks"
+    if open_risks:
+        return "resolve-context-gaps"
     if dependency_edges:
         return "observe"
     return "insufficient-context"
@@ -1166,6 +1174,8 @@ def _req_011_recommendation_rationale(*, decision: str) -> str:
         return "Some dependency edges are obligation-ready, while weaker or under-evidenced edges remain open risks."
     if decision == "record-open-risks":
         return "Dependency edges were extracted, but evidence or confidence gaps prevent obligation promotion."
+    if decision == "resolve-context-gaps":
+        return "Stale or missing context artifacts prevent reliable cross-project dependency replay."
     if decision == "observe":
         return "Dependency edges were extracted for observation, but no cross-project obligation is warranted yet."
     return "No cross-project dependency edges were extracted from the provided broad-sweep context."
@@ -1177,11 +1187,63 @@ def _build_req_011_processing_behavior(
 ) -> dict[str, Any]:
     earth_sweep_evidence_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
     cross_project_context = list(broad_sweep_context["cross_project_context"])
+    earth_sweep_source_artifacts = list(broad_sweep_context["earth_sweep_source_artifacts"])
+    required_context_documents = list(broad_sweep_context["required_context_documents"])
     dependency_edges = _build_req_011_dependency_edges(broad_sweep_context=broad_sweep_context)
+    source_artifact_refs = _collect_unique_refs(
+        *[_collect_unique_refs([row["artifact_ref"]], row["evidence_refs"]) for row in earth_sweep_source_artifacts]
+    )
+    required_doc_refs = _collect_unique_refs(
+        *[_collect_unique_refs([row["doc_ref"]], row["evidence_refs"]) for row in required_context_documents]
+    )
 
     cross_project_obligations: list[dict[str, Any]] = []
     open_risks: list[dict[str, Any]] = []
     matched_context_projects: set[str] = set()
+
+    for source_artifact in earth_sweep_source_artifacts:
+        if source_artifact["status"] != "stale":
+            continue
+        open_risks.append(
+            {
+                "risk_id": f"risk-earth-source-{_stable_id_fragment(source_artifact['artifact_ref'])}",
+                "reason_code": "stale_earth_sweep_source_artifact",
+                "summary": f"Earth sweep source artifact is stale: {source_artifact['artifact_ref']}",
+                "required_evidence_refs": _collect_unique_refs(
+                    [source_artifact["artifact_ref"]],
+                    source_artifact["evidence_refs"],
+                ),
+            }
+        )
+
+    for required_doc in required_context_documents:
+        if required_doc["status"] != "missing":
+            continue
+        reason_code = {
+            "mission": "missing_mission_doc",
+            "scope": "missing_scope_doc",
+            "peer-project": "missing_peer_project_doc",
+        }[required_doc["doc_kind"]]
+        summary = (
+            f"Required peer-project document is missing for '{required_doc['project_id']}': {required_doc['doc_ref']}"
+            if required_doc["doc_kind"] == "peer-project"
+            else f"Required {required_doc['doc_kind']} document is missing: {required_doc['doc_ref']}"
+        )
+        open_risks.append(
+            {
+                "risk_id": (
+                    "risk-context-doc-"
+                    f"{_stable_id_fragment(required_doc['doc_kind'], required_doc['project_id'], required_doc['doc_ref'])}"
+                ),
+                "reason_code": reason_code,
+                "summary": summary,
+                "required_evidence_refs": _collect_unique_refs(
+                    [required_doc["doc_ref"]],
+                    required_doc["evidence_refs"],
+                ),
+            }
+        )
+
     for edge in dependency_edges:
         supporting_context_project_ids = list(edge["supporting_context_project_ids"])
         supporting_context_refs = list(edge["supporting_context_evidence_refs"])
@@ -1249,6 +1311,8 @@ def _build_req_011_processing_behavior(
     open_risks.sort(key=lambda row: row["risk_id"])
     evidence_refs = _collect_unique_refs(
         earth_sweep_evidence_refs,
+        source_artifact_refs,
+        required_doc_refs,
         *[row["evidence_refs"] for row in cross_project_context],
         *[row["evidence_refs"] for row in dependency_edges],
         *[row["supporting_context_evidence_refs"] for row in dependency_edges],
@@ -1294,6 +1358,12 @@ def _build_req_011_processing_behavior(
         ],
         "evidence_refs_used": evidence_refs,
     }
+    if earth_sweep_source_artifacts:
+        context_usage["earth_sweep_source_artifacts_used"] = True
+        context_usage["earth_sweep_source_artifact_refs_used"] = source_artifact_refs
+    if required_context_documents:
+        context_usage["required_context_documents_used"] = True
+        context_usage["required_context_document_refs_used"] = required_doc_refs
 
     return {
         "strategy": "cross-project-dependency-extraction",

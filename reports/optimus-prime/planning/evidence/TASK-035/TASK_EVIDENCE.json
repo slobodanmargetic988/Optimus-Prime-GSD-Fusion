@@ -1,0 +1,117 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-unknown",
+  "task_id": "TASK-035",
+  "requirement_ids": [
+    "REQ-011"
+  ],
+  "updated_at": "2026-03-15T20:57:42Z",
+  "dev": {
+    "status": "pass",
+    "checks": [
+      "python3 -m pytest tests/contracts/test_cross-project-dependency-extraction.py -q",
+      "python3 -m pytest tests/integration/test_cross-project-dependency-extraction.py -q",
+      "python3 -m pytest tests/hardening/test_cross-project-dependency-extraction_hardening.py -q"
+    ],
+    "verify_results": [
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/contracts/test_cross-project-dependency-extraction.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": ".. [100%] 2 passed in 0.03s"
+      },
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/integration/test_cross-project-dependency-extraction.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": ".. [100%] 2 passed in 0.03s"
+      },
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/hardening/test_cross-project-dependency-extraction_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.03s"
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/contracts/test_cross-project-dependency-extraction.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": ".. [100%] 2 passed in 0.01s"
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/integration/test_cross-project-dependency-extraction.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": ".. [100%] 2 passed in 0.01s"
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/hardening/test_cross-project-dependency-extraction_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "stale_source_artifact_detected_during_earth_sweep",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "missing_mission_scope_or_peer_project_doc_reason_codes",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "replay_stability_context_bundle_serialization",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/contracts/test_cross-project-dependency-extraction.py",
+      "tests/integration/test_cross-project-dependency-extraction.py",
+      "tests/hardening/test_cross-project-dependency-extraction_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-035/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "pending",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_011_stale_earth_source_reason_code_covered",
+      "req_011_missing_context_doc_reason_codes_covered",
+      "req_011_context_bundle_replay_stable",
+      "req_011_consecutive_check_runs_passed",
+      "task_evidence_path_resolved"
+    ]
+  }
+}
