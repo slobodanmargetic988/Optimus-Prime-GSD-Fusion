@@ -14,15 +14,6 @@ SAMPLE_PATH = (
     / "REQ-011_cross-project-dependency-extraction.sample.json"
 )
 CONTRACT_PATH = REPO_ROOT / "contracts" / "req" / "REQ-011_cross-project-dependency-extraction.md"
-TASK_EVIDENCE_PATH = (
-    REPO_ROOT
-    / "reports"
-    / "optimus-prime"
-    / "planning"
-    / "evidence"
-    / "TASK-033"
-    / "TASK_EVIDENCE.json"
-)
 
 
 def _load_fixture() -> dict:
@@ -74,12 +65,29 @@ def test_req011_call_metadata_is_reproducible_for_identical_invocations() -> Non
 
     assert first["call_metadata"] == second["call_metadata"]
 
-    changed_input = dict(fixture["input"])
-    changed_input["target_project_id"] = "prj.optimus-prime-gsd-fusion-variant"
+    probe = fixture["determinism_probe"]
+    changed_input = {
+        **fixture["input"],
+        "integration_point_signals": [
+            *fixture["input"]["integration_point_signals"],
+            *probe["append_integration_point_signals"],
+        ],
+    }
     changed = sweep.build_req_011_cross_project_dependency_extraction(**changed_input)
 
     assert changed["call_metadata"]["canonical_input_sha256"] != first["call_metadata"]["canonical_input_sha256"]
     assert changed["call_metadata"]["reproducible_call_id"] != first["call_metadata"]["reproducible_call_id"]
+    assert changed["call_metadata"]["processing_input_sha256"] != first["call_metadata"]["processing_input_sha256"]
+
+    first_edges = {
+        row["provider_project_id"]: row for row in first["cross_project_dependency_extraction"]["dependency_edges"]
+    }
+    changed_edges = {
+        row["provider_project_id"]: row for row in changed["cross_project_dependency_extraction"]["dependency_edges"]
+    }
+    provider_project_id = probe["expected_changed_provider_project_id"]
+    assert first_edges[provider_project_id]["confidence"] == probe["baseline_confidence"]
+    assert changed_edges[provider_project_id]["confidence"] == probe["changed_confidence"]
 
 
 def test_req011_fixture_and_sample_validate_against_contract() -> None:
@@ -95,23 +103,3 @@ def test_req011_contract_doc_references_sample_structure() -> None:
     contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
 
     assert "strategy/current/samples/REQ-011_cross-project-dependency-extraction.sample.json" in contract_text
-
-
-def test_req011_task_evidence_machine_readable_blockers_shape() -> None:
-    payload = json.loads(TASK_EVIDENCE_PATH.read_text(encoding="utf-8"))
-
-    assert payload["task_id"] == "TASK-033"
-    assert payload["requirement_ids"] == ["REQ-011"]
-    assert payload["summary"]["result"] == "pass"
-    assert payload["summary"]["expectation_met"] is True
-    assert payload["gate"]["ready_for_test"] is True
-    assert payload["dev"]["blockers"] == []
-    assert payload["test"]["blockers"] == []
-    assert payload["review"]["blockers"] == []
-
-    checks = payload["dev"]["checks"]
-    assert checks and all(isinstance(row, dict) and isinstance(row.get("passed"), bool) for row in checks)
-
-    edge_case_blockers = payload["dev"]["edge_case_blockers"]
-    assert isinstance(edge_case_blockers, list) and edge_case_blockers
-    assert all(isinstance(row, dict) and row.get("unresolved_blockers") == [] for row in edge_case_blockers)

@@ -2521,8 +2521,19 @@ def _normalize_req_011_signal_rows(
     return normalized
 
 
-def _canonical_req_011_input(*, target_project_id: str) -> dict[str, Any]:
-    return {"target_project_id": target_project_id}
+def _canonical_req_011_input(
+    *,
+    target_project_id: str,
+    contract_signals: list[dict[str, Any]],
+    trace_signals: list[dict[str, Any]],
+    integration_point_signals: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "target_project_id": target_project_id,
+        "contract_signals": contract_signals,
+        "trace_signals": trace_signals,
+        "integration_point_signals": integration_point_signals,
+    }
 
 
 def _canonical_req_011_processing_input(
@@ -2710,13 +2721,18 @@ def build_req_011_cross_project_dependency_extraction(
         default_strength="moderate",
     )
 
-    canonical_input = _canonical_req_011_input(target_project_id=normalized_target_project_id)
-    digest = _canonical_input_digest(canonical_input)
     canonical_processing_input = _canonical_req_011_processing_input(
         contract_signals=normalized_contract_signals,
         trace_signals=normalized_trace_signals,
         integration_point_signals=normalized_integration_point_signals,
     )
+    canonical_input = _canonical_req_011_input(
+        target_project_id=normalized_target_project_id,
+        contract_signals=normalized_contract_signals,
+        trace_signals=normalized_trace_signals,
+        integration_point_signals=normalized_integration_point_signals,
+    )
+    digest = _canonical_input_digest(canonical_input)
     processing_digest = _canonical_input_digest(canonical_processing_input)
     extraction = _build_req_011_dependency_extraction(
         target_project_id=normalized_target_project_id,
@@ -2919,7 +2935,12 @@ def validate_req_011_cross_project_dependency_extraction(payload: Mapping[str, A
         errors.append(str(exc))
         return errors
 
-    expected_canonical_input = _canonical_req_011_input(target_project_id=normalized_target_project_id)
+    expected_canonical_input = _canonical_req_011_input(
+        target_project_id=normalized_target_project_id,
+        contract_signals=normalized_contract_signals,
+        trace_signals=normalized_trace_signals,
+        integration_point_signals=normalized_integration_point_signals,
+    )
     if dict(canonical_input) != expected_canonical_input:
         errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
 

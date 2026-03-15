@@ -124,5 +124,22 @@
       "weak_dependency_count": 1,
       "open_risk_count": 2
     }
+  },
+  "determinism_probe": {
+    "append_integration_point_signals": [
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-observability",
+        "dependency_ref": "integration/runtime-observability-snapshot-feed",
+        "summary": "Declared integration point routes runtime snapshot metrics into observability feeds.",
+        "signal_strength": "moderate",
+        "evidence_refs": [
+          "strategy/current/integration/runtime-observability-snapshot-feed.md#L3"
+        ]
+      }
+    ],
+    "expected_changed_provider_project_id": "prj.runtime-observability",
+    "baseline_confidence": "low",
+    "changed_confidence": "medium"
   }
 }
