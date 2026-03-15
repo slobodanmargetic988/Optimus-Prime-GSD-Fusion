@@ -202,6 +202,10 @@ Related runtime state files:
 - `/op-simple-build`: `.op-simple/current/watchdog_exit_signal.json` (written when watchdog stop condition triggers).
 - `/op-simple-build`: `.op-simple/current/terminal_capsule.json` (terminal-stop forensic summary).
 - `/op-simple-build`: `.op-simple/current/mergeability_report.json` (lane/run mergeability state).
+- `/op-simple-build`: `.op-simple/current/merge_queue.json` (active deterministic merge failures waiting for cadence-based merge-manager handling).
+- `/op-simple-build`: `.op-simple/current/unmergable_merges.json` (merge-manager-consumed items that still could not be resolved).
+- `/op-simple-build`: `.op-simple/current/merge_manager_report.json` (runtime-normalized merge-manager outcome report).
+- `/op-simple-build`: `.op-simple/current/merge_journal.jsonl` (append-only merge attempt/disposition history).
 
 Resume after stop:
 

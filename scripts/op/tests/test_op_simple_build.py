@@ -41,6 +41,34 @@ def build_repo(root: Path) -> None:
     git(root, "commit", "-m", "seed")
 
 
+def write_merge_runtime_baseline(
+    root: Path,
+    cfg: object,
+    *,
+    lane_base_branches: dict[str, str],
+    cycle_number: int = 1,
+) -> None:
+    (root / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_initialize_state(cfg)
+    MODULE._ensure_default_artifacts(cfg)
+    MODULE._atomic_write_json(
+        root / MODULE.ARTIFACT_FILES["plan_packets"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": cycle_number,
+            "lane_base_branches": lane_base_branches,
+            "tasks": [],
+        },
+    )
+    MODULE._write_lane_base_watchdog_registry(
+        cfg,
+        cycle_number=cycle_number,
+        lane_base_branches=lane_base_branches,
+        plan_cycle_number=cycle_number,
+    )
+
+
 def make_req(root: Path, **overrides: object) -> SimpleNamespace:
     payload = {
         "repo_root": str(root),
@@ -634,88 +662,77 @@ def test_worker_liveness_ignores_stale_thread_markers(tmp_path: Path, monkeypatc
     assert MODULE._live_pid_in_progress_worker_count(cfg) == 1
 
 
-def test_build_mergeability_report_clears_lane_merge_gate_pending_when_lane_ready(tmp_path: Path) -> None:
+def test_deterministic_merge_sweep_merges_done_task_commit_into_lane_base(tmp_path: Path) -> None:
     build_repo(tmp_path)
-    cfg = MODULE.RunConfig(
-        repo_root=tmp_path,
-        sleep_minutes=0,
-        max_build_cycles=1,
-        max_parallel_workers=8,
-        dry_run=True,
-    )
-    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
-    MODULE._ensure_default_artifacts(cfg)
+    git(tmp_path, "checkout", "-b", "lane-phase-1-a")
+    git(tmp_path, "checkout", "main")
+    git(tmp_path, "checkout", "-b", "task-1-dev")
+    (tmp_path / "task1.txt").write_text("task one\n", encoding="utf-8")
+    git(tmp_path, "add", "task1.txt")
+    git(tmp_path, "commit", "-m", "task 1")
+    task_sha = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "main")
+
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={"phase-1/lane-a": "lane-phase-1-a"}, cycle_number=1)
     MODULE._atomic_write_json(
         tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
         {
             "schema_version": "1.0",
             "updated_at": "2026-01-01T00:00:00Z",
-            "cycle_number": 5,
+            "cycle_number": 1,
             "tasks": [
                 {
                     "task_id": "TASK-1",
                     "lane_id": "phase-1/lane-a",
                     "status": "done",
-                    "lane_merge_gate_pending": True,
-                }
+                    "last_handoff_outcome": {"head_commit": task_sha, "branch": "task-1-dev"},
+                },
+                {
+                    "task_id": "TASK-2",
+                    "lane_id": "phase-1/lane-a",
+                    "status": "pending",
+                },
             ],
             "blockers": [],
             "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
-            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
-        },
-    )
-    MODULE._atomic_write_json(
-        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
-        {
-            "schema_version": "1.0",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "cycle_number": 5,
-            "workers": [
-                {
-                    "worker_id": "worker-1",
-                    "status": "done",
-                    "current_task_id": "TASK-1",
-                    "branch": "main",
-                }
-            ],
         },
     )
 
-    report = MODULE._build_mergeability_report(cfg, cycle_number=5, cycle_mode="merge_recovery")
+    out = MODULE._deterministic_merge_sweep(cfg, cycle_number=1, run_base_ref="main")
 
-    lane_report = report["lane_status"]["phase-1/lane-a"]
-    assert lane_report["tester_gate_status"] == "pass"
-    assert lane_report["lane_to_run_merge_status"] == "ready"
-    assert report["lane_merge_gate_pending_cleared_count"] == 1
-
-    task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
-    task_row = task_state["tasks"][0]
-    assert task_row["lane_merge_gate_pending"] is False
-    assert isinstance(task_row.get("lane_merge_gate_cleared_at"), str)
+    assert out["task_merge_successes"] == 1
+    assert out["lane_merge_attempts"] == 0
+    assert MODULE._git_is_ancestor_commit(tmp_path, ancestor=task_sha, descendant="lane-phase-1-a") is True
+    queue_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["merge_queue"]).read_text(encoding="utf-8"))
+    assert queue_payload["items"] == []
+    journal_rows = [json.loads(line) for line in (tmp_path / MODULE.MERGE_JOURNAL_FILE).read_text(encoding="utf-8").splitlines()]
+    assert any(row["event"] == "merged" and row["kind"] == "task_to_lane" for row in journal_rows)
 
 
-def test_build_mergeability_report_marks_pending_lane_as_blocked_for_merge(tmp_path: Path) -> None:
+def test_deterministic_merge_sweep_skips_task_commit_already_in_lane_base(tmp_path: Path) -> None:
     build_repo(tmp_path)
-    cfg = MODULE.RunConfig(
-        repo_root=tmp_path,
-        sleep_minutes=0,
-        max_build_cycles=1,
-        max_parallel_workers=8,
-        dry_run=True,
-    )
-    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
-    MODULE._ensure_default_artifacts(cfg)
+    git(tmp_path, "checkout", "-b", "lane-phase-2-b")
+    (tmp_path / "lane2.txt").write_text("already on lane\n", encoding="utf-8")
+    git(tmp_path, "add", "lane2.txt")
+    git(tmp_path, "commit", "-m", "lane task")
+    task_sha = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "main")
+
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={"phase-2/lane-b": "lane-phase-2-b"}, cycle_number=2)
     MODULE._atomic_write_json(
         tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
         {
             "schema_version": "1.0",
             "updated_at": "2026-01-01T00:00:00Z",
-            "cycle_number": 6,
+            "cycle_number": 2,
             "tasks": [
                 {
                     "task_id": "TASK-2",
                     "lane_id": "phase-2/lane-b",
-                    "status": "in_progress",
+                    "status": "done",
+                    "last_handoff_outcome": {"head_commit": task_sha, "branch": "lane-phase-2-b"},
                 },
                 {
                     "task_id": "TASK-3",
@@ -725,203 +742,534 @@ def test_build_mergeability_report_marks_pending_lane_as_blocked_for_merge(tmp_p
             ],
             "blockers": [],
             "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
-            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
         },
     )
 
-    report = MODULE._build_mergeability_report(cfg, cycle_number=6, cycle_mode="normal")
+    out = MODULE._deterministic_merge_sweep(cfg, cycle_number=2, run_base_ref="main")
 
-    lane_report = report["lane_status"]["phase-2/lane-b"]
-    assert lane_report["tester_gate_status"] == "pending_lane_completion"
-    assert lane_report["lane_to_run_merge_status"] == "waiting_for_lane_completion"
-    assert report["gate_owner"] == "BOSS"
-    assert any(item.get("reason_code") == "lane_pending_tasks" for item in report["merge_blockers"])
+    assert out["task_merge_skips"] == 1
+    assert out["task_merge_successes"] == 0
+    queue_payload = json.loads((tmp_path / MODULE.ARTIFACT_FILES["merge_queue"]).read_text(encoding="utf-8"))
+    assert queue_payload["items"] == []
+    journal_rows = [json.loads(line) for line in (tmp_path / MODULE.MERGE_JOURNAL_FILE).read_text(encoding="utf-8").splitlines()]
+    assert any(row["event"] == "skip" and row["kind"] == "task_to_lane" for row in journal_rows)
 
 
-def test_merge_progression_engine_releases_done_workers_for_ready_lane(tmp_path: Path) -> None:
+def test_deterministic_merge_sweep_queues_task_to_lane_conflict(tmp_path: Path) -> None:
     build_repo(tmp_path)
-    cfg = MODULE.RunConfig(
-        repo_root=tmp_path,
-        sleep_minutes=0,
-        max_build_cycles=1,
-        max_parallel_workers=8,
-        dry_run=True,
+    (tmp_path / "shared.txt").write_text("base\n", encoding="utf-8")
+    git(tmp_path, "add", "shared.txt")
+    git(tmp_path, "commit", "-m", "shared base")
+    base_sha = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "-b", "lane-phase-3-c", base_sha)
+    (tmp_path / "shared.txt").write_text("lane version\n", encoding="utf-8")
+    git(tmp_path, "add", "shared.txt")
+    git(tmp_path, "commit", "-m", "lane change")
+    git(tmp_path, "checkout", "-b", "task-3-dev", base_sha)
+    (tmp_path / "shared.txt").write_text("task version\n", encoding="utf-8")
+    git(tmp_path, "add", "shared.txt")
+    git(tmp_path, "commit", "-m", "task change")
+    task_sha = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "main")
+
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={"phase-3/lane-c": "lane-phase-3-c"}, cycle_number=3)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 3,
+            "tasks": [
+                {
+                    "task_id": "TASK-3",
+                    "lane_id": "phase-3/lane-c",
+                    "status": "done",
+                    "last_handoff_outcome": {"head_commit": task_sha, "branch": "task-3-dev"},
+                },
+                {
+                    "task_id": "TASK-4",
+                    "lane_id": "phase-3/lane-c",
+                    "status": "pending",
+                },
+            ],
+            "blockers": [],
+            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
+        },
     )
-    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
-    MODULE._ensure_default_artifacts(cfg)
+
+    out = MODULE._deterministic_merge_sweep(cfg, cycle_number=3, run_base_ref="main")
+
+    assert out["queue_item_count"] == 1
+    queue_items = MODULE._load_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"])
+    assert len(queue_items) == 1
+    assert queue_items[0]["kind"] == "task_to_lane"
+    assert queue_items[0]["failure_reason_code"] == "git_merge_conflict"
+    journal_rows = [json.loads(line) for line in (tmp_path / MODULE.MERGE_JOURNAL_FILE).read_text(encoding="utf-8").splitlines()]
+    assert any(row["event"] == "queued" and row["kind"] == "task_to_lane" for row in journal_rows)
+
+
+def test_deterministic_merge_sweep_merges_lane_base_into_run_base_when_lane_done(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    git(tmp_path, "checkout", "-b", "lane-phase-4-d")
+    (tmp_path / "lane4.txt").write_text("lane four\n", encoding="utf-8")
+    git(tmp_path, "add", "lane4.txt")
+    git(tmp_path, "commit", "-m", "lane four done")
+    lane_sha = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "main")
+
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={"phase-4/lane-d": "lane-phase-4-d"}, cycle_number=4)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 4,
+            "tasks": [
+                {
+                    "task_id": "TASK-4",
+                    "lane_id": "phase-4/lane-d",
+                    "status": "done",
+                    "last_handoff_outcome": {"head_commit": lane_sha, "branch": "lane-phase-4-d"},
+                }
+            ],
+            "blockers": [],
+            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
+        },
+    )
+
+    out = MODULE._deterministic_merge_sweep(cfg, cycle_number=4, run_base_ref="main")
+
+    assert out["lane_merge_successes"] == 1
+    assert MODULE._git_is_ancestor_commit(tmp_path, ancestor=lane_sha, descendant="main") is True
+
+
+def test_deterministic_merge_sweep_does_not_merge_lane_to_run_until_lane_done(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    git(tmp_path, "checkout", "-b", "lane-phase-5-e")
+    (tmp_path / "lane5.txt").write_text("lane five\n", encoding="utf-8")
+    git(tmp_path, "add", "lane5.txt")
+    git(tmp_path, "commit", "-m", "lane five work")
+    lane_sha = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "main")
+
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={"phase-5/lane-e": "lane-phase-5-e"}, cycle_number=5)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 5,
+            "tasks": [
+                {
+                    "task_id": "TASK-5",
+                    "lane_id": "phase-5/lane-e",
+                    "status": "done",
+                    "last_handoff_outcome": {"head_commit": lane_sha, "branch": "lane-phase-5-e"},
+                },
+                {
+                    "task_id": "TASK-6",
+                    "lane_id": "phase-5/lane-e",
+                    "status": "pending",
+                },
+            ],
+            "blockers": [],
+            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
+        },
+    )
+
+    out = MODULE._deterministic_merge_sweep(cfg, cycle_number=5, run_base_ref="main")
+
+    assert out["lane_merge_attempts"] == 0
+    assert MODULE._git_is_ancestor_commit(tmp_path, ancestor=lane_sha, descendant="main") is False
+
+
+def test_deterministic_merge_sweep_queues_lane_to_run_conflict(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    (tmp_path / "integration.txt").write_text("base\n", encoding="utf-8")
+    git(tmp_path, "add", "integration.txt")
+    git(tmp_path, "commit", "-m", "integration base")
+    base_sha = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "-b", "lane-phase-6-f", base_sha)
+    (tmp_path / "integration.txt").write_text("lane change\n", encoding="utf-8")
+    git(tmp_path, "add", "integration.txt")
+    git(tmp_path, "commit", "-m", "lane change")
+    lane_sha = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "main")
+    (tmp_path / "integration.txt").write_text("run-base change\n", encoding="utf-8")
+    git(tmp_path, "add", "integration.txt")
+    git(tmp_path, "commit", "-m", "run base change")
+
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={"phase-6/lane-f": "lane-phase-6-f"}, cycle_number=6)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "cycle_number": 6,
+            "tasks": [
+                {
+                    "task_id": "TASK-6",
+                    "lane_id": "phase-6/lane-f",
+                    "status": "done",
+                    "last_handoff_outcome": {"head_commit": lane_sha, "branch": "lane-phase-6-f"},
+                }
+            ],
+            "blockers": [],
+            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
+        },
+    )
+
+    out = MODULE._deterministic_merge_sweep(cfg, cycle_number=6, run_base_ref="main")
+
+    assert out["queue_item_count"] == 1
+    queue_items = MODULE._load_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"])
+    assert len(queue_items) == 1
+    assert queue_items[0]["kind"] == "lane_to_run"
+    assert queue_items[0]["failure_reason_code"] == "git_merge_conflict"
+
+
+def test_deterministic_merge_sweep_deduplicates_queue_items_across_cycles(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    (tmp_path / "dedup.txt").write_text("base\n", encoding="utf-8")
+    git(tmp_path, "add", "dedup.txt")
+    git(tmp_path, "commit", "-m", "dedup base")
+    base_sha = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "-b", "lane-phase-7-g", base_sha)
+    (tmp_path / "dedup.txt").write_text("lane change\n", encoding="utf-8")
+    git(tmp_path, "add", "dedup.txt")
+    git(tmp_path, "commit", "-m", "lane change")
+    git(tmp_path, "checkout", "-b", "task-7-dev", base_sha)
+    (tmp_path / "dedup.txt").write_text("task change\n", encoding="utf-8")
+    git(tmp_path, "add", "dedup.txt")
+    git(tmp_path, "commit", "-m", "task change")
+    task_sha = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "main")
+
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={"phase-7/lane-g": "lane-phase-7-g"}, cycle_number=7)
     MODULE._atomic_write_json(
         tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
         {
             "schema_version": "1.0",
             "updated_at": "2026-01-01T00:00:00Z",
             "cycle_number": 7,
-            "tasks": [{"task_id": "TASK-1", "lane_id": "phase-1/lane-a", "status": "done"}],
+            "tasks": [
+                {
+                    "task_id": "TASK-7",
+                    "lane_id": "phase-7/lane-g",
+                    "status": "done",
+                    "last_handoff_outcome": {"head_commit": task_sha, "branch": "task-7-dev"},
+                },
+                {
+                    "task_id": "TASK-8",
+                    "lane_id": "phase-7/lane-g",
+                    "status": "pending",
+                },
+            ],
             "blockers": [],
             "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
-            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
         },
     )
-    MODULE._atomic_write_json(
-        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
-        {
-            "schema_version": "1.0",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "cycle_number": 7,
-            "workers": [
-                {
-                    "worker_id": "worker-1",
-                    "status": "done",
-                    "current_task_id": "TASK-1",
-                    "current_packet_id": "packet-1",
-                    "branch": "main",
-                }
-            ],
-        },
-    )
-    mergeability = MODULE._build_mergeability_report(cfg, cycle_number=7, cycle_mode="merge_recovery")
 
-    progression = MODULE._run_merge_progression_engine(
-        cfg,
-        cycle_number=7,
-        cycle_mode="merge_recovery",
-        mergeability_report=mergeability,
-    )
+    first = MODULE._deterministic_merge_sweep(cfg, cycle_number=7, run_base_ref="main")
+    second = MODULE._deterministic_merge_sweep(cfg, cycle_number=8, run_base_ref="main")
 
-    assert progression["state_changed"] is True
-    assert progression["workers_released_count"] == 1
-    assert progression["lane_merge_completed_count"] == 1
-    worker_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["worker_registry"]).read_text(encoding="utf-8"))
-    worker_row = worker_state["workers"][0]
-    assert worker_row["status"] == "idle"
-    assert worker_row["current_task_id"] is None
-    task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
-    task_row = task_state["tasks"][0]
-    assert isinstance(task_row.get("lane_fan_in_accepted_at"), str)
-    assert isinstance(task_row.get("lane_to_run_merged_at"), str)
-    report_after = MODULE._build_mergeability_report(cfg, cycle_number=8, cycle_mode="merge_recovery")
-    assert report_after["unmerged_commit_count"] == 0
-    assert "unscoped" not in report_after["lane_shas"]
+    assert first["queue_item_count"] == 1
+    assert second["queue_item_count"] == 1
+    queue_items = MODULE._load_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"])
+    assert len(queue_items) == 1
+    assert queue_items[0]["attempt_count"] == 2
 
 
-def test_merge_progression_engine_opens_blocker_when_lane_ready_but_commit_not_in_run_base(tmp_path: Path) -> None:
+def test_run_periodic_merge_manager_skips_when_queue_empty(tmp_path: Path) -> None:
     build_repo(tmp_path)
-    subprocess.run(["git", "checkout", "-b", "feature-merge-test"], cwd=tmp_path, check=True)
-    feature_file = tmp_path / "feature.txt"
-    feature_file.write_text("feature branch content\n", encoding="utf-8")
-    subprocess.run(["git", "add", "feature.txt"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-m", "feature commit"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "checkout", "main"], cwd=tmp_path, check=True)
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={}, cycle_number=8)
 
-    cfg = MODULE.RunConfig(
-        repo_root=tmp_path,
-        sleep_minutes=0,
-        max_build_cycles=1,
-        max_parallel_workers=8,
-        dry_run=True,
-    )
-    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
-    MODULE._ensure_default_artifacts(cfg)
+    out = MODULE._run_periodic_merge_manager(cfg, cycle_number=5, run_base_ref="main")
+
+    assert out["ran"] is False
+    assert out["reason"] == "empty_queue"
+
+
+def test_run_periodic_merge_manager_skips_on_non_cadence_cycle(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={}, cycle_number=9)
+    queue_item = {
+        "queue_item_id": "merge-1",
+        "kind": "task_to_lane",
+        "lane_id": "phase-9/lane-a",
+        "task_id": "TASK-9",
+        "target_branch": "lane-phase-9-a",
+        "source_commit": "abc1234",
+        "source_ref": "task-9-dev",
+        "first_failed_cycle": 1,
+        "last_failed_cycle": 1,
+        "attempt_count": 1,
+        "failure_reason_code": "git_merge_conflict",
+        "failure_message": "conflict",
+        "status": "queued",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    MODULE._write_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"], cycle_number=9, items=[queue_item])
+
+    out = MODULE._run_periodic_merge_manager(cfg, cycle_number=4, run_base_ref="main")
+
+    assert out["ran"] is False
+    assert out["reason"] == "non_cadence_cycle"
+
+
+def test_run_periodic_merge_manager_consumes_queue_with_git_proof(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    git(tmp_path, "checkout", "-b", "lane-phase-10-a")
+    git(tmp_path, "checkout", "main")
+    git(tmp_path, "checkout", "-b", "task-10-dev")
+    (tmp_path / "task10.txt").write_text("task ten\n", encoding="utf-8")
+    git(tmp_path, "add", "task10.txt")
+    git(tmp_path, "commit", "-m", "task ten")
+    task_sha = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "checkout", "main")
+
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={"phase-10/lane-a": "lane-phase-10-a"}, cycle_number=10)
+    queue_item = {
+        "queue_item_id": MODULE._merge_queue_item_id("task_to_lane", "lane-phase-10-a", task_sha),
+        "kind": "task_to_lane",
+        "lane_id": "phase-10/lane-a",
+        "task_id": "TASK-10",
+        "target_branch": "lane-phase-10-a",
+        "source_commit": task_sha,
+        "source_ref": "task-10-dev",
+        "first_failed_cycle": 1,
+        "last_failed_cycle": 1,
+        "attempt_count": 1,
+        "failure_reason_code": "git_merge_conflict",
+        "failure_message": "conflict",
+        "status": "queued",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    MODULE._write_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"], cycle_number=10, items=[queue_item])
+
+    def fake_invoke_manager(*_args, **_kwargs):
+        MODULE._git_merge_source_into_target(tmp_path, target_branch="lane-phase-10-a", source_spec=task_sha)
+        MODULE._atomic_write_json(
+            tmp_path / MODULE.ARTIFACT_FILES["merge_manager_report"],
+            {
+                "cycle_number": 10,
+                "resolved_items": [{"queue_item_id": queue_item["queue_item_id"], "resolution_summary": "merged cleanly"}],
+                "unresolved_items": [],
+            },
+        )
+        return MODULE.ManagerResult(
+            manager="merge-manager",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            message="done",
+        )
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+
+    out = MODULE._run_periodic_merge_manager(cfg, cycle_number=10, run_base_ref="main")
+
+    assert out["status"] == "consumed"
+    assert MODULE._load_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"]) == []
+    assert MODULE._git_is_ancestor_commit(tmp_path, ancestor=task_sha, descendant="lane-phase-10-a") is True
+    journal_rows = [json.loads(line) for line in (tmp_path / MODULE.MERGE_JOURNAL_FILE).read_text(encoding="utf-8").splitlines()]
+    assert any(row["event"] == "manager_resolved" for row in journal_rows)
+
+
+def test_run_periodic_merge_manager_moves_unresolved_items_to_unmergable(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={}, cycle_number=11)
+    queue_item = {
+        "queue_item_id": "merge-unresolved",
+        "kind": "lane_to_run",
+        "lane_id": "phase-11/lane-a",
+        "task_id": None,
+        "target_branch": "main",
+        "source_commit": "deadbeef",
+        "source_ref": "lane-phase-11-a",
+        "first_failed_cycle": 1,
+        "last_failed_cycle": 1,
+        "attempt_count": 1,
+        "failure_reason_code": "git_merge_conflict",
+        "failure_message": "conflict",
+        "status": "queued",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    MODULE._write_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"], cycle_number=11, items=[queue_item])
+
+    def fake_invoke_manager(*_args, **_kwargs):
+        MODULE._atomic_write_json(
+            tmp_path / MODULE.ARTIFACT_FILES["merge_manager_report"],
+            {
+                "cycle_number": 15,
+                "resolved_items": [],
+                "unresolved_items": [{"queue_item_id": "merge-unresolved", "last_manager_reason": "manual merge still blocked"}],
+            },
+        )
+        return MODULE.ManagerResult(
+            manager="merge-manager",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            message="done",
+        )
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+
+    out = MODULE._run_periodic_merge_manager(cfg, cycle_number=15, run_base_ref="main")
+
+    assert out["status"] == "consumed"
+    assert MODULE._load_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"]) == []
+    unmergable = MODULE._load_queue_items(tmp_path / MODULE.ARTIFACT_FILES["unmergable_merges"])
+    assert len(unmergable) == 1
+    assert unmergable[0]["last_manager_reason"] == "manual merge still blocked"
+
+
+def test_run_periodic_merge_manager_leaves_queue_unchanged_on_invalid_report(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={}, cycle_number=12)
+    queue_item = {
+        "queue_item_id": "merge-invalid",
+        "kind": "task_to_lane",
+        "lane_id": "phase-12/lane-a",
+        "task_id": "TASK-12",
+        "target_branch": "lane-phase-12-a",
+        "source_commit": "abc1234",
+        "source_ref": "task-12-dev",
+        "first_failed_cycle": 1,
+        "last_failed_cycle": 1,
+        "attempt_count": 1,
+        "failure_reason_code": "git_merge_conflict",
+        "failure_message": "conflict",
+        "status": "queued",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    MODULE._write_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"], cycle_number=12, items=[queue_item])
+
+    def fake_invoke_manager(*_args, **_kwargs):
+        MODULE._atomic_write_json(
+            tmp_path / MODULE.ARTIFACT_FILES["merge_manager_report"],
+            {"cycle_number": 15, "resolved_items": [], "unresolved_items": []},
+        )
+        return MODULE.ManagerResult(
+            manager="merge-manager",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            message="done",
+        )
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+
+    out = MODULE._run_periodic_merge_manager(cfg, cycle_number=15, run_base_ref="main")
+
+    assert out["status"] == "invalid_report"
+    assert len(MODULE._load_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"])) == 1
+
+
+def test_run_periodic_merge_manager_leaves_queue_unchanged_on_failure(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={}, cycle_number=13)
+    queue_item = {
+        "queue_item_id": "merge-failure",
+        "kind": "task_to_lane",
+        "lane_id": "phase-13/lane-a",
+        "task_id": "TASK-13",
+        "target_branch": "lane-phase-13-a",
+        "source_commit": "abc1234",
+        "source_ref": "task-13-dev",
+        "first_failed_cycle": 1,
+        "last_failed_cycle": 1,
+        "attempt_count": 1,
+        "failure_reason_code": "git_merge_conflict",
+        "failure_message": "conflict",
+        "status": "queued",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    MODULE._write_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"], cycle_number=13, items=[queue_item])
+
+    def fake_invoke_manager(*_args, **_kwargs):
+        return MODULE.ManagerResult(
+            manager="merge-manager",
+            status="failed",
+            timeout=False,
+            returncode=1,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            message="failed",
+            reason_code="manager_failed",
+        )
+
+    monkeypatch.setattr(MODULE, "_invoke_manager", fake_invoke_manager)
+
+    out = MODULE._run_periodic_merge_manager(cfg, cycle_number=15, run_base_ref="main")
+
+    assert out["status"] == "failed"
+    assert len(MODULE._load_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"])) == 1
+
+
+def test_build_mergeability_report_uses_runtime_queue_state(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(repo_root=tmp_path, sleep_minutes=0, max_build_cycles=1, max_parallel_workers=8, dry_run=False)
+    write_merge_runtime_baseline(tmp_path, cfg, lane_base_branches={"phase-14/lane-a": "lane-phase-14-a"}, cycle_number=14)
+    git(tmp_path, "checkout", "-b", "lane-phase-14-a")
+    git(tmp_path, "checkout", "main")
     MODULE._atomic_write_json(
         tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
         {
             "schema_version": "1.0",
             "updated_at": "2026-01-01T00:00:00Z",
-            "cycle_number": 8,
-            "tasks": [{"task_id": "TASK-2", "lane_id": "phase-2/lane-b", "status": "done"}],
+            "cycle_number": 14,
+            "tasks": [{"task_id": "TASK-14", "lane_id": "phase-14/lane-a", "status": "done"}],
             "blockers": [],
             "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
-            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
         },
     )
-    MODULE._atomic_write_json(
-        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
-        {
-            "schema_version": "1.0",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "cycle_number": 8,
-            "workers": [
-                {
-                    "worker_id": "worker-2",
-                    "status": "done",
-                    "current_task_id": "TASK-2",
-                    "branch": "feature-merge-test",
-                }
-            ],
-        },
-    )
-    mergeability = MODULE._build_mergeability_report(cfg, cycle_number=8, cycle_mode="merge_recovery")
+    queue_item = {
+        "queue_item_id": MODULE._merge_queue_item_id("lane_to_run", "main", "abc1234"),
+        "kind": "lane_to_run",
+        "lane_id": "phase-14/lane-a",
+        "task_id": None,
+        "target_branch": "main",
+        "source_commit": "abc1234",
+        "source_ref": "lane-phase-14-a",
+        "first_failed_cycle": 1,
+        "last_failed_cycle": 1,
+        "attempt_count": 1,
+        "failure_reason_code": "git_merge_conflict",
+        "failure_message": "conflict",
+        "status": "queued",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    MODULE._write_queue_items(tmp_path / MODULE.ARTIFACT_FILES["merge_queue"], cycle_number=14, items=[queue_item])
 
-    progression = MODULE._run_merge_progression_engine(
-        cfg,
-        cycle_number=8,
-        cycle_mode="merge_recovery",
-        mergeability_report=mergeability,
-    )
+    report = MODULE._build_mergeability_report(cfg, cycle_number=14, cycle_mode="merge_recovery")
 
-    assert progression["state_changed"] is True
-    assert progression["lane_merge_blocked_count"] == 1
-    task_state = json.loads((tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"]).read_text(encoding="utf-8"))
-    blockers = task_state.get("blockers") if isinstance(task_state, dict) else []
-    assert isinstance(blockers, list)
-    blocker_row = next((row for row in blockers if isinstance(row, dict) and row.get("lane_id") == "phase-2/lane-b"), None)
-    assert isinstance(blocker_row, dict)
-    assert blocker_row.get("reason_code") == "lane_run_merge_pending_commit_not_in_run_base"
-    assert blocker_row.get("status") == "open"
-
-
-def test_build_mergeability_report_skips_already_merged_ancestor_commits(tmp_path: Path) -> None:
-    build_repo(tmp_path)
-    subprocess.run(["git", "checkout", "-b", "feature-ancestor-merged"], cwd=tmp_path, check=True)
-    feature_file = tmp_path / "feature_ancestor.txt"
-    feature_file.write_text("ancestor merge content\n", encoding="utf-8")
-    subprocess.run(["git", "add", "feature_ancestor.txt"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-m", "feature ancestor commit"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "checkout", "main"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "merge", "--no-ff", "feature-ancestor-merged", "-m", "merge feature ancestor"], cwd=tmp_path, check=True)
-
-    cfg = MODULE.RunConfig(
-        repo_root=tmp_path,
-        sleep_minutes=0,
-        max_build_cycles=1,
-        max_parallel_workers=8,
-        dry_run=True,
-    )
-    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
-    MODULE._ensure_default_artifacts(cfg)
-    MODULE._atomic_write_json(
-        tmp_path / MODULE.ARTIFACT_FILES["task_execution_state"],
-        {
-            "schema_version": "1.0",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "cycle_number": 9,
-            "tasks": [{"task_id": "TASK-9", "lane_id": "phase-9/lane-a", "status": "done"}],
-            "blockers": [],
-            "attempts": {stage: 0 for stage in MODULE.TASK_ATTEMPT_STAGES},
-            "last_handoff_outcome": {"status": "unknown", "reason_codes": [], "timestamp": None},
-        },
-    )
-    MODULE._atomic_write_json(
-        tmp_path / MODULE.ARTIFACT_FILES["worker_registry"],
-        {
-            "schema_version": "1.0",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "cycle_number": 9,
-            "workers": [
-                {
-                    "worker_id": "worker-9",
-                    "status": "done",
-                    "current_task_id": "TASK-9",
-                    "branch": "feature-ancestor-merged",
-                }
-            ],
-        },
-    )
-
-    report = MODULE._build_mergeability_report(cfg, cycle_number=9, cycle_mode="merge_recovery")
-    lane_row = report["lane_status"]["phase-9/lane-a"]
-    assert report["unmerged_commit_count"] == 0
-    assert lane_row["lane_unmerged_commit_count"] == 0
-    assert report["lane_shas"] == {}
+    lane_report = report["lane_status"]["phase-14/lane-a"]
+    assert report["gate_owner"] == "runtime"
+    assert lane_report["lane_to_run_merge_status"] == "queued"
+    assert report["lane_shas"] == {"phase-14/lane-a": ["abc1234"]}
 
 
 def test_apply_restart_determinism_hooks_supports_watchdog_resume_idempotency(tmp_path: Path) -> None:
@@ -3774,7 +4122,7 @@ def test_run_invokes_wrapup_manager_on_watchdog_terminal_stop(tmp_path: Path, mo
 
     assert out["ok"] is True
     assert out["data"]["stop_reason"] == "stale_base_branch_commit"
-    assert calls.count("BOSS") == 1
+    assert calls.count("BOSS") == 0
     assert calls.count("wrapup-manager") == 1
 
 
