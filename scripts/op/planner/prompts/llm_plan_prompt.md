@@ -14,6 +14,13 @@ Hard requirements:
    - Every non-empty `tasks[].lane_id` must be present as a key in `lane_base_branches`.
    - Branch names must be non-empty strings and deterministic/stable for each lane_id.
    - Do not finalize if this map is missing or incomplete.
+   3B. Lane-end merge readiness task contract (hard):
+   - Every lane must include a final lane-end merge-readiness task.
+   - That task must be placed at the end of the lane dependency chain.
+   - Its purpose is to reconcile the lane-base branch with the latest run-base before the lane is considered fully complete.
+   - The lane-end task must depend on all prior implementation, test, review, and hardening tasks in that lane.
+   - The lane-end task must describe verifying that lane-base contains any required run-base changes so later lane->run merge is less likely to conflict.
+   - Do not finalize planning if a lane is missing this final merge-readiness task.
 
 4. If validation fails, fix artifacts and rerun validator until it passes.
 5. Do not output prose files outside required artifacts.
@@ -205,6 +212,7 @@ Strict output discipline:
 - For existing projects, final task graph clearly integrates into current architecture without duplicating parallel subsystems.
 - You must generate <repo-root>/reports/optimus-prime/planning/PLAN_PACKETS.json and it must pass the provided validation before stopping.
 - `PLAN_PACKETS.lane_base_branches` exists and fully covers all `tasks[].lane_id`.
+- Each lane contains a lane-end merge-readiness task.
 
 
 ## Tech Stack Resolution Policy

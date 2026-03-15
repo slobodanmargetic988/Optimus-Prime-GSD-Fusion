@@ -632,7 +632,7 @@ Invariant:
 | unmerged_commit_count | integer | Aggregate queued merge-debt signal |
 | merge_blockers | array | Explicit runtime-known blockers preventing deterministic lane/run merge closure |
 | gate_owner | string | Current owner for merge truth (`runtime` when blockers exist, otherwise `none`) |
-| lane_status | object | Per-lane deterministic merge state (`fan_in_status`, tester gate, lane->run state) |
+| lane_status | object | Per-lane deterministic merge state (`fan_in_status`, tester gate, lane->run state, including blocked fan-in debt) |
 | lane_merge_gate_pending_cleared_count | integer | Compatibility field; always `0` in runtime-owned merge flow |
 | progression | object | Queue/progression counters (`task_to_lane_queue_items`, `lane_to_run_queue_items`, `lane_ready_for_run_merge`) |
 | progress_fingerprint | string | Deterministic mergeability digest |
@@ -642,6 +642,7 @@ Invariant:
 - Runtime writes `mergeability_report.json` every cycle, including timeout/unhappy-path cycles where feasible.
 - Runtime merge truth is git ancestry + active merge queue, not done worker branch names.
 - `lane_shas` must only include queue-backed unresolved source commits.
+- Lanes with active same-lane `task_to_lane` queue debt must not report `lane_to_run_merge_status=ready`.
 
 ## 15) merge_queue.json
 
@@ -727,7 +728,7 @@ Append-only JSONL event stream. Each row includes:
 | schema_version | string | Contract version |
 | timestamp | string(UTC) | Event time |
 | cycle_number | integer | Cycle identity |
-| event | string | `merged`, `skip`, `queued`, `manager_resolved`, or `manager_unresolved` |
+| event | string | `merged`, `skip`, `queued`, `deferred`, `retired`, `manager_resolved`, or `manager_unresolved` |
 | kind | string | `task_to_lane` or `lane_to_run` |
 | lane_id | string | Lane owning the merge action |
 | task_id | string\|null | Task identity when relevant |
@@ -741,6 +742,7 @@ Append-only JSONL event stream. Each row includes:
 
 Invariant:
 - Runtime appends a journal row for every deterministic merge skip/success/queue action and every merge-manager disposition.
+- Runtime also appends journal rows when lane->run is deferred due to active task fan-in debt and when obsolete queue items are retired automatically.
 
 ## 19) terminal_capsule.json
 

@@ -6607,6 +6607,179 @@ def _all_lane_tasks_done(counts: dict[str, int]) -> bool:
     return pending == 0 and in_progress == 0 and blocked == 0 and done > 0
 
 
+def _retire_queue_item(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    queue_items_by_id: dict[str, dict[str, Any]],
+    queue_item_id: str,
+    retirement_reason_code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> bool:
+    queue_item = queue_items_by_id.pop(queue_item_id, None)
+    if not isinstance(queue_item, dict):
+        return False
+    _append_merge_journal(
+        cfg,
+        cycle_number=cycle_number,
+        event="retired",
+        kind=str(queue_item.get("kind") or "").strip(),
+        lane_id=str(queue_item.get("lane_id") or "").strip(),
+        task_id=str(queue_item.get("task_id") or "").strip() or None,
+        target_branch=str(queue_item.get("target_branch") or "").strip(),
+        source_commit=str(queue_item.get("source_commit") or "").strip(),
+        source_ref=str(queue_item.get("source_ref") or "").strip() or None,
+        queue_item_id=queue_item_id,
+        status="retired",
+        message=message,
+        details={
+            "retirement_reason_code": str(retirement_reason_code or "").strip() or "queue_item_obsolete",
+            **(details if isinstance(details, dict) else {}),
+        },
+    )
+    return True
+
+
+def _reconcile_merge_queue_items(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    run_base_ref: str,
+    task_rows: list[dict[str, Any]],
+    lane_map: dict[str, str],
+    queue_items_by_id: dict[str, dict[str, Any]],
+) -> dict[str, int]:
+    retired_count = 0
+    task_rows_by_id = {
+        str(row.get("task_id") or "").strip(): row
+        for row in task_rows
+        if isinstance(row, dict) and str(row.get("task_id") or "").strip()
+    }
+    lane_counts = _lane_task_counts(task_rows)
+    for queue_item_id, queue_item in list(queue_items_by_id.items()):
+        kind = str(queue_item.get("kind") or "").strip()
+        lane_id = str(queue_item.get("lane_id") or "").strip() or "unscoped"
+        task_id = str(queue_item.get("task_id") or "").strip()
+        target_branch = str(queue_item.get("target_branch") or "").strip()
+        source_commit = str(queue_item.get("source_commit") or "").strip()
+        if _merge_item_has_git_proof(cfg, queue_item):
+            if _retire_queue_item(
+                cfg,
+                cycle_number=cycle_number,
+                queue_items_by_id=queue_items_by_id,
+                queue_item_id=queue_item_id,
+                retirement_reason_code="git_proof_present",
+                message="queue item retired because git ancestry already proves merge completion",
+            ):
+                retired_count += 1
+            continue
+        if kind == "task_to_lane":
+            task_row = task_rows_by_id.get(task_id)
+            if not isinstance(task_row, dict):
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="task_missing",
+                    message=f"queue item retired because task '{task_id or 'unknown'}' no longer exists in task state",
+                ):
+                    retired_count += 1
+                continue
+            current_status = str(task_row.get("status") or "").strip()
+            current_lane_id = str(task_row.get("lane_id") or "").strip() or "unscoped"
+            current_head_commit = _task_last_handoff_head_commit(task_row)
+            current_target_branch = str(lane_map.get(current_lane_id) or "").strip()
+            if current_status != "done" or not current_head_commit:
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="task_no_longer_done",
+                    message=f"queue item retired because task '{task_id or 'unknown'}' is no longer done with authoritative head commit",
+                ):
+                    retired_count += 1
+                continue
+            if current_lane_id != lane_id:
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="task_lane_changed",
+                    message=f"queue item retired because task '{task_id or 'unknown'}' moved to lane '{current_lane_id}'",
+                    details={"current_lane_id": current_lane_id},
+                ):
+                    retired_count += 1
+                continue
+            if current_head_commit != source_commit:
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="superseded_by_newer_head_commit",
+                    message=f"queue item retired because task '{task_id or 'unknown'}' advanced to newer head commit '{current_head_commit}'",
+                    details={"current_head_commit": current_head_commit},
+                ):
+                    retired_count += 1
+                continue
+            if current_target_branch and target_branch != current_target_branch:
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="target_branch_changed",
+                    message=f"queue item retired because lane target branch changed to '{current_target_branch}'",
+                    details={"current_target_branch": current_target_branch},
+                ):
+                    retired_count += 1
+                continue
+        elif kind == "lane_to_run":
+            counts = lane_counts.get(lane_id, {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0})
+            current_source_ref = str(lane_map.get(lane_id) or "").strip()
+            current_lane_tip = _git_resolve_commit(cfg.repo_root, current_source_ref) if current_source_ref else ""
+            if target_branch != str(run_base_ref or "").strip():
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="run_base_target_changed",
+                    message=f"queue item retired because run-base target changed to '{run_base_ref}'",
+                    details={"current_run_base_ref": str(run_base_ref or "").strip()},
+                ):
+                    retired_count += 1
+                continue
+            if not _all_lane_tasks_done(counts):
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="lane_no_longer_complete",
+                    message=f"queue item retired because lane '{lane_id}' no longer satisfies all-tasks-done gate",
+                ):
+                    retired_count += 1
+                continue
+            if current_source_ref and current_lane_tip and current_lane_tip != source_commit:
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="superseded_by_newer_lane_tip",
+                    message=f"queue item retired because lane '{lane_id}' advanced to newer tip '{current_lane_tip}'",
+                    details={"current_lane_tip": current_lane_tip, "current_source_ref": current_source_ref},
+                ):
+                    retired_count += 1
+                continue
+    return {"retired_count": int(retired_count)}
+
+
 def _deterministic_merge_sweep(cfg: RunConfig, *, cycle_number: int, run_base_ref: str) -> dict[str, Any]:
     task_path = cfg.repo_root / ARTIFACT_FILES["task_execution_state"]
     task_payload = _read_json(task_path, default={})
@@ -6628,8 +6801,18 @@ def _deterministic_merge_sweep(cfg: RunConfig, *, cycle_number: int, run_base_re
     lane_merge_attempts = 0
     lane_merge_successes = 0
     lane_merge_skips = 0
+    lane_merge_deferred = 0
     queue_updates = 0
     queue_resolved = 0
+    queue_reconciliation = _reconcile_merge_queue_items(
+        cfg,
+        cycle_number=cycle_number,
+        run_base_ref=run_base_ref,
+        task_rows=task_rows,
+        lane_map=lane_map,
+        queue_items_by_id=queue_items_by_id,
+    )
+    queue_resolved += int(queue_reconciliation.get("retired_count") or 0)
 
     for task_row in task_rows:
         if str(task_row.get("status") or "").strip() != "done":
@@ -6813,6 +6996,28 @@ def _deterministic_merge_sweep(cfg: RunConfig, *, cycle_number: int, run_base_re
     for lane_id, counts in sorted(lane_counts.items(), key=lambda item: item[0]):
         if not _all_lane_tasks_done(counts):
             continue
+        lane_task_queue_items = [
+            row
+            for row in queue_items_by_id.values()
+            if str(row.get("lane_id") or "").strip() == lane_id and str(row.get("kind") or "").strip() == "task_to_lane"
+        ]
+        if lane_task_queue_items:
+            lane_merge_deferred += 1
+            _append_merge_journal(
+                cfg,
+                cycle_number=cycle_number,
+                event="deferred",
+                kind="lane_to_run",
+                lane_id=lane_id,
+                task_id=None,
+                target_branch=str(run_base_ref or "").strip(),
+                source_commit="",
+                source_ref=str(lane_map.get(lane_id) or "").strip() or None,
+                status="blocked_on_task_fan_in",
+                message=f"lane->run merge deferred because lane '{lane_id}' still has active task->lane merge debt",
+                details={"active_task_queue_items": len(lane_task_queue_items)},
+            )
+            continue
         target_branch = str(run_base_ref or "").strip()
         source_ref = str(lane_map.get(lane_id) or "").strip()
         if not source_ref:
@@ -6914,6 +7119,7 @@ def _deterministic_merge_sweep(cfg: RunConfig, *, cycle_number: int, run_base_re
         "lane_merge_attempts": int(lane_merge_attempts),
         "lane_merge_successes": int(lane_merge_successes),
         "lane_merge_skips": int(lane_merge_skips),
+        "lane_merge_deferred": int(lane_merge_deferred),
         "queue_item_count": len(queue_items),
         "queue_updates": int(queue_updates),
         "queue_resolved": int(queue_resolved),
@@ -7246,6 +7452,17 @@ def _build_mergeability_report(cfg: RunConfig, *, cycle_number: int, cycle_mode:
                     "reason_code": "lane_pending_tasks",
                     "owner": "runtime",
                     "message": f"lane has unfinished tasks (pending={pending_count}, in_progress={in_progress_count})",
+                }
+            )
+        elif task_queue_items:
+            tester_gate_status = "pending_task_fan_in"
+            lane_to_run_merge_status = "blocked_on_task_fan_in"
+            merge_blockers.append(
+                {
+                    "lane_id": lane_id,
+                    "reason_code": "lane_task_merge_debt",
+                    "owner": "runtime",
+                    "message": f"lane has {len(task_queue_items)} active task->lane merge debt item(s)",
                 }
             )
         elif lane_to_run_queue_items:
