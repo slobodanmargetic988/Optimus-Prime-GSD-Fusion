@@ -14,6 +14,8 @@ REQ_007_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-007.ground-graph-context-bundle.v1"
 REQ_015_SCHEMA_VERSION = "req-015.integration-opportunity-detection.v1"
 REQ_015_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-015.integration-opportunity-context-bundle.v1"
 REQ_016_SCHEMA_VERSION = "req-016.reuse-opportunity-detection.v1"
+REQ_017_SCHEMA_VERSION = "req-017.overlap-and-conflict-detection.v1"
+REQ_017_ALLOWED_DIRECTION_SIGNALS = {"advance", "hold", "sunset"}
 
 
 def _utc_now_iso() -> str:
@@ -889,6 +891,247 @@ def detect_reuse_opportunities(
         "summary": (
             f"{len(reuse_recommendations)} capability reuse recommendation(s); "
             f"{len(no_reuse_detected)} capability gap(s)."
+        ),
+    }
+
+
+def _normalize_req_017_direction_signal(value: Any, *, label: str) -> str:
+    signal = _require_nonempty_str(value if value is not None else "advance", label=label).lower()
+    if signal not in REQ_017_ALLOWED_DIRECTION_SIGNALS:
+        raise ValueError(
+            f"{label} must be one of {sorted(REQ_017_ALLOWED_DIRECTION_SIGNALS)}"
+        )
+    return signal
+
+
+def _normalize_req_017_timeline(value: Any, *, label: str) -> dict[str, int]:
+    timeline = _require_mapping(value, label=label)
+    start_week = _require_nonnegative_int(timeline.get("start_week"), label=f"{label}.start_week")
+    end_week = _require_nonnegative_int(timeline.get("end_week"), label=f"{label}.end_week")
+    if end_week < start_week:
+        raise ValueError(f"{label}.end_week must be >= {label}.start_week")
+    return {
+        "start_week": start_week,
+        "end_week": end_week,
+    }
+
+
+def _req_017_conflict_risk_level(left_signal: str, right_signal: str) -> str | None:
+    if left_signal == right_signal:
+        return None
+    pair = frozenset({left_signal, right_signal})
+    if pair == {"advance", "sunset"}:
+        return "high"
+    if pair == {"advance", "hold"}:
+        return "medium"
+    if pair == {"hold", "sunset"}:
+        return "medium"
+    return "medium"
+
+
+def _req_017_resolution_options(*, risk_level: str) -> list[dict[str, str]]:
+    return [
+        {
+            "option_id": "align_direction_before_commit",
+            "summary": "Align roadmap direction signals across both projects before roadmap lock.",
+            "risk_tradeoff": (
+                "Lowers cross-project churn risk but may delay one initiative during direction convergence."
+                if risk_level == "high"
+                else "Reduces integration ambiguity but can defer near-term throughput while teams realign."
+            ),
+        },
+        {
+            "option_id": "timebox_dual_track_validation",
+            "summary": "Run a short dual-track validation window before final direction selection.",
+            "risk_tradeoff": "Preserves optionality but increases near-term coordination and validation cost.",
+        },
+        {
+            "option_id": "split_interface_boundaries",
+            "summary": "Split capability ownership boundaries and enforce explicit interface contracts.",
+            "risk_tradeoff": "Allows independent progress but increases long-term maintenance and integration overhead.",
+        },
+    ]
+
+
+def detect_overlap_and_conflicts(
+    payload: Mapping[str, Any],
+    *,
+    evaluated_at: str | None = None,
+) -> dict[str, Any]:
+    context = _require_mapping(payload, label="overlap_and_conflict_detection")
+    active_project_id = _require_nonempty_str(
+        context.get("active_project_id"),
+        label="overlap_and_conflict_detection.active_project_id",
+    )
+    related_project_ids_raw = context.get("related_project_ids")
+    if not isinstance(related_project_ids_raw, list) or not related_project_ids_raw:
+        raise ValueError("overlap_and_conflict_detection.related_project_ids must be a non-empty list")
+    related_project_ids = _normalize_string_list(
+        related_project_ids_raw,
+        label="overlap_and_conflict_detection.related_project_ids",
+    )
+    if active_project_id in related_project_ids:
+        raise ValueError("overlap_and_conflict_detection.related_project_ids must not include active_project_id")
+    allowed_project_ids = {active_project_id, *related_project_ids}
+
+    initiatives_raw = context.get("initiatives")
+    if not isinstance(initiatives_raw, list) or not initiatives_raw:
+        raise ValueError("overlap_and_conflict_detection.initiatives must be a non-empty list")
+
+    initiatives: list[dict[str, Any]] = []
+    seen_initiative_keys: set[tuple[str, str]] = set()
+    for idx, row in enumerate(initiatives_raw):
+        item = _require_mapping(row, label=f"overlap_and_conflict_detection.initiatives[{idx}]")
+        project_id = _require_nonempty_str(
+            item.get("project_id"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].project_id",
+        )
+        if project_id not in allowed_project_ids:
+            raise ValueError(
+                f"overlap_and_conflict_detection.initiatives[{idx}].project_id must reference active_project_id or related_project_ids"
+            )
+        initiative_id = _require_nonempty_str(
+            item.get("initiative_id"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].initiative_id",
+        )
+        initiative_key = (project_id, initiative_id)
+        if initiative_key in seen_initiative_keys:
+            continue
+        seen_initiative_keys.add(initiative_key)
+
+        roadmap_direction = _require_nonempty_str(
+            item.get("roadmap_direction"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].roadmap_direction",
+        )
+        direction_signal = _normalize_req_017_direction_signal(
+            item.get("direction_signal"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].direction_signal",
+        )
+        capability_tags = _normalize_string_list_in_order(
+            item.get("capability_tags"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].capability_tags",
+            allow_empty=False,
+        )
+        timeline = _normalize_req_017_timeline(
+            item.get("timeline"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].timeline",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].evidence_refs",
+        )
+        initiatives.append(
+            {
+                "initiative_id": initiative_id,
+                "project_id": project_id,
+                "roadmap_direction": roadmap_direction,
+                "direction_signal": direction_signal,
+                "capability_tags": capability_tags,
+                "timeline": timeline,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    initiatives.sort(key=lambda row: (row["project_id"], row["initiative_id"]))
+
+    overlapping_initiatives: list[dict[str, Any]] = []
+    conflicting_directions: list[dict[str, Any]] = []
+    evidence_refs: set[str] = set()
+
+    for left_idx, left in enumerate(initiatives):
+        for right in initiatives[left_idx + 1 :]:
+            if left["project_id"] == right["project_id"]:
+                continue
+            shared_capability_tags = sorted(set(left["capability_tags"]).intersection(right["capability_tags"]))
+            if not shared_capability_tags:
+                continue
+
+            overlap_start_week = max(left["timeline"]["start_week"], right["timeline"]["start_week"])
+            overlap_end_week = min(left["timeline"]["end_week"], right["timeline"]["end_week"])
+            if overlap_start_week > overlap_end_week:
+                continue
+
+            pair = sorted([left, right], key=lambda row: (row["project_id"], row["initiative_id"]))
+            overlap_evidence_refs = sorted({*left["evidence_refs"], *right["evidence_refs"]})
+            overlap_id = f"overlap-{len(overlapping_initiatives) + 1:03d}"
+            overlapping_initiatives.append(
+                {
+                    "overlap_id": overlap_id,
+                    "initiatives": [
+                        {
+                            "initiative_id": row["initiative_id"],
+                            "project_id": row["project_id"],
+                            "roadmap_direction": row["roadmap_direction"],
+                            "direction_signal": row["direction_signal"],
+                        }
+                        for row in pair
+                    ],
+                    "shared_capability_tags": shared_capability_tags,
+                    "overlap_window": {
+                        "start_week": overlap_start_week,
+                        "end_week": overlap_end_week,
+                    },
+                    "evidence_refs": overlap_evidence_refs,
+                }
+            )
+            evidence_refs.update(overlap_evidence_refs)
+
+            risk_level = _req_017_conflict_risk_level(left["direction_signal"], right["direction_signal"])
+            if risk_level is None:
+                continue
+            conflicting_directions.append(
+                {
+                    "conflict_id": f"conflict-{len(conflicting_directions) + 1:03d}",
+                    "overlap_id": overlap_id,
+                    "initiatives": [
+                        {
+                            "initiative_id": row["initiative_id"],
+                            "project_id": row["project_id"],
+                            "roadmap_direction": row["roadmap_direction"],
+                            "direction_signal": row["direction_signal"],
+                        }
+                        for row in pair
+                    ],
+                    "shared_capability_tags": shared_capability_tags,
+                    "conflict_reason": "direction_signals_conflict_on_overlapping_capability_window",
+                    "risk_level": risk_level,
+                    "resolution_options": _req_017_resolution_options(risk_level=risk_level),
+                    "evidence_refs": overlap_evidence_refs,
+                }
+            )
+
+    overlap_evidence_refs = sorted(evidence_refs)
+    if conflicting_directions:
+        decision = "conflicts_detected"
+    elif overlapping_initiatives:
+        decision = "overlap_detected_no_direction_conflict"
+    else:
+        decision = "no_overlap_or_conflict_detected"
+
+    return {
+        "requirement_id": "REQ-017",
+        "surface": "overlap_and_conflict_detection",
+        "schema_version": REQ_017_SCHEMA_VERSION,
+        "evaluated_at": _require_nonempty_str(evaluated_at or _utc_now_iso(), label="evaluated_at"),
+        "active_project_id": active_project_id,
+        "related_project_ids": related_project_ids,
+        "overlap_index": {
+            "initiative_ids": [f"{row['project_id']}::{row['initiative_id']}" for row in initiatives],
+            "capability_tags_considered": sorted(
+                {
+                    capability_tag
+                    for row in initiatives
+                    for capability_tag in row["capability_tags"]
+                }
+            ),
+        },
+        "overlapping_initiatives": overlapping_initiatives,
+        "conflicting_directions": conflicting_directions,
+        "evidence_refs": overlap_evidence_refs,
+        "decision": decision,
+        "summary": (
+            f"{len(overlapping_initiatives)} overlap(s) detected; "
+            f"{len(conflicting_directions)} conflict(s) with resolution options."
         ),
     }
 
