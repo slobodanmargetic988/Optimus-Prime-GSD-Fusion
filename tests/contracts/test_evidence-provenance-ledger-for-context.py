@@ -47,3 +47,14 @@ def test_req_021_sample_payload_is_valid_contract_shape():
     assert ledger["ledger_scope"] == module.REQ_021_LEDGER_SCOPE
     assert ledger["claim_count"] == len(ledger["context_claims"])
 
+
+def test_req_021_validator_rejects_missing_artifact_refs_index_union_when_empty():
+    fixture = _read_json(FIXTURE_PATH)
+    payload = fixture["expected_payload"]
+    mutated = json.loads(json.dumps(payload))
+    ledger = mutated["evidence_provenance_ledger_for_context"]
+    assert ledger["artifact_refs_index"]
+    ledger["artifact_refs_index"] = []
+
+    errors = module.validate_req_021_evidence_provenance_ledger_for_context(mutated)
+    assert "evidence_provenance_ledger_for_context.artifact_refs_index must equal union of claim sources" in errors

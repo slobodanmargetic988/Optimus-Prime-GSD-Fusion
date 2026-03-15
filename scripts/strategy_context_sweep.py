@@ -1182,7 +1182,7 @@ def validate_req_021_evidence_provenance_ledger_for_context(payload: Mapping[str
             if isinstance(claim, Mapping) and isinstance(claim.get("source_artifact_refs"), list)
         ]
     )
-    if artifact_refs_index and artifact_refs_index != expected_index:
+    if artifact_refs_index != expected_index:
         errors.append("evidence_provenance_ledger_for_context.artifact_refs_index must equal union of claim sources")
 
     metadata = payload.get("call_metadata")

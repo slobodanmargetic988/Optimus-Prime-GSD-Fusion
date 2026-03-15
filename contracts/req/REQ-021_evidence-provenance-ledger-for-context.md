@@ -57,6 +57,15 @@ Each `context_claims[]` entry required keys:
 - `processing_call_id` (must equal `req021-processing-` + first 16 chars of digest)
 - `canonical_processing_input` (normalized context inputs used to build evidence-backed claims)
 
+`call_metadata.canonical_processing_input` keys:
+
+- `target_project_evidence_refs` (sorted unique list of strings)
+- `earth_sweep_evidence_refs` (sorted unique list of strings)
+- `cross_project_context` (normalized list of cross-project context entries)
+- `candidate_recommendations` (normalized list of candidate recommendation entries)
+- `earth_sweep_source_artifacts` (optional; only present when non-empty)
+- `required_context_documents` (optional; only present when non-empty)
+
 ## Sample structure
 
 Sample artifact path:
@@ -109,9 +118,17 @@ Sample JSON shape:
       "target_project_evidence_refs": [],
       "earth_sweep_evidence_refs": [],
       "cross_project_context": [],
-      "candidate_recommendations": []
+      "candidate_recommendations": [],
+      "earth_sweep_source_artifacts": [
+        {
+          "artifact_ref": "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md",
+          "status": "stale",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+          ]
+        }
+      ]
     }
   }
 }
 ```
-
