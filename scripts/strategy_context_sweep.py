@@ -925,7 +925,6 @@ def _normalize_prior_strategy_revisions(raw_value: Any) -> list[dict[str, Any]]:
             }
         )
 
-    normalized.sort(key=lambda row: row["revision_identity"])
     return normalized
 
 

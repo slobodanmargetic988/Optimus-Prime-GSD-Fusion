@@ -36,7 +36,7 @@ Top-level required keys:
 `prior_strategy_revision_ingestion` required keys:
 
 - `current_revision_identity` (non-empty string)
-- `prior_strategy_revisions` (normalized list)
+- `prior_strategy_revisions` (normalized list that preserves source order)
 - `changelog_history` (normalized list)
 - `analysis` (deterministic continuity + drift output)
 
@@ -45,6 +45,11 @@ Top-level required keys:
 - `continuity`
 - `drift`
 - `composition_context`
+
+`continuity.latest_prior_revision_id` semantics:
+
+- Derived from the final element of `prior_strategy_revisions` after normalization.
+- No lexicographic reordering is applied to revision identities, so `rev-10` remains later than `rev-9` when source order encodes chronology.
 
 `call_metadata` required keys:
 

@@ -50,3 +50,43 @@ def test_req_009_rejects_duplicate_prior_revision_identity():
 
     with pytest.raises(ValueError, match="revision_identity must be unique"):
         module.build_req_009_prior_strategy_revision_ingestion(**bad_input)
+
+
+def test_req_009_latest_prior_revision_uses_source_order_not_lexicographic_identity():
+    payload = module.build_req_009_prior_strategy_revision_ingestion(
+        current_revision_identity="rev-req009-r11",
+        prior_strategy_revisions=[
+            {
+                "revision_identity": "rev-8",
+                "summary": "Earlier baseline",
+                "recommended_action_ids": ["action-legacy"],
+                "evidence_refs": ["reports/rev-8.json"],
+            },
+            {
+                "revision_identity": "rev-9",
+                "summary": "Ninth revision",
+                "recommended_action_ids": ["action-stable"],
+                "evidence_refs": ["reports/rev-9.json"],
+            },
+            {
+                "revision_identity": "rev-10",
+                "summary": "Tenth revision",
+                "recommended_action_ids": ["action-current"],
+                "evidence_refs": ["reports/rev-10.json"],
+            },
+        ],
+        changelog_history=[],
+    )
+
+    ingestion = payload["prior_strategy_revision_ingestion"]
+    continuity = ingestion["analysis"]["continuity"]
+    drift = ingestion["analysis"]["drift"]
+
+    assert [row["revision_identity"] for row in ingestion["prior_strategy_revisions"]] == [
+        "rev-8",
+        "rev-9",
+        "rev-10",
+    ]
+    assert continuity["ingested_revision_ids"] == ["rev-8", "rev-9", "rev-10"]
+    assert continuity["latest_prior_revision_id"] == "rev-10"
+    assert drift["new_action_ids"] == ["action-current"]
