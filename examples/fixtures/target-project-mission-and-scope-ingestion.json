@@ -1,0 +1,57 @@
+{
+  "valid_case": {
+    "input": {
+      "target_project": {
+        "mission": {
+          "text": "Deliver deterministic strategy recommendations for Optimus project planning.",
+          "source": "mission.md"
+        },
+        "scope": {
+          "text": "Only include constraints required to guide recommendation generation.",
+          "source": "scope.md"
+        }
+      }
+    }
+  },
+  "rejection_cases": [
+    {
+      "name": "missing_target_project",
+      "input": {},
+      "expected_reason_codes": [
+        "target_project_missing"
+      ]
+    },
+    {
+      "name": "missing_scope",
+      "input": {
+        "target_project": {
+          "mission": {
+            "text": "Mission exists",
+            "source": "mission.md"
+          }
+        }
+      },
+      "expected_reason_codes": [
+        "scope_missing"
+      ]
+    },
+    {
+      "name": "empty_mission_text",
+      "input": {
+        "target_project": {
+          "mission": {
+            "text": "   ",
+            "source": "mission.md"
+          },
+          "scope": {
+            "text": "Scope exists",
+            "source": "scope.md"
+          }
+        }
+      },
+      "expected_reason_codes": [
+        "mission_empty"
+      ]
+    }
+  ]
+}
