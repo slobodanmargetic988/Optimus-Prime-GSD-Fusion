@@ -28,5 +28,45 @@
       ],
       "content": "Interface: fusion-evidence.v1\nfusion-evidence.v1 required fields: evidence_ref and source_path.\nfusion-evidence.v1 optional fields: source_sha256."
     }
-  ]
+  ],
+  "earth_sweep_context": {
+    "evidence_refs": [
+      {
+        "peer_project_id": "earth-shared-interfaces",
+        "source_path": "earth/contracts/shared-interfaces.md",
+        "line_number": 2,
+        "evidence_ref": "earth-sweep/earth-shared-interfaces/shared-interfaces#L2"
+      },
+      {
+        "peer_project_id": "earth-shared-interfaces",
+        "source_path": "earth/contracts/shared-interfaces.md",
+        "line_number": 3,
+        "evidence_ref": "earth-sweep/earth-shared-interfaces/shared-interfaces#L3"
+      },
+      {
+        "peer_project_id": "earth-shared-interfaces",
+        "source_path": "earth/contracts/shared-interfaces.md",
+        "line_number": 5,
+        "evidence_ref": "earth-sweep/earth-shared-interfaces/shared-interfaces#L5"
+      },
+      {
+        "peer_project_id": "earth-shared-interfaces",
+        "source_path": "earth/contracts/shared-interfaces.md",
+        "line_number": 6,
+        "evidence_ref": "earth-sweep/earth-shared-interfaces/shared-interfaces#L6"
+      },
+      {
+        "peer_project_id": "earth-targeted-interface",
+        "source_path": "earth/contracts/targeted-interface.md",
+        "line_number": 2,
+        "evidence_ref": "earth-sweep/earth-targeted-interface/targeted-interface#L2"
+      },
+      {
+        "peer_project_id": "earth-targeted-interface",
+        "source_path": "earth/contracts/targeted-interface.md",
+        "line_number": 3,
+        "evidence_ref": "earth-sweep/earth-targeted-interface/targeted-interface#L3"
+      }
+    ]
+  }
 }

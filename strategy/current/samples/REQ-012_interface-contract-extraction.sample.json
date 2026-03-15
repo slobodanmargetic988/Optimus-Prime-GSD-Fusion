@@ -118,12 +118,199 @@
       ]
     }
   ],
+  "cross_project_recommendations": [
+    {
+      "recommendation_id": "REC-0001",
+      "recommendation_type": "interface_obligation",
+      "source_project_id": "earth-targeted-interface",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "interface_id": "fusion-evidence.v1",
+      "obligation_id": "ICO-0005",
+      "obligation_level": "required",
+      "summary": "Adopt required fusion-evidence.v1 obligation: fusion-evidence.v1 required fields: evidence_ref and source_path.",
+      "rationale": "Shared interface obligation backed by Earth-sweep evidence.",
+      "source_provenance": [
+        {
+          "source_id": "earth-targeted-interface",
+          "source_path": "earth/contracts/targeted-interface.md",
+          "source_sha256": "310a8ca3236a7d893e48785eea28259244275106213668d5f6a7eb2dce908003",
+          "line_number": 2,
+          "excerpt": "fusion-evidence.v1 required fields: evidence_ref and source_path."
+        }
+      ],
+      "evidence_refs": [
+        "earth-sweep/earth-targeted-interface/targeted-interface#L2"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "earth-targeted-interface:earth/contracts/targeted-interface.md:2"
+        ],
+        "evidence_ref_count": 1
+      }
+    },
+    {
+      "recommendation_id": "REC-0002",
+      "recommendation_type": "interface_obligation",
+      "source_project_id": "earth-targeted-interface",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "interface_id": "fusion-evidence.v1",
+      "obligation_id": "ICO-0006",
+      "obligation_level": "optional",
+      "summary": "Adopt optional fusion-evidence.v1 obligation: fusion-evidence.v1 optional fields: source_sha256.",
+      "rationale": "Shared interface optional guidance backed by Earth-sweep evidence; do not over-constrain downstream plans.",
+      "source_provenance": [
+        {
+          "source_id": "earth-targeted-interface",
+          "source_path": "earth/contracts/targeted-interface.md",
+          "source_sha256": "310a8ca3236a7d893e48785eea28259244275106213668d5f6a7eb2dce908003",
+          "line_number": 3,
+          "excerpt": "fusion-evidence.v1 optional fields: source_sha256."
+        }
+      ],
+      "evidence_refs": [
+        "earth-sweep/earth-targeted-interface/targeted-interface#L3"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "earth-targeted-interface:earth/contracts/targeted-interface.md:3"
+        ],
+        "evidence_ref_count": 1
+      }
+    },
+    {
+      "recommendation_id": "REC-0003",
+      "recommendation_type": "interface_obligation",
+      "source_project_id": "earth-shared-interfaces",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "interface_id": "planning-packet.v2",
+      "obligation_id": "ICO-0001",
+      "obligation_level": "required",
+      "summary": "Adopt required planning-packet.v2 obligation: planning-packet.v2 MUST include task_identifier and requirement_ids.",
+      "rationale": "Shared interface obligation backed by Earth-sweep evidence.",
+      "source_provenance": [
+        {
+          "source_id": "earth-shared-interfaces",
+          "source_path": "earth/contracts/shared-interfaces.md",
+          "source_sha256": "70de275f1de712725ba02e4a4578de427781e552c6d2251a2e095fff77dc03f2",
+          "line_number": 2,
+          "excerpt": "planning-packet.v2 MUST include task_identifier and requirement_ids."
+        }
+      ],
+      "evidence_refs": [
+        "earth-sweep/earth-shared-interfaces/shared-interfaces#L2"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "earth-shared-interfaces:earth/contracts/shared-interfaces.md:2"
+        ],
+        "evidence_ref_count": 1
+      }
+    },
+    {
+      "recommendation_id": "REC-0004",
+      "recommendation_type": "interface_obligation",
+      "source_project_id": "earth-shared-interfaces",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "interface_id": "planning-packet.v2",
+      "obligation_id": "ICO-0002",
+      "obligation_level": "optional",
+      "summary": "Adopt optional planning-packet.v2 obligation: planning-packet.v2 SHOULD include operator_summary for human review.",
+      "rationale": "Shared interface optional guidance backed by Earth-sweep evidence; do not over-constrain downstream plans.",
+      "source_provenance": [
+        {
+          "source_id": "earth-shared-interfaces",
+          "source_path": "earth/contracts/shared-interfaces.md",
+          "source_sha256": "70de275f1de712725ba02e4a4578de427781e552c6d2251a2e095fff77dc03f2",
+          "line_number": 3,
+          "excerpt": "planning-packet.v2 SHOULD include operator_summary for human review."
+        }
+      ],
+      "evidence_refs": [
+        "earth-sweep/earth-shared-interfaces/shared-interfaces#L3"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "earth-shared-interfaces:earth/contracts/shared-interfaces.md:3"
+        ],
+        "evidence_ref_count": 1
+      }
+    },
+    {
+      "recommendation_id": "REC-0005",
+      "recommendation_type": "interface_obligation",
+      "source_project_id": "earth-shared-interfaces",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "interface_id": "telemetry-handshake.v1",
+      "obligation_id": "ICO-0003",
+      "obligation_level": "required",
+      "summary": "Adopt required telemetry-handshake.v1 obligation: telemetry-handshake.v1 SHALL include source_commit and generated_at.",
+      "rationale": "Shared interface obligation backed by Earth-sweep evidence.",
+      "source_provenance": [
+        {
+          "source_id": "earth-shared-interfaces",
+          "source_path": "earth/contracts/shared-interfaces.md",
+          "source_sha256": "70de275f1de712725ba02e4a4578de427781e552c6d2251a2e095fff77dc03f2",
+          "line_number": 5,
+          "excerpt": "telemetry-handshake.v1 SHALL include source_commit and generated_at."
+        }
+      ],
+      "evidence_refs": [
+        "earth-sweep/earth-shared-interfaces/shared-interfaces#L5"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "earth-shared-interfaces:earth/contracts/shared-interfaces.md:5"
+        ],
+        "evidence_ref_count": 1
+      }
+    },
+    {
+      "recommendation_id": "REC-0006",
+      "recommendation_type": "interface_obligation",
+      "source_project_id": "earth-shared-interfaces",
+      "target_project_id": "optimus-prime-gsd-fusion",
+      "interface_id": "telemetry-handshake.v1",
+      "obligation_id": "ICO-0004",
+      "obligation_level": "optional",
+      "summary": "Adopt optional telemetry-handshake.v1 obligation: telemetry-handshake.v1 MAY include debug_notes when available.",
+      "rationale": "Shared interface optional guidance backed by Earth-sweep evidence; do not over-constrain downstream plans.",
+      "source_provenance": [
+        {
+          "source_id": "earth-shared-interfaces",
+          "source_path": "earth/contracts/shared-interfaces.md",
+          "source_sha256": "70de275f1de712725ba02e4a4578de427781e552c6d2251a2e095fff77dc03f2",
+          "line_number": 6,
+          "excerpt": "telemetry-handshake.v1 MAY include debug_notes when available."
+        }
+      ],
+      "evidence_refs": [
+        "earth-sweep/earth-shared-interfaces/shared-interfaces#L6"
+      ],
+      "cross_project_context": {
+        "context_type": "earth_sweep",
+        "match_keys": [
+          "earth-shared-interfaces:earth/contracts/shared-interfaces.md:6"
+        ],
+        "evidence_ref_count": 1
+      }
+    }
+  ],
+  "open_risks": [],
   "summary": {
     "earth_contract_source_count": 3,
     "relevant_source_count": 2,
     "shared_interface_contract_count": 3,
     "required_obligation_count": 3,
     "optional_obligation_count": 3,
-    "total_obligation_count": 6
+    "total_obligation_count": 6,
+    "recommendation_count": 6,
+    "open_risk_count": 0,
+    "earth_sweep_context_entry_count": 6,
+    "earth_sweep_evidence_refs_used_count": 6
   }
 }

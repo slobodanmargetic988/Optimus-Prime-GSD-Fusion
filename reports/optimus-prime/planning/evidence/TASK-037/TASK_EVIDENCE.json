@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-unknown",
+  "phase_id": "phase-1",
+  "task_id": "TASK-037",
+  "requirement_ids": [
+    "REQ-012"
+  ],
+  "updated_at": "2026-03-15T00:00:00Z",
+  "dev": {
+    "status": "done",
+    "checks": [
+      {
+        "name": "req012_interface_extraction_earth_sweep_gating",
+        "passed": true,
+        "details": "REQ-012 now emits evidence-backed interface recommendations with deterministic cross_project_context and open-risk fallback for missing/stale Earth-sweep evidence."
+      },
+      {
+        "name": "req012_integration_contract_coverage",
+        "passed": true,
+        "details": "Added integration checks for recommendation field completeness, evidence refs, and Earth-sweep context usage."
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_interface-contract-extraction.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.02s"
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "examples/fixtures/interface-contract-extraction.json",
+      "tests/integration/test_interface-contract-extraction.py",
+      "contracts/req/REQ-012_interface-contract-extraction.md",
+      "strategy/current/samples/REQ-012_interface-contract-extraction.sample.json",
+      "reports/optimus-prime/planning/evidence/TASK-037/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": []
+  }
+}

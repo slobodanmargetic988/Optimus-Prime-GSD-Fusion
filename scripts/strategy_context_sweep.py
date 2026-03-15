@@ -345,12 +345,18 @@ def extract_interface_contracts(payload: dict[str, Any], *, generated_at: str | 
         current_project.get("project_id"), field_name="current_project.project_id"
     )
     contract_sources = _require_list(payload_obj.get("earth_contract_sources"), field_name="earth_contract_sources")
+    earth_sweep_evidence_index, earth_sweep_evidence_entry_count = _index_earth_sweep_evidence_refs(payload_obj)
 
     interfaces_by_id: dict[str, dict[str, Any]] = {}
     obligation_index = 0
     required_count = 0
     optional_count = 0
     relevant_source_count = 0
+    cross_project_recommendations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    used_earth_sweep_refs: set[str] = set()
+    recommendation_index = 0
+    risk_index = 0
 
     for source_idx, raw_source in enumerate(contract_sources):
         source = _require_mapping(raw_source, field_name=f"earth_contract_sources[{source_idx}]")
@@ -433,13 +439,103 @@ def extract_interface_contracts(payload: dict[str, Any], *, generated_at: str | 
     shared_interface_contracts = []
     for interface_id in sorted(interfaces_by_id.keys()):
         row = interfaces_by_id[interface_id]
+        obligations = row["obligations"]
+        for obligation in obligations:
+            source_provenance = obligation["source_provenance"]
+            source_project_id = "earth-contracts"
+            if source_provenance and isinstance(source_provenance[0], dict):
+                source_id = source_provenance[0].get("source_id")
+                if isinstance(source_id, str) and source_id:
+                    source_project_id = source_id
+            recommendation_refs, stale_refs, context_keys = _collect_evidence_refs_for_provenance(
+                peer_project_id=source_project_id,
+                source_provenance=source_provenance,
+                earth_sweep_evidence_index=earth_sweep_evidence_index,
+            )
+            if recommendation_refs:
+                recommendation_index += 1
+                used_earth_sweep_refs.update(recommendation_refs)
+                obligation_level = obligation["obligation_level"]
+                cross_project_recommendations.append(
+                    {
+                        "recommendation_id": f"REC-{recommendation_index:04d}",
+                        "recommendation_type": "interface_obligation",
+                        "source_project_id": source_project_id,
+                        "target_project_id": current_project_id,
+                        "interface_id": interface_id,
+                        "obligation_id": obligation["obligation_id"],
+                        "obligation_level": obligation_level,
+                        "summary": (
+                            f"Adopt {obligation_level} {interface_id} obligation: "
+                            f"{obligation['statement']}"
+                        ),
+                        "rationale": (
+                            "Shared interface obligation backed by Earth-sweep evidence."
+                            if obligation_level == "required"
+                            else (
+                                "Shared interface optional guidance backed by Earth-sweep evidence; "
+                                "do not over-constrain downstream plans."
+                            )
+                        ),
+                        "source_provenance": source_provenance,
+                        "evidence_refs": recommendation_refs,
+                        "cross_project_context": {
+                            "context_type": "earth_sweep",
+                            "match_keys": context_keys,
+                            "evidence_ref_count": len(recommendation_refs),
+                        },
+                    }
+                )
+            elif stale_refs:
+                risk_index += 1
+                open_risks.append(
+                    {
+                        "risk_id": f"RISK-{risk_index:04d}",
+                        "risk_type": "stale_earth_sweep_source_artifact",
+                        "reason_code": REASON_CODE_STALE_EARTH_SWEEP_SOURCE_ARTIFACT,
+                        "recommendation_type": "interface_obligation",
+                        "source_project_id": source_project_id,
+                        "target_project_id": current_project_id,
+                        "interface_id": interface_id,
+                        "obligation_id": obligation["obligation_id"],
+                        "summary": (
+                            "Shared interface obligation matched stale Earth-sweep source artifacts; "
+                            f"kept as open risk: {obligation['statement']}"
+                        ),
+                        "required_context_match_keys": context_keys,
+                        "source_provenance": source_provenance,
+                        "evidence_refs": stale_refs,
+                    }
+                )
+            else:
+                risk_index += 1
+                open_risks.append(
+                    {
+                        "risk_id": f"RISK-{risk_index:04d}",
+                        "risk_type": "missing_earth_sweep_evidence",
+                        "reason_code": REASON_CODE_MISSING_EARTH_SWEEP_EVIDENCE,
+                        "recommendation_type": "interface_obligation",
+                        "source_project_id": source_project_id,
+                        "target_project_id": current_project_id,
+                        "interface_id": interface_id,
+                        "obligation_id": obligation["obligation_id"],
+                        "summary": (
+                            "Shared interface obligation lacks Earth-sweep evidence refs; "
+                            f"kept as open risk: {obligation['statement']}"
+                        ),
+                        "required_context_match_keys": context_keys,
+                        "source_provenance": source_provenance,
+                        "evidence_refs": [],
+                    }
+                )
+
         shared_interface_contracts.append(
             {
                 "interface_id": interface_id,
                 "source_contract_ids": sorted(row["source_contract_ids"]),
                 "required_obligation_count": row["required_obligation_count"],
                 "optional_obligation_count": row["optional_obligation_count"],
-                "obligations": row["obligations"],
+                "obligations": obligations,
             }
         )
 
@@ -448,6 +544,8 @@ def extract_interface_contracts(payload: dict[str, Any], *, generated_at: str | 
         "generated_at": generated_at or _utc_now_iso(),
         "current_project_id": current_project_id,
         "shared_interface_contracts": shared_interface_contracts,
+        "cross_project_recommendations": cross_project_recommendations,
+        "open_risks": open_risks,
         "summary": {
             "earth_contract_source_count": len(contract_sources),
             "relevant_source_count": relevant_source_count,
@@ -455,6 +553,10 @@ def extract_interface_contracts(payload: dict[str, Any], *, generated_at: str | 
             "required_obligation_count": required_count,
             "optional_obligation_count": optional_count,
             "total_obligation_count": required_count + optional_count,
+            "recommendation_count": len(cross_project_recommendations),
+            "open_risk_count": len(open_risks),
+            "earth_sweep_context_entry_count": earth_sweep_evidence_entry_count,
+            "earth_sweep_evidence_refs_used_count": len(used_earth_sweep_refs),
         },
     }
 
