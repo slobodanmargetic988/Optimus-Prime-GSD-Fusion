@@ -1,4 +1,5 @@
 # BEGIN OPTIMUS-PRIME MANAGED REPORT IGNORES
+/.op-simple/
 /reports/optimus-prime/**
 /reports/optimus-prime/runtime/**
 /reports/optimus-prime/controller/**
