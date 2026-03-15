@@ -40,6 +40,60 @@ def test_req_020_builder_normalizes_risk_signals_with_taxonomy_compatibility():
     assert metadata["reproducible_call_id"] == anchors["reproducible_call_id"]
 
 
+def test_req_020_builder_is_deterministic_when_normalized_at_utc_is_omitted():
+    fixture = _read_json(FIXTURE_PATH)
+    omitted_timestamp_input = dict(fixture["input"])
+    omitted_timestamp_input.pop("normalized_at_utc")
+
+    payload_a = module.build_req_020_risk_signal_normalization(**omitted_timestamp_input)
+    payload_b = module.build_req_020_risk_signal_normalization(**omitted_timestamp_input)
+    assert payload_a == payload_b
+    assert module.validate_req_020_risk_signal_normalization(payload_a) == []
+    assert (
+        payload_a["risk_signal_normalization"]["normalized_at_utc"]
+        == fixture["expected_contract_anchors"]["derived_normalized_at_utc_when_omitted"]
+    )
+
+
+def test_req_020_builder_uses_deterministic_fallback_when_observed_timestamps_are_missing():
+    payload = module.build_req_020_risk_signal_normalization(
+        risk_signals=[
+            {
+                "signal_source": "retry",
+                "reason_code": "retry_exhausted",
+                "summary": "Retry budget exhausted without observed timestamps.",
+                "severity": "medium",
+                "occurrence_count": 1,
+                "evidence_refs": ["reports/optimus-prime/retries/no-observed-timestamp.json"],
+            }
+        ]
+    )
+    assert module.validate_req_020_risk_signal_normalization(payload) == []
+    assert payload["risk_signal_normalization"]["normalized_at_utc"] == module.REQ_020_FALLBACK_NORMALIZED_AT_UTC
+
+
+def test_req_020_validator_reports_alias_row_field_errors_without_throwing():
+    fixture = _read_json(FIXTURE_PATH)
+    payload = module.build_req_020_risk_signal_normalization(**fixture["input"])
+    payload["risk_signal_normalization"]["reason_code_taxonomy"]["source_reason_code_aliases_applied"] = [
+        {
+            "source_reason_code": 17,
+            "normalized_reason_code": {"invalid": True},
+        }
+    ]
+
+    errors = module.validate_req_020_risk_signal_normalization(payload)
+    assert errors
+    assert (
+        "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied[0].source_reason_code"
+        " must be a string when provided"
+    ) in errors
+    assert (
+        "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied[0].normalized_reason_code"
+        " must be a string when provided"
+    ) in errors
+
+
 def test_req_020_sample_payload_and_contract_doc_are_aligned():
     sample = _read_json(SAMPLE_PATH)
     assert module.validate_req_020_risk_signal_normalization(sample) == []

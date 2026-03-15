@@ -43,6 +43,7 @@ REQ_020_SCHEMA_VERSION = "req-020.risk-signal-normalization.v1"
 REQ_020_REQUIREMENT_ID = "REQ-020"
 REQ_020_TOOL = "strategy-context-sweep"
 REQ_020_TOOL_VERSION = "1.0.0"
+REQ_020_FALLBACK_NORMALIZED_AT_UTC = "1970-01-01T00:00:00Z"
 
 REQ_020_ALLOWED_SOURCES = {
     "blocker",
@@ -2494,15 +2495,13 @@ def validate_req_009_prior_strategy_revision_ingestion(payload: Mapping[str, Any
     return errors
 
 
-def _req_020_utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 def _normalize_req_020_timestamp(raw_value: Any, *, field_name: str, allow_empty: bool) -> str:
     if raw_value is None:
         if allow_empty:
             return ""
-        return _req_020_utc_now_iso()
+        raise ValueError(f"{field_name} must be provided")
+    if allow_empty and isinstance(raw_value, str) and not raw_value.strip():
+        return ""
     text = _require_nonempty_text(raw_value, field_name=field_name)
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
@@ -2745,17 +2744,32 @@ def _build_req_020_summary(normalized_signals: list[dict[str, Any]], total_input
     }
 
 
+def _derive_req_020_normalized_at_utc(normalized_input_rows: list[dict[str, Any]]) -> str:
+    observed_timestamps = [
+        timestamp
+        for row in normalized_input_rows
+        for timestamp in (row["first_observed_at_utc"], row["last_observed_at_utc"])
+        if timestamp
+    ]
+    if observed_timestamps:
+        return max(observed_timestamps)
+    return REQ_020_FALLBACK_NORMALIZED_AT_UTC
+
+
 def build_req_020_risk_signal_normalization(
     *,
     risk_signals: list[Mapping[str, Any]],
     normalized_at_utc: str | None = None,
 ) -> dict[str, Any]:
     normalized_input_rows = _normalize_req_020_signal_rows(risk_signals)
-    normalized_timestamp = _normalize_req_020_timestamp(
-        normalized_at_utc,
-        field_name="normalized_at_utc",
-        allow_empty=False,
-    )
+    if normalized_at_utc is None:
+        normalized_timestamp = _derive_req_020_normalized_at_utc(normalized_input_rows)
+    else:
+        normalized_timestamp = _normalize_req_020_timestamp(
+            normalized_at_utc,
+            field_name="normalized_at_utc",
+            allow_empty=False,
+        )
     normalized_signals, alias_rows = _build_req_020_aggregate_signals(normalized_input_rows)
     reason_codes = sorted({row["reason_code"] for row in normalized_signals})
     taxonomy = {
@@ -2934,28 +2948,40 @@ def validate_req_020_risk_signal_normalization(payload: Mapping[str, Any]) -> li
                         f"[{index}] must be an object"
                     )
                     continue
-                if not _normalize_context_note(
-                    row.get("source_reason_code"),
-                    field_name=(
-                        "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
-                        f"[{index}].source_reason_code"
-                    ),
-                ):
-                    errors.append(
-                        "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
-                        f"[{index}].source_reason_code must be a non-empty string"
+                source_reason_field = (
+                    "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
+                    f"[{index}].source_reason_code"
+                )
+                normalized_reason_field = (
+                    "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
+                    f"[{index}].normalized_reason_code"
+                )
+                try:
+                    source_reason_code = _normalize_context_note(
+                        row.get("source_reason_code"),
+                        field_name=source_reason_field,
                     )
-                if not _normalize_context_note(
-                    row.get("normalized_reason_code"),
-                    field_name=(
-                        "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
-                        f"[{index}].normalized_reason_code"
-                    ),
-                ):
-                    errors.append(
-                        "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
-                        f"[{index}].normalized_reason_code must be a non-empty string"
+                except ValueError as exc:
+                    errors.append(str(exc))
+                else:
+                    if not source_reason_code:
+                        errors.append(
+                            "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
+                            f"[{index}].source_reason_code must be a non-empty string"
+                        )
+                try:
+                    normalized_reason_code = _normalize_context_note(
+                        row.get("normalized_reason_code"),
+                        field_name=normalized_reason_field,
                     )
+                except ValueError as exc:
+                    errors.append(str(exc))
+                else:
+                    if not normalized_reason_code:
+                        errors.append(
+                            "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
+                            f"[{index}].normalized_reason_code must be a non-empty string"
+                        )
 
     summary = normalization.get("summary")
     if not isinstance(summary, Mapping):

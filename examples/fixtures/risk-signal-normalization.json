@@ -68,6 +68,7 @@
     "schema_version": "req-020.risk-signal-normalization.v1",
     "requirement_id": "REQ-020",
     "normalized_at_utc": "2026-03-15T01:30:00Z",
+    "derived_normalized_at_utc_when_omitted": "2026-03-15T01:20:00Z",
     "normalized_signal_ids": [
       "risk-signal.afa5fefa3efb",
       "risk-signal.950141e95f9e",

@@ -32,7 +32,7 @@ This surface preserves gate-review reason-code taxonomy compatibility by emittin
       "last_observed_at_utc": "ISO-8601 UTC timestamp"
     }
   ],
-  "normalized_at_utc": "ISO-8601 UTC timestamp"
+  "normalized_at_utc": "ISO-8601 UTC timestamp (optional)"
 }
 ```
 
@@ -40,6 +40,7 @@ Notes:
 - `signal_source` aliases are normalized (`blockers` -> `blocker`, `watchdog-exit` -> `watchdog_exit`, `regression` -> `regression_pattern`).
 - `reason_code` aliases are normalized to canonical gate-review-compatible reason codes.
 - Signals are aggregated by `(signal_source, reason_code, summary)` and `occurrence_count` is summed.
+- If `normalized_at_utc` is omitted, the builder derives it deterministically from the latest observed signal timestamp (`max(first_observed_at_utc, last_observed_at_utc)` across rows). If no observed timestamps are provided, fallback is `1970-01-01T00:00:00Z`.
 
 ## Output Contract
 REQ-020 output shape:
