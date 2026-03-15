@@ -38,6 +38,8 @@ Builder anchors:
 - `revision_identity` (non-empty string)
 - `execution_resource_context` (object)
 - `execution_candidates` (optional list)
+- `earth_sweep_evidence_refs` (optional list)
+- `cross_project_context` (optional list)
 
 `execution_resource_context` required sections:
 
@@ -76,6 +78,17 @@ Builder anchors:
 - `evidence_refs` (optional list of strings)
 - `next_step` (non-empty string, default generated)
 
+`earth_sweep_evidence_refs` fields:
+
+- list of Earth-sweep evidence refs used to justify cross-project resource coordination
+
+`cross_project_context[]` fields:
+
+- `project_id` (non-empty string)
+- `project_root` (absolute path)
+- `evidence_refs` (optional list of strings)
+- `context_note` (optional string)
+
 ## Output contract
 
 Top-level required keys:
@@ -104,13 +117,18 @@ Top-level required keys:
 - `evidence_refs`
 - `sequencing_policy_suggestions[]`
 - `model_routing_policy_suggestions[]`
+- `cross_project_context`
+- `cross_project_obligations[]`
 - `open_risks[]`
 
 Resource influence guarantees:
 
 - Sequencing order and `execution_batch` are derived from resource-constrained parallel slots.
 - Model-routing suggestions are derived from candidate complexity/priority and available model tiers.
-- Open risks are emitted when routing is unavailable or token budgets are exceeded.
+- Broad-sweep context is mirrored under `processing_behavior.context_inputs.broad_sweep_context`.
+- Broad-sweep evidence refs are aggregated into `context_usage.evidence_refs_used` and `recommendation.evidence_refs`.
+- Cross-project obligations are emitted only when Earth-sweep evidence refs and project evidence refs are both present.
+- Open risks are emitted when routing is unavailable, token budgets are exceeded, or cross-project coordination lacks Earth-sweep evidence.
 
 ## Sample structure
 

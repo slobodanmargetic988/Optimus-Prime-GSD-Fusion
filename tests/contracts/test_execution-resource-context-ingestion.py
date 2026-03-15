@@ -54,9 +54,25 @@ def test_req_019_resource_context_shapes_sequencing_and_model_routing() -> None:
     recommendation = sample["processing_behavior"]["recommendation"]
     usage = sample["processing_behavior"]["context_usage"]
 
+    assert set(recommendation.keys()) == {
+        "decision",
+        "rationale",
+        "confidence",
+        "evidence_refs",
+        "sequencing_policy_suggestions",
+        "model_routing_policy_suggestions",
+        "cross_project_context",
+        "cross_project_obligations",
+        "open_risks",
+    }
     assert recommendation["decision"] == "proceed-with-constraints"
     assert usage["effective_parallel_slots_used"] == 2
     assert usage["sequencing_batch_count"] == 2
+    assert usage["cross_project_context_used"] is True
+    assert usage["cross_project_projects_considered"] == ["runtime-orchestrator"]
+    assert usage["earth_sweep_evidence_refs_used"] == [
+        "reports/earth/sweeps/2026-03-15/resource-portfolio.json"
+    ]
 
     sequencing = recommendation["sequencing_policy_suggestions"]
     assert [row["action_id"] for row in sequencing] == [
@@ -73,6 +89,20 @@ def test_req_019_resource_context_shapes_sequencing_and_model_routing() -> None:
         "action-contract-normalize": "gpt-5",
         "action-summary-pass": "gpt-5-mini",
     }
+    assert recommendation["cross_project_obligations"] == [
+        {
+            "obligation_id": "obligation-resource-runtime-orchestrator",
+            "project_id": "runtime-orchestrator",
+            "summary": (
+                "Coordinate execution-resource sequencing and model-routing policy with "
+                "'runtime-orchestrator' before shared execution."
+            ),
+            "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/resource-portfolio.json",
+                "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+            ],
+        }
+    ]
 
 
 def test_req_019_rejects_invalid_parallel_task_limit() -> None:

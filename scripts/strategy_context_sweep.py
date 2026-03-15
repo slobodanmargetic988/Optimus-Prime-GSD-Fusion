@@ -1755,6 +1755,76 @@ def _effective_parallel_slots(resource_context: Mapping[str, Any]) -> int:
     return max(1, min(int(rate_limits["max_parallel_tasks"]), max(1, cpu_capacity)))
 
 
+def _build_req_019_cross_project_context_summary(
+    *,
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "cross_project": bool(cross_project_context),
+        "projects_considered": [row["project_id"] for row in cross_project_context],
+        "projects_with_evidence_refs": [row["project_id"] for row in cross_project_context if row["evidence_refs"]],
+        "projects_without_evidence_refs": [row["project_id"] for row in cross_project_context if not row["evidence_refs"]],
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "evidence_refs_by_project": {
+            row["project_id"]: list(row["evidence_refs"])
+            for row in cross_project_context
+        },
+    }
+
+
+def _build_req_019_cross_project_recommendations(
+    *,
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    for row in cross_project_context:
+        project_id = str(row["project_id"])
+        project_refs = list(row["evidence_refs"])
+        if not earth_sweep_evidence_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-cross-project-earth-evidence-{project_id}",
+                    "reason_code": "missing_earth_sweep_evidence_refs",
+                    "summary": (
+                        f"Cross-project execution-resource coordination for '{project_id}' remains unresolved "
+                        "until Earth-sweep evidence refs are attached."
+                    ),
+                    "required_evidence_refs": project_refs,
+                }
+            )
+            continue
+        if not project_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-cross-project-context-evidence-{project_id}",
+                    "reason_code": "missing_cross_project_context_evidence_refs",
+                    "summary": (
+                        f"Cross-project execution-resource coordination for '{project_id}' remains unresolved "
+                        "because project-specific evidence refs are missing."
+                    ),
+                    "required_evidence_refs": list(earth_sweep_evidence_refs),
+                }
+            )
+            continue
+        cross_project_obligations.append(
+            {
+                "obligation_id": f"obligation-resource-{project_id}",
+                "project_id": project_id,
+                "summary": (
+                    f"Coordinate execution-resource sequencing and model-routing policy with '{project_id}' "
+                    "before shared execution."
+                ),
+                "evidence_refs": _collect_unique_refs(earth_sweep_evidence_refs, project_refs),
+            }
+        )
+    cross_project_obligations.sort(key=lambda row: (row["project_id"], row["obligation_id"]))
+    open_risks.sort(key=lambda row: row["risk_id"])
+    return cross_project_obligations, open_risks
+
+
 def _route_models_for_execution_candidates(
     *,
     execution_candidates: list[dict[str, Any]],
@@ -1821,10 +1891,14 @@ def _canonical_req_019_processing_input(
     *,
     execution_resource_context: dict[str, Any],
     execution_candidates: list[dict[str, Any]],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "execution_resource_context": execution_resource_context,
         "execution_candidates": execution_candidates,
+        "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+        "cross_project_context": cross_project_context,
     }
 
 
@@ -1857,12 +1931,22 @@ def _build_req_019_processing_behavior(
     *,
     execution_resource_context: dict[str, Any],
     execution_candidates: list[dict[str, Any]],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
 ) -> dict[str, Any]:
     routing_suggestions, routing_risks, routed_action_ids = _route_models_for_execution_candidates(
         execution_candidates=execution_candidates,
         resource_context=execution_resource_context,
     )
     route_by_action = {row["action_id"]: row for row in routing_suggestions}
+    cross_project_context_summary = _build_req_019_cross_project_context_summary(
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+    )
+    cross_project_obligations, cross_project_risks = _build_req_019_cross_project_recommendations(
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+    )
 
     hardware_profile = execution_resource_context["hardware_profile"]
     rate_limits = execution_resource_context["rate_limits"]
@@ -1907,6 +1991,7 @@ def _build_req_019_processing_behavior(
                 }
             )
 
+    open_risks.extend(cross_project_risks)
     open_risks.sort(key=lambda row: row["risk_id"])
     ordered_candidates = sorted(
         execution_candidates,
@@ -1955,10 +2040,13 @@ def _build_req_019_processing_behavior(
         hardware_profile["evidence_refs"],
         rate_limits["evidence_refs"],
         runtime_budget["evidence_refs"],
+        earth_sweep_evidence_refs,
+        *[row["evidence_refs"] for row in cross_project_context],
         *[row["evidence_refs"] for row in execution_resource_context["model_inventory"]],
         *[row["evidence_refs"] for row in execution_candidates],
         *[row["evidence_refs"] for row in routing_suggestions],
         *[row["evidence_refs"] for row in sequencing_policy_suggestions],
+        *[row["evidence_refs"] for row in cross_project_obligations],
         *[row["required_evidence_refs"] for row in open_risks],
     )
     decision = _req_019_recommendation_decision(
@@ -1970,9 +2058,15 @@ def _build_req_019_processing_behavior(
     context_inputs = {
         "execution_resource_context": execution_resource_context,
         "execution_candidates": execution_candidates,
+        "broad_sweep_context": {
+            "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+            "cross_project_context": cross_project_context,
+        },
     }
     context_usage = {
         "resource_context_used": True,
+        "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+        "cross_project_context_used": bool(cross_project_context),
         "cpu_cores_used": hardware_profile["cpu_cores"],
         "gpu_count_used": hardware_profile["gpu_count"],
         "max_parallel_tasks_used": rate_limits["max_parallel_tasks"],
@@ -1983,6 +2077,10 @@ def _build_req_019_processing_behavior(
         "model_inventory_ids_used": [row["model_id"] for row in execution_resource_context["model_inventory"]],
         "execution_candidate_ids_used": [row["action_id"] for row in execution_candidates],
         "routed_action_ids_used": sorted(routed_action_ids),
+        "cross_project_projects_considered": cross_project_context_summary["projects_considered"],
+        "cross_project_projects_with_evidence_refs": cross_project_context_summary["projects_with_evidence_refs"],
+        "cross_project_projects_without_evidence_refs": cross_project_context_summary["projects_without_evidence_refs"],
+        "earth_sweep_evidence_refs_used": list(earth_sweep_evidence_refs),
         "sequencing_batch_count": max([row["execution_batch"] for row in sequencing_policy_suggestions], default=0),
         "total_estimated_token_cost": total_estimated_token_cost,
         "evidence_refs_used": evidence_refs,
@@ -1995,6 +2093,8 @@ def _build_req_019_processing_behavior(
         "evidence_refs": evidence_refs,
         "sequencing_policy_suggestions": sequencing_policy_suggestions,
         "model_routing_policy_suggestions": routing_suggestions,
+        "cross_project_context": cross_project_context_summary,
+        "cross_project_obligations": cross_project_obligations,
         "open_risks": open_risks,
     }
     return {
@@ -2015,6 +2115,8 @@ def build_req_019_execution_resource_context_ingestion(
     revision_identity: str,
     execution_resource_context: Mapping[str, Any],
     execution_candidates: list[Mapping[str, Any]] | None = None,
+    earth_sweep_evidence_refs: list[str] | None = None,
+    cross_project_context: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
     normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
@@ -2022,6 +2124,11 @@ def build_req_019_execution_resource_context_ingestion(
     normalized_revision_identity = _require_nonempty_text(revision_identity, field_name="revision_identity")
     normalized_execution_resource_context = _normalize_execution_resource_context(execution_resource_context)
     normalized_execution_candidates = _normalize_execution_candidates(execution_candidates)
+    normalized_earth_sweep_evidence_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
 
     canonical_input = _canonical_call_input(
         target_project_root=normalized_target_root,
@@ -2033,11 +2140,15 @@ def build_req_019_execution_resource_context_ingestion(
     canonical_processing_input = _canonical_req_019_processing_input(
         execution_resource_context=normalized_execution_resource_context,
         execution_candidates=normalized_execution_candidates,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
     )
     processing_digest = _canonical_input_digest(canonical_processing_input)
     processing_behavior = _build_req_019_processing_behavior(
         execution_resource_context=normalized_execution_resource_context,
         execution_candidates=normalized_execution_candidates,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
     )
 
     return {
@@ -2160,7 +2271,7 @@ def validate_req_019_execution_resource_context_ingestion(payload: Mapping[str, 
     if not isinstance(context_inputs, Mapping):
         errors.append("processing_behavior.context_inputs must be an object")
         return errors
-    for required_field in ("execution_resource_context", "execution_candidates"):
+    for required_field in ("execution_resource_context", "execution_candidates", "broad_sweep_context"):
         if required_field not in context_inputs:
             errors.append(f"processing_behavior.context_inputs missing {required_field}")
 
@@ -2170,6 +2281,8 @@ def validate_req_019_execution_resource_context_ingestion(payload: Mapping[str, 
     else:
         for required_field in (
             "resource_context_used",
+            "earth_sweep_context_used",
+            "cross_project_context_used",
             "cpu_cores_used",
             "gpu_count_used",
             "max_parallel_tasks_used",
@@ -2180,6 +2293,10 @@ def validate_req_019_execution_resource_context_ingestion(payload: Mapping[str, 
             "model_inventory_ids_used",
             "execution_candidate_ids_used",
             "routed_action_ids_used",
+            "cross_project_projects_considered",
+            "cross_project_projects_with_evidence_refs",
+            "cross_project_projects_without_evidence_refs",
+            "earth_sweep_evidence_refs_used",
             "sequencing_batch_count",
             "total_estimated_token_cost",
             "evidence_refs_used",
@@ -2198,6 +2315,8 @@ def validate_req_019_execution_resource_context_ingestion(payload: Mapping[str, 
             "evidence_refs",
             "sequencing_policy_suggestions",
             "model_routing_policy_suggestions",
+            "cross_project_context",
+            "cross_project_obligations",
             "open_risks",
         ):
             if required_field not in recommendation:
@@ -2252,6 +2371,16 @@ def validate_req_019_execution_resource_context_ingestion(payload: Mapping[str, 
         )
         normalized_resource_context = _normalize_execution_resource_context(ingestion.get("resource_context"))
         normalized_execution_candidates = _normalize_execution_candidates(context_inputs.get("execution_candidates"))
+        broad_sweep_context = context_inputs.get("broad_sweep_context")
+        if not isinstance(broad_sweep_context, Mapping):
+            raise ValueError("processing_behavior.context_inputs.broad_sweep_context must be an object")
+        normalized_earth_sweep_evidence_refs = _normalize_string_list(
+            broad_sweep_context.get("earth_sweep_evidence_refs"),
+            field_name="processing_behavior.context_inputs.broad_sweep_context.earth_sweep_evidence_refs",
+        )
+        normalized_cross_project_context = _normalize_cross_project_context(
+            broad_sweep_context.get("cross_project_context")
+        )
     except ValueError as exc:
         errors.append(str(exc))
         return errors
@@ -2275,6 +2404,8 @@ def validate_req_019_execution_resource_context_ingestion(payload: Mapping[str, 
     expected_processing_behavior = _build_req_019_processing_behavior(
         execution_resource_context=normalized_resource_context,
         execution_candidates=normalized_execution_candidates,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
     )
     if dict(processing_behavior) != expected_processing_behavior:
         errors.append("processing_behavior must mirror deterministic resource-aware processing output")
@@ -2287,6 +2418,8 @@ def validate_req_019_execution_resource_context_ingestion(payload: Mapping[str, 
     expected_canonical_processing_input = _canonical_req_019_processing_input(
         execution_resource_context=normalized_resource_context,
         execution_candidates=normalized_execution_candidates,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
     )
     if dict(canonical_processing_input) != expected_canonical_processing_input:
         errors.append("call_metadata.canonical_processing_input must mirror normalized processing input")

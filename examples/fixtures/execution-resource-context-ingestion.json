@@ -100,6 +100,19 @@
         ],
         "next_step": "Run after higher priority actions complete."
       }
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-15/resource-portfolio.json"
+    ],
+    "cross_project_context": [
+      {
+        "project_id": "runtime-orchestrator",
+        "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "context_note": "Shared runtime constraints for scheduling and routing."
+      }
     ]
   },
   "expected_payload": {
@@ -270,10 +283,27 @@
             ],
             "next_step": "Run after higher priority actions complete."
           }
-        ]
+        ],
+        "broad_sweep_context": {
+          "earth_sweep_evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/resource-portfolio.json"
+          ],
+          "cross_project_context": [
+            {
+              "project_id": "runtime-orchestrator",
+              "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+              ],
+              "context_note": "Shared runtime constraints for scheduling and routing."
+            }
+          ]
+        }
       },
       "context_usage": {
         "resource_context_used": true,
+        "earth_sweep_context_used": true,
+        "cross_project_context_used": true,
         "cpu_cores_used": 4,
         "gpu_count_used": 1,
         "max_parallel_tasks_used": 2,
@@ -296,10 +326,22 @@
           "action-risk-scan",
           "action-summary-pass"
         ],
+        "cross_project_projects_considered": [
+          "runtime-orchestrator"
+        ],
+        "cross_project_projects_with_evidence_refs": [
+          "runtime-orchestrator"
+        ],
+        "cross_project_projects_without_evidence_refs": [],
+        "earth_sweep_evidence_refs_used": [
+          "reports/earth/sweeps/2026-03-15/resource-portfolio.json"
+        ],
         "sequencing_batch_count": 2,
         "total_estimated_token_cost": 36000,
         "evidence_refs_used": [
           "contracts/req/REQ-019_execution-resource-context-ingestion.md",
+          "reports/earth/sweeps/2026-03-15/resource-portfolio.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
           "reports/planning/TASK-059/risk-scan-inputs.json",
           "reports/planning/TASK-059/summary-inputs.json",
           "reports/runtime/budget/window-2026-03-15.json",
@@ -316,6 +358,8 @@
         "confidence": "medium",
         "evidence_refs": [
           "contracts/req/REQ-019_execution-resource-context-ingestion.md",
+          "reports/earth/sweeps/2026-03-15/resource-portfolio.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
           "reports/planning/TASK-059/risk-scan-inputs.json",
           "reports/planning/TASK-059/summary-inputs.json",
           "reports/runtime/budget/window-2026-03-15.json",
@@ -440,6 +484,35 @@
             ]
           }
         ],
+        "cross_project_context": {
+          "cross_project": true,
+          "projects_considered": [
+            "runtime-orchestrator"
+          ],
+          "projects_with_evidence_refs": [
+            "runtime-orchestrator"
+          ],
+          "projects_without_evidence_refs": [],
+          "earth_sweep_evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/resource-portfolio.json"
+          ],
+          "evidence_refs_by_project": {
+            "runtime-orchestrator": [
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ]
+          }
+        },
+        "cross_project_obligations": [
+          {
+            "obligation_id": "obligation-resource-runtime-orchestrator",
+            "project_id": "runtime-orchestrator",
+            "summary": "Coordinate execution-resource sequencing and model-routing policy with 'runtime-orchestrator' before shared execution.",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/resource-portfolio.json",
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ]
+          }
+        ],
         "open_risks": [
           {
             "risk_id": "risk-daily-token-budget-exceeded",
@@ -466,8 +539,8 @@
         "runtime_mode": "llm-first",
         "target_project_root": "/workspace/projects/optimus-prime"
       },
-      "processing_input_sha256": "265e3c212634df8047815adc92300025e50ce1adcac48375e021b958aa897320",
-      "processing_call_id": "req019-processing-265e3c212634df80",
+      "processing_input_sha256": "58e0b2dfc2e6cb76d7f4379ae5a801c84961d357a332493ef9e31a732d437eb1",
+      "processing_call_id": "req019-processing-58e0b2dfc2e6cb76",
       "canonical_processing_input": {
         "execution_resource_context": {
           "hardware_profile": {
@@ -564,6 +637,19 @@
               "reports/planning/TASK-059/summary-inputs.json"
             ],
             "next_step": "Run after higher priority actions complete."
+          }
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/resource-portfolio.json"
+        ],
+        "cross_project_context": [
+          {
+            "project_id": "runtime-orchestrator",
+            "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ],
+            "context_note": "Shared runtime constraints for scheduling and routing."
           }
         ]
       }
