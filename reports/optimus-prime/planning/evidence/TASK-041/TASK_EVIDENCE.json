@@ -1,0 +1,111 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-1",
+  "task_id": "TASK-041",
+  "requirement_ids": [
+    "REQ-013"
+  ],
+  "updated_at": "2026-03-15T01:44:13Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contracts_req013_run1",
+        "command": "python3 -m pytest tests/contracts/test_capability-catalog-extraction.py -q",
+        "exit_code": 0
+      },
+      {
+        "name": "integration_req013_run1",
+        "command": "python3 -m pytest tests/integration/test_capability-catalog-extraction.py -q",
+        "exit_code": 0
+      },
+      {
+        "name": "hardening_req013_run1",
+        "command": "python3 -m pytest tests/hardening/test_capability-catalog-extraction_hardening.py -q",
+        "exit_code": 0
+      },
+      {
+        "name": "contracts_req013_run2",
+        "command": "python3 -m pytest tests/contracts/test_capability-catalog-extraction.py -q",
+        "exit_code": 0
+      },
+      {
+        "name": "integration_req013_run2",
+        "command": "python3 -m pytest tests/integration/test_capability-catalog-extraction.py -q",
+        "exit_code": 0
+      },
+      {
+        "name": "hardening_req013_run2",
+        "command": "python3 -m pytest tests/hardening/test_capability-catalog-extraction_hardening.py -q",
+        "exit_code": 0
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_capability-catalog-extraction.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_capability-catalog-extraction.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_capability-catalog-extraction_hardening.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_capability-catalog-extraction.py -q",
+        "run": 2,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_capability-catalog-extraction.py -q",
+        "run": 2,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_capability-catalog-extraction_hardening.py -q",
+        "run": 2,
+        "passed": true
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "tests/hardening/test_capability-catalog-extraction_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-041/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "ready_for_test"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}
