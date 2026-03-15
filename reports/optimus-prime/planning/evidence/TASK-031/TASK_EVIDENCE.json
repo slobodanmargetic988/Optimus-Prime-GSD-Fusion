@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-2",
+  "task_id": "TASK-031",
+  "requirement_ids": [
+    "REQ-010"
+  ],
+  "updated_at": "2026-03-15T02:21:35Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req010_hardening_stale_source_artifact_detected",
+        "status": "passed",
+        "details": "REQ-010 hardening confirms stale Earth-sweep source artifacts surface deterministic reason code output and evidence refs in change-detection context and risk outputs."
+      },
+      {
+        "name": "req010_hardening_missing_docs_and_peer_doc_reason_codes",
+        "status": "passed",
+        "details": "REQ-010 hardening confirms missing mission/scope and peer-project document gaps emit explicit deterministic reason_code and evidence_ref outputs."
+      },
+      {
+        "name": "req010_hardening_replay_context_bundle_stability",
+        "status": "passed",
+        "details": "REQ-010 hardening confirms context bundle serialization and change-detection payloads are replay-stable across repeated runs."
+      }
+    ],
+    "edge_case_rows": [
+      {
+        "edge_case_id": "stale_source_artifact_detected_during_earth_sweep",
+        "status": "resolved",
+        "reason_codes": [
+          "stale_source_artifact_detected",
+          "missing_peer_project_doc"
+        ],
+        "unresolved_blocker": false,
+        "evidence_refs": [
+          "tests/hardening/test_change-detection-since-previous-strategy-revision_hardening.py"
+        ]
+      },
+      {
+        "edge_case_id": "missing_mission_scope_or_peer_project_doc",
+        "status": "resolved",
+        "reason_codes": [
+          "missing_scope_doc",
+          "missing_peer_project_doc"
+        ],
+        "unresolved_blocker": false,
+        "evidence_refs": [
+          "tests/hardening/test_change-detection-since-previous-strategy-revision_hardening.py"
+        ]
+      },
+      {
+        "edge_case_id": "replay_stability_of_context_bundle_serialization",
+        "status": "resolved",
+        "reason_codes": [],
+        "unresolved_blocker": false,
+        "evidence_refs": [
+          "tests/hardening/test_change-detection-since-previous-strategy-revision_hardening.py"
+        ]
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_change-detection-since-previous-strategy-revision.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_change-detection-since-previous-strategy-revision.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_change-detection-since-previous-strategy-revision_hardening.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_change-detection-since-previous-strategy-revision.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 2
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_change-detection-since-previous-strategy-revision.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 2
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_change-detection-since-previous-strategy-revision_hardening.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 2
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "tests/hardening/test_change-detection-since-previous-strategy-revision_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-031/TASK_EVIDENCE.json"
+    ]
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

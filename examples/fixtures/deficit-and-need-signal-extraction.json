@@ -1,0 +1,73 @@
+{
+  "analysis_type": "deficit_and_need_signal_extraction",
+  "now_utc": "2026-03-14T21:00:00Z",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "capability_tags": [
+      "telemetry",
+      "orchestration",
+      "contracts",
+      "planning"
+    ]
+  },
+  "thresholds": {
+    "min_impact_score": 6,
+    "min_urgency_score": 6,
+    "min_leverage_ratio": 0.5
+  },
+  "max_signals": 5,
+  "deficits": [
+    {
+      "deficit_id": "DEF-001",
+      "summary": "Runtime telemetry freshness blind spots slow blocker remediation.",
+      "impact_score": 9,
+      "urgency_score": 8,
+      "required_capability_tags": [
+        "telemetry",
+        "orchestration"
+      ],
+      "evidence_refs": [
+        "OBS-TELEM-001",
+        "DOC-OPS-002"
+      ]
+    },
+    {
+      "deficit_id": "DEF-002",
+      "summary": "Strategy packet contract drift is not detected before planning starts.",
+      "impact_score": 7,
+      "urgency_score": 9,
+      "required_capability_tags": [
+        "contracts",
+        "planning"
+      ],
+      "evidence_refs": [
+        "OBS-CONTRACT-011"
+      ]
+    },
+    {
+      "deficit_id": "DEF-003",
+      "summary": "Earth-wide release visibility is fragmented across projects.",
+      "impact_score": 8,
+      "urgency_score": 7,
+      "required_capability_tags": [
+        "dashboard",
+        "analytics"
+      ],
+      "evidence_refs": [
+        "OBS-RELEASE-004"
+      ]
+    },
+    {
+      "deficit_id": "DEF-004",
+      "summary": "Contributor onboarding docs are stale and inconsistent.",
+      "impact_score": 4,
+      "urgency_score": 5,
+      "required_capability_tags": [
+        "documentation"
+      ],
+      "evidence_refs": [
+        "DOC-ONBOARD-003"
+      ]
+    }
+  ]
+}

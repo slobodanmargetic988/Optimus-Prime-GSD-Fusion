@@ -1,0 +1,165 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-2",
+  "task_id": "TASK-006",
+  "requirement_ids": [
+    "REQ-002"
+  ],
+  "updated_at": "2026-03-14T23:35:29Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req002_hardening_stale_source_artifact_detected",
+        "status": "passed",
+        "details": "Earth sweep now emits deterministic stale source artifact reason codes with evidence refs."
+      },
+      {
+        "name": "req002_hardening_missing_docs_and_peer_doc_reason_codes",
+        "status": "passed",
+        "details": "Missing mission/scope and peer-project document gaps emit explicit deterministic reason_code outputs."
+      },
+      {
+        "name": "req002_hardening_replay_context_bundle_stability",
+        "status": "passed",
+        "details": "Context bundle serialization is replay-stable across repeated runs."
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_earth-wide-repository-discovery-manifest.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_earth-wide-repository-discovery-manifest.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_earth-wide-repository-discovery-manifest_hardening.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_earth-wide-repository-discovery-manifest.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 2
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_earth-wide-repository-discovery-manifest.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 2
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_earth-wide-repository-discovery-manifest_hardening.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 2
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/hardening/test_earth-wide-repository-discovery-manifest_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-006/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "pytest_req002_contract_run1",
+        "status": "passed"
+      },
+      {
+        "name": "pytest_req002_integration_run1",
+        "status": "passed"
+      },
+      {
+        "name": "pytest_req002_hardening_run1",
+        "status": "passed"
+      },
+      {
+        "name": "pytest_req002_contract_run2",
+        "status": "passed"
+      },
+      {
+        "name": "pytest_req002_integration_run2",
+        "status": "passed"
+      },
+      {
+        "name": "pytest_req002_hardening_run2",
+        "status": "passed"
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_earth-wide-repository-discovery-manifest.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_earth-wide-repository-discovery-manifest.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_earth-wide-repository-discovery-manifest_hardening.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 1
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_earth-wide-repository-discovery-manifest.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 2
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_earth-wide-repository-discovery-manifest.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 2
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_earth-wide-repository-discovery-manifest_hardening.py -q",
+        "status": "passed",
+        "exit_code": 0,
+        "run": 2
+      }
+    ],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-006/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "completed",
+    "decision": "approved",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}
