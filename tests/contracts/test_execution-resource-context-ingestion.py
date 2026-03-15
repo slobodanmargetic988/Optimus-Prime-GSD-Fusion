@@ -112,3 +112,15 @@ def test_req_019_rejects_invalid_parallel_task_limit() -> None:
 
     with pytest.raises(ValueError, match="max_parallel_tasks"):
         module.build_req_019_execution_resource_context_ingestion(**bad_input)
+
+
+def test_req_019_rejects_duplicate_cross_project_project_ids() -> None:
+    fixture = _read_json(FIXTURE_PATH)
+    bad_input = json.loads(json.dumps(fixture["input"]))
+    duplicate = dict(bad_input["cross_project_context"][0])
+    duplicate["project_root"] = "/workspace/projects/Earth/runtime-orchestrator-shadow"
+    duplicate["evidence_refs"] = ["reports/earth/sweeps/2026-03-15/runtime-orchestrator-shadow.json"]
+    bad_input["cross_project_context"] = list(bad_input["cross_project_context"]) + [duplicate]
+
+    with pytest.raises(ValueError, match="cross_project_context\\[1\\]\\.project_id must be unique"):
+        module.build_req_019_execution_resource_context_ingestion(**bad_input)

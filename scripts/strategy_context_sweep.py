@@ -112,10 +112,14 @@ def _normalize_cross_project_context(raw_value: Any) -> list[dict[str, Any]]:
         raise ValueError("cross_project_context must be a list")
 
     normalized: list[dict[str, Any]] = []
+    seen_project_ids: set[str] = set()
     for index, item in enumerate(raw_value):
         if not isinstance(item, Mapping):
             raise ValueError(f"cross_project_context[{index}] must be an object")
         project_id = _require_nonempty_text(item.get("project_id"), field_name=f"cross_project_context[{index}].project_id")
+        if project_id in seen_project_ids:
+            raise ValueError(f"cross_project_context[{index}].project_id must be unique")
+        seen_project_ids.add(project_id)
         project_root = _normalize_root(item.get("project_root"), field_name=f"cross_project_context[{index}].project_root")
         evidence_refs = _normalize_string_list(
             item.get("evidence_refs"),

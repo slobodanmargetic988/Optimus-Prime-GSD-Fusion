@@ -6,7 +6,7 @@
   "requirement_ids": [
     "REQ-019"
   ],
-  "updated_at": "2026-03-15T18:45:09Z",
+  "updated_at": "2026-03-15T19:23:20Z",
   "dev": {
     "status": "pass",
     "checks": [
@@ -19,14 +19,14 @@
         "command": "python3 -m pytest tests/contracts/test_execution-resource-context-ingestion.py -q",
         "passed": true,
         "exit_code": 0,
-        "output": "..... [100%] 5 passed in 0.02s"
+        "output": "...... [100%] 6 passed in 0.03s"
       },
       {
         "run": 1,
         "command": "python3 -m pytest tests/integration/test_execution-resource-context-ingestion.py -q",
         "passed": true,
         "exit_code": 0,
-        "output": ".. [100%] 2 passed in 0.02s"
+        "output": "... [100%] 3 passed in 0.03s"
       }
     ],
     "edge_case_blockers": [
@@ -78,6 +78,7 @@
     "reason_codes": [
       "req_019_broad_sweep_context_ingested",
       "req_019_cross_project_context_usage_verified",
+      "req_019_duplicate_cross_project_ids_rejected",
       "req_019_missing_earth_evidence_open_risk_verified",
       "task_evidence_path_resolved"
     ]
