@@ -1357,6 +1357,50 @@ def validate_bundle_contract(bundle_path: Path, planning_root: Path) -> tuple[di
         if plan_id and evidence_plan_id and evidence_plan_id != plan_id:
             _err(errors, "planner_bundle_schema_error", f"{path} plan_id mismatch", expected_plan_id=plan_id, actual_plan_id=evidence_plan_id)
 
+    if isinstance(plan_packets, dict) and isinstance(task_state, dict):
+        plan_task_kinds = {
+            _as_str(item.get("task_id")): _as_str(item.get("task_kind"))
+            for item in plan_packets.get("tasks", [])
+            if isinstance(item, dict) and _as_str(item.get("task_id"))
+        }
+        state_rows = task_state.get("tasks") if isinstance(task_state.get("tasks"), list) else []
+        for idx, row in enumerate(state_rows):
+            if not isinstance(row, dict):
+                continue
+            task_id = _as_str(row.get("task_id"))
+            if not task_id or task_id not in plan_task_kinds:
+                continue
+            state_kind = _as_str(row.get("task_kind"))
+            plan_kind = plan_task_kinds[task_id]
+            if state_kind and plan_kind and state_kind != plan_kind:
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    f"TASK_EXECUTION_STATE.tasks[{idx}].task_kind must match PLAN_PACKETS task_kind",
+                    task_id=task_id,
+                    expected_task_kind=plan_kind,
+                    actual_task_kind=state_kind,
+                )
+        for path in evidence_keys:
+            artifact = bundle[path]
+            payload = artifact.content if isinstance(artifact.content, dict) else None
+            if not isinstance(payload, dict):
+                continue
+            task_id = _as_str(payload.get("task_id"))
+            if not task_id or task_id not in plan_task_kinds:
+                continue
+            evidence_kind = _as_str(payload.get("task_kind"))
+            plan_kind = plan_task_kinds[task_id]
+            if evidence_kind and plan_kind and evidence_kind != plan_kind:
+                _err(
+                    errors,
+                    "planner_bundle_schema_error",
+                    f"{path}.task_kind must match PLAN_PACKETS task_kind",
+                    task_id=task_id,
+                    expected_task_kind=plan_kind,
+                    actual_task_kind=evidence_kind,
+                )
+
     if req_ids and state_json is not None:
         state_reqs = state_json.get("requirements")
         if isinstance(state_reqs, list):

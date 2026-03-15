@@ -14,7 +14,7 @@ Lane-level review rule:
 - Validate correctness, regression risk, and acceptance-criteria coverage.
 - Perform lightweight evidence-backed review (diff, checks, targeted verification).
 - Return deterministic decision for Optimus routing:
-  - `review_passed`
+  - `completed`
   - `needs_dev_fix`
   - `blocked`
 
@@ -65,7 +65,7 @@ Lane-level review rule:
 - Return exactly one machine-readable JSON object and no additional prose or markdown.
 - Required output schema (and only this schema):
   - `task_identifier` (string)
-  - `decision` (`review_passed`, `needs_dev_fix`, `blocked`)
+  - `decision` (`completed`, `needs_dev_fix`, `blocked`)
   - `checks` (array of check result objects)
   - `findings` (array of short strings; empty array when no findings)
 - Persist the same JSON object to a canonical local handoff file:
@@ -91,11 +91,11 @@ Lane-level review rule:
 5. Review dev and tester summaries to confirm expected scope and evidence.
 6. Execute minimal additional checks needed to confirm acceptance and risk.
 7. Classify result:
-   - acceptance satisfied and no blocking risk -> `review_passed`
+   - acceptance satisfied and no blocking risk -> `completed`
    - defects/regressions/open risk requiring changes -> `needs_dev_fix`
    - external/precondition blocker -> `blocked`
-   - for `lane_review`, `review_passed` means the lane is ready for the next integrated gate (deep review or merge progression, depending on packet intent)
-   - for `deep_review`, `review_passed` means the lane is ready for merge progression
+   - for `lane_review`, `completed` means the lane is ready for the next integrated gate (deep review or merge progression, depending on packet intent)
+   - for `deep_review`, `completed` means the lane is ready for merge progression
 8. Validate output schema strictly (no alias keys, no extra top-level keys).
 9. Write canonical handoff JSON to `<worktree_root>/reports/handoffs/<task_identifier>.handoff.json`.
 10. Return only the final JSON object and stop.
@@ -123,7 +123,7 @@ Lane-level review rule:
 ## Pre-Return Checklist (Mandatory)
 - [ ] Output parses as JSON object.
 - [ ] Top-level keys are exactly: `task_identifier`, `decision`, `checks`, `findings`.
-- [ ] `decision` is one of: `review_passed`, `needs_dev_fix`, `blocked`.
+- [ ] `decision` is one of: `completed`, `needs_dev_fix`, `blocked`.
 - [ ] `checks` is an array and `findings` is an array.
 - [ ] No alias keys are present (`reviewer_decision`, `reviewer_result`, `result`, `status`).
 - [ ] Canonical handoff JSON file exists at `<worktree_root>/reports/handoffs/<task_identifier>.handoff.json`.

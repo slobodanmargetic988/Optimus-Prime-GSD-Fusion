@@ -165,7 +165,7 @@
       <section class="card half">
         <h2>Review Decision Contract</h2>
         <ul>
-          <li><strong>review_passed</strong>: lane-level acceptance met and no blocking risk.</li>
+          <li><strong>completed</strong>: lane-level acceptance met and no blocking risk.</li>
           <li><strong>needs_dev_fix</strong>: unresolved defect, regression, or high-risk issue.</li>
           <li><strong>blocked</strong>: external dependency prevents valid final decision.</li>
         </ul>
@@ -216,7 +216,7 @@ head_commit: a1b2c3d
 checks:
 - npm run test -- navbar: pass
 - npm run build: pass
-decision: review_passed
+decision: completed
 findings:
 - none
 blockers: none</div>

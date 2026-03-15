@@ -15,7 +15,7 @@ Lane-level verification rule:
 - Add or adjust tests only when needed to close an evidence gap.
 - Start each task from a fresh test database state (`reset -> migrate -> seed`) before runtime validation when DB-backed checks are required.
 - Report deterministic decision for Optimus routing:
-  - `ready_for_review`
+  - `completed`
   - `needs_dev_fix`
   - `blocked`
 - Re-test developer rework for the same task when reassigned.
@@ -99,7 +99,7 @@ Lane-level verification rule:
   - payload fields: `worktree_root`, `task_identifier`, `env_source`, `python_bin`, `runs[]`, optional `timeout_sec`, optional per-run `timeout_sec`, optional `db_precheck`, `stop_on_blocked`, `dry_run`
 - Orchestration-relevant output fields:
   - `decision_hint`, `runs[]` (`result`, `summary`, `snippet`, `signature`, `timeout_sec`), `blocker_class`, `host_rerun_commands`
-- Treat `decision_hint` as authoritative routing input: `ready_for_review`, `needs_dev_fix`, or `blocked`.
+- Treat `decision_hint` as authoritative routing input: `completed`, `needs_dev_fix`, or `blocked`.
 
 ### Tester Handoff Summary Builder Quick Use
 - Use `tester-handoff-summary-builder` to emit the final strict tester summary payload for Optimus.
@@ -124,7 +124,7 @@ Lane-level verification rule:
   - `start_from_commit`
   - `head_commit`
   - `checks` (pass/fail)
-  - `decision` (`ready_for_review`, `needs_dev_fix`, `blocked`)
+  - `decision` (`completed`, `needs_dev_fix`, `blocked`)
   - `findings` (short list)
   - `blockers` (only when blocked)
 
@@ -146,7 +146,7 @@ Lane-level verification rule:
 6. Execute minimum test set needed to validate acceptance criteria.
 7. If evidence is insufficient, expand tests only as much as needed.
 8. Classify result:
-   - all required checks pass -> `ready_for_review`
+   - all required checks pass -> `completed`
    - reproducible functional defect/regression -> `needs_dev_fix`
    - project DB bootstrap failure caused by repo scripts (migration/seed/reset incompatibility) -> `needs_dev_fix`
    - external/precondition blocker -> `blocked`

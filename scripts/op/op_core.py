@@ -436,11 +436,13 @@ def _primary_stage_for_task_kind(task_kind: str) -> str:
 def _task_kind(task: dict[str, Any], plan_task: dict[str, Any] | None = None) -> str:
     task_value = task.get("task_kind") if isinstance(task, dict) else None
     plan_value = plan_task.get("task_kind") if isinstance(plan_task, dict) else None
-    normalized = _normalize_task_kind(task_value or plan_value)
+    plan_kind = _normalize_task_kind(plan_value)
+    task_kind = _normalize_task_kind(task_value)
+    normalized = plan_kind if isinstance(plan_task, dict) and plan_kind in TASK_KIND_ALLOWED else task_kind
     if isinstance(task, dict):
         task["task_kind"] = normalized
     if isinstance(plan_task, dict):
-        plan_task["task_kind"] = _normalize_task_kind(plan_task.get("task_kind"))
+        plan_task["task_kind"] = plan_kind
     return normalized
 
 
@@ -3079,6 +3081,7 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
         phase_id = _as_str(phase.get("phase_id"))
         if phase_id:
             plan_phase_ids.add(phase_id)
+    plan_task_map = _plan_task_map(plan_packets)
     for item in tasks:
         if not isinstance(item, dict):
             errors.append({"code": "task_state_invalid", "message": "task entries must be objects"})
@@ -3102,7 +3105,8 @@ def _validate_task_execution_state(task_state: dict[str, Any], plan_packets: dic
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} lane_id is required"})
         elif not lane_id.startswith(f"{phase_id}/lane-"):
             errors.append({"code": "task_state_invalid", "message": f"task {task_id} lane_id must be phase-scoped"})
-        task_kind = _normalize_task_kind(item.get("task_kind"))
+        plan_task = plan_task_map.get(task_id) if isinstance(plan_task_map.get(task_id), dict) else None
+        task_kind = _task_kind(item, plan_task)
         item["task_kind"] = task_kind
         verification_contract = item.get("verification_contract")
         if not isinstance(verification_contract, dict):
@@ -3647,23 +3651,13 @@ def _sync_task_state_from_evidence(repo_root: Path, plan_packets: dict[str, Any]
         expectation_eval = _evaluate_evidence_expectation(payload=payload, expected=expected)
         if expectation_eval.get("progress"):
             if _as_bool_field(gapfix_state.get("active")):
-                task["status"] = TASK_STATUS_REVIEW_DONE
-                gapfix_state["active"] = False
-                gapfix_state["active_batch_id"] = None
-                gapfix_state["batch_last_updated_at"] = payload_updated_at
-                task["gapfix_state"] = gapfix_state
+                _apply_successful_evidence_completion(
+                    task,
+                    payload_updated_at=payload_updated_at,
+                    gapfix_state=gapfix_state,
+                )
             else:
-                if task_kind in TASK_KIND_ALLOWED:
-                    task["status"] = TASK_STATUS_REVIEW_DONE
-                elif stage == "dev":
-                    task["status"] = TASK_STATUS_DEV_DONE
-                elif stage == "test":
-                    task["status"] = TASK_STATUS_TESTS_DONE
-                else:
-                    task["status"] = TASK_STATUS_REVIEW_DONE
-            task["owner_slot"] = None
-            task["blocking_source"] = "none"
-            task["last_progress_at"] = payload_updated_at
+                _apply_successful_evidence_completion(task, payload_updated_at=payload_updated_at)
             warnings.append(
                 {
                     "code": "tdd_expectation_met",
@@ -3940,6 +3934,7 @@ def _normalize_task_evidence_payload(payload: dict[str, Any]) -> bool:
         "ready_for_test": "pass",
         "ready_for_review": "pass",
         "ready_for_phase_exit": "pass",
+        "completed": "pass",
     }.get(result)
     if canonical and canonical != result:
         summary["result"] = canonical
@@ -3987,6 +3982,100 @@ def _normalize_task_evidence_payload(payload: dict[str, Any]) -> bool:
         changed = True
     payload["summary"] = summary
     return changed
+
+
+def _normalize_handoff_result(value: Any) -> str:
+    result = (_as_str(value) or "").strip().lower()
+    return {
+        "ready_for_test": "completed",
+        "ready_for_review": "completed",
+        "review_passed": "completed",
+    }.get(result, result)
+
+
+def _apply_successful_evidence_completion(
+    task: dict[str, Any],
+    *,
+    payload_updated_at: str,
+    gapfix_state: dict[str, Any] | None = None,
+) -> None:
+    task["status"] = TASK_STATUS_REVIEW_DONE
+    task["owner_slot"] = None
+    task["blocking_source"] = "none"
+    task["last_progress_at"] = payload_updated_at
+    if isinstance(gapfix_state, dict):
+        gapfix_state["active"] = False
+        gapfix_state["active_batch_id"] = None
+        gapfix_state["batch_last_updated_at"] = payload_updated_at
+        task["gapfix_state"] = gapfix_state
+
+
+def _dead_pid_redispatch_base_status(
+    task: dict[str, Any],
+    plan_task: dict[str, Any] | None,
+    *,
+    status: str,
+    stage_name: str,
+) -> tuple[str, dict[str, Any] | None]:
+    if bool(task.get("is_gap_closure")) or bool((plan_task or {}).get("is_gap_closure")):
+        return {
+            TASK_STATUS_DEV_WORKING: TASK_STATUS_PENDING,
+            TASK_STATUS_TESTING: TASK_STATUS_DEV_DONE,
+            TASK_STATUS_REVIEWING: TASK_STATUS_TESTS_DONE,
+        }[status], None
+    expected_stage = _dispatch_stage_for_task(task, plan_task)
+    warning: dict[str, Any] | None = None
+    if expected_stage != stage_name:
+        warning = {
+            "code": "dead_pid_legacy_stage_normalized",
+            "message": (
+                f"task {_as_str(task.get('task_id')) or 'TASK-UNKNOWN'} dead-pid recovery normalized "
+                f"legacy stage {stage_name} to canonical redispatch stage {expected_stage}"
+            ),
+            "stage": "build_loop",
+            "task_id": _as_str(task.get("task_id")) or None,
+            "legacy_stage": stage_name,
+            "canonical_stage": expected_stage,
+            "task_kind": _task_kind(task, plan_task),
+        }
+    return TASK_STATUS_PENDING, warning
+
+
+def _repair_task_state_task_kinds(task_state: dict[str, Any], plan_packets: dict[str, Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    tasks = task_state.get("tasks")
+    if not isinstance(tasks, list):
+        return warnings
+    plan_map = _plan_task_map(plan_packets)
+    for item in tasks:
+        if not isinstance(item, dict):
+            continue
+        task_id = _as_str(item.get("task_id"))
+        if not task_id:
+            continue
+        plan_task = plan_map.get(task_id) if isinstance(plan_map.get(task_id), dict) else None
+        if not isinstance(plan_task, dict):
+            item["task_kind"] = _normalize_task_kind(item.get("task_kind"))
+            continue
+        plan_kind = _normalize_task_kind(plan_task.get("task_kind"))
+        state_kind_raw = _as_str(item.get("task_kind")) or ""
+        state_kind = _normalize_task_kind(state_kind_raw)
+        item["task_kind"] = plan_kind
+        if state_kind != plan_kind:
+            warnings.append(
+                {
+                    "code": "task_kind_repaired_from_plan",
+                    "message": (
+                        f"task {task_id} task_kind repaired from {state_kind_raw or 'missing'} "
+                        f"to {plan_kind} using PLAN_PACKETS authority"
+                    ),
+                    "stage": "build_preflight",
+                    "task_id": task_id,
+                    "from_task_kind": state_kind_raw or None,
+                    "to_task_kind": plan_kind,
+                }
+            )
+    return warnings
 
 
 def _is_not_started_evidence_placeholder(payload: dict[str, Any], summary_result: str, reason_codes: list[Any]) -> bool:
@@ -6250,12 +6339,7 @@ def _prepare_dead_pid_redispatch_assignments(
             expectation_eval = _evaluate_evidence_expectation(payload=evidence_payload, expected=expected)
             if expectation_eval.get("progress"):
                 evidence_progress = True
-                if stage_name == "dev":
-                    task["status"] = TASK_STATUS_DEV_DONE
-                elif stage_name == "test":
-                    task["status"] = TASK_STATUS_TESTS_DONE
-                else:
-                    task["status"] = TASK_STATUS_REVIEW_DONE
+                _apply_successful_evidence_completion(task, payload_updated_at=utc_now_iso())
             else:
                 warnings.append(
                     {
@@ -6272,9 +6356,6 @@ def _prepare_dead_pid_redispatch_assignments(
                 )
 
         if evidence_progress:
-            task["owner_slot"] = None
-            task["blocking_source"] = "none"
-            task["last_progress_at"] = utc_now_iso()
             retry_counts.pop(task_id, None)
             warnings.append(
                 {
@@ -6303,13 +6384,17 @@ def _prepare_dead_pid_redispatch_assignments(
             )
             continue
 
-        redispatch_base_status = {
-            TASK_STATUS_DEV_WORKING: TASK_STATUS_PENDING,
-            TASK_STATUS_TESTING: TASK_STATUS_DEV_DONE,
-            TASK_STATUS_REVIEWING: TASK_STATUS_TESTS_DONE,
-        }[status]
+        redispatch_base_status, normalization_warning = _dead_pid_redispatch_base_status(
+            task,
+            plan_task,
+            status=status,
+            stage_name=stage_name,
+        )
+        if isinstance(normalization_warning, dict):
+            warnings.append(normalization_warning)
         task["status"] = redispatch_base_status
         task["owner_slot"] = None
+        task["blocking_source"] = "none"
         task["last_progress_at"] = utc_now_iso()
         lane_id = _as_str(task.get("lane_id")) or _as_str(plan_task.get("lane_id"))
         phase_id = _as_str(task.get("phase_id")) or _as_str(plan_task.get("phase_id")) or "phase-1"
@@ -8957,7 +9042,7 @@ def _apply_handoff_updates(repo_root: Path, task_state: dict[str, Any], build_st
             evidence["dev_ready_evidence_ref"] = task_evidence_ref
         task["last_progress_at"] = utc_now_iso()
 
-        result = (_as_str(row.get("result")) or _as_str(row.get("status")) or "").lower()
+        result = _normalize_handoff_result(_as_str(row.get("result")) or _as_str(row.get("status")))
         if result in {"blocked", "failed", "error", "dispatch_failed"}:
             reason_codes = [
                 code
@@ -10708,6 +10793,8 @@ def _preflight_build(
                     "stage": "build_preflight",
                 }
             )
+    if task_state and plan_packets:
+        warnings.extend(_repair_task_state_task_kinds(task_state, plan_packets))
     validation_errors = _validate_task_execution_state(task_state, plan_packets) if task_state and plan_packets else []
     for item in validation_errors:
         warnings.append(

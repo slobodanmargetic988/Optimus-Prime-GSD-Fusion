@@ -27,7 +27,7 @@ Output: test decision for Optimus routing
 ### Expected Output
 ```text
 Runs focused backend/frontend checks required for acceptance criteria.
-Returns concise summary with decision ready_for_review.
+Returns concise summary with decision completed.
 Treats the packet as lane-level verification rather than per-task developer routing.
 Includes task_identifier, branch, head_commit, checks, and findings.
 ```

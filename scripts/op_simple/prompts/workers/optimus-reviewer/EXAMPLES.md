@@ -29,7 +29,7 @@ Output: JSON-only decision payload + canonical handoff file write
 ```json
 {
   "task_identifier": "MYO-81",
-  "decision": "review_passed",
+  "decision": "completed",
   "checks": [
     {
       "name": "targeted_tests",
@@ -111,7 +111,7 @@ Output: JSON-only decision payload + canonical handoff file write
 ```json
 {
   "task_identifier": "MYO-23",
-  "decision": "review_passed",
+  "decision": "completed",
   "checks": [
     {
       "name": "fallback_branch_lineage",

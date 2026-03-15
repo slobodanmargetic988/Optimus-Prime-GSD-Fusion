@@ -4505,6 +4505,41 @@ def test_planner_validator_rejects_invalid_task_kind_mode_pair():
         assert any("mode must be one of lane_test" in str(item.get("message")) for item in errors)
 
 
+def test_planner_validator_rejects_task_kind_mismatch_between_plan_and_task_state():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-new-project",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        run_payload(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "override_old_plan": True,
+            }
+        )
+
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        rows = [json.loads(line) for line in bundle_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        for row in rows:
+            if row.get("artifact_path") == "TASK_EXECUTION_STATE.json":
+                row["content"]["tasks"][0]["task_kind"] = "lane_review"
+                row["checksum_sha256"] = planner_checksum("json", row["content"])
+                break
+
+        write_planner_bundle(bundle_path, rows)
+        req = MODULE.parse_request({"command": "/op-plan", "repo_root": str(root)})
+        payload, errors = MODULE._planner_validate_bundle(req, bundle_path)
+        assert payload is None
+        assert any("must match PLAN_PACKETS task_kind" in str(item.get("message")) for item in errors)
+
+
 def test_planner_validator_rejects_missing_evidence_expectation_fields():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -5095,8 +5130,165 @@ def test_dead_pid_with_progress_reconciles_without_redispatch():
         warning_codes = {item.get("code") for item in warnings if isinstance(item, dict)}
         assert assignments == []
         assert "dead_pid_evidence_reconciled" in warning_codes
-        assert task.get("status") == "dev_done"
+        assert task.get("status") == "review_done"
         assert task.get("owner_slot") is None
+
+
+def test_dead_pid_lane_test_no_progress_resets_to_pending():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        plan_packets["tasks"][0]["task_kind"] = "lane_test"
+        plan_packets["tasks"][0]["verification_contract"]["mode"] = "lane_test"
+        task["task_kind"] = "lane_test"
+        task["verification_contract"]["mode"] = "lane_test"
+        task["status"] = "testing"
+        task["owner_slot"] = "test-1"
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "test-1":
+                row["session_state"] = "running"
+                row["state"] = "running"
+                row["dispatch_pid"] = None
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+
+        assignments, _warnings = MODULE._prepare_dead_pid_redispatch_assignments(
+            root,
+            task_state,
+            plan_packets,
+            build_state,
+        )
+        assert assignments
+        assert assignments[0].get("task_id") == "TASK-001"
+        assert task.get("status") == "pending"
+
+
+def test_dead_pid_legacy_stage_emits_normalization_warning():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        plan_packets["tasks"][0]["task_kind"] = "lane_review"
+        plan_packets["tasks"][0]["verification_contract"]["mode"] = "lane_review"
+        task["task_kind"] = "lane_review"
+        task["verification_contract"]["mode"] = "lane_review"
+        task["status"] = "testing"
+        task["owner_slot"] = "test-1"
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        registry_path = root / "reports" / "optimus-prime" / "WORKER_REGISTRY.json"
+        registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        for row in registry_payload.get("workers", []):
+            if row.get("slot") == "test-1":
+                row["session_state"] = "running"
+                row["state"] = "running"
+                row["dispatch_pid"] = None
+                row["active_task_id"] = "TASK-001"
+                row["active_task"] = "TASK-001"
+        registry_path.write_text(json.dumps(registry_payload, indent=2) + "\n", encoding="utf-8")
+
+        _assignments, warnings = MODULE._prepare_dead_pid_redispatch_assignments(
+            root,
+            task_state,
+            plan_packets,
+            build_state,
+        )
+        assert any(
+            isinstance(item, dict) and item.get("code") == "dead_pid_legacy_stage_normalized"
+            for item in warnings
+        )
+
+
+def test_preflight_repairs_task_kind_from_plan_authority():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets_path = planning / "PLAN_PACKETS.json"
+        task_state_path = planning / "TASK_EXECUTION_STATE.json"
+        plan_packets = json.loads(plan_packets_path.read_text(encoding="utf-8"))
+        task_state = json.loads(task_state_path.read_text(encoding="utf-8"))
+        plan_packets["tasks"][0]["task_kind"] = "lane_review"
+        task_state["tasks"][0]["task_kind"] = "implementation"
+        plan_packets_path.write_text(json.dumps(plan_packets, indent=2) + "\n", encoding="utf-8")
+        task_state_path.write_text(json.dumps(task_state, indent=2) + "\n", encoding="utf-8")
+
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root)})
+        warnings, _missing, _state_payload, _plan_packets, repaired_task_state, _profile_selection = MODULE._preflight_build(req)
+        assert repaired_task_state["tasks"][0]["task_kind"] == "lane_review"
+        assert any(
+            isinstance(item, dict) and item.get("code") == "task_kind_repaired_from_plan"
+            for item in warnings
+        )
+
+
+def test_handoff_updates_normalize_legacy_success_aliases_to_completed():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        planning = root / "reports" / "optimus-prime" / "planning"
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        handoff_path = root / "reports" / "optimus-prime" / "HANDOFF_LOG.jsonl"
+        handoff_path.write_text(
+            json.dumps(
+                {
+                    "task_identifier": "TASK-001",
+                    "result": "ready_for_review",
+                    "task_evidence_ref": "reports/optimus-prime/planning/evidence/TASK-001/TASK_EVIDENCE.json",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        MODULE._apply_handoff_updates(root, task_state, build_state)
+        task = next(item for item in task_state["tasks"] if item.get("task_id") == "TASK-001")
+        assert task["last_handoff_outcome"]["status"] == "completed"
 
 
 def test_dead_pid_missing_completion_artifact_blocks_after_threshold():
@@ -6049,6 +6241,47 @@ def test_dispatch_next_task_routes_lane_review_tasks_to_reviewer(monkeypatch: py
         out = MODULE._dispatch_next_task(req, plan_packets, task_state, build_state, None)
         assert out.get("ok") is True
         assert seen == ["review"]
+
+
+def test_dispatch_next_task_prefers_plan_task_kind_over_stale_task_state(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        req = MODULE.parse_request({"command": "/op-build", "repo_root": str(root), "dry_run": True})
+        planning = root / "reports" / "optimus-prime" / "planning"
+        plan_packets = json.loads((planning / "PLAN_PACKETS.json").read_text(encoding="utf-8"))
+        task_state = json.loads((planning / "TASK_EXECUTION_STATE.json").read_text(encoding="utf-8"))
+        build_state = MODULE._load_build_state(planning / "BUILD_STATE.json")
+        build_state["profile_aliases"] = ["codex"]
+        MODULE._ensure_worker_registry_v2(root, build_state)
+        plan_packets["tasks"][0]["task_kind"] = "lane_review"
+        plan_packets["tasks"][0]["verification_contract"]["mode"] = "lane_review"
+        plan_packets["lane_base_branches"][plan_packets["tasks"][0]["lane_id"]] = "main"
+        task_state["tasks"][0]["task_kind"] = "implementation"
+        task_state["tasks"][0]["verification_contract"]["mode"] = "implementation_green"
+        monkeypatch.setattr(MODULE, "_select_profile_alias_for_slot", lambda *_args, **_kwargs: {"ok": True, "alias": "codex"})
+        monkeypatch.setattr(MODULE, "_active_worker_count_by_alias", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(MODULE, "_read_profile_rate_states", lambda *_args, **_kwargs: {"codex": {"soft_gated": False}})
+        seen: list[str] = []
+
+        def fake_dispatch(_req, _task_payload, _plan_task, stage_name, *_args, **_kwargs):
+            seen.append(stage_name)
+            return {"ok": True, "dispatch": {"dispatch_mode_used": "exec", "dispatch_thread_id": "thread-plan-authority"}}
+
+        monkeypatch.setattr(MODULE, "_dispatch_task_packet", fake_dispatch)
+
+        out = MODULE._dispatch_next_task(req, plan_packets, task_state, build_state, None)
+        assert out.get("ok") is True
+        assert seen == ["review"]
+        assert task_state["tasks"][0]["task_kind"] == "lane_review"
 
 
 def test_dispatch_next_task_marks_profile_permanently_blocked_on_refresh_token_reused_unauthorized(

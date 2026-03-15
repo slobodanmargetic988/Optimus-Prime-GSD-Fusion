@@ -72,7 +72,7 @@ def base_summary() -> dict:
         "task_identifier": "MYO-155",
         "branch": "codex/dev-1/MYO-155",
         "head_commit": "abc123",
-        "decision": "ready_for_review",
+        "decision": "completed",
         "checks": [{"name": "unit", "result": "pass", "details": None}],
         "blockers": [],
     }

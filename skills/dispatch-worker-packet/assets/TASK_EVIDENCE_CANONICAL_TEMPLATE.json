@@ -41,8 +41,6 @@
     "artifacts": []
   },
   "gate": {
-    "ready_for_test": false,
-    "ready_for_review": false,
     "ready_for_phase_exit": false
   },
   "summary": {

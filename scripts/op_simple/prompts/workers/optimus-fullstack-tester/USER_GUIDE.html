@@ -166,7 +166,7 @@
       <section class="card half">
         <h2>Decision Contract</h2>
         <ul>
-          <li><strong>ready_for_review</strong>: lane-level acceptance criteria proven.</li>
+          <li><strong>completed</strong>: lane-level acceptance criteria proven.</li>
           <li><strong>needs_dev_fix</strong>: reproducible defect or regression exists.</li>
           <li><strong>blocked</strong>: external dependency prevents valid testing.</li>
         </ul>
@@ -217,7 +217,7 @@ head_commit: a1b2c3d
 checks:
 - npm run test -- navbar: pass
 - npm run build: pass
-decision: ready_for_review
+decision: completed
 findings:
 - none
 blockers: none</div>
