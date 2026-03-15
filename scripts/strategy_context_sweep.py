@@ -254,6 +254,55 @@ def _build_context_bundle(
     }
 
 
+def _build_interface_context_bundle(
+    *,
+    current_project_id: str,
+    shared_interface_contracts: list[dict[str, Any]],
+    cross_project_recommendations: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+    earth_sweep_evidence_index: dict[tuple[str, str, int], list[dict[str, Any]]],
+) -> dict[str, Any]:
+    earth_sweep_index_rows = []
+    for key, refs in sorted(earth_sweep_evidence_index.items(), key=lambda item: (item[0][0], item[0][1], item[0][2])):
+        peer_project_id, source_path, line_number = key
+        earth_sweep_index_rows.append(
+            {
+                "peer_project_id": peer_project_id,
+                "source_path": source_path,
+                "line_number": line_number,
+                "evidence_refs": [str(item.get("evidence_ref")) for item in refs if isinstance(item, dict)],
+                "source_sha256": sorted(
+                    {
+                        str(item.get("source_sha256"))
+                        for item in refs
+                        if isinstance(item, dict) and isinstance(item.get("source_sha256"), str) and item.get("source_sha256")
+                    }
+                ),
+            }
+        )
+
+    payload = {
+        "current_project_id": current_project_id,
+        "shared_interface_contracts": shared_interface_contracts,
+        "cross_project_recommendations": cross_project_recommendations,
+        "open_risks": open_risks,
+        "earth_sweep_index": earth_sweep_index_rows,
+    }
+    serialized = _canonical_json(payload)
+    return {
+        "bundle_version": "REQ-012-context-bundle.v1",
+        "serialization_format": "json-canonical-sort-keys",
+        "serialization_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+        "serialization": serialized,
+        "entry_counts": {
+            "shared_interface_contract_count": len(shared_interface_contracts),
+            "recommendation_count": len(cross_project_recommendations),
+            "open_risk_count": len(open_risks),
+            "earth_sweep_index_count": len(earth_sweep_index_rows),
+        },
+    }
+
+
 def _extract_signals_from_document(
     *,
     peer_project_id: str,
@@ -539,6 +588,14 @@ def extract_interface_contracts(payload: dict[str, Any], *, generated_at: str | 
             }
         )
 
+    context_bundle = _build_interface_context_bundle(
+        current_project_id=current_project_id,
+        shared_interface_contracts=shared_interface_contracts,
+        cross_project_recommendations=cross_project_recommendations,
+        open_risks=open_risks,
+        earth_sweep_evidence_index=earth_sweep_evidence_index,
+    )
+
     return {
         "schema_version": REQ012_SCHEMA_VERSION,
         "generated_at": generated_at or _utc_now_iso(),
@@ -546,6 +603,7 @@ def extract_interface_contracts(payload: dict[str, Any], *, generated_at: str | 
         "shared_interface_contracts": shared_interface_contracts,
         "cross_project_recommendations": cross_project_recommendations,
         "open_risks": open_risks,
+        "context_bundle": context_bundle,
         "summary": {
             "earth_contract_source_count": len(contract_sources),
             "relevant_source_count": relevant_source_count,
