@@ -36,6 +36,8 @@ RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 REQ_009_SCHEMA_VERSION = "req-009.prior-strategy-revision-ingestion.v1"
 REQ_009_REQUIREMENT_ID = "REQ-009"
+REQ_011_SCHEMA_VERSION = "req-011.cross-project-dependency-extraction.v1"
+REQ_011_REQUIREMENT_ID = "REQ-011"
 REQ_013_SCHEMA_VERSION = "req-013.capability-catalog-extraction.v1"
 REQ_013_REQUIREMENT_ID = "REQ-013"
 
@@ -2429,6 +2431,529 @@ def validate_req_009_prior_strategy_revision_ingestion(payload: Mapping[str, Any
 
     expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
     expected_processing_call_id = f"req009-processing-{expected_processing_digest[:16]}"
+    if metadata.get("processing_input_sha256") != expected_processing_digest:
+        errors.append("call_metadata.processing_input_sha256 does not match processing input")
+    if metadata.get("processing_call_id") != expected_processing_call_id:
+        errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    return errors
+
+
+def _normalize_req_011_signal_strength(raw_value: Any, *, field_name: str, default: str) -> str:
+    allowed_strengths = {"strong", "moderate", "weak"}
+    if default not in allowed_strengths:
+        raise ValueError(f"{field_name} default signal strength must be one of {sorted(allowed_strengths)}")
+    if raw_value is None:
+        return default
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string when provided")
+    normalized = raw_value.strip().lower()
+    if normalized not in allowed_strengths:
+        raise ValueError(f"{field_name} must be one of: strong, moderate, weak")
+    return normalized
+
+
+def _normalize_req_011_signal_rows(
+    raw_value: Any,
+    *,
+    field_name: str,
+    source_kind: str,
+    default_strength: str,
+) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError(f"{field_name} must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"{field_name}[{index}] must be an object")
+        consumer_project_id = _require_nonempty_text(
+            item.get("consumer_project_id"),
+            field_name=f"{field_name}[{index}].consumer_project_id",
+        )
+        provider_project_id = _require_nonempty_text(
+            item.get("provider_project_id"),
+            field_name=f"{field_name}[{index}].provider_project_id",
+        )
+        dependency_ref = _require_nonempty_text(
+            item.get("dependency_ref"),
+            field_name=f"{field_name}[{index}].dependency_ref",
+        )
+        summary = _require_nonempty_text(
+            item.get("summary") if item.get("summary") is not None else dependency_ref,
+            field_name=f"{field_name}[{index}].summary",
+        )
+        signal_strength = _normalize_req_011_signal_strength(
+            item.get("signal_strength"),
+            field_name=f"{field_name}[{index}].signal_strength",
+            default=default_strength,
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"{field_name}[{index}].evidence_refs",
+        )
+        if not evidence_refs:
+            raise ValueError(f"{field_name}[{index}].evidence_refs must include at least one evidence ref")
+
+        normalized.append(
+            {
+                "source_kind": source_kind,
+                "consumer_project_id": consumer_project_id,
+                "provider_project_id": provider_project_id,
+                "dependency_ref": dependency_ref,
+                "summary": summary,
+                "signal_strength": signal_strength,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(
+        key=lambda row: (
+            row["consumer_project_id"],
+            row["provider_project_id"],
+            row["dependency_ref"],
+            row["summary"],
+            row["signal_strength"],
+        )
+    )
+    return normalized
+
+
+def _canonical_req_011_input(*, target_project_id: str) -> dict[str, Any]:
+    return {"target_project_id": target_project_id}
+
+
+def _canonical_req_011_processing_input(
+    *,
+    contract_signals: list[dict[str, Any]],
+    trace_signals: list[dict[str, Any]],
+    integration_point_signals: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "contract_signals": contract_signals,
+        "trace_signals": trace_signals,
+        "integration_point_signals": integration_point_signals,
+    }
+
+
+def _req_011_signal_sort_key(signal: Mapping[str, Any]) -> tuple[int, int, str]:
+    source_kind_order = {"contract": 0, "integration_point": 1, "trace": 2}
+    signal_strength_order = {"strong": 0, "moderate": 1, "weak": 2}
+    return (
+        source_kind_order.get(str(signal.get("source_kind")), 99),
+        signal_strength_order.get(str(signal.get("signal_strength")), 99),
+        str(signal.get("dependency_ref", "")),
+    )
+
+
+def _req_011_edge_confidence(signals: list[dict[str, Any]]) -> str:
+    source_kinds = {row["source_kind"] for row in signals}
+    signal_strengths = {row["signal_strength"] for row in signals}
+    has_contract = "contract" in source_kinds
+    has_trace = "trace" in source_kinds
+    has_integration_point = "integration_point" in source_kinds
+    has_strong_support = "strong" in signal_strengths
+    if has_contract and has_strong_support and (has_trace or has_integration_point):
+        return "high"
+    if has_contract and has_strong_support:
+        return "high"
+    if has_contract or (has_trace and has_integration_point):
+        return "medium"
+    return "low"
+
+
+def _build_req_011_dependency_extraction(
+    *,
+    target_project_id: str,
+    contract_signals: list[dict[str, Any]],
+    trace_signals: list[dict[str, Any]],
+    integration_point_signals: list[dict[str, Any]],
+) -> dict[str, Any]:
+    grouped_signals: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    filtered_local_signal_count = 0
+    all_signals = contract_signals + trace_signals + integration_point_signals
+    for signal in all_signals:
+        consumer_project_id = signal["consumer_project_id"]
+        provider_project_id = signal["provider_project_id"]
+        if consumer_project_id == provider_project_id:
+            filtered_local_signal_count += 1
+            continue
+        edge_key = (consumer_project_id, provider_project_id)
+        grouped_signals.setdefault(edge_key, []).append(signal)
+
+    dependency_edges: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    for consumer_project_id, provider_project_id in sorted(grouped_signals.keys()):
+        signals = sorted(grouped_signals[(consumer_project_id, provider_project_id)], key=_req_011_signal_sort_key)
+        preferred_signal = signals[0]
+        source_kinds = sorted({row["source_kind"] for row in signals})
+        dependency_refs = _collect_unique_refs(*[[row["dependency_ref"]] for row in signals])
+        evidence_refs = _collect_unique_refs(*[row["evidence_refs"] for row in signals])
+        confidence = _req_011_edge_confidence(signals)
+        hard_dependency = confidence == "high"
+        dependency_edge_id = f"dependency-edge.{_stable_id_fragment(consumer_project_id, provider_project_id)}"
+
+        dependency_edges.append(
+            {
+                "dependency_edge_id": dependency_edge_id,
+                "consumer_project_id": consumer_project_id,
+                "provider_project_id": provider_project_id,
+                "relationship": "depends_on",
+                "summary": preferred_signal["summary"],
+                "source_kinds": source_kinds,
+                "supporting_signal_count": len(signals),
+                "dependency_refs": dependency_refs,
+                "confidence": confidence,
+                "hard_dependency": hard_dependency,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+        if hard_dependency:
+            continue
+        reason_code = "low_confidence_dependency_edge" if confidence == "low" else "medium_confidence_dependency_edge"
+        open_risks.append(
+            {
+                "risk_id": f"dependency-risk.{_stable_id_fragment(dependency_edge_id, reason_code)}",
+                "dependency_edge_id": dependency_edge_id,
+                "reason_code": reason_code,
+                "risk_level": "high" if confidence == "low" else "medium",
+                "summary": (
+                    f"Dependency edge {consumer_project_id} -> {provider_project_id} "
+                    f"remains a soft dependency because confidence is {confidence}."
+                ),
+                "confidence": confidence,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    dependency_edges.sort(key=lambda row: row["dependency_edge_id"])
+    open_risks.sort(key=lambda row: row["risk_id"])
+    evidence_refs = _collect_unique_refs(
+        *[row["evidence_refs"] for row in dependency_edges],
+        *[row["evidence_refs"] for row in open_risks],
+    )
+    hard_dependency_edge_ids = sorted(
+        row["dependency_edge_id"] for row in dependency_edges if row["hard_dependency"]
+    )
+    soft_dependency_edge_ids = sorted(
+        row["dependency_edge_id"] for row in dependency_edges if not row["hard_dependency"]
+    )
+    weak_dependency_edge_ids = sorted(row["dependency_edge_id"] for row in dependency_edges if row["confidence"] == "low")
+    source_signal_count_by_kind = {
+        "contracts": len(contract_signals),
+        "traces": len(trace_signals),
+        "integration_points": len(integration_point_signals),
+    }
+    projects_involved = sorted(
+        {
+            target_project_id,
+            *[row["consumer_project_id"] for row in dependency_edges],
+            *[row["provider_project_id"] for row in dependency_edges],
+        }
+    )
+
+    return {
+        "target_project_id": target_project_id,
+        "source_signals": {
+            "contract_signals": contract_signals,
+            "trace_signals": trace_signals,
+            "integration_point_signals": integration_point_signals,
+        },
+        "dependency_edges": dependency_edges,
+        "open_risks": open_risks,
+        "summary": {
+            "source_signal_count": len(all_signals),
+            "filtered_local_signal_count": filtered_local_signal_count,
+            "source_signal_count_by_kind": source_signal_count_by_kind,
+            "dependency_edge_count": len(dependency_edges),
+            "hard_dependency_count": len(hard_dependency_edge_ids),
+            "soft_dependency_count": len(soft_dependency_edge_ids),
+            "weak_dependency_count": len(weak_dependency_edge_ids),
+            "hard_dependency_edge_ids": hard_dependency_edge_ids,
+            "soft_dependency_edge_ids": soft_dependency_edge_ids,
+            "weak_dependency_edge_ids": weak_dependency_edge_ids,
+            "projects_involved": projects_involved,
+            "open_risk_count": len(open_risks),
+        },
+        "evidence_refs": evidence_refs,
+    }
+
+
+def build_req_011_cross_project_dependency_extraction(
+    *,
+    target_project_id: str,
+    contract_signals: list[Mapping[str, Any]] | None = None,
+    trace_signals: list[Mapping[str, Any]] | None = None,
+    integration_point_signals: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the REQ-011 cross-project dependency extraction payload."""
+    normalized_target_project_id = _require_nonempty_text(target_project_id, field_name="target_project_id")
+    normalized_contract_signals = _normalize_req_011_signal_rows(
+        contract_signals,
+        field_name="contract_signals",
+        source_kind="contract",
+        default_strength="strong",
+    )
+    normalized_trace_signals = _normalize_req_011_signal_rows(
+        trace_signals,
+        field_name="trace_signals",
+        source_kind="trace",
+        default_strength="weak",
+    )
+    normalized_integration_point_signals = _normalize_req_011_signal_rows(
+        integration_point_signals,
+        field_name="integration_point_signals",
+        source_kind="integration_point",
+        default_strength="moderate",
+    )
+
+    canonical_input = _canonical_req_011_input(target_project_id=normalized_target_project_id)
+    digest = _canonical_input_digest(canonical_input)
+    canonical_processing_input = _canonical_req_011_processing_input(
+        contract_signals=normalized_contract_signals,
+        trace_signals=normalized_trace_signals,
+        integration_point_signals=normalized_integration_point_signals,
+    )
+    processing_digest = _canonical_input_digest(canonical_processing_input)
+    extraction = _build_req_011_dependency_extraction(
+        target_project_id=normalized_target_project_id,
+        contract_signals=normalized_contract_signals,
+        trace_signals=normalized_trace_signals,
+        integration_point_signals=normalized_integration_point_signals,
+    )
+
+    return {
+        "schema_version": REQ_011_SCHEMA_VERSION,
+        "requirement_id": REQ_011_REQUIREMENT_ID,
+        "cross_project_dependency_extraction": extraction,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req011-{digest[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_digest,
+            "processing_call_id": f"req011-processing-{processing_digest[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+        },
+    }
+
+
+def validate_req_011_cross_project_dependency_extraction(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-011 payload shape and deterministic call metadata."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    top_keys = set(payload.keys())
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "cross_project_dependency_extraction",
+        "call_metadata",
+    }
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_011_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_011_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_011_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_011_REQUIREMENT_ID}")
+
+    extraction = payload.get("cross_project_dependency_extraction")
+    if not isinstance(extraction, Mapping):
+        errors.append("cross_project_dependency_extraction must be an object")
+        return errors
+
+    required_extraction = {
+        "target_project_id",
+        "source_signals",
+        "dependency_edges",
+        "open_risks",
+        "summary",
+        "evidence_refs",
+    }
+    extraction_keys = set(extraction.keys())
+    missing_extraction = sorted(required_extraction - extraction_keys)
+    if missing_extraction:
+        errors.append(f"cross_project_dependency_extraction missing keys: {missing_extraction}")
+    unexpected_extraction = sorted(extraction_keys - required_extraction)
+    if unexpected_extraction:
+        errors.append(f"cross_project_dependency_extraction has unexpected keys: {unexpected_extraction}")
+
+    target_project_id = extraction.get("target_project_id")
+    if not isinstance(target_project_id, str) or not target_project_id.strip():
+        errors.append("cross_project_dependency_extraction.target_project_id must be a non-empty string")
+
+    source_signals = extraction.get("source_signals")
+    if not isinstance(source_signals, Mapping):
+        errors.append("cross_project_dependency_extraction.source_signals must be an object")
+        return errors
+
+    for required_field in ("contract_signals", "trace_signals", "integration_point_signals"):
+        if required_field not in source_signals:
+            errors.append(f"cross_project_dependency_extraction.source_signals missing {required_field}")
+
+    dependency_edges = extraction.get("dependency_edges")
+    if not isinstance(dependency_edges, list):
+        errors.append("cross_project_dependency_extraction.dependency_edges must be a list")
+    else:
+        for index, edge in enumerate(dependency_edges):
+            if not isinstance(edge, Mapping):
+                errors.append(f"cross_project_dependency_extraction.dependency_edges[{index}] must be an object")
+                continue
+            for required_field in (
+                "dependency_edge_id",
+                "consumer_project_id",
+                "provider_project_id",
+                "relationship",
+                "summary",
+                "source_kinds",
+                "supporting_signal_count",
+                "dependency_refs",
+                "confidence",
+                "hard_dependency",
+                "evidence_refs",
+            ):
+                if required_field not in edge:
+                    errors.append(
+                        f"cross_project_dependency_extraction.dependency_edges[{index}] missing {required_field}"
+                    )
+            confidence = edge.get("confidence")
+            if confidence not in {"high", "medium", "low"}:
+                errors.append(
+                    f"cross_project_dependency_extraction.dependency_edges[{index}].confidence "
+                    "must be one of: high, medium, low"
+                )
+            if confidence == "low" and edge.get("hard_dependency") is not False:
+                errors.append(
+                    "cross_project_dependency_extraction.dependency_edges"
+                    f"[{index}].hard_dependency must be false when confidence is low"
+                )
+
+    open_risks = extraction.get("open_risks")
+    if not isinstance(open_risks, list):
+        errors.append("cross_project_dependency_extraction.open_risks must be a list")
+    else:
+        for index, row in enumerate(open_risks):
+            if not isinstance(row, Mapping):
+                errors.append(f"cross_project_dependency_extraction.open_risks[{index}] must be an object")
+                continue
+            for required_field in (
+                "risk_id",
+                "dependency_edge_id",
+                "reason_code",
+                "risk_level",
+                "summary",
+                "confidence",
+                "evidence_refs",
+            ):
+                if required_field not in row:
+                    errors.append(f"cross_project_dependency_extraction.open_risks[{index}] missing {required_field}")
+
+    if not isinstance(extraction.get("summary"), Mapping):
+        errors.append("cross_project_dependency_extraction.summary must be an object")
+    if not isinstance(extraction.get("evidence_refs"), list):
+        errors.append("cross_project_dependency_extraction.evidence_refs must be a list")
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+
+    required_metadata = {
+        "reproducibility",
+        "canonical_input_sha256",
+        "reproducible_call_id",
+        "canonical_input",
+        "processing_input_sha256",
+        "processing_call_id",
+        "canonical_processing_input",
+    }
+    metadata_keys = set(metadata.keys())
+    missing_metadata = sorted(required_metadata - metadata_keys)
+    if missing_metadata:
+        errors.append(f"call_metadata missing keys: {missing_metadata}")
+    unexpected_metadata = sorted(metadata_keys - required_metadata)
+    if unexpected_metadata:
+        errors.append(f"call_metadata has unexpected keys: {unexpected_metadata}")
+
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+
+    try:
+        normalized_target_project_id = _require_nonempty_text(
+            extraction.get("target_project_id"),
+            field_name="cross_project_dependency_extraction.target_project_id",
+        )
+        normalized_contract_signals = _normalize_req_011_signal_rows(
+            source_signals.get("contract_signals"),
+            field_name="cross_project_dependency_extraction.source_signals.contract_signals",
+            source_kind="contract",
+            default_strength="strong",
+        )
+        normalized_trace_signals = _normalize_req_011_signal_rows(
+            source_signals.get("trace_signals"),
+            field_name="cross_project_dependency_extraction.source_signals.trace_signals",
+            source_kind="trace",
+            default_strength="weak",
+        )
+        normalized_integration_point_signals = _normalize_req_011_signal_rows(
+            source_signals.get("integration_point_signals"),
+            field_name="cross_project_dependency_extraction.source_signals.integration_point_signals",
+            source_kind="integration_point",
+            default_strength="moderate",
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
+
+    expected_canonical_input = _canonical_req_011_input(target_project_id=normalized_target_project_id)
+    if dict(canonical_input) != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+
+    expected_digest = _canonical_input_digest(expected_canonical_input)
+    expected_call_id = f"req011-{expected_digest[:16]}"
+    if metadata.get("canonical_input_sha256") != expected_digest:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != expected_call_id:
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    expected_extraction = _build_req_011_dependency_extraction(
+        target_project_id=normalized_target_project_id,
+        contract_signals=normalized_contract_signals,
+        trace_signals=normalized_trace_signals,
+        integration_point_signals=normalized_integration_point_signals,
+    )
+    if dict(extraction) != expected_extraction:
+        errors.append("cross_project_dependency_extraction must mirror deterministic extraction output")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+        return errors
+
+    expected_canonical_processing_input = _canonical_req_011_processing_input(
+        contract_signals=normalized_contract_signals,
+        trace_signals=normalized_trace_signals,
+        integration_point_signals=normalized_integration_point_signals,
+    )
+    if dict(canonical_processing_input) != expected_canonical_processing_input:
+        errors.append("call_metadata.canonical_processing_input must mirror normalized processing input")
+
+    expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
+    expected_processing_call_id = f"req011-processing-{expected_processing_digest[:16]}"
     if metadata.get("processing_input_sha256") != expected_processing_digest:
         errors.append("call_metadata.processing_input_sha256 does not match processing input")
     if metadata.get("processing_call_id") != expected_processing_call_id:
