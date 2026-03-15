@@ -10,6 +10,26 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
+try:
+    from scripts.strategy_context_workers import w02 as _worker_w02
+    from scripts.strategy_context_workers import w03 as _worker_w03
+    from scripts.strategy_context_workers import w04 as _worker_w04
+    from scripts.strategy_context_workers import w05 as _worker_w05
+    from scripts.strategy_context_workers import w06 as _worker_w06
+    from scripts.strategy_context_workers import w07 as _worker_w07
+    from scripts.strategy_context_workers import w08 as _worker_w08
+except ModuleNotFoundError:
+    _repo_root = Path(__file__).resolve().parents[1]
+    if str(_repo_root) not in sys.path:
+        sys.path.insert(0, str(_repo_root))
+    from scripts.strategy_context_workers import w02 as _worker_w02
+    from scripts.strategy_context_workers import w03 as _worker_w03
+    from scripts.strategy_context_workers import w04 as _worker_w04
+    from scripts.strategy_context_workers import w05 as _worker_w05
+    from scripts.strategy_context_workers import w06 as _worker_w06
+    from scripts.strategy_context_workers import w07 as _worker_w07
+    from scripts.strategy_context_workers import w08 as _worker_w08
+
 SCHEMA_VERSION = "req-001.llm-first-strategy-runtime-entrypoint.v1"
 REQUIREMENT_ID = "REQ-001"
 RUNTIME_MODE = "llm-first"
@@ -2441,7 +2461,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main_req001(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
 
     context_input: dict[str, Any] = {}
@@ -2480,6 +2500,139 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, sort_keys=False))
     else:
         _write_payload(Path(args.output_path), payload)
+    return 0
+
+
+# Re-export worker-surface functions to preserve merged requirement contracts.
+utc_now_iso = _worker_w08.utc_now_iso
+build_earth_repository_discovery_context_bundle = _worker_w02.build_earth_repository_discovery_context_bundle
+serialize_earth_repository_discovery_context_bundle = _worker_w02.serialize_earth_repository_discovery_context_bundle
+build_earth_repository_discovery_manifest = _worker_w02.build_earth_repository_discovery_manifest
+validate_earth_repository_discovery_manifest = _worker_w02.validate_earth_repository_discovery_manifest
+build_change_detection_since_previous_strategy_revision = _worker_w02.build_change_detection_since_previous_strategy_revision
+validate_change_detection_since_previous_strategy_revision = _worker_w02.validate_change_detection_since_previous_strategy_revision
+extract_deficit_and_need_signals = _worker_w02.extract_deficit_and_need_signals
+ingest_target_project_mission_scope = _worker_w03.ingest_target_project_mission_scope
+extract_interface_contracts = _worker_w04.extract_interface_contracts
+extract_interface_contracts_file = _worker_w04.extract_interface_contracts_file
+ingest_peer_project_mission_and_scope = _worker_w04.ingest_peer_project_mission_and_scope
+ingest_peer_project_mission_and_scope_file = _worker_w04.ingest_peer_project_mission_and_scope_file
+sweep_runtime_telemetry_artifacts = _worker_w06.sweep_runtime_telemetry_artifacts
+load_ground_graph_snapshot = _worker_w07.load_ground_graph_snapshot
+load_json_object = _worker_w07.load_json_object
+ingest_ground_graph_snapshot = _worker_w07.ingest_ground_graph_snapshot
+process_ground_graph_snapshot = _worker_w07.process_ground_graph_snapshot
+detect_integration_opportunities = _worker_w07.detect_integration_opportunities
+serialize_integration_opportunity_context_bundle = _worker_w07.serialize_integration_opportunity_context_bundle
+detect_reuse_opportunities = _worker_w07.detect_reuse_opportunities
+serialize_ground_graph_context_bundle = _worker_w07.serialize_ground_graph_context_bundle
+serialize_req_008_context_bundle = _worker_w08.serialize_req_008_context_bundle
+build_req_008_research_packet_ingestion_and_normalization = (
+    _worker_w08.build_req_008_research_packet_ingestion_and_normalization
+)
+validate_req_008_research_packet_ingestion_and_normalization = (
+    _worker_w08.validate_req_008_research_packet_ingestion_and_normalization
+)
+serialize_req_015_integration_opportunity_bundle = _worker_w08.serialize_req_015_integration_opportunity_bundle
+build_req_015_integration_opportunity_detection = _worker_w08.build_req_015_integration_opportunity_detection
+validate_req_015_integration_opportunity_detection = _worker_w08.validate_req_015_integration_opportunity_detection
+ALLOWED_RISK_LEVELS = _worker_w08.ALLOWED_RISK_LEVELS
+REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT = _worker_w08.REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT
+REASON_CODE_CONTEXT_DOC_MISSING = _worker_w08.REASON_CODE_CONTEXT_DOC_MISSING
+REASON_CODE_PEER_PROJECT_DOC_MISSING = _worker_w08.REASON_CODE_PEER_PROJECT_DOC_MISSING
+
+
+def _looks_like_req008_builder_input(payload: Mapping[str, Any]) -> bool:
+    required = {"research_packet", "recommendations", "normalized_at_utc"}
+    return required.issubset(payload.keys())
+
+
+def run(payload: dict[str, Any]) -> dict[str, Any]:
+    analysis_type = str(payload.get("analysis_type", "")).strip()
+    if analysis_type == "deficit_and_need_signal_extraction":
+        return _worker_w02.run(payload)
+
+    projects = payload.get("projects")
+    if isinstance(projects, list) and projects:
+        artifacts = projects[0].get("artifacts") if isinstance(projects[0], dict) else None
+        if isinstance(artifacts, dict):
+            if "runtime_traces" in artifacts or "cycle_summaries" in artifacts:
+                return _worker_w06.run(payload)
+            if {"plan_packets", "state", "roadmap", "requirements"} & set(artifacts.keys()):
+                return _worker_w05.run(payload)
+
+    if "deficits" in payload and "target_project" in payload:
+        return _worker_w02.run(payload)
+
+    raise ValueError(
+        "unable to route run payload: expected deficit/need extraction, planning artifact sweep, or runtime telemetry sweep input"
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if any(
+        arg in argv
+        for arg in (
+            "--target-project-root",
+            "--earth-root",
+            "--output-root",
+            "--revision-identity",
+            "--context-input-path",
+            "--output-path",
+        )
+    ):
+        return _main_req001(argv)
+
+    parser = argparse.ArgumentParser(description="Unified strategy context sweep CLI.")
+    parser.add_argument("--input-json", required=True, help='Input payload path or "-" for stdin.')
+    parser.add_argument("--output-json", default="-", help='Output path or "-" for stdout.')
+    parser.add_argument("--json-pretty", action="store_true", help="Pretty-print JSON output.")
+    args = parser.parse_args(argv)
+
+    if args.input_json == "-":
+        payload = json.loads(sys.stdin.read())
+    else:
+        payload = json.loads(Path(args.input_json).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise SystemExit("input payload must be a JSON object")
+
+    try:
+        if _looks_like_req008_builder_input(payload):
+            output_payload = build_req_008_research_packet_ingestion_and_normalization(**payload)
+        else:
+            output_payload = run(payload)
+    except Exception as exc:
+        if hasattr(exc, "code") and hasattr(exc, "message"):
+            error_payload = {
+                "ok": False,
+                "analysis_type": str(payload.get("analysis_type") or ""),
+                "reason_code": str(getattr(exc, "code", "runtime_error")),
+                "evidence_refs": list(getattr(exc, "evidence_refs", []) or []),
+                "errors": [
+                    {
+                        "stage": str(getattr(exc, "stage", "runtime")),
+                        "message": str(getattr(exc, "message", str(exc))),
+                    }
+                ],
+            }
+            rendered_error = json.dumps(error_payload, indent=2 if args.json_pretty else None, sort_keys=False)
+            if args.output_json == "-":
+                print(rendered_error)
+            else:
+                target = Path(args.output_json)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(rendered_error + "\n", encoding="utf-8")
+            return 1
+        raise
+
+    rendered = json.dumps(output_payload, indent=2 if args.json_pretty else None, sort_keys=False)
+    if args.output_json == "-":
+        print(rendered)
+    else:
+        target = Path(args.output_json)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(rendered + "\n", encoding="utf-8")
     return 0
 
 
