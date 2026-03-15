@@ -61,13 +61,100 @@
     "requirement_id": "REQ-021",
     "evidence_provenance_ledger_for_context": {
       "ledger_scope": "strategy_context_sweep.processing_behavior",
-      "claim_count": 10,
+      "claim_count": 24,
       "context_claims": [
+        {
+          "claim_id": "claim-01c89faf5fc7",
+          "claim_key": "processing_behavior.context_inputs.candidate_recommendations[action_id=action-cross-project-audit]",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+          ]
+        },
+        {
+          "claim_id": "claim-f79b3cf5ca43",
+          "claim_key": "processing_behavior.context_inputs.candidate_recommendations[action_id=action-local-provenance]",
+          "source_artifact_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "claim_id": "claim-cb2b9c0bc1e4",
+          "claim_key": "processing_behavior.context_inputs.cross_project_context[project_id=ground-control-hub]",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+          ]
+        },
+        {
+          "claim_id": "claim-cc52ddbcb9d7",
+          "claim_key": "processing_behavior.context_inputs.earth_sweep.evidence_refs",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/portfolio.json"
+          ]
+        },
+        {
+          "claim_id": "claim-238533f838bb",
+          "claim_key": "processing_behavior.context_inputs.earth_sweep_source_artifacts[artifact_ref=reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md]",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md"
+          ]
+        },
+        {
+          "claim_id": "claim-ca6ff6d9d73d",
+          "claim_key": "processing_behavior.context_inputs.target_project.evidence_refs",
+          "source_artifact_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "claim_id": "claim-319796026203",
+          "claim_key": "processing_behavior.context_usage.cross_project_context_used",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+          ]
+        },
         {
           "claim_id": "claim-0eb57a0da749",
           "claim_key": "processing_behavior.context_usage.cross_project_projects_considered",
           "source_artifact_refs": [
             "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+          ]
+        },
+        {
+          "claim_id": "claim-5ca63d0a76f8",
+          "claim_key": "processing_behavior.context_usage.cross_project_refs_used",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+          ]
+        },
+        {
+          "claim_id": "claim-06fbe7634216",
+          "claim_key": "processing_behavior.context_usage.earth_sweep_context_used",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/portfolio.json"
+          ]
+        },
+        {
+          "claim_id": "claim-0f20afcfb6f4",
+          "claim_key": "processing_behavior.context_usage.earth_sweep_refs_used",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/portfolio.json"
+          ]
+        },
+        {
+          "claim_id": "claim-9cd366534256",
+          "claim_key": "processing_behavior.context_usage.earth_sweep_source_artifact_refs_used",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md"
+          ]
+        },
+        {
+          "claim_id": "claim-e29999279946",
+          "claim_key": "processing_behavior.context_usage.earth_sweep_source_artifacts_used",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md"
           ]
         },
         {
@@ -77,6 +164,20 @@
             "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
             "reports/earth/sweeps/2026-03-14/portfolio.json",
             "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md",
+            "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "claim_id": "claim-bb3da4659d55",
+          "claim_key": "processing_behavior.context_usage.target_project_context_used",
+          "source_artifact_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "claim_id": "claim-9df3fa0ed0b3",
+          "claim_key": "processing_behavior.context_usage.target_project_refs_used",
+          "source_artifact_refs": [
             "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
           ]
         },
@@ -228,4 +329,3 @@
     }
   }
 }
-

@@ -912,20 +912,25 @@ def _req_021_claim_id(*, claim_key: str, source_artifact_refs: list[str]) -> str
     return f"claim-{digest}"
 
 
+def _req_021_string_refs(raw_value: Any) -> list[str]:
+    if not isinstance(raw_value, list):
+        return []
+    return _collect_unique_refs([str(ref) for ref in raw_value if isinstance(ref, str)])
+
+
 def _build_req_021_context_claims(*, processing_behavior: Mapping[str, Any]) -> list[dict[str, Any]]:
     recommendation = processing_behavior.get("recommendation")
     if not isinstance(recommendation, Mapping):
         return []
 
-    recommendation_evidence_refs = (
-        recommendation.get("evidence_refs") if isinstance(recommendation.get("evidence_refs"), list) else []
-    )
-    recommendation_sources = _collect_unique_refs([str(ref) for ref in recommendation_evidence_refs if isinstance(ref, str)])
+    recommendation_sources = _req_021_string_refs(recommendation.get("evidence_refs"))
 
     claims: list[dict[str, Any]] = []
 
     def add_claim(*, claim_key: str, source_artifact_refs: list[str]) -> None:
         normalized_sources = _collect_unique_refs(source_artifact_refs)
+        if not normalized_sources:
+            return
         claims.append(
             {
                 "claim_id": _req_021_claim_id(claim_key=claim_key, source_artifact_refs=normalized_sources),
@@ -933,6 +938,85 @@ def _build_req_021_context_claims(*, processing_behavior: Mapping[str, Any]) -> 
                 "source_artifact_refs": normalized_sources,
             }
         )
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if isinstance(context_inputs, Mapping):
+        target_project = context_inputs.get("target_project")
+        if isinstance(target_project, Mapping):
+            add_claim(
+                claim_key="processing_behavior.context_inputs.target_project.evidence_refs",
+                source_artifact_refs=_req_021_string_refs(target_project.get("evidence_refs")),
+            )
+
+        earth_sweep = context_inputs.get("earth_sweep")
+        if isinstance(earth_sweep, Mapping):
+            add_claim(
+                claim_key="processing_behavior.context_inputs.earth_sweep.evidence_refs",
+                source_artifact_refs=_req_021_string_refs(earth_sweep.get("evidence_refs")),
+            )
+
+        cross_project_context = context_inputs.get("cross_project_context")
+        if isinstance(cross_project_context, list):
+            for row in cross_project_context:
+                if not isinstance(row, Mapping):
+                    continue
+                project_id = str(row.get("project_id", "")).strip()
+                if not project_id:
+                    continue
+                add_claim(
+                    claim_key=f"processing_behavior.context_inputs.cross_project_context[project_id={project_id}]",
+                    source_artifact_refs=_req_021_string_refs(row.get("evidence_refs")),
+                )
+
+        candidate_recommendations = context_inputs.get("candidate_recommendations")
+        if isinstance(candidate_recommendations, list):
+            for row in candidate_recommendations:
+                if not isinstance(row, Mapping):
+                    continue
+                action_id = str(row.get("action_id", "")).strip()
+                if not action_id:
+                    continue
+                add_claim(
+                    claim_key=f"processing_behavior.context_inputs.candidate_recommendations[action_id={action_id}]",
+                    source_artifact_refs=_req_021_string_refs(row.get("evidence_refs")),
+                )
+
+        earth_sweep_source_artifacts = context_inputs.get("earth_sweep_source_artifacts")
+        if isinstance(earth_sweep_source_artifacts, list):
+            for row in earth_sweep_source_artifacts:
+                if not isinstance(row, Mapping):
+                    continue
+                artifact_ref = str(row.get("artifact_ref", "")).strip()
+                if not artifact_ref:
+                    continue
+                add_claim(
+                    claim_key=f"processing_behavior.context_inputs.earth_sweep_source_artifacts[artifact_ref={artifact_ref}]",
+                    source_artifact_refs=_collect_unique_refs(
+                        [artifact_ref],
+                        _req_021_string_refs(row.get("evidence_refs")),
+                    ),
+                )
+
+        required_context_documents = context_inputs.get("required_context_documents")
+        if isinstance(required_context_documents, list):
+            for row in required_context_documents:
+                if not isinstance(row, Mapping):
+                    continue
+                doc_kind = str(row.get("doc_kind", "")).strip()
+                doc_ref = str(row.get("doc_ref", "")).strip()
+                project_id = str(row.get("project_id", "")).strip()
+                if not doc_kind or not doc_ref:
+                    continue
+                add_claim(
+                    claim_key=(
+                        "processing_behavior.context_inputs.required_context_documents"
+                        f"[doc_kind={doc_kind},project_id={project_id},doc_ref={doc_ref}]"
+                    ),
+                    source_artifact_refs=_collect_unique_refs(
+                        [doc_ref],
+                        _req_021_string_refs(row.get("evidence_refs")),
+                    ),
+                )
 
     add_claim(claim_key="processing_behavior.recommendation.decision", source_artifact_refs=recommendation_sources)
     add_claim(claim_key="processing_behavior.recommendation.rationale", source_artifact_refs=recommendation_sources)
@@ -986,22 +1070,68 @@ def _build_req_021_context_claims(*, processing_behavior: Mapping[str, Any]) -> 
 
     context_usage = processing_behavior.get("context_usage")
     if isinstance(context_usage, Mapping):
-        cross_project_refs_used = (
-            context_usage.get("cross_project_refs_used")
-            if isinstance(context_usage.get("cross_project_refs_used"), list)
-            else []
+        target_project_refs_used = _req_021_string_refs(context_usage.get("target_project_refs_used"))
+        earth_sweep_refs_used = _req_021_string_refs(context_usage.get("earth_sweep_refs_used"))
+        cross_project_refs_used = _req_021_string_refs(context_usage.get("cross_project_refs_used"))
+        earth_sweep_source_artifact_refs_used = _req_021_string_refs(
+            context_usage.get("earth_sweep_source_artifact_refs_used")
+        )
+        required_context_document_refs_used = _req_021_string_refs(
+            context_usage.get("required_context_document_refs_used")
+        )
+        add_claim(
+            claim_key="processing_behavior.context_usage.target_project_context_used",
+            source_artifact_refs=target_project_refs_used,
+        )
+        add_claim(
+            claim_key="processing_behavior.context_usage.earth_sweep_context_used",
+            source_artifact_refs=earth_sweep_refs_used,
+        )
+        add_claim(
+            claim_key="processing_behavior.context_usage.cross_project_context_used",
+            source_artifact_refs=cross_project_refs_used,
+        )
+        add_claim(
+            claim_key="processing_behavior.context_usage.target_project_refs_used",
+            source_artifact_refs=target_project_refs_used,
+        )
+        add_claim(
+            claim_key="processing_behavior.context_usage.earth_sweep_refs_used",
+            source_artifact_refs=earth_sweep_refs_used,
+        )
+        add_claim(
+            claim_key="processing_behavior.context_usage.cross_project_refs_used",
+            source_artifact_refs=cross_project_refs_used,
         )
         add_claim(
             claim_key="processing_behavior.context_usage.cross_project_projects_considered",
-            source_artifact_refs=[str(ref) for ref in cross_project_refs_used if isinstance(ref, str)],
+            source_artifact_refs=cross_project_refs_used,
         )
-        evidence_refs_used = (
-            context_usage.get("evidence_refs_used") if isinstance(context_usage.get("evidence_refs_used"), list) else []
-        )
+        evidence_refs_used = _req_021_string_refs(context_usage.get("evidence_refs_used"))
         add_claim(
             claim_key="processing_behavior.context_usage.evidence_refs_used",
-            source_artifact_refs=[str(ref) for ref in evidence_refs_used if isinstance(ref, str)],
+            source_artifact_refs=evidence_refs_used,
         )
+        if "earth_sweep_source_artifacts_used" in context_usage:
+            add_claim(
+                claim_key="processing_behavior.context_usage.earth_sweep_source_artifacts_used",
+                source_artifact_refs=earth_sweep_source_artifact_refs_used,
+            )
+        if earth_sweep_source_artifact_refs_used:
+            add_claim(
+                claim_key="processing_behavior.context_usage.earth_sweep_source_artifact_refs_used",
+                source_artifact_refs=earth_sweep_source_artifact_refs_used,
+            )
+        if "required_context_documents_used" in context_usage:
+            add_claim(
+                claim_key="processing_behavior.context_usage.required_context_documents_used",
+                source_artifact_refs=required_context_document_refs_used,
+            )
+        if required_context_document_refs_used:
+            add_claim(
+                claim_key="processing_behavior.context_usage.required_context_document_refs_used",
+                source_artifact_refs=required_context_document_refs_used,
+            )
 
     claims.sort(key=lambda row: row["claim_key"])
     return claims
