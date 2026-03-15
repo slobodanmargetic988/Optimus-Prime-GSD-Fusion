@@ -1,0 +1,364 @@
+{
+  "schema_version": "req-019.execution-resource-context-ingestion.v1",
+  "requirement_id": "REQ-019",
+  "execution_resource_context_ingestion": {
+    "runtime_mode": "llm-first",
+    "execution_mode": "long-thinking",
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req019-fixture-r1"
+  },
+  "processing_behavior": {
+    "strategy": "execution-resource-aware-broad-sweep",
+    "reasoning_mode": "long-thinking",
+    "heuristic_summarization_only": false,
+    "context_inputs": {
+      "target_project": {
+        "project_root": "/workspace/projects/optimus-prime",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json"
+        ]
+      },
+      "earth_sweep": {
+        "earth_root": "/workspace/projects/Earth",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/portfolio.json"
+        ]
+      },
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime scheduling and shared token bucket constraints."
+        }
+      ],
+      "candidate_recommendations": [
+        {
+          "action_id": "action-cpu-low",
+          "summary": "Run lightweight validation first under constrained token budget.",
+          "rationale": "Lower token action can complete while preserving budget for deeper follow-up.",
+          "action_scope": "local",
+          "requires_earth_evidence": false,
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json"
+          ],
+          "next_step": "Run local validation lane before deep analysis lane.",
+          "resource_intensity": "low",
+          "estimated_tokens": 18000,
+          "preferred_model": ""
+        },
+        {
+          "action_id": "action-deep-analysis",
+          "summary": "Run deep cross-project analysis with evidence-backed constraints.",
+          "rationale": "Requires richer model reasoning once lightweight checks pass.",
+          "action_scope": "cross-project",
+          "requires_earth_evidence": true,
+          "project_id": "runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "next_step": "Dispatch deep analysis after low-cost checks complete.",
+          "resource_intensity": "high",
+          "estimated_tokens": 210000,
+          "preferred_model": ""
+        }
+      ],
+      "execution_resource_context": {
+        "hardware_profiles": [
+          {
+            "profile_id": "cpu-primary",
+            "cpu_cores": 16,
+            "memory_gb": 64,
+            "gpu_count": 0,
+            "evidence_refs": [
+              "reports/runtime/hardware-profile/cpu-primary.json"
+            ]
+          }
+        ],
+        "rate_limit_windows": [
+          {
+            "provider": "openai",
+            "model": "gpt-5",
+            "requests_per_minute": 30,
+            "tokens_per_minute": 90000,
+            "evidence_refs": [
+              "reports/runtime/rate-limits/openai-gpt5.json"
+            ]
+          }
+        ],
+        "model_catalog": [
+          {
+            "model_id": "gpt-5",
+            "reasoning_tier": "high",
+            "evidence_refs": [
+              "reports/runtime/model-catalog/gpt-5.json"
+            ]
+          },
+          {
+            "model_id": "gpt-5-balanced",
+            "reasoning_tier": "balanced",
+            "evidence_refs": [
+              "reports/runtime/model-catalog/gpt-5-balanced.json"
+            ]
+          },
+          {
+            "model_id": "gpt-5-mini",
+            "reasoning_tier": "light",
+            "evidence_refs": [
+              "reports/runtime/model-catalog/gpt-5-mini.json"
+            ]
+          }
+        ],
+        "runtime_budget": {
+          "max_parallel_actions": 2,
+          "max_daily_tokens": 1200000
+        }
+      }
+    },
+    "context_usage": {
+      "target_project_context_used": true,
+      "earth_sweep_context_used": true,
+      "cross_project_context_used": true,
+      "target_project_refs_used": [
+        "reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_refs_used": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json"
+      ],
+      "cross_project_refs_used": [
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+      ],
+      "cross_project_projects_considered": [
+        "runtime-orchestrator"
+      ],
+      "evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json"
+      ]
+    },
+    "recommendation": {
+      "decision": "proceed",
+      "rationale": "Broad-sweep context evidence is sufficient for immediate LLM-first execution.",
+      "confidence": "high",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json"
+      ],
+      "recommended_actions": [
+        {
+          "action_id": "action-cpu-low",
+          "summary": "Run lightweight validation first under constrained token budget.",
+          "rationale": "Lower token action can complete while preserving budget for deeper follow-up.",
+          "action_scope": "local",
+          "next_step": "Run local validation lane before deep analysis lane.",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "action_id": "action-deep-analysis",
+          "summary": "Run deep cross-project analysis with evidence-backed constraints.",
+          "rationale": "Requires richer model reasoning once lightweight checks pass.",
+          "action_scope": "cross-project",
+          "next_step": "Dispatch deep analysis after low-cost checks complete.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ]
+        }
+      ],
+      "cross_project_obligations": [
+        {
+          "obligation_id": "obligation-action-deep-analysis",
+          "project_id": "runtime-orchestrator",
+          "summary": "Run deep cross-project analysis with evidence-backed constraints.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ]
+        }
+      ],
+      "open_risks": []
+    }
+  },
+  "resource_policy": {
+    "sequencing_policy_suggestions": {
+      "ordered_action_ids": [
+        "action-cpu-low",
+        "action-deep-analysis"
+      ],
+      "max_parallel_actions": 1,
+      "reason_codes": [
+        "cpu_only_execution_context",
+        "tight_rate_limit_parallelism_reduced"
+      ],
+      "minimum_requests_per_minute": 30,
+      "minimum_tokens_per_minute": 90000,
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json",
+        "reports/runtime/hardware-profile/cpu-primary.json",
+        "reports/runtime/model-catalog/gpt-5-balanced.json",
+        "reports/runtime/model-catalog/gpt-5-mini.json",
+        "reports/runtime/model-catalog/gpt-5.json",
+        "reports/runtime/rate-limits/openai-gpt5.json"
+      ]
+    },
+    "model_routing_policy_suggestions": [
+      {
+        "action_id": "action-cpu-low",
+        "selected_model": "gpt-5-mini",
+        "fallback_model": "gpt-5-balanced",
+        "reason_codes": [
+          "resource_intensity_low"
+        ],
+        "estimated_tokens": 18000
+      },
+      {
+        "action_id": "action-deep-analysis",
+        "selected_model": "gpt-5-balanced",
+        "fallback_model": "gpt-5-mini",
+        "reason_codes": [
+          "rate_limit_tight_route_to_balanced_model",
+          "resource_intensity_high"
+        ],
+        "estimated_tokens": 210000
+      }
+    ],
+    "resource_context_summary": {
+      "hardware_profile_count": 1,
+      "rate_limit_window_count": 1,
+      "model_catalog_count": 3,
+      "max_gpu_count": 0,
+      "total_estimated_tokens": 228000
+    }
+  },
+  "context_bundle": {
+    "schema_version": "req-019.execution-resource-context-bundle.v1",
+    "canonical_json": "{\"processing_context_inputs\":{\"candidate_recommendations\":[{\"action_id\":\"action-cpu-low\",\"action_scope\":\"local\",\"estimated_tokens\":18000,\"evidence_refs\":[\"reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json\"],\"next_step\":\"Run local validation lane before deep analysis lane.\",\"preferred_model\":\"\",\"project_id\":\"\",\"rationale\":\"Lower token action can complete while preserving budget for deeper follow-up.\",\"requires_earth_evidence\":false,\"resource_intensity\":\"low\",\"summary\":\"Run lightweight validation first under constrained token budget.\"},{\"action_id\":\"action-deep-analysis\",\"action_scope\":\"cross-project\",\"estimated_tokens\":210000,\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"next_step\":\"Dispatch deep analysis after low-cost checks complete.\",\"preferred_model\":\"\",\"project_id\":\"runtime-orchestrator\",\"rationale\":\"Requires richer model reasoning once lightweight checks pass.\",\"requires_earth_evidence\":true,\"resource_intensity\":\"high\",\"summary\":\"Run deep cross-project analysis with evidence-backed constraints.\"}],\"cross_project_context\":[{\"context_note\":\"Runtime scheduling and shared token bucket constraints.\",\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"project_id\":\"runtime-orchestrator\",\"project_root\":\"/workspace/projects/Earth/runtime-orchestrator\"}],\"earth_sweep\":{\"earth_root\":\"/workspace/projects/Earth\",\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/portfolio.json\"]},\"execution_resource_context\":{\"hardware_profiles\":[{\"cpu_cores\":16,\"evidence_refs\":[\"reports/runtime/hardware-profile/cpu-primary.json\"],\"gpu_count\":0,\"memory_gb\":64,\"profile_id\":\"cpu-primary\"}],\"model_catalog\":[{\"evidence_refs\":[\"reports/runtime/model-catalog/gpt-5.json\"],\"model_id\":\"gpt-5\",\"reasoning_tier\":\"high\"},{\"evidence_refs\":[\"reports/runtime/model-catalog/gpt-5-balanced.json\"],\"model_id\":\"gpt-5-balanced\",\"reasoning_tier\":\"balanced\"},{\"evidence_refs\":[\"reports/runtime/model-catalog/gpt-5-mini.json\"],\"model_id\":\"gpt-5-mini\",\"reasoning_tier\":\"light\"}],\"rate_limit_windows\":[{\"evidence_refs\":[\"reports/runtime/rate-limits/openai-gpt5.json\"],\"model\":\"gpt-5\",\"provider\":\"openai\",\"requests_per_minute\":30,\"tokens_per_minute\":90000}],\"runtime_budget\":{\"max_daily_tokens\":1200000,\"max_parallel_actions\":2}},\"target_project\":{\"evidence_refs\":[\"reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json\"],\"project_root\":\"/workspace/projects/optimus-prime\"}},\"processing_context_usage\":{\"cross_project_context_used\":true,\"cross_project_projects_considered\":[\"runtime-orchestrator\"],\"cross_project_refs_used\":[\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"earth_sweep_context_used\":true,\"earth_sweep_refs_used\":[\"reports/earth/sweeps/2026-03-15/portfolio.json\"],\"evidence_refs_used\":[\"reports/earth/sweeps/2026-03-15/portfolio.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\",\"reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json\"],\"target_project_context_used\":true,\"target_project_refs_used\":[\"reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json\"]},\"recommendation\":{\"confidence\":\"high\",\"cross_project_obligations\":[{\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/portfolio.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"obligation_id\":\"obligation-action-deep-analysis\",\"project_id\":\"runtime-orchestrator\",\"summary\":\"Run deep cross-project analysis with evidence-backed constraints.\"}],\"decision\":\"proceed\",\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/portfolio.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\",\"reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json\"],\"open_risks\":[],\"rationale\":\"Broad-sweep context evidence is sufficient for immediate LLM-first execution.\",\"recommended_actions\":[{\"action_id\":\"action-cpu-low\",\"action_scope\":\"local\",\"evidence_refs\":[\"reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json\"],\"next_step\":\"Run local validation lane before deep analysis lane.\",\"rationale\":\"Lower token action can complete while preserving budget for deeper follow-up.\",\"summary\":\"Run lightweight validation first under constrained token budget.\"},{\"action_id\":\"action-deep-analysis\",\"action_scope\":\"cross-project\",\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\"],\"next_step\":\"Dispatch deep analysis after low-cost checks complete.\",\"rationale\":\"Requires richer model reasoning once lightweight checks pass.\",\"summary\":\"Run deep cross-project analysis with evidence-backed constraints.\"}]},\"resource_policy\":{\"model_routing_policy_suggestions\":[{\"action_id\":\"action-cpu-low\",\"estimated_tokens\":18000,\"fallback_model\":\"gpt-5-balanced\",\"reason_codes\":[\"resource_intensity_low\"],\"selected_model\":\"gpt-5-mini\"},{\"action_id\":\"action-deep-analysis\",\"estimated_tokens\":210000,\"fallback_model\":\"gpt-5-mini\",\"reason_codes\":[\"rate_limit_tight_route_to_balanced_model\",\"resource_intensity_high\"],\"selected_model\":\"gpt-5-balanced\"}],\"resource_context_summary\":{\"hardware_profile_count\":1,\"max_gpu_count\":0,\"model_catalog_count\":3,\"rate_limit_window_count\":1,\"total_estimated_tokens\":228000},\"sequencing_policy_suggestions\":{\"evidence_refs\":[\"reports/earth/sweeps/2026-03-15/portfolio.json\",\"reports/earth/sweeps/2026-03-15/runtime-orchestrator.json\",\"reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json\",\"reports/runtime/hardware-profile/cpu-primary.json\",\"reports/runtime/model-catalog/gpt-5-balanced.json\",\"reports/runtime/model-catalog/gpt-5-mini.json\",\"reports/runtime/model-catalog/gpt-5.json\",\"reports/runtime/rate-limits/openai-gpt5.json\"],\"max_parallel_actions\":1,\"minimum_requests_per_minute\":30,\"minimum_tokens_per_minute\":90000,\"ordered_action_ids\":[\"action-cpu-low\",\"action-deep-analysis\"],\"reason_codes\":[\"cpu_only_execution_context\",\"tight_rate_limit_parallelism_reduced\"]}}}",
+    "sha256": "a1063a3ac410985b9042bf9c2c2741e7a2fb8323612017bffcc68cdafb778b53"
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "9772db8cd2347ea96427f822cbff68d37aec9176d06a7287dc81ff2aed4fb65d",
+    "reproducible_call_id": "req019-9772db8cd2347ea9",
+    "canonical_input": {
+      "earth_root": "/workspace/projects/Earth",
+      "execution_mode": "long-thinking",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req019-fixture-r1",
+      "runtime_mode": "llm-first",
+      "target_project_root": "/workspace/projects/optimus-prime"
+    },
+    "processing_input_sha256": "1c37fc56fc49adaccc3e985df17eeb06062667d933e88b2ce14d0da0f1206f18",
+    "processing_call_id": "req019-processing-1c37fc56fc49adac",
+    "canonical_processing_input": {
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json"
+      ],
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime scheduling and shared token bucket constraints."
+        }
+      ],
+      "candidate_recommendations": [
+        {
+          "action_id": "action-cpu-low",
+          "summary": "Run lightweight validation first under constrained token budget.",
+          "rationale": "Lower token action can complete while preserving budget for deeper follow-up.",
+          "action_scope": "local",
+          "requires_earth_evidence": false,
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json"
+          ],
+          "next_step": "Run local validation lane before deep analysis lane.",
+          "resource_intensity": "low",
+          "estimated_tokens": 18000,
+          "preferred_model": ""
+        },
+        {
+          "action_id": "action-deep-analysis",
+          "summary": "Run deep cross-project analysis with evidence-backed constraints.",
+          "rationale": "Requires richer model reasoning once lightweight checks pass.",
+          "action_scope": "cross-project",
+          "requires_earth_evidence": true,
+          "project_id": "runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "next_step": "Dispatch deep analysis after low-cost checks complete.",
+          "resource_intensity": "high",
+          "estimated_tokens": 210000,
+          "preferred_model": ""
+        }
+      ],
+      "execution_resource_context": {
+        "hardware_profiles": [
+          {
+            "profile_id": "cpu-primary",
+            "cpu_cores": 16,
+            "memory_gb": 64,
+            "gpu_count": 0,
+            "evidence_refs": [
+              "reports/runtime/hardware-profile/cpu-primary.json"
+            ]
+          }
+        ],
+        "rate_limit_windows": [
+          {
+            "provider": "openai",
+            "model": "gpt-5",
+            "requests_per_minute": 30,
+            "tokens_per_minute": 90000,
+            "evidence_refs": [
+              "reports/runtime/rate-limits/openai-gpt5.json"
+            ]
+          }
+        ],
+        "model_catalog": [
+          {
+            "model_id": "gpt-5",
+            "reasoning_tier": "high",
+            "evidence_refs": [
+              "reports/runtime/model-catalog/gpt-5.json"
+            ]
+          },
+          {
+            "model_id": "gpt-5-balanced",
+            "reasoning_tier": "balanced",
+            "evidence_refs": [
+              "reports/runtime/model-catalog/gpt-5-balanced.json"
+            ]
+          },
+          {
+            "model_id": "gpt-5-mini",
+            "reasoning_tier": "light",
+            "evidence_refs": [
+              "reports/runtime/model-catalog/gpt-5-mini.json"
+            ]
+          }
+        ],
+        "runtime_budget": {
+          "max_parallel_actions": 2,
+          "max_daily_tokens": 1200000
+        }
+      }
+    }
+  }
+}

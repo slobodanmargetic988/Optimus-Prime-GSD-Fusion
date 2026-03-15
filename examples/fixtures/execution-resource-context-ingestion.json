@@ -1,0 +1,122 @@
+{
+  "input": {
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req019-fixture-r1",
+    "target_project_evidence_refs": [
+      "reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json"
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-15/portfolio.json"
+    ],
+    "cross_project_context": [
+      {
+        "project_id": "runtime-orchestrator",
+        "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "context_note": "Runtime scheduling and shared token bucket constraints."
+      }
+    ],
+    "candidate_recommendations": [
+      {
+        "action_id": "action-cpu-low",
+        "summary": "Run lightweight validation first under constrained token budget.",
+        "rationale": "Lower token action can complete while preserving budget for deeper follow-up.",
+        "action_scope": "local",
+        "requires_earth_evidence": false,
+        "project_id": "",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-061/TASK_EVIDENCE.json"
+        ],
+        "next_step": "Run local validation lane before deep analysis lane.",
+        "resource_intensity": "low",
+        "estimated_tokens": 18000
+      },
+      {
+        "action_id": "action-deep-analysis",
+        "summary": "Run deep cross-project analysis with evidence-backed constraints.",
+        "rationale": "Requires richer model reasoning once lightweight checks pass.",
+        "action_scope": "cross-project",
+        "requires_earth_evidence": true,
+        "project_id": "runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "next_step": "Dispatch deep analysis after low-cost checks complete.",
+        "resource_intensity": "high",
+        "estimated_tokens": 210000
+      }
+    ],
+    "execution_resource_context": {
+      "hardware_profiles": [
+        {
+          "profile_id": "cpu-primary",
+          "cpu_cores": 16,
+          "memory_gb": 64,
+          "gpu_count": 0,
+          "evidence_refs": [
+            "reports/runtime/hardware-profile/cpu-primary.json"
+          ]
+        }
+      ],
+      "rate_limit_windows": [
+        {
+          "provider": "openai",
+          "model": "gpt-5",
+          "requests_per_minute": 30,
+          "tokens_per_minute": 90000,
+          "evidence_refs": [
+            "reports/runtime/rate-limits/openai-gpt5.json"
+          ]
+        }
+      ],
+      "model_catalog": [
+        {
+          "model_id": "gpt-5",
+          "reasoning_tier": "high",
+          "evidence_refs": [
+            "reports/runtime/model-catalog/gpt-5.json"
+          ]
+        },
+        {
+          "model_id": "gpt-5-balanced",
+          "reasoning_tier": "balanced",
+          "evidence_refs": [
+            "reports/runtime/model-catalog/gpt-5-balanced.json"
+          ]
+        },
+        {
+          "model_id": "gpt-5-mini",
+          "reasoning_tier": "light",
+          "evidence_refs": [
+            "reports/runtime/model-catalog/gpt-5-mini.json"
+          ]
+        }
+      ],
+      "runtime_budget": {
+        "max_parallel_actions": 2,
+        "max_daily_tokens": 1200000
+      }
+    }
+  },
+  "expected_contract_anchors": {
+    "schema_version": "req-019.execution-resource-context-ingestion.v1",
+    "requirement_id": "REQ-019",
+    "strategy": "execution-resource-aware-broad-sweep",
+    "ordered_action_ids": [
+      "action-cpu-low",
+      "action-deep-analysis"
+    ],
+    "sequencing_reason_codes": [
+      "cpu_only_execution_context",
+      "tight_rate_limit_parallelism_reduced"
+    ],
+    "selected_models_by_action": {
+      "action-cpu-low": "gpt-5-mini",
+      "action-deep-analysis": "gpt-5-balanced"
+    }
+  }
+}
