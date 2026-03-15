@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-008 research packet ingestion and normalization contract surface."""
+"""REQ-008 and REQ-015 contract/data-model surfaces for strategy context sweep."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ TOOL = "strategy-context-sweep"
 TOOL_VERSION = "1.0.0"
 REQUIREMENT_ID = "REQ-008"
 SCHEMA_VERSION = "req-008.research-packet-ingestion-and-normalization.v1"
+REQ_015_REQUIREMENT_ID = "REQ-015"
+REQ_015_SCHEMA_VERSION = "req-015.integration-opportunity-detection.v1"
 ALLOWED_RISK_LEVELS = {"low", "medium", "high", "critical"}
 REASON_CODE_EARTH_SWEEP_EVIDENCE_MISSING = "earth_sweep_evidence_missing"
 REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT = "earth_sweep_stale_source_artifact"
@@ -32,6 +34,10 @@ LOG_BUDGET_MAX_BYTES = 3 * 1024 * 1024 * 1024
 
 class Req008Error(ValueError):
     """Raised when REQ-008 normalization input is malformed."""
+
+
+class Req015Error(ValueError):
+    """Raised when REQ-015 integration opportunity input is malformed."""
 
 
 def utc_now_iso() -> str:
@@ -1441,6 +1447,349 @@ def validate_req_008_research_packet_ingestion_and_normalization(payload: Mappin
         if context_bundle_sha256:
             if not re.fullmatch(r"[0-9a-f]{64}", context_bundle_sha256):
                 errors.append("source.context_bundle_sha256 must be a lowercase hex sha256 digest")
+
+    return errors
+
+
+def _require_text_req_015(value: Any, *, field_name: str) -> str:
+    text = _as_text(value)
+    if not text:
+        raise Req015Error(f"{field_name} must be a non-empty string")
+    return text
+
+
+def _require_mapping_req_015(value: Any, *, field_name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise Req015Error(f"{field_name} must be an object")
+    return value
+
+
+def _require_sequence_req_015(value: Any, *, field_name: str) -> Sequence[Any]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req015Error(f"{field_name} must be an array")
+    return value
+
+
+def _normalize_req_015_evidence_refs(evidence_rows: Sequence[Any], *, field_name: str) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen_artifact_ids: set[str] = set()
+    for index, row in enumerate(evidence_rows):
+        evidence = _require_mapping_req_015(row, field_name=f"{field_name}[{index}]")
+        artifact_id = _require_text_req_015(
+            evidence.get("artifact_id"),
+            field_name=f"{field_name}[{index}].artifact_id",
+        )
+        if artifact_id in seen_artifact_ids:
+            raise Req015Error(f"{field_name}[{index}].artifact_id duplicates {artifact_id}")
+        seen_artifact_ids.add(artifact_id)
+        normalized_row: dict[str, Any] = {
+            "artifact_id": artifact_id,
+            "kind": _require_text_req_015(evidence.get("kind"), field_name=f"{field_name}[{index}].kind"),
+            "uri": _require_text_req_015(evidence.get("uri"), field_name=f"{field_name}[{index}].uri"),
+        }
+        notes = _as_text(evidence.get("notes"))
+        if notes:
+            normalized_row["notes"] = notes
+        normalized.append(normalized_row)
+    if not normalized:
+        raise Req015Error(f"{field_name} must contain at least one evidence ref")
+    return normalized
+
+
+def _normalize_req_015_expected_interaction_contract(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, str]:
+    contract = _require_mapping_req_015(value, field_name=field_name)
+    return {
+        "interaction_type": _require_text_req_015(
+            contract.get("interaction_type"),
+            field_name=f"{field_name}.interaction_type",
+        ),
+        "producer_component": _require_text_req_015(
+            contract.get("producer_component"),
+            field_name=f"{field_name}.producer_component",
+        ),
+        "consumer_component": _require_text_req_015(
+            contract.get("consumer_component"),
+            field_name=f"{field_name}.consumer_component",
+        ),
+        "interface": _require_text_req_015(
+            contract.get("interface"),
+            field_name=f"{field_name}.interface",
+        ),
+        "data_contract": _require_text_req_015(
+            contract.get("data_contract"),
+            field_name=f"{field_name}.data_contract",
+        ),
+    }
+
+
+def _normalize_req_015_side_effect_notes(raw_value: Any, *, field_name: str) -> list[str]:
+    rows = _require_sequence_req_015(raw_value, field_name=field_name)
+    notes: list[str] = []
+    seen: set[str] = set()
+    for index, row in enumerate(rows):
+        note = _require_text_req_015(row, field_name=f"{field_name}[{index}]")
+        if note in seen:
+            continue
+        seen.add(note)
+        notes.append(note)
+    if not notes:
+        raise Req015Error(f"{field_name} must contain at least one note")
+    return notes
+
+
+def serialize_req_015_integration_opportunity_bundle(payload: Mapping[str, Any]) -> str:
+    bundle = {
+        "target_project": payload.get("target_project", {}),
+        "integration_opportunities": payload.get("integration_opportunities", []),
+    }
+    return json.dumps(bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _req_015_bundle_sha256(payload: Mapping[str, Any]) -> str:
+    return hashlib.sha256(serialize_req_015_integration_opportunity_bundle(payload).encode("utf-8")).hexdigest()
+
+
+def build_req_015_integration_opportunity_detection(
+    *,
+    target_project: Mapping[str, Any],
+    integration_candidates: Sequence[Any],
+    normalized_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """Build REQ-015 integration opportunity data-model payload."""
+    normalized_target_project = {
+        "project_id": _require_text_req_015(
+            target_project.get("project_id"),
+            field_name="target_project.project_id",
+        ),
+    }
+    target_project_name = _as_text(target_project.get("project_name"))
+    if target_project_name:
+        normalized_target_project["project_name"] = target_project_name
+
+    normalized_candidates = _require_sequence_req_015(
+        integration_candidates,
+        field_name="integration_candidates",
+    )
+    if not normalized_candidates:
+        raise Req015Error("integration_candidates must contain at least one candidate")
+
+    opportunities: list[dict[str, Any]] = []
+    for index, row in enumerate(normalized_candidates, start=1):
+        candidate = _require_mapping_req_015(row, field_name=f"integration_candidates[{index - 1}]")
+        peer_project_id = _require_text_req_015(
+            candidate.get("peer_project_id"),
+            field_name=f"integration_candidates[{index - 1}].peer_project_id",
+        )
+        if peer_project_id == normalized_target_project["project_id"]:
+            raise Req015Error(
+                f"integration_candidates[{index - 1}].peer_project_id must differ from target_project.project_id"
+            )
+
+        opportunity_id = f"integration-opportunity.{index:03d}.{_normalize_slug(peer_project_id)}"
+        opportunities.append(
+            {
+                "integration_opportunity_id": opportunity_id,
+                "target_project_id": normalized_target_project["project_id"],
+                "peer_project_id": peer_project_id,
+                "opportunity_summary": _require_text_req_015(
+                    candidate.get("opportunity_summary"),
+                    field_name=f"integration_candidates[{index - 1}].opportunity_summary",
+                ),
+                "expected_interaction_contract": _normalize_req_015_expected_interaction_contract(
+                    candidate.get("expected_interaction_contract"),
+                    field_name=f"integration_candidates[{index - 1}].expected_interaction_contract",
+                ),
+                "dependency_side_effect_notes": _normalize_req_015_side_effect_notes(
+                    candidate.get("dependency_side_effect_notes"),
+                    field_name=f"integration_candidates[{index - 1}].dependency_side_effect_notes",
+                ),
+                "evidence_refs": _normalize_req_015_evidence_refs(
+                    _require_sequence_req_015(
+                        candidate.get("evidence_refs"),
+                        field_name=f"integration_candidates[{index - 1}].evidence_refs",
+                    ),
+                    field_name=f"integration_candidates[{index - 1}].evidence_refs",
+                ),
+                "provenance": {
+                    "source_fields": [
+                        "integration_candidates[].opportunity_summary",
+                        "integration_candidates[].expected_interaction_contract",
+                        "integration_candidates[].dependency_side_effect_notes[]",
+                        "integration_candidates[].evidence_refs[]",
+                    ],
+                },
+            }
+        )
+
+    output_payload = {
+        "schema_version": REQ_015_SCHEMA_VERSION,
+        "requirement_id": REQ_015_REQUIREMENT_ID,
+        "target_project": normalized_target_project,
+        "integration_opportunities": opportunities,
+        "source": {
+            "normalized_at_utc": _normalize_timestamp(normalized_at_utc),
+            "tool": TOOL,
+            "tool_version": TOOL_VERSION,
+        },
+    }
+    output_payload["source"]["context_bundle_sha256"] = _req_015_bundle_sha256(output_payload)
+    return output_payload
+
+
+def validate_req_015_integration_opportunity_detection(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-015 integration opportunity contract shape and linkage rules."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be an object"]
+
+    required_top_level = {
+        "schema_version",
+        "requirement_id",
+        "target_project",
+        "integration_opportunities",
+        "source",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top_level - top_keys)
+    unexpected_top = sorted(top_keys - required_top_level)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_015_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_015_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_015_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_015_REQUIREMENT_ID}")
+
+    target_project = payload.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("target_project must be an object")
+        target_project = {}
+    target_project_id = _as_text(target_project.get("project_id"))
+    if not target_project_id:
+        errors.append("target_project.project_id must be a non-empty string")
+
+    integration_opportunities = payload.get("integration_opportunities")
+    if not isinstance(integration_opportunities, Sequence) or isinstance(
+        integration_opportunities, (str, bytes, bytearray)
+    ):
+        errors.append("integration_opportunities must be an array")
+        integration_opportunities = []
+    elif not integration_opportunities:
+        errors.append("integration_opportunities must not be empty")
+
+    opportunity_ids: set[str] = set()
+    evidence_ids: set[str] = set()
+    for index, row in enumerate(integration_opportunities):
+        if not isinstance(row, Mapping):
+            errors.append(f"integration_opportunities[{index}] must be an object")
+            continue
+        opportunity_id = _as_text(row.get("integration_opportunity_id"))
+        row_target_project_id = _as_text(row.get("target_project_id"))
+        peer_project_id = _as_text(row.get("peer_project_id"))
+        opportunity_summary = _as_text(row.get("opportunity_summary"))
+        expected_interaction_contract = row.get("expected_interaction_contract")
+        dependency_side_effect_notes = row.get("dependency_side_effect_notes")
+        evidence_refs = row.get("evidence_refs")
+        provenance = row.get("provenance")
+
+        if not opportunity_id:
+            errors.append(f"integration_opportunities[{index}].integration_opportunity_id is required")
+        elif opportunity_id in opportunity_ids:
+            errors.append(f"integration_opportunities[{index}].integration_opportunity_id duplicates {opportunity_id}")
+        else:
+            opportunity_ids.add(opportunity_id)
+
+        if not row_target_project_id:
+            errors.append(f"integration_opportunities[{index}].target_project_id is required")
+        elif target_project_id and row_target_project_id != target_project_id:
+            errors.append(
+                f"integration_opportunities[{index}].target_project_id must match target_project.project_id"
+            )
+
+        if not peer_project_id:
+            errors.append(f"integration_opportunities[{index}].peer_project_id is required")
+        elif target_project_id and peer_project_id == target_project_id:
+            errors.append(
+                f"integration_opportunities[{index}].peer_project_id must differ from target_project.project_id"
+            )
+
+        if not opportunity_summary:
+            errors.append(f"integration_opportunities[{index}].opportunity_summary is required")
+
+        if not isinstance(expected_interaction_contract, Mapping):
+            errors.append(f"integration_opportunities[{index}].expected_interaction_contract must be an object")
+        else:
+            for key in (
+                "interaction_type",
+                "producer_component",
+                "consumer_component",
+                "interface",
+                "data_contract",
+            ):
+                if not _as_text(expected_interaction_contract.get(key)):
+                    errors.append(
+                        f"integration_opportunities[{index}].expected_interaction_contract.{key} is required"
+                    )
+
+        if not isinstance(dependency_side_effect_notes, Sequence) or isinstance(
+            dependency_side_effect_notes,
+            (str, bytes, bytearray),
+        ):
+            errors.append(f"integration_opportunities[{index}].dependency_side_effect_notes must be an array")
+        elif not dependency_side_effect_notes:
+            errors.append(f"integration_opportunities[{index}].dependency_side_effect_notes must not be empty")
+        else:
+            for note_index, note in enumerate(dependency_side_effect_notes):
+                if not _as_text(note):
+                    errors.append(
+                        "integration_opportunities"
+                        f"[{index}].dependency_side_effect_notes[{note_index}] must be non-empty"
+                    )
+
+        _validate_evidence_refs_array(
+            evidence_refs=evidence_refs,
+            field_name=f"integration_opportunities[{index}].evidence_refs",
+            errors=errors,
+            evidence_ids=evidence_ids,
+            require_non_empty=True,
+        )
+
+        if not isinstance(provenance, Mapping):
+            errors.append(f"integration_opportunities[{index}].provenance must be an object")
+        else:
+            source_fields = provenance.get("source_fields")
+            if not isinstance(source_fields, Sequence) or isinstance(source_fields, (str, bytes, bytearray)):
+                errors.append(f"integration_opportunities[{index}].provenance.source_fields must be an array")
+            elif not source_fields:
+                errors.append(f"integration_opportunities[{index}].provenance.source_fields must not be empty")
+            else:
+                for source_index, source_field in enumerate(source_fields):
+                    if not _as_text(source_field):
+                        errors.append(
+                            f"integration_opportunities[{index}].provenance.source_fields[{source_index}] must be non-empty"
+                        )
+
+    source = payload.get("source")
+    if not isinstance(source, Mapping):
+        errors.append("source must be an object")
+    else:
+        if _as_text(source.get("normalized_at_utc")) == "":
+            errors.append("source.normalized_at_utc must be a non-empty string")
+        if source.get("tool") != TOOL:
+            errors.append(f"source.tool must be {TOOL}")
+        if source.get("tool_version") != TOOL_VERSION:
+            errors.append(f"source.tool_version must be {TOOL_VERSION}")
+        context_bundle_sha256 = _as_text(source.get("context_bundle_sha256"))
+        if not context_bundle_sha256:
+            errors.append("source.context_bundle_sha256 must be a non-empty string")
+        elif not re.fullmatch(r"[0-9a-f]{64}", context_bundle_sha256):
+            errors.append("source.context_bundle_sha256 must be a lowercase hex sha256 digest")
 
     return errors
 

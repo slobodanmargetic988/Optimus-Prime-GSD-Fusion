@@ -1,0 +1,82 @@
+{
+  "schema_version": "req-015.integration-opportunity-detection.v1",
+  "requirement_id": "REQ-015",
+  "target_project": {
+    "project_id": "prj.optimus-prime-gsd-fusion",
+    "project_name": "Optimus Prime GSD Fusion"
+  },
+  "integration_opportunities": [
+    {
+      "integration_opportunity_id": "integration-opportunity.001.prj-runtime-core",
+      "target_project_id": "prj.optimus-prime-gsd-fusion",
+      "peer_project_id": "prj.runtime-core",
+      "opportunity_summary": "Reuse runtime-core lease heartbeat signals to improve stale worker detection inside strategy sweep decisions.",
+      "expected_interaction_contract": {
+        "interaction_type": "event_ingestion",
+        "producer_component": "runtime-core lease heartbeat emitter",
+        "consumer_component": "strategy context sweep integration matcher",
+        "interface": "reports/optimus-prime/planning/STATE.md lease telemetry rows",
+        "data_contract": "lease_id, slot_id, heartbeat_at_utc, lease_state"
+      },
+      "dependency_side_effect_notes": [
+        "Runtime heartbeat field changes require synchronized parser updates in this repo.",
+        "Heartbeat cadence reductions can increase false stale-worker flags during dispatch sweeps."
+      ],
+      "evidence_refs": [
+        {
+          "artifact_id": "artifact.runtime-core-state-20260315",
+          "kind": "state_snapshot",
+          "uri": "reports/optimus-prime/planning/STATE.md",
+          "notes": "Runtime-core lease telemetry observed during canary cycle."
+        }
+      ],
+      "provenance": {
+        "source_fields": [
+          "integration_candidates[].opportunity_summary",
+          "integration_candidates[].expected_interaction_contract",
+          "integration_candidates[].dependency_side_effect_notes[]",
+          "integration_candidates[].evidence_refs[]"
+        ]
+      }
+    },
+    {
+      "integration_opportunity_id": "integration-opportunity.002.prj-analytics-hub",
+      "target_project_id": "prj.optimus-prime-gsd-fusion",
+      "peer_project_id": "prj.analytics-hub",
+      "opportunity_summary": "Forward per-cycle dispatch diagnostics into analytics-hub for cross-project throughput regression baselines.",
+      "expected_interaction_contract": {
+        "interaction_type": "batch_export",
+        "producer_component": "strategy dispatch diagnostics exporter",
+        "consumer_component": "analytics-hub throughput baseline loader",
+        "interface": "analytics-hub ingestion contract v2",
+        "data_contract": "cycle_id, queue_depth, dispatch_latency_ms_p95, profile_budget_remaining"
+      },
+      "dependency_side_effect_notes": [
+        "Analytics schema drift can invalidate downstream trend reports until mappings are refreshed.",
+        "Additional export traffic increases cycle-end I/O pressure for dispatch workers."
+      ],
+      "evidence_refs": [
+        {
+          "artifact_id": "artifact.analytics-hub-contract-20260315",
+          "kind": "contract_doc",
+          "uri": "op-tools/strategy/contracts/analytics-hub-ingestion-v2.md",
+          "notes": "Analytics-hub ingestion fields required for baseline ingestion."
+        }
+      ],
+      "provenance": {
+        "source_fields": [
+          "integration_candidates[].opportunity_summary",
+          "integration_candidates[].expected_interaction_contract",
+          "integration_candidates[].dependency_side_effect_notes[]",
+          "integration_candidates[].evidence_refs[]"
+        ]
+      }
+    }
+  ],
+  "source": {
+    "normalized_at_utc": "2026-03-15T00:40:00Z",
+    "tool": "strategy-context-sweep",
+    "tool_version": "1.0.0",
+    "context_bundle_sha256": "8a6aa44af4e04b3b3d20cb763693912b2d2bae58571b4e8ece300c0022a5b775"
+  }
+}
