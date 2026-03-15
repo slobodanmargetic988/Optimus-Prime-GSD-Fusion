@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-001 and REQ-009 contract surfaces for strategy context sweep processing."""
+"""REQ-001, REQ-009, and REQ-020 contract surfaces for strategy context sweep processing."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -38,6 +39,62 @@ REQ_009_SCHEMA_VERSION = "req-009.prior-strategy-revision-ingestion.v1"
 REQ_009_REQUIREMENT_ID = "REQ-009"
 REQ_013_SCHEMA_VERSION = "req-013.capability-catalog-extraction.v1"
 REQ_013_REQUIREMENT_ID = "REQ-013"
+REQ_020_SCHEMA_VERSION = "req-020.risk-signal-normalization.v1"
+REQ_020_REQUIREMENT_ID = "REQ-020"
+REQ_020_TOOL = "strategy-context-sweep"
+REQ_020_TOOL_VERSION = "1.0.0"
+
+REQ_020_ALLOWED_SOURCES = {
+    "blocker",
+    "retry",
+    "watchdog_exit",
+    "regression_pattern",
+}
+REQ_020_SOURCE_ALIASES = {
+    "blocker": "blocker",
+    "blockers": "blocker",
+    "retry": "retry",
+    "retries": "retry",
+    "watchdog_exit": "watchdog_exit",
+    "watchdog-exit": "watchdog_exit",
+    "watchdog": "watchdog_exit",
+    "regression_pattern": "regression_pattern",
+    "regression-pattern": "regression_pattern",
+    "regression": "regression_pattern",
+}
+REQ_020_ANALYSIS_ANCHORS = [
+    "blockers",
+    "retries",
+    "watchdog_exits",
+    "regression_patterns",
+]
+REQ_020_ALLOWED_SEVERITIES = {
+    "low",
+    "medium",
+    "high",
+    "critical",
+}
+REQ_020_SEVERITY_ORDER = {
+    "low": 0,
+    "medium": 1,
+    "high": 2,
+    "critical": 3,
+}
+REQ_020_DEFAULT_REASON_CODE_BY_SOURCE = {
+    "blocker": "task_blocked",
+    "retry": "retry_limit_reached",
+    "watchdog_exit": "stale_base_branch_commit",
+    "regression_pattern": "regression_detected",
+}
+REQ_020_REASON_CODE_ALIASES = {
+    "blocker_detected": "task_blocked",
+    "blocking_issue_detected": "task_blocked",
+    "retry_exhausted": "retry_limit_reached",
+    "retry_budget_exhausted": "retry_limit_reached",
+    "watchdog_timeout": "stale_base_branch_commit",
+    "watchdog_terminal_exit": "stale_run_base_hard_limit",
+    "regression_pattern_detected": "regression_detected",
+}
 
 
 def _require_nonempty_text(value: Any, *, field_name: str) -> str:
@@ -2437,6 +2494,517 @@ def validate_req_009_prior_strategy_revision_ingestion(payload: Mapping[str, Any
     return errors
 
 
+def _req_020_utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _normalize_req_020_timestamp(raw_value: Any, *, field_name: str, allow_empty: bool) -> str:
+    if raw_value is None:
+        if allow_empty:
+            return ""
+        return _req_020_utc_now_iso()
+    text = _require_nonempty_text(raw_value, field_name=field_name)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a valid ISO-8601 timestamp: {exc}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field_name} must include timezone information")
+    return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _normalize_req_020_source(raw_value: Any, *, field_name: str) -> str:
+    source = _require_nonempty_text(raw_value, field_name=field_name).strip().lower().replace("-", "_")
+    source = REQ_020_SOURCE_ALIASES.get(source, source)
+    if source not in REQ_020_ALLOWED_SOURCES:
+        raise ValueError(f"{field_name} must be one of: {sorted(REQ_020_ALLOWED_SOURCES)}")
+    return source
+
+
+def _normalize_req_020_reason_code(
+    raw_value: Any,
+    *,
+    field_name: str,
+    signal_source: str,
+) -> tuple[str, str]:
+    if raw_value is None:
+        default_reason = REQ_020_DEFAULT_REASON_CODE_BY_SOURCE[signal_source]
+        return default_reason, default_reason
+    source_reason_code = _require_nonempty_text(raw_value, field_name=field_name).lower().replace("-", "_")
+    normalized_reason_code = REQ_020_REASON_CODE_ALIASES.get(source_reason_code, source_reason_code)
+    return normalized_reason_code, source_reason_code
+
+
+def _normalize_req_020_severity(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return "medium"
+    severity = _require_nonempty_text(raw_value, field_name=field_name).strip().lower()
+    if severity not in REQ_020_ALLOWED_SEVERITIES:
+        raise ValueError(f"{field_name} must be one of: {sorted(REQ_020_ALLOWED_SEVERITIES)}")
+    return severity
+
+
+def _normalize_req_020_occurrence_count(raw_value: Any, *, field_name: str) -> int:
+    if raw_value is None:
+        return 1
+    if isinstance(raw_value, bool):
+        raise ValueError(f"{field_name} must be a positive integer")
+    if isinstance(raw_value, int):
+        if raw_value <= 0:
+            raise ValueError(f"{field_name} must be a positive integer")
+        return raw_value
+    if isinstance(raw_value, float):
+        if raw_value <= 0 or not raw_value.is_integer():
+            raise ValueError(f"{field_name} must be a positive integer")
+        return int(raw_value)
+    raise ValueError(f"{field_name} must be a positive integer")
+
+
+def _normalize_req_020_signal_rows(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        raise ValueError("risk_signals must be a list")
+    if not isinstance(raw_value, list):
+        raise ValueError("risk_signals must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"risk_signals[{index}] must be an object")
+        signal_source = _normalize_req_020_source(
+            item.get("signal_source"),
+            field_name=f"risk_signals[{index}].signal_source",
+        )
+        reason_code, source_reason_code = _normalize_req_020_reason_code(
+            item.get("reason_code"),
+            field_name=f"risk_signals[{index}].reason_code",
+            signal_source=signal_source,
+        )
+        explicit_source_reason_code = item.get("source_reason_code")
+        if explicit_source_reason_code is not None:
+            source_reason_code = _require_nonempty_text(
+                explicit_source_reason_code,
+                field_name=f"risk_signals[{index}].source_reason_code",
+            ).lower().replace("-", "_")
+        summary = _require_nonempty_text(
+            item.get("summary"),
+            field_name=f"risk_signals[{index}].summary",
+        )
+        severity = _normalize_req_020_severity(
+            item.get("severity"),
+            field_name=f"risk_signals[{index}].severity",
+        )
+        occurrence_count = _normalize_req_020_occurrence_count(
+            item.get("occurrence_count"),
+            field_name=f"risk_signals[{index}].occurrence_count",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"risk_signals[{index}].evidence_refs",
+        )
+        first_observed_at_utc = _normalize_req_020_timestamp(
+            item.get("first_observed_at_utc"),
+            field_name=f"risk_signals[{index}].first_observed_at_utc",
+            allow_empty=True,
+        )
+        last_observed_at_utc = _normalize_req_020_timestamp(
+            item.get("last_observed_at_utc"),
+            field_name=f"risk_signals[{index}].last_observed_at_utc",
+            allow_empty=True,
+        )
+        if first_observed_at_utc and last_observed_at_utc and first_observed_at_utc > last_observed_at_utc:
+            raise ValueError(
+                f"risk_signals[{index}] first_observed_at_utc must be <= last_observed_at_utc"
+            )
+
+        normalized.append(
+            {
+                "signal_source": signal_source,
+                "reason_code": reason_code,
+                "source_reason_code": source_reason_code,
+                "summary": summary,
+                "severity": severity,
+                "occurrence_count": occurrence_count,
+                "evidence_refs": evidence_refs,
+                "first_observed_at_utc": first_observed_at_utc,
+                "last_observed_at_utc": last_observed_at_utc,
+            }
+        )
+
+    if not normalized:
+        raise ValueError("risk_signals must contain at least one signal")
+
+    normalized.sort(
+        key=lambda row: (
+            row["signal_source"],
+            row["reason_code"],
+            row["summary"],
+            row["severity"],
+            row["occurrence_count"],
+            row["first_observed_at_utc"],
+            row["last_observed_at_utc"],
+            tuple(row["evidence_refs"]),
+        )
+    )
+    return normalized
+
+
+def _select_req_020_earliest(*timestamps: str) -> str:
+    values = [value for value in timestamps if value]
+    if not values:
+        return ""
+    return min(values)
+
+
+def _select_req_020_latest(*timestamps: str) -> str:
+    values = [value for value in timestamps if value]
+    if not values:
+        return ""
+    return max(values)
+
+
+def _build_req_020_aggregate_signals(
+    normalized_input_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    alias_pairs: set[tuple[str, str]] = set()
+    for row in normalized_input_rows:
+        key = (row["signal_source"], row["reason_code"], row["summary"])
+        existing = by_key.get(key)
+        if existing is None:
+            by_key[key] = {
+                "signal_source": row["signal_source"],
+                "reason_code": row["reason_code"],
+                "summary": row["summary"],
+                "severity": row["severity"],
+                "occurrence_count": row["occurrence_count"],
+                "evidence_refs": set(row["evidence_refs"]),
+                "first_observed_at_utc": row["first_observed_at_utc"],
+                "last_observed_at_utc": row["last_observed_at_utc"],
+                "source_reason_codes": {row["source_reason_code"]},
+            }
+        else:
+            if REQ_020_SEVERITY_ORDER[row["severity"]] > REQ_020_SEVERITY_ORDER[existing["severity"]]:
+                existing["severity"] = row["severity"]
+            existing["occurrence_count"] += row["occurrence_count"]
+            existing["evidence_refs"].update(row["evidence_refs"])
+            existing["first_observed_at_utc"] = _select_req_020_earliest(
+                existing["first_observed_at_utc"],
+                row["first_observed_at_utc"],
+            )
+            existing["last_observed_at_utc"] = _select_req_020_latest(
+                existing["last_observed_at_utc"],
+                row["last_observed_at_utc"],
+            )
+            existing["source_reason_codes"].add(row["source_reason_code"])
+
+        if row["source_reason_code"] != row["reason_code"]:
+            alias_pairs.add((row["source_reason_code"], row["reason_code"]))
+
+    normalized_signals: list[dict[str, Any]] = []
+    for signal_source, reason_code, summary in sorted(by_key.keys()):
+        aggregate = by_key[(signal_source, reason_code, summary)]
+        normalized_signals.append(
+            {
+                "normalized_signal_id": (
+                    "risk-signal."
+                    f"{_stable_id_fragment(signal_source, reason_code, summary)}"
+                ),
+                "signal_source": signal_source,
+                "reason_code": reason_code,
+                "source_reason_codes": sorted(aggregate["source_reason_codes"]),
+                "summary": summary,
+                "severity": aggregate["severity"],
+                "occurrence_count": aggregate["occurrence_count"],
+                "evidence_refs": sorted(aggregate["evidence_refs"]),
+                "first_observed_at_utc": aggregate["first_observed_at_utc"],
+                "last_observed_at_utc": aggregate["last_observed_at_utc"],
+            }
+        )
+
+    alias_rows = [
+        {
+            "source_reason_code": source_reason_code,
+            "normalized_reason_code": normalized_reason_code,
+        }
+        for source_reason_code, normalized_reason_code in sorted(alias_pairs)
+    ]
+    return normalized_signals, alias_rows
+
+
+def _build_req_020_summary(normalized_signals: list[dict[str, Any]], total_input_signals: int) -> dict[str, Any]:
+    source_counts = {source: 0 for source in sorted(REQ_020_ALLOWED_SOURCES)}
+    severity_counts = {severity: 0 for severity in sorted(REQ_020_ALLOWED_SEVERITIES)}
+    for row in normalized_signals:
+        source_counts[row["signal_source"]] += 1
+        severity_counts[row["severity"]] += 1
+    return {
+        "total_input_signals": total_input_signals,
+        "total_normalized_signals": len(normalized_signals),
+        "source_counts": source_counts,
+        "severity_counts": severity_counts,
+    }
+
+
+def build_req_020_risk_signal_normalization(
+    *,
+    risk_signals: list[Mapping[str, Any]],
+    normalized_at_utc: str | None = None,
+) -> dict[str, Any]:
+    normalized_input_rows = _normalize_req_020_signal_rows(risk_signals)
+    normalized_timestamp = _normalize_req_020_timestamp(
+        normalized_at_utc,
+        field_name="normalized_at_utc",
+        allow_empty=False,
+    )
+    normalized_signals, alias_rows = _build_req_020_aggregate_signals(normalized_input_rows)
+    reason_codes = sorted({row["reason_code"] for row in normalized_signals})
+    taxonomy = {
+        "compatibility_target": "gate_review_reason_codes",
+        "canonical_reason_codes": reason_codes,
+        "source_reason_code_aliases_applied": alias_rows,
+    }
+
+    canonical_input = {
+        "risk_signals": normalized_input_rows,
+        "normalized_at_utc": normalized_timestamp,
+    }
+    digest = _canonical_input_digest(canonical_input)
+    return {
+        "schema_version": REQ_020_SCHEMA_VERSION,
+        "requirement_id": REQ_020_REQUIREMENT_ID,
+        "analysis_anchors": list(REQ_020_ANALYSIS_ANCHORS),
+        "risk_signal_normalization": {
+            "normalized_at_utc": normalized_timestamp,
+            "signals": normalized_signals,
+            "reason_code_taxonomy": taxonomy,
+            "summary": _build_req_020_summary(
+                normalized_signals=normalized_signals,
+                total_input_signals=len(normalized_input_rows),
+            ),
+        },
+        "source": {
+            "tool": REQ_020_TOOL,
+            "tool_version": REQ_020_TOOL_VERSION,
+        },
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req020-{digest[:16]}",
+            "canonical_input": canonical_input,
+        },
+    }
+
+
+def validate_req_020_risk_signal_normalization(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "analysis_anchors",
+        "risk_signal_normalization",
+        "source",
+        "call_metadata",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_020_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_020_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_020_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_020_REQUIREMENT_ID}")
+
+    analysis_anchors = payload.get("analysis_anchors")
+    if analysis_anchors != REQ_020_ANALYSIS_ANCHORS:
+        errors.append("analysis_anchors must match REQ-020 anchor order")
+
+    normalization = payload.get("risk_signal_normalization")
+    if not isinstance(normalization, Mapping):
+        errors.append("risk_signal_normalization must be an object")
+        return errors
+
+    normalized_at_utc = normalization.get("normalized_at_utc")
+    try:
+        _normalize_req_020_timestamp(
+            normalized_at_utc,
+            field_name="risk_signal_normalization.normalized_at_utc",
+            allow_empty=False,
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+
+    signals = normalization.get("signals")
+    if not isinstance(signals, list):
+        errors.append("risk_signal_normalization.signals must be a list")
+    elif not signals:
+        errors.append("risk_signal_normalization.signals must contain at least one signal")
+    else:
+        for index, row in enumerate(signals):
+            if not isinstance(row, Mapping):
+                errors.append(f"risk_signal_normalization.signals[{index}] must be an object")
+                continue
+            for field_name in (
+                "normalized_signal_id",
+                "signal_source",
+                "reason_code",
+                "source_reason_codes",
+                "summary",
+                "severity",
+                "occurrence_count",
+                "evidence_refs",
+                "first_observed_at_utc",
+                "last_observed_at_utc",
+            ):
+                if field_name not in row:
+                    errors.append(f"risk_signal_normalization.signals[{index}] missing {field_name}")
+
+            signal_source = row.get("signal_source")
+            if signal_source not in REQ_020_ALLOWED_SOURCES:
+                errors.append(
+                    f"risk_signal_normalization.signals[{index}].signal_source must be one of {sorted(REQ_020_ALLOWED_SOURCES)}"
+                )
+
+            severity = row.get("severity")
+            if severity not in REQ_020_ALLOWED_SEVERITIES:
+                errors.append(
+                    f"risk_signal_normalization.signals[{index}].severity must be one of {sorted(REQ_020_ALLOWED_SEVERITIES)}"
+                )
+
+            occurrence_count = row.get("occurrence_count")
+            if not isinstance(occurrence_count, int) or occurrence_count <= 0:
+                errors.append(
+                    f"risk_signal_normalization.signals[{index}].occurrence_count must be a positive integer"
+                )
+
+            source_reason_codes = row.get("source_reason_codes")
+            if not isinstance(source_reason_codes, list) or not source_reason_codes:
+                errors.append(f"risk_signal_normalization.signals[{index}].source_reason_codes must be a non-empty list")
+            else:
+                for reason_index, source_reason_code in enumerate(source_reason_codes):
+                    if not isinstance(source_reason_code, str) or not source_reason_code.strip():
+                        errors.append(
+                            "risk_signal_normalization.signals"
+                            f"[{index}].source_reason_codes[{reason_index}] must be a non-empty string"
+                        )
+
+            evidence_refs = row.get("evidence_refs")
+            if not isinstance(evidence_refs, list):
+                errors.append(f"risk_signal_normalization.signals[{index}].evidence_refs must be a list")
+            else:
+                for evidence_index, evidence_ref in enumerate(evidence_refs):
+                    if not isinstance(evidence_ref, str) or not evidence_ref.strip():
+                        errors.append(
+                            f"risk_signal_normalization.signals[{index}].evidence_refs[{evidence_index}] must be a non-empty string"
+                        )
+
+            for field_name in ("first_observed_at_utc", "last_observed_at_utc"):
+                try:
+                    _normalize_req_020_timestamp(
+                        row.get(field_name),
+                        field_name=f"risk_signal_normalization.signals[{index}].{field_name}",
+                        allow_empty=True,
+                    )
+                except ValueError as exc:
+                    errors.append(str(exc))
+
+    taxonomy = normalization.get("reason_code_taxonomy")
+    if not isinstance(taxonomy, Mapping):
+        errors.append("risk_signal_normalization.reason_code_taxonomy must be an object")
+    else:
+        if taxonomy.get("compatibility_target") != "gate_review_reason_codes":
+            errors.append("risk_signal_normalization.reason_code_taxonomy.compatibility_target must be gate_review_reason_codes")
+        canonical_reason_codes = taxonomy.get("canonical_reason_codes")
+        if not isinstance(canonical_reason_codes, list):
+            errors.append("risk_signal_normalization.reason_code_taxonomy.canonical_reason_codes must be a list")
+        alias_rows = taxonomy.get("source_reason_code_aliases_applied")
+        if not isinstance(alias_rows, list):
+            errors.append("risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied must be a list")
+        else:
+            for index, row in enumerate(alias_rows):
+                if not isinstance(row, Mapping):
+                    errors.append(
+                        "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
+                        f"[{index}] must be an object"
+                    )
+                    continue
+                if not _normalize_context_note(
+                    row.get("source_reason_code"),
+                    field_name=(
+                        "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
+                        f"[{index}].source_reason_code"
+                    ),
+                ):
+                    errors.append(
+                        "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
+                        f"[{index}].source_reason_code must be a non-empty string"
+                    )
+                if not _normalize_context_note(
+                    row.get("normalized_reason_code"),
+                    field_name=(
+                        "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
+                        f"[{index}].normalized_reason_code"
+                    ),
+                ):
+                    errors.append(
+                        "risk_signal_normalization.reason_code_taxonomy.source_reason_code_aliases_applied"
+                        f"[{index}].normalized_reason_code must be a non-empty string"
+                    )
+
+    summary = normalization.get("summary")
+    if not isinstance(summary, Mapping):
+        errors.append("risk_signal_normalization.summary must be an object")
+    else:
+        for field_name in ("total_input_signals", "total_normalized_signals", "source_counts", "severity_counts"):
+            if field_name not in summary:
+                errors.append(f"risk_signal_normalization.summary missing {field_name}")
+
+    source = payload.get("source")
+    if not isinstance(source, Mapping):
+        errors.append("source must be an object")
+    else:
+        if source.get("tool") != REQ_020_TOOL:
+            errors.append(f"source.tool must be {REQ_020_TOOL}")
+        if source.get("tool_version") != REQ_020_TOOL_VERSION:
+            errors.append(f"source.tool_version must be {REQ_020_TOOL_VERSION}")
+
+    call_metadata = payload.get("call_metadata")
+    if not isinstance(call_metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+    for field_name in ("reproducibility", "canonical_input_sha256", "reproducible_call_id", "canonical_input"):
+        if field_name not in call_metadata:
+            errors.append(f"call_metadata missing {field_name}")
+
+    canonical_input = call_metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+
+    if errors:
+        return errors
+
+    try:
+        rebuilt = build_req_020_risk_signal_normalization(
+            risk_signals=list(canonical_input.get("risk_signals", [])),
+            normalized_at_utc=canonical_input.get("normalized_at_utc"),
+        )
+    except ValueError as exc:
+        errors.append(f"call_metadata.canonical_input is invalid: {exc}")
+        return errors
+
+    if dict(payload) != rebuilt:
+        errors.append("payload must mirror deterministic REQ-020 normalization output")
+
+    return errors
+
+
 def _write_payload(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
@@ -2547,10 +3115,22 @@ def _looks_like_req008_builder_input(payload: Mapping[str, Any]) -> bool:
     return required.issubset(payload.keys())
 
 
+def _looks_like_req020_builder_input(payload: Mapping[str, Any]) -> bool:
+    analysis_type = str(payload.get("analysis_type", "")).strip()
+    if analysis_type == "risk_signal_normalization":
+        return True
+    return "risk_signals" in payload
+
+
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     analysis_type = str(payload.get("analysis_type", "")).strip()
     if analysis_type == "deficit_and_need_signal_extraction":
         return _worker_w02.run(payload)
+    if analysis_type == "risk_signal_normalization":
+        return build_req_020_risk_signal_normalization(
+            risk_signals=list(payload.get("risk_signals", [])),
+            normalized_at_utc=payload.get("normalized_at_utc"),
+        )
 
     projects = payload.get("projects")
     if isinstance(projects, list) and projects:
@@ -2600,6 +3180,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if _looks_like_req008_builder_input(payload):
             output_payload = build_req_008_research_packet_ingestion_and_normalization(**payload)
+        elif _looks_like_req020_builder_input(payload):
+            output_payload = build_req_020_risk_signal_normalization(
+                risk_signals=list(payload.get("risk_signals", [])),
+                normalized_at_utc=payload.get("normalized_at_utc"),
+            )
         else:
             output_payload = run(payload)
     except Exception as exc:
