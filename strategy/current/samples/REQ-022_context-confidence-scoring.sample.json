@@ -1,0 +1,351 @@
+{
+  "schema_version": "req-022.context-confidence-scoring.v1",
+  "requirement_id": "REQ-022",
+  "context_confidence_scoring_entrypoint": {
+    "runtime_mode": "llm-first",
+    "execution_mode": "long-thinking",
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req022-fixture-r1"
+  },
+  "processing_behavior": {
+    "strategy": "context-confidence-scoring-broad-sweep",
+    "reasoning_mode": "long-thinking",
+    "heuristic_summarization_only": false,
+    "context_inputs": {
+      "target_project": {
+        "project_root": "/workspace/projects/optimus-prime",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-070/TASK_EVIDENCE.json"
+        ]
+      },
+      "earth_sweep": {
+        "earth_root": "/workspace/projects/Earth",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/portfolio.json"
+        ]
+      },
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json"
+          ],
+          "context_note": "Peer runtime constraints may affect strategy assumptions."
+        }
+      ],
+      "candidate_recommendations": [
+        {
+          "action_id": "action-cross-runtime-sync",
+          "summary": "Coordinate runtime strategy assumptions with runtime-orchestrator.",
+          "rationale": "Cross-project assumptions require Earth evidence before obligations can be committed.",
+          "action_scope": "cross-project",
+          "requires_earth_evidence": true,
+          "project_id": "runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json"
+          ],
+          "next_step": "Open a coordination task with evidence attached."
+        },
+        {
+          "action_id": "action-local-clarify-context",
+          "summary": "Clarify context confidence semantics for downstream planning.",
+          "rationale": "Downstream planning should not overfit weak inputs.",
+          "action_scope": "local",
+          "requires_earth_evidence": false,
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-070/TASK_EVIDENCE.json"
+          ],
+          "next_step": "Land deterministic context confidence scoring fields."
+        }
+      ],
+      "earth_sweep_source_artifacts": [
+        {
+          "artifact_ref": "reports/earth/sweeps/2026-03-01/runtime-orchestrator.json",
+          "status": "stale",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/portfolio.json"
+          ]
+        }
+      ],
+      "required_context_documents": [
+        {
+          "doc_kind": "scope",
+          "doc_ref": "scope.md",
+          "status": "missing",
+          "project_id": "",
+          "evidence_refs": []
+        }
+      ]
+    },
+    "context_usage": {
+      "target_project_context_used": true,
+      "earth_sweep_context_used": true,
+      "cross_project_context_used": true,
+      "target_project_refs_used": [
+        "reports/optimus-prime/planning/evidence/TASK-070/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_refs_used": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json"
+      ],
+      "cross_project_refs_used": [
+        "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json"
+      ],
+      "cross_project_projects_considered": [
+        "runtime-orchestrator"
+      ],
+      "evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-01/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/optimus-prime/planning/evidence/TASK-070/TASK_EVIDENCE.json",
+        "scope.md"
+      ],
+      "earth_sweep_source_artifacts_used": true,
+      "earth_sweep_source_artifact_refs_used": [
+        "reports/earth/sweeps/2026-03-01/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-15/portfolio.json"
+      ],
+      "required_context_documents_used": true,
+      "required_context_document_refs_used": [
+        "scope.md"
+      ]
+    },
+    "context_confidence": {
+      "recency_anchor_date": "2026-03-15",
+      "overall_confidence": "medium",
+      "overall_confidence_score": 0.683,
+      "elements": [
+        {
+          "element_id": "cross-project-8f04d03e7d46",
+          "element_kind": "cross-project",
+          "summary": "Cross-project context for 'runtime-orchestrator'.",
+          "confidence": "high",
+          "confidence_score": 0.818,
+          "quality_score": 0.75,
+          "recency_score": 0.9,
+          "rationale": "Cross-project context for 'runtime-orchestrator'.; Quality=0.75; Recency=0.90",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "element_id": "earth-source-artifact-0e5c5f5ee9d9",
+          "element_kind": "earth-source-artifact",
+          "summary": "Earth sweep source artifact (stale).",
+          "confidence": "low",
+          "confidence_score": 0.535,
+          "quality_score": 0.4,
+          "recency_score": 0.7,
+          "rationale": "Earth sweep source artifact (stale).; Quality=0.40; Recency=0.70; Artifact ref: reports/earth/sweeps/2026-03-01/runtime-orchestrator.json; Supporting evidence refs: 1",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-01/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "element_id": "earth-sweep-f75aa9ff039b",
+          "element_kind": "earth-sweep",
+          "summary": "Earth-sweep context evidence.",
+          "confidence": "high",
+          "confidence_score": 0.917,
+          "quality_score": 0.85,
+          "recency_score": 1.0,
+          "rationale": "Earth-sweep context evidence.; Quality=0.85; Recency=1.00",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/portfolio.json"
+          ]
+        },
+        {
+          "element_id": "required-context-doc-7d642681abc6",
+          "element_kind": "required-context-doc",
+          "summary": "Required context document: scope doc (missing).",
+          "confidence": "low",
+          "confidence_score": 0.38,
+          "quality_score": 0.2,
+          "recency_score": 0.6,
+          "rationale": "Required context document: scope doc (missing).; Quality=0.20; Recency=0.60; Doc ref: scope.md",
+          "evidence_refs": [
+            "scope.md"
+          ]
+        },
+        {
+          "element_id": "target-project-58fad0e255c0",
+          "element_kind": "target-project",
+          "summary": "Target-project context bundle evidence.",
+          "confidence": "medium",
+          "confidence_score": 0.765,
+          "quality_score": 0.9,
+          "recency_score": 0.6,
+          "rationale": "Target-project context bundle evidence.; Quality=0.90; Recency=0.60",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-070/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "low_confidence_element_ids": [
+        "earth-source-artifact-0e5c5f5ee9d9",
+        "required-context-doc-7d642681abc6"
+      ]
+    },
+    "recommendation": {
+      "decision": "resolve-context-gaps",
+      "rationale": "Low-confidence context was detected during broad-sweep scoring; refresh or replace weak inputs before downstream planning relies on them.",
+      "confidence": "medium",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-01/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/optimus-prime/planning/evidence/TASK-070/TASK_EVIDENCE.json",
+        "scope.md"
+      ],
+      "recommended_actions": [
+        {
+          "action_id": "action-cross-runtime-sync",
+          "summary": "Coordinate runtime strategy assumptions with runtime-orchestrator.",
+          "rationale": "Cross-project assumptions require Earth evidence before obligations can be committed.",
+          "action_scope": "cross-project",
+          "next_step": "Open a coordination task with evidence attached.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "action_id": "action-local-clarify-context",
+          "summary": "Clarify context confidence semantics for downstream planning.",
+          "rationale": "Downstream planning should not overfit weak inputs.",
+          "action_scope": "local",
+          "next_step": "Land deterministic context confidence scoring fields.",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-070/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "cross_project_obligations": [
+        {
+          "obligation_id": "obligation-action-cross-runtime-sync",
+          "project_id": "runtime-orchestrator",
+          "summary": "Coordinate runtime strategy assumptions with runtime-orchestrator.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-15/portfolio.json"
+          ]
+        }
+      ],
+      "open_risks": [
+        {
+          "risk_id": "risk-context-doc-5f21d456c41d",
+          "summary": "Required scope document is missing: scope.md",
+          "reason_code": "missing_scope_doc",
+          "required_evidence_refs": [
+            "scope.md"
+          ]
+        },
+        {
+          "risk_id": "risk-earth-source-0d964c191e5d",
+          "summary": "Earth sweep source artifact is stale: reports/earth/sweeps/2026-03-01/runtime-orchestrator.json",
+          "reason_code": "stale_earth_sweep_source_artifact",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-01/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-15/portfolio.json"
+          ]
+        },
+        {
+          "risk_id": "risk-low-context-92c490830e20",
+          "summary": "Low-confidence context detected for element 'earth-source-artifact-0e5c5f5ee9d9'.",
+          "reason_code": "low_context_confidence",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-01/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "risk_id": "risk-low-context-e56ed8d8ac6b",
+          "summary": "Low-confidence context detected for element 'required-context-doc-7d642681abc6'.",
+          "reason_code": "low_context_confidence",
+          "required_evidence_refs": [
+            "scope.md"
+          ]
+        }
+      ]
+    }
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "5b999e279a1117386b7619bc75ace781e18a91467c4632b15ac63583577733f6",
+    "reproducible_call_id": "req022-5b999e279a111738",
+    "canonical_input": {
+      "earth_root": "/workspace/projects/Earth",
+      "execution_mode": "long-thinking",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req022-fixture-r1",
+      "runtime_mode": "llm-first",
+      "target_project_root": "/workspace/projects/optimus-prime"
+    },
+    "processing_input_sha256": "656ea7b8c8ef502f18a831c82d4668c50acda91cef2abc4790b67669be00399e",
+    "processing_call_id": "req022-processing-656ea7b8c8ef502f",
+    "canonical_processing_input": {
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-070/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json"
+      ],
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json"
+          ],
+          "context_note": "Peer runtime constraints may affect strategy assumptions."
+        }
+      ],
+      "candidate_recommendations": [
+        {
+          "action_id": "action-cross-runtime-sync",
+          "summary": "Coordinate runtime strategy assumptions with runtime-orchestrator.",
+          "rationale": "Cross-project assumptions require Earth evidence before obligations can be committed.",
+          "action_scope": "cross-project",
+          "requires_earth_evidence": true,
+          "project_id": "runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-14/runtime-orchestrator.json"
+          ],
+          "next_step": "Open a coordination task with evidence attached."
+        },
+        {
+          "action_id": "action-local-clarify-context",
+          "summary": "Clarify context confidence semantics for downstream planning.",
+          "rationale": "Downstream planning should not overfit weak inputs.",
+          "action_scope": "local",
+          "requires_earth_evidence": false,
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-070/TASK_EVIDENCE.json"
+          ],
+          "next_step": "Land deterministic context confidence scoring fields."
+        }
+      ],
+      "earth_sweep_source_artifacts": [
+        {
+          "artifact_ref": "reports/earth/sweeps/2026-03-01/runtime-orchestrator.json",
+          "status": "stale",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/portfolio.json"
+          ]
+        }
+      ],
+      "required_context_documents": [
+        {
+          "doc_kind": "scope",
+          "doc_ref": "scope.md",
+          "status": "missing",
+          "project_id": "",
+          "evidence_refs": []
+        }
+      ]
+    }
+  }
+}

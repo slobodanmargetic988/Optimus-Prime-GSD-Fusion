@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -38,6 +40,8 @@ REQ_009_SCHEMA_VERSION = "req-009.prior-strategy-revision-ingestion.v1"
 REQ_009_REQUIREMENT_ID = "REQ-009"
 REQ_013_SCHEMA_VERSION = "req-013.capability-catalog-extraction.v1"
 REQ_013_REQUIREMENT_ID = "REQ-013"
+REQ_022_SCHEMA_VERSION = "req-022.context-confidence-scoring.v1"
+REQ_022_REQUIREMENT_ID = "REQ-022"
 
 
 def _require_nonempty_text(value: Any, *, field_name: str) -> str:
@@ -365,6 +369,212 @@ def _recommendation_confidence(*, evidence_refs: list[str], open_risks: list[dic
     if open_risks:
         return "medium"
     return "high"
+
+
+_DATE_PATTERN = re.compile(r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})")
+
+
+def _extract_dates_from_refs(evidence_refs: list[str]) -> list[date]:
+    dates: list[date] = []
+    for ref in evidence_refs:
+        if not isinstance(ref, str):
+            continue
+        match = _DATE_PATTERN.search(ref)
+        if not match:
+            continue
+        try:
+            dates.append(
+                date(
+                    int(match.group("year")),
+                    int(match.group("month")),
+                    int(match.group("day")),
+                )
+            )
+        except ValueError:
+            continue
+    dates.sort()
+    return dates
+
+
+def _latest_evidence_date(*ref_groups: list[str]) -> date | None:
+    latest: date | None = None
+    for refs in ref_groups:
+        for found in _extract_dates_from_refs(refs):
+            if latest is None or found > latest:
+                latest = found
+    return latest
+
+
+def _recency_score_for_refs(*, evidence_refs: list[str], anchor_date: date | None) -> float:
+    if anchor_date is None:
+        return 0.6
+    dates = _extract_dates_from_refs(evidence_refs)
+    if not dates:
+        return 0.6
+    element_date = dates[-1]
+    delta_days = (anchor_date - element_date).days
+    if delta_days <= 0:
+        return 1.0
+    if delta_days <= 7:
+        return 0.9
+    if delta_days <= 30:
+        return 0.7
+    if delta_days <= 90:
+        return 0.5
+    return 0.3
+
+
+def _confidence_label_for_score(score: float) -> str:
+    if score >= 0.8:
+        return "high"
+    if score >= 0.55:
+        return "medium"
+    return "low"
+
+
+def _score_context_element(
+    *,
+    element_kind: str,
+    element_id_parts: tuple[str, ...],
+    evidence_refs: list[str],
+    quality_score: float,
+    anchor_date: date | None,
+    summary: str,
+    notes: str = "",
+) -> dict[str, Any]:
+    recency_score = _recency_score_for_refs(evidence_refs=evidence_refs, anchor_date=anchor_date)
+    blended = (0.55 * quality_score) + (0.45 * recency_score)
+    confidence_score = round(max(0.0, min(1.0, blended)), 3)
+    confidence = _confidence_label_for_score(confidence_score)
+    element_id = f"{element_kind}-{_stable_id_fragment(*element_id_parts)}"
+    rationale_bits = [summary, f"Quality={quality_score:.2f}", f"Recency={recency_score:.2f}"]
+    if notes:
+        rationale_bits.append(notes.strip())
+    return {
+        "element_id": element_id,
+        "element_kind": element_kind,
+        "summary": summary,
+        "confidence": confidence,
+        "confidence_score": confidence_score,
+        "quality_score": round(quality_score, 3),
+        "recency_score": round(recency_score, 3),
+        "rationale": "; ".join(rationale_bits),
+        "evidence_refs": list(evidence_refs),
+    }
+
+
+def _build_context_confidence_report(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+) -> dict[str, Any]:
+    anchor_date = _latest_evidence_date(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        *[row.get("evidence_refs", []) for row in cross_project_context],
+        *[row.get("evidence_refs", []) for row in earth_sweep_source_artifacts],
+        *[row.get("evidence_refs", []) for row in required_context_documents],
+    )
+
+    elements: list[dict[str, Any]] = []
+    elements.append(
+        _score_context_element(
+            element_kind="target-project",
+            element_id_parts=("target-project", target_project_root),
+            evidence_refs=target_project_evidence_refs,
+            quality_score=0.9 if target_project_evidence_refs else 0.45,
+            anchor_date=anchor_date,
+            summary="Target-project context bundle evidence.",
+            notes="No target-project evidence refs supplied." if not target_project_evidence_refs else "",
+        )
+    )
+    elements.append(
+        _score_context_element(
+            element_kind="earth-sweep",
+            element_id_parts=("earth-sweep", earth_root),
+            evidence_refs=earth_sweep_evidence_refs,
+            quality_score=0.85 if earth_sweep_evidence_refs else 0.4,
+            anchor_date=anchor_date,
+            summary="Earth-sweep context evidence.",
+            notes="No Earth-sweep evidence refs supplied." if not earth_sweep_evidence_refs else "",
+        )
+    )
+
+    for row in cross_project_context:
+        project_id = str(row.get("project_id", ""))
+        project_root = str(row.get("project_root", ""))
+        evidence_refs = list(row.get("evidence_refs", [])) if isinstance(row.get("evidence_refs"), list) else []
+        quality = 0.75 if evidence_refs else 0.35
+        elements.append(
+            _score_context_element(
+                element_kind="cross-project",
+                element_id_parts=("cross-project", project_id, project_root),
+                evidence_refs=evidence_refs,
+                quality_score=quality,
+                anchor_date=anchor_date,
+                summary=f"Cross-project context for '{project_id}'.",
+                notes="Missing cross-project evidence refs." if not evidence_refs else "",
+            )
+        )
+
+    for row in earth_sweep_source_artifacts:
+        artifact_ref = str(row.get("artifact_ref", ""))
+        status = str(row.get("status", "fresh")).strip().lower()
+        evidence_refs = list(row.get("evidence_refs", [])) if isinstance(row.get("evidence_refs"), list) else []
+        quality = 0.9 if status == "fresh" else 0.4
+        supporting_note = ""
+        if evidence_refs:
+            supporting_note = f"Supporting evidence refs: {len(evidence_refs)}"
+        elements.append(
+            _score_context_element(
+                element_kind="earth-source-artifact",
+                element_id_parts=("earth-source-artifact", artifact_ref, status),
+                evidence_refs=[artifact_ref],
+                quality_score=quality,
+                anchor_date=anchor_date,
+                summary=f"Earth sweep source artifact ({status}).",
+                notes="; ".join(bit for bit in (f"Artifact ref: {artifact_ref}", supporting_note) if bit),
+            )
+        )
+
+    for row in required_context_documents:
+        doc_kind = str(row.get("doc_kind", ""))
+        doc_ref = str(row.get("doc_ref", ""))
+        status = str(row.get("status", "present")).strip().lower()
+        project_id = str(row.get("project_id", ""))
+        evidence_refs = list(row.get("evidence_refs", [])) if isinstance(row.get("evidence_refs"), list) else []
+        quality = 0.8 if status == "present" else 0.2
+        label = f"{doc_kind} doc"
+        if doc_kind == "peer-project":
+            label = f"peer-project doc ({project_id})"
+        elements.append(
+            _score_context_element(
+                element_kind="required-context-doc",
+                element_id_parts=("required-context-doc", doc_kind, project_id, doc_ref, status),
+                evidence_refs=[doc_ref, *evidence_refs],
+                quality_score=quality,
+                anchor_date=anchor_date,
+                summary=f"Required context document: {label} ({status}).",
+                notes=f"Doc ref: {doc_ref}",
+            )
+        )
+
+    elements.sort(key=lambda row: (row["element_kind"], row["element_id"]))
+    low_ids = [row["element_id"] for row in elements if row["confidence"] == "low"]
+    overall_score = round(sum(row["confidence_score"] for row in elements) / len(elements), 3) if elements else 0.0
+    overall_confidence = _confidence_label_for_score(overall_score)
+    return {
+        "recency_anchor_date": anchor_date.isoformat() if anchor_date else "",
+        "overall_confidence": overall_confidence,
+        "overall_confidence_score": overall_score,
+        "elements": elements,
+        "low_confidence_element_ids": low_ids,
+    }
 
 
 def _build_processing_behavior(
@@ -887,6 +1097,338 @@ def validate_req_001_runtime_entrypoint(payload: Mapping[str, Any]) -> list[str]
 
     expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
     expected_processing_call_id = f"req001-processing-{expected_processing_digest[:16]}"
+    if metadata.get("processing_input_sha256") != expected_processing_digest:
+        errors.append("call_metadata.processing_input_sha256 does not match processing input")
+    if metadata.get("processing_call_id") != expected_processing_call_id:
+        errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    return errors
+
+
+def build_req_022_context_confidence_scoring(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    target_project_evidence_refs: list[str] | None = None,
+    earth_sweep_evidence_refs: list[str] | None = None,
+    cross_project_context: list[Mapping[str, Any]] | None = None,
+    candidate_recommendations: list[Mapping[str, Any]] | None = None,
+    earth_sweep_source_artifacts: list[Mapping[str, Any]] | None = None,
+    required_context_documents: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the REQ-022 context confidence scoring payload."""
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_nonempty_text(revision_identity, field_name="revision_identity")
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_context = _normalize_cross_project_context(cross_project_context)
+    normalized_candidates = _normalize_candidate_recommendations(candidate_recommendations)
+    normalized_earth_source_artifacts = _normalize_earth_sweep_source_artifacts(earth_sweep_source_artifacts)
+    normalized_required_documents = _normalize_required_context_documents(required_context_documents)
+
+    canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    digest = _canonical_input_digest(canonical_input)
+    canonical_processing_input = _canonical_processing_input(
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+    )
+    processing_digest = _canonical_input_digest(canonical_processing_input)
+
+    base_processing_behavior = _build_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        candidate_recommendations=normalized_candidates,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+    )
+    confidence_report = _build_context_confidence_report(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_context,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+    )
+
+    base_recommendation = dict(base_processing_behavior["recommendation"])
+    open_risks: list[dict[str, Any]] = list(base_recommendation["open_risks"])
+    low_confidence_ids = list(confidence_report["low_confidence_element_ids"])
+    if low_confidence_ids:
+        evidence_by_element_id = {row["element_id"]: row.get("evidence_refs", []) for row in confidence_report["elements"]}
+        for element_id in low_confidence_ids:
+            element_refs = evidence_by_element_id.get(element_id, [])
+            open_risks.append(
+                {
+                    "risk_id": f"risk-low-context-{_stable_id_fragment(element_id)}",
+                    "summary": f"Low-confidence context detected for element '{element_id}'.",
+                    "reason_code": "low_context_confidence",
+                    "required_evidence_refs": list(element_refs),
+                }
+            )
+
+    open_risks.sort(key=lambda row: row["risk_id"])
+    recommendation_refs = _collect_unique_refs(
+        list(base_recommendation.get("evidence_refs", [])),
+        *[row.get("evidence_refs", []) for row in confidence_report["elements"]],
+        *[row.get("required_evidence_refs", []) for row in open_risks],
+    )
+
+    decision = str(base_recommendation.get("decision", "insufficient-context"))
+    if low_confidence_ids:
+        decision = "resolve-context-gaps"
+
+    confidence = str(confidence_report.get("overall_confidence", "low"))
+    if not recommendation_refs:
+        confidence = "low"
+    elif open_risks and confidence == "high":
+        confidence = "medium"
+
+    rationale = base_recommendation.get("rationale", "")
+    if low_confidence_ids:
+        rationale = (
+            "Low-confidence context was detected during broad-sweep scoring; refresh or replace weak inputs "
+            "before downstream planning relies on them."
+        )
+
+    processing_behavior = {
+        "strategy": "context-confidence-scoring-broad-sweep",
+        "reasoning_mode": EXECUTION_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": base_processing_behavior["context_inputs"],
+        "context_usage": base_processing_behavior["context_usage"],
+        "context_confidence": confidence_report,
+        "recommendation": {
+            "decision": decision,
+            "rationale": rationale or _recommendation_rationale(decision=decision),
+            "confidence": confidence,
+            "evidence_refs": recommendation_refs,
+            "recommended_actions": list(base_recommendation.get("recommended_actions", [])),
+            "cross_project_obligations": list(base_recommendation.get("cross_project_obligations", [])),
+            "open_risks": open_risks,
+        },
+    }
+
+    return {
+        "schema_version": REQ_022_SCHEMA_VERSION,
+        "requirement_id": REQ_022_REQUIREMENT_ID,
+        "context_confidence_scoring_entrypoint": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+        },
+        "processing_behavior": processing_behavior,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req022-{digest[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_digest,
+            "processing_call_id": f"req022-processing-{processing_digest[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+        },
+    }
+
+
+def validate_req_022_context_confidence_scoring(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-022 payload shape and deterministic call metadata."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    top_keys = set(payload.keys())
+    required_top = {"schema_version", "requirement_id", "context_confidence_scoring_entrypoint", "processing_behavior", "call_metadata"}
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_022_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_022_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_022_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_022_REQUIREMENT_ID}")
+
+    entrypoint = payload.get("context_confidence_scoring_entrypoint")
+    if not isinstance(entrypoint, Mapping):
+        errors.append("context_confidence_scoring_entrypoint must be an object")
+        return errors
+    required_entrypoint = {
+        "runtime_mode",
+        "execution_mode",
+        "target_project_root",
+        "earth_root",
+        "output_root",
+        "revision_identity",
+    }
+    entrypoint_keys = set(entrypoint.keys())
+    missing_entrypoint = sorted(required_entrypoint - entrypoint_keys)
+    if missing_entrypoint:
+        errors.append(f"context_confidence_scoring_entrypoint missing keys: {missing_entrypoint}")
+    unexpected_entrypoint = sorted(entrypoint_keys - required_entrypoint)
+    if unexpected_entrypoint:
+        errors.append(f"context_confidence_scoring_entrypoint unexpected keys: {unexpected_entrypoint}")
+
+    if entrypoint.get("runtime_mode") != RUNTIME_MODE:
+        errors.append(f"context_confidence_scoring_entrypoint.runtime_mode must be {RUNTIME_MODE}")
+    if entrypoint.get("execution_mode") != EXECUTION_MODE:
+        errors.append(f"context_confidence_scoring_entrypoint.execution_mode must be {EXECUTION_MODE}")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+    for field in ("strategy", "reasoning_mode", "heuristic_summarization_only", "context_inputs", "context_usage", "context_confidence", "recommendation"):
+        if field not in processing_behavior:
+            errors.append(f"processing_behavior missing {field}")
+    if processing_behavior.get("reasoning_mode") != EXECUTION_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    confidence = processing_behavior.get("context_confidence")
+    if isinstance(confidence, Mapping):
+        for field in ("recency_anchor_date", "overall_confidence", "overall_confidence_score", "elements", "low_confidence_element_ids"):
+            if field not in confidence:
+                errors.append(f"processing_behavior.context_confidence missing {field}")
+    else:
+        errors.append("processing_behavior.context_confidence must be an object")
+
+    recommendation = processing_behavior.get("recommendation")
+    if isinstance(recommendation, Mapping):
+        for field in (
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "recommended_actions",
+            "cross_project_obligations",
+            "open_risks",
+        ):
+            if field not in recommendation:
+                errors.append(f"processing_behavior.recommendation missing {field}")
+    else:
+        errors.append("processing_behavior.recommendation must be an object")
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+    required_metadata = {
+        "reproducibility",
+        "canonical_input_sha256",
+        "reproducible_call_id",
+        "canonical_input",
+        "processing_input_sha256",
+        "processing_call_id",
+        "canonical_processing_input",
+    }
+    metadata_keys = set(metadata.keys())
+    missing_metadata = sorted(required_metadata - metadata_keys)
+    if missing_metadata:
+        errors.append(f"call_metadata missing keys: {missing_metadata}")
+    unexpected_metadata = sorted(metadata_keys - required_metadata)
+    if unexpected_metadata:
+        errors.append(f"call_metadata has unexpected keys: {unexpected_metadata}")
+
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+    expected_canonical_input = _canonical_call_input(
+        target_project_root=str(entrypoint.get("target_project_root", "")),
+        earth_root=str(entrypoint.get("earth_root", "")),
+        output_root=str(entrypoint.get("output_root", "")),
+        revision_identity=str(entrypoint.get("revision_identity", "")),
+    )
+    if dict(canonical_input) != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+
+    expected_digest = _canonical_input_digest(expected_canonical_input)
+    expected_call_id = f"req022-{expected_digest[:16]}"
+    if metadata.get("canonical_input_sha256") != expected_digest:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != expected_call_id:
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+        return errors
+    expected_processing_input = _canonical_processing_input(
+        target_project_evidence_refs=list(
+            processing_behavior.get("context_inputs", {})
+            .get("target_project", {})
+            .get("evidence_refs", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
+        earth_sweep_evidence_refs=list(
+            processing_behavior.get("context_inputs", {})
+            .get("earth_sweep", {})
+            .get("evidence_refs", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
+        cross_project_context=list(
+            processing_behavior.get("context_inputs", {})
+            .get("cross_project_context", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
+        candidate_recommendations=list(
+            processing_behavior.get("context_inputs", {})
+            .get("candidate_recommendations", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
+        earth_sweep_source_artifacts=list(
+            processing_behavior.get("context_inputs", {})
+            .get("earth_sweep_source_artifacts", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
+        required_context_documents=list(
+            processing_behavior.get("context_inputs", {})
+            .get("required_context_documents", [])
+        )
+        if isinstance(processing_behavior.get("context_inputs", {}), Mapping)
+        else [],
+    )
+    if dict(canonical_processing_input) != expected_processing_input:
+        errors.append("call_metadata.canonical_processing_input must mirror normalized processing input")
+
+    expected_processing_digest = _canonical_input_digest(expected_processing_input)
+    expected_processing_call_id = f"req022-processing-{expected_processing_digest[:16]}"
     if metadata.get("processing_input_sha256") != expected_processing_digest:
         errors.append("call_metadata.processing_input_sha256 does not match processing input")
     if metadata.get("processing_call_id") != expected_processing_call_id:
