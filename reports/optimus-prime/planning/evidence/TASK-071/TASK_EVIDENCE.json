@@ -1,0 +1,107 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-1",
+  "task_id": "TASK-071",
+  "requirement_ids": [
+    "REQ-022"
+  ],
+  "updated_at": "2026-03-15T20:56:45Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contract_context_confidence_scoring_run_1",
+        "command": "python3 -m pytest tests/contracts/test_context-confidence-scoring.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s"
+      },
+      {
+        "name": "integration_context_confidence_scoring_run_1",
+        "command": "python3 -m pytest tests/integration/test_context-confidence-scoring.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s"
+      },
+      {
+        "name": "hardening_context_confidence_scoring_run_1",
+        "command": "python3 -m pytest tests/hardening/test_context-confidence-scoring_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s"
+      },
+      {
+        "name": "contract_context_confidence_scoring_run_2",
+        "command": "python3 -m pytest tests/contracts/test_context-confidence-scoring.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s"
+      },
+      {
+        "name": "integration_context_confidence_scoring_run_2",
+        "command": "python3 -m pytest tests/integration/test_context-confidence-scoring.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s"
+      },
+      {
+        "name": "hardening_context_confidence_scoring_run_2",
+        "command": "python3 -m pytest tests/hardening/test_context-confidence-scoring_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-022",
+        "status": "pass",
+        "details": "Stale Earth sweep source artifacts emit deterministic reason_code output with required_evidence_refs so replay diagnostics remain actionable."
+      },
+      {
+        "requirement_id": "REQ-022",
+        "status": "pass",
+        "details": "Missing mission/scope and peer-project required documents emit explicit deterministic reason_code outputs without masking unhappy paths."
+      },
+      {
+        "requirement_id": "REQ-022",
+        "status": "pass",
+        "details": "Context bundle canonical_processing_input serialization is replay-stable across repeated runs (normalized ordering + stable digests)."
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-071/TASK_EVIDENCE.json",
+      "tests/hardening/test_context-confidence-scoring_hardening.py"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_022_contract_green_twice",
+      "req_022_integration_green_twice",
+      "req_022_hardening_green_twice",
+      "stale_earth_sweep_source_artifact_reason_code_verified",
+      "missing_context_doc_reason_codes_verified",
+      "req_022_context_bundle_replay_stable"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}
