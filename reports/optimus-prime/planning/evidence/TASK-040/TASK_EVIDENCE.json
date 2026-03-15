@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-1",
+  "task_id": "TASK-040",
+  "requirement_ids": [
+    "REQ-013"
+  ],
+  "updated_at": "2026-03-15T01:05:59Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "pytest_integration_req013",
+        "command": "python3 -m pytest tests/integration/test_capability-catalog-extraction.py -q",
+        "exit_code": 0
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_capability-catalog-extraction.py -q",
+        "passed": true
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "tests/integration/test_capability-catalog-extraction.py",
+      "reports/optimus-prime/planning/evidence/TASK-040/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "ready_for_test"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}
