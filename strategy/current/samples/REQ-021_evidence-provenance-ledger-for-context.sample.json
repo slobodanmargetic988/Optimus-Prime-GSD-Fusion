@@ -1,0 +1,122 @@
+{
+  "schema_version": "req-021.evidence-provenance-ledger-for-context.v1",
+  "requirement_id": "REQ-021",
+  "evidence_provenance_ledger_for_context": {
+    "ledger_scope": "strategy_context_sweep.processing_behavior",
+    "claim_count": 7,
+    "context_claims": [
+      {
+        "claim_id": "claim-72409a5dae5a",
+        "claim_key": "processing_behavior.context_usage.cross_project_projects_considered",
+        "source_artifact_refs": [
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+        ]
+      },
+      {
+        "claim_id": "claim-a85431f05e03",
+        "claim_key": "processing_behavior.context_usage.evidence_refs_used",
+        "source_artifact_refs": [
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+          "reports/earth/sweeps/2026-03-15/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-021/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "claim_id": "claim-8fddad1261c3",
+        "claim_key": "processing_behavior.recommendation.confidence",
+        "source_artifact_refs": [
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+          "reports/earth/sweeps/2026-03-15/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-021/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "claim_id": "claim-beaf89bbe2d1",
+        "claim_key": "processing_behavior.recommendation.decision",
+        "source_artifact_refs": [
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+          "reports/earth/sweeps/2026-03-15/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-021/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "claim_id": "claim-3f6f03e93a56",
+        "claim_key": "processing_behavior.recommendation.evidence_refs",
+        "source_artifact_refs": [
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+          "reports/earth/sweeps/2026-03-15/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-021/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "claim_id": "claim-a22fb5f56e63",
+        "claim_key": "processing_behavior.recommendation.rationale",
+        "source_artifact_refs": [
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+          "reports/earth/sweeps/2026-03-15/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-021/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "claim_id": "claim-8b1040691e01",
+        "claim_key": "processing_behavior.recommendation.recommended_actions[action_id=action-local-ledger]",
+        "source_artifact_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-021/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "artifact_refs_index": [
+      "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+      "reports/earth/sweeps/2026-03-15/portfolio.json",
+      "reports/optimus-prime/planning/evidence/TASK-021/TASK_EVIDENCE.json"
+    ]
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "da921d7b48c9b4757269247e33524f1a26b615ed16c6e12f573bba3e952a6b6f",
+    "reproducible_call_id": "req021-da921d7b48c9b475",
+    "canonical_input": {
+      "earth_root": "/opt/optimus-prime/Earth",
+      "execution_mode": "long-thinking",
+      "output_root": "/opt/optimus-prime/project-root/strategy-out",
+      "revision_identity": "rev-req021-sample-r1",
+      "runtime_mode": "llm-first",
+      "target_project_root": "/opt/optimus-prime/project-root"
+    },
+    "processing_input_sha256": "efb8983b3742c63f9398ddee5ec50a49f3b9720a1fc1129ce12cca9ed3e4a371",
+    "processing_call_id": "req021-processing-efb8983b3742c63f",
+    "canonical_processing_input": {
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-021/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json"
+      ],
+      "cross_project_context": [
+        {
+          "project_id": "ground-control-hub",
+          "project_root": "/opt/optimus-prime/Earth/ground-control-hub",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+          ],
+          "context_note": "Sample cross-project context entry."
+        }
+      ],
+      "candidate_recommendations": [
+        {
+          "action_id": "action-local-ledger",
+          "summary": "Generate evidence provenance ledger for context claims.",
+          "rationale": "Auditability improves when each claim is evidence-linked.",
+          "action_scope": "local",
+          "requires_earth_evidence": false,
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-021/TASK_EVIDENCE.json"
+          ],
+          "next_step": "Attach REQ-021 ledger to context sweep output bundle."
+        }
+      ]
+    }
+  }
+}
+

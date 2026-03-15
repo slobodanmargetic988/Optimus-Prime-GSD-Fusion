@@ -1,0 +1,231 @@
+{
+  "input": {
+    "target_project_root": "/opt/optimus-prime/project-root",
+    "earth_root": "/opt/optimus-prime/Earth",
+    "output_root": "/opt/optimus-prime/project-root/strategy-out",
+    "revision_identity": "rev-req021-fixture-r1",
+    "target_project_evidence_refs": [
+      "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-14/portfolio.json"
+    ],
+    "cross_project_context": [
+      {
+        "project_id": "ground-control-hub",
+        "project_root": "/opt/optimus-prime/Earth/ground-control-hub",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+        ],
+        "context_note": "Earth sweep for ground ingestion dependencies."
+      }
+    ],
+    "candidate_recommendations": [
+      {
+        "action_id": "action-local-provenance",
+        "summary": "Attach evidence provenance ledger to context claims.",
+        "rationale": "Deterministic audit requires binding claims to concrete artifacts.",
+        "action_scope": "local",
+        "requires_earth_evidence": false,
+        "project_id": "",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+        ],
+        "next_step": "Emit REQ-021 ledger alongside context sweep outputs."
+      },
+      {
+        "action_id": "action-cross-project-audit",
+        "summary": "Coordinate provenance expectations with Ground Control Hub.",
+        "rationale": "Cross-project context needs a shared audit trail for evidence refs.",
+        "action_scope": "cross-project",
+        "requires_earth_evidence": true,
+        "project_id": "ground-control-hub",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+        ],
+        "next_step": "Only open cross-project obligation after attaching Earth sweep evidence refs."
+      }
+    ],
+    "earth_sweep_source_artifacts": [
+      {
+        "artifact_ref": "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md",
+        "status": "stale",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+        ]
+      }
+    ]
+  },
+  "expected_payload": {
+    "schema_version": "req-021.evidence-provenance-ledger-for-context.v1",
+    "requirement_id": "REQ-021",
+    "evidence_provenance_ledger_for_context": {
+      "ledger_scope": "strategy_context_sweep.processing_behavior",
+      "claim_count": 10,
+      "context_claims": [
+        {
+          "claim_id": "claim-0eb57a0da749",
+          "claim_key": "processing_behavior.context_usage.cross_project_projects_considered",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+          ]
+        },
+        {
+          "claim_id": "claim-e9907d5c510d",
+          "claim_key": "processing_behavior.context_usage.evidence_refs_used",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-14/portfolio.json",
+            "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md",
+            "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "claim_id": "claim-31ac5c7f4896",
+          "claim_key": "processing_behavior.recommendation.confidence",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-14/portfolio.json",
+            "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md",
+            "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "claim_id": "claim-a8290a8dbd8f",
+          "claim_key": "processing_behavior.recommendation.cross_project_obligations[obligation_id=obligation-action-cross-project-audit]",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-14/portfolio.json"
+          ]
+        },
+        {
+          "claim_id": "claim-c7b97cf56c48",
+          "claim_key": "processing_behavior.recommendation.decision",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-14/portfolio.json",
+            "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md",
+            "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "claim_id": "claim-4b49434ed3b2",
+          "claim_key": "processing_behavior.recommendation.evidence_refs",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-14/portfolio.json",
+            "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md",
+            "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "claim_id": "claim-247ab275c74a",
+          "claim_key": "processing_behavior.recommendation.open_risks[risk_id=risk-earth-source-22641fb1c0ad]",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md"
+          ]
+        },
+        {
+          "claim_id": "claim-3bbff33cbdfb",
+          "claim_key": "processing_behavior.recommendation.rationale",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-14/portfolio.json",
+            "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md",
+            "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "claim_id": "claim-1e90e8fa8fd5",
+          "claim_key": "processing_behavior.recommendation.recommended_actions[action_id=action-cross-project-audit]",
+          "source_artifact_refs": [
+            "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+          ]
+        },
+        {
+          "claim_id": "claim-98b2ad1ef307",
+          "claim_key": "processing_behavior.recommendation.recommended_actions[action_id=action-local-provenance]",
+          "source_artifact_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "artifact_refs_index": [
+        "reports/earth/sweeps/2026-03-14/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-14/portfolio.json",
+        "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md",
+        "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+      ]
+    },
+    "call_metadata": {
+      "reproducibility": "deterministic-input-fingerprint",
+      "canonical_input_sha256": "f7ef51ec2bb3cf55f37563284038cae2c53ea568bcabf056a3db1267b2ea00d1",
+      "reproducible_call_id": "req021-f7ef51ec2bb3cf55",
+      "canonical_input": {
+        "earth_root": "/opt/optimus-prime/Earth",
+        "execution_mode": "long-thinking",
+        "output_root": "/opt/optimus-prime/project-root/strategy-out",
+        "revision_identity": "rev-req021-fixture-r1",
+        "runtime_mode": "llm-first",
+        "target_project_root": "/opt/optimus-prime/project-root"
+      },
+      "processing_input_sha256": "0a5b044b5e63cb90d3f105d3407153aef9d4488552ba3dfe4501bae54a60e812",
+      "processing_call_id": "req021-processing-0a5b044b5e63cb90",
+      "canonical_processing_input": {
+        "target_project_evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-14/portfolio.json"
+        ],
+        "cross_project_context": [
+          {
+            "project_id": "ground-control-hub",
+            "project_root": "/opt/optimus-prime/Earth/ground-control-hub",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+            ],
+            "context_note": "Earth sweep for ground ingestion dependencies."
+          }
+        ],
+        "candidate_recommendations": [
+          {
+            "action_id": "action-cross-project-audit",
+            "summary": "Coordinate provenance expectations with Ground Control Hub.",
+            "rationale": "Cross-project context needs a shared audit trail for evidence refs.",
+            "action_scope": "cross-project",
+            "requires_earth_evidence": true,
+            "project_id": "ground-control-hub",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+            ],
+            "next_step": "Only open cross-project obligation after attaching Earth sweep evidence refs."
+          },
+          {
+            "action_id": "action-local-provenance",
+            "summary": "Attach evidence provenance ledger to context claims.",
+            "rationale": "Deterministic audit requires binding claims to concrete artifacts.",
+            "action_scope": "local",
+            "requires_earth_evidence": false,
+            "project_id": "",
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-065/TASK_EVIDENCE.json"
+            ],
+            "next_step": "Emit REQ-021 ledger alongside context sweep outputs."
+          }
+        ],
+        "earth_sweep_source_artifacts": [
+          {
+            "artifact_ref": "reports/earth/sweeps/2026-03-14/sources/ground-control-hub.md",
+            "status": "stale",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-14/ground-control-hub.json"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
+
