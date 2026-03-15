@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -36,6 +37,8 @@ RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 REQ_009_SCHEMA_VERSION = "req-009.prior-strategy-revision-ingestion.v1"
 REQ_009_REQUIREMENT_ID = "REQ-009"
+REQ_011_SCHEMA_VERSION = "req-011.cross-project-dependency-extraction.v1"
+REQ_011_REQUIREMENT_ID = "REQ-011"
 REQ_013_SCHEMA_VERSION = "req-013.capability-catalog-extraction.v1"
 REQ_013_REQUIREMENT_ID = "REQ-013"
 REQ_019_SCHEMA_VERSION = "req-019.execution-resource-context-ingestion.v1"
@@ -896,6 +899,633 @@ def validate_req_001_runtime_entrypoint(payload: Mapping[str, Any]) -> list[str]
     if metadata.get("processing_input_sha256") != expected_processing_digest:
         errors.append("call_metadata.processing_input_sha256 does not match processing input")
     if metadata.get("processing_call_id") != expected_processing_call_id:
+        errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    return errors
+
+
+def _slug_token(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    return slug or _stable_id_fragment(value)
+
+
+def _normalize_req_011_signal_row(
+    raw_value: Any,
+    *,
+    index: int,
+    field_name: str,
+    signal_type: str,
+) -> dict[str, Any]:
+    if not isinstance(raw_value, Mapping):
+        raise ValueError(f"{field_name}[{index}] must be an object")
+
+    source_ref_field = {
+        "contract": "contract_ref",
+        "trace": "trace_ref",
+        "declared-integration-point": "integration_point_ref",
+    }[signal_type]
+    source_project_id = _require_nonempty_text(
+        raw_value.get("source_project_id"),
+        field_name=f"{field_name}[{index}].source_project_id",
+    )
+    target_project_id = _require_nonempty_text(
+        raw_value.get("target_project_id"),
+        field_name=f"{field_name}[{index}].target_project_id",
+    )
+    if source_project_id == target_project_id:
+        raise ValueError(f"{field_name}[{index}] must describe a cross-project dependency edge")
+
+    dependency_key = _require_nonempty_text(
+        raw_value.get("dependency_key"),
+        field_name=f"{field_name}[{index}].dependency_key",
+    )
+    signal_slug = "-".join(
+        (
+            _slug_token(source_project_id),
+            _slug_token(target_project_id),
+            _slug_token(dependency_key),
+            _slug_token(signal_type),
+        )
+    )
+    return {
+        "signal_id": _require_nonempty_text(
+            raw_value.get("signal_id") if raw_value.get("signal_id") is not None else f"signal-{signal_slug}",
+            field_name=f"{field_name}[{index}].signal_id",
+        ),
+        "signal_type": signal_type,
+        "dependency_key": dependency_key,
+        "summary": _require_nonempty_text(
+            raw_value.get("summary"),
+            field_name=f"{field_name}[{index}].summary",
+        ),
+        "source_project_id": source_project_id,
+        "source_project_root": _normalize_root(
+            raw_value.get("source_project_root"),
+            field_name=f"{field_name}[{index}].source_project_root",
+        ),
+        "target_project_id": target_project_id,
+        "target_project_root": _normalize_root(
+            raw_value.get("target_project_root"),
+            field_name=f"{field_name}[{index}].target_project_root",
+        ),
+        source_ref_field: _require_nonempty_text(
+            raw_value.get(source_ref_field),
+            field_name=f"{field_name}[{index}].{source_ref_field}",
+        ),
+        "evidence_refs": _normalize_string_list(
+            raw_value.get("evidence_refs"),
+            field_name=f"{field_name}[{index}].evidence_refs",
+        ),
+    }
+
+
+def _normalize_req_011_signal_rows(
+    raw_value: Any,
+    *,
+    field_name: str,
+    signal_type: str,
+) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError(f"{field_name} must be a list")
+
+    normalized = [
+        _normalize_req_011_signal_row(row, index=index, field_name=field_name, signal_type=signal_type)
+        for index, row in enumerate(raw_value)
+    ]
+    normalized.sort(
+        key=lambda row: (
+            row["source_project_id"],
+            row["target_project_id"],
+            row["dependency_key"],
+            row["signal_id"],
+        )
+    )
+    return normalized
+
+
+def _normalize_req_011_broad_sweep_context(raw_value: Any) -> dict[str, Any]:
+    if raw_value is None:
+        raw_value = {}
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("broad_sweep_context must be an object")
+
+    return {
+        "earth_sweep_evidence_refs": _normalize_string_list(
+            raw_value.get("earth_sweep_evidence_refs"),
+            field_name="broad_sweep_context.earth_sweep_evidence_refs",
+        ),
+        "cross_project_context": _normalize_cross_project_context(raw_value.get("cross_project_context")),
+        "contract_dependencies": _normalize_req_011_signal_rows(
+            raw_value.get("contract_dependencies"),
+            field_name="broad_sweep_context.contract_dependencies",
+            signal_type="contract",
+        ),
+        "trace_dependencies": _normalize_req_011_signal_rows(
+            raw_value.get("trace_dependencies"),
+            field_name="broad_sweep_context.trace_dependencies",
+            signal_type="trace",
+        ),
+        "declared_integration_points": _normalize_req_011_signal_rows(
+            raw_value.get("declared_integration_points"),
+            field_name="broad_sweep_context.declared_integration_points",
+            signal_type="declared-integration-point",
+        ),
+    }
+
+
+def _req_011_signal_source_ref(signal: Mapping[str, Any]) -> str:
+    if signal["signal_type"] == "contract":
+        return str(signal["contract_ref"])
+    if signal["signal_type"] == "trace":
+        return str(signal["trace_ref"])
+    return str(signal["integration_point_ref"])
+
+
+def _req_011_signal_evidence_refs(signal: Mapping[str, Any]) -> list[str]:
+    return _collect_unique_refs(list(signal["evidence_refs"]), [_req_011_signal_source_ref(signal)])
+
+
+def _req_011_edge_confidence(signal_types: list[str], *, evidence_refs: list[str]) -> tuple[str, str]:
+    if len(signal_types) >= 3 and evidence_refs:
+        return "high", "Contracts, traces, and declared integration points corroborate the edge."
+    if len(signal_types) >= 2 and evidence_refs:
+        return "medium", "Multiple broad-sweep signal types corroborate the edge."
+    if evidence_refs:
+        return "low", "Only one corroborating signal type is attached to the edge."
+    return "low", "The edge lacks evidence refs and cannot be treated as confirmed."
+
+
+def _build_req_011_dependency_edges(
+    *,
+    broad_sweep_context: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    cross_project_context = list(broad_sweep_context["cross_project_context"])
+    context_refs_by_project = {
+        row["project_id"]: list(row["evidence_refs"])
+        for row in cross_project_context
+    }
+    grouped_signals: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for signal in (
+        list(broad_sweep_context["contract_dependencies"])
+        + list(broad_sweep_context["trace_dependencies"])
+        + list(broad_sweep_context["declared_integration_points"])
+    ):
+        key = (signal["source_project_id"], signal["target_project_id"], signal["dependency_key"])
+        grouped_signals.setdefault(key, []).append(signal)
+
+    dependency_edges: list[dict[str, Any]] = []
+    for key, signals in grouped_signals.items():
+        source_project_id, target_project_id, dependency_key = key
+        ordered_signals = sorted(signals, key=lambda row: (row["signal_type"], row["signal_id"]))
+        signal_types = sorted({str(row["signal_type"]) for row in ordered_signals})
+        signal_evidence_refs = _collect_unique_refs(*[_req_011_signal_evidence_refs(row) for row in ordered_signals])
+        supporting_context_project_ids = sorted(
+            project_id
+            for project_id in {source_project_id, target_project_id}
+            if project_id in context_refs_by_project
+        )
+        supporting_context_evidence_refs = _collect_unique_refs(
+            *[context_refs_by_project.get(project_id, []) for project_id in supporting_context_project_ids]
+        )
+        confidence, confidence_reason = _req_011_edge_confidence(signal_types, evidence_refs=signal_evidence_refs)
+        edge_slug = "-".join(
+            (
+                _slug_token(source_project_id),
+                _slug_token(target_project_id),
+                _slug_token(dependency_key),
+            )
+        )
+
+        dependency_edges.append(
+            {
+                "dependency_edge_id": f"dependency-edge-{edge_slug}",
+                "dependency_key": dependency_key,
+                "source_project_id": source_project_id,
+                "source_project_root": ordered_signals[0]["source_project_root"],
+                "target_project_id": target_project_id,
+                "target_project_root": ordered_signals[0]["target_project_root"],
+                "summary": sorted({str(row["summary"]) for row in ordered_signals})[0],
+                "signal_types": signal_types,
+                "supporting_signal_ids": [str(row["signal_id"]) for row in ordered_signals],
+                "supporting_signal_count": len(ordered_signals),
+                "contract_refs": sorted(
+                    {str(row["contract_ref"]) for row in ordered_signals if row["signal_type"] == "contract"}
+                ),
+                "trace_refs": sorted(
+                    {str(row["trace_ref"]) for row in ordered_signals if row["signal_type"] == "trace"}
+                ),
+                "integration_point_refs": sorted(
+                    {
+                        str(row["integration_point_ref"])
+                        for row in ordered_signals
+                        if row["signal_type"] == "declared-integration-point"
+                    }
+                ),
+                "confidence": confidence,
+                "confidence_reason": confidence_reason,
+                "evidence_refs": signal_evidence_refs,
+                "supporting_context_project_ids": supporting_context_project_ids,
+                "supporting_context_evidence_refs": supporting_context_evidence_refs,
+            }
+        )
+
+    dependency_edges.sort(
+        key=lambda row: (
+            row["source_project_id"],
+            row["target_project_id"],
+            row["dependency_key"],
+            row["dependency_edge_id"],
+        )
+    )
+    return dependency_edges
+
+
+def _req_011_recommendation_decision(
+    *,
+    dependency_edges: list[dict[str, Any]],
+    cross_project_obligations: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+) -> str:
+    if cross_project_obligations and not open_risks:
+        return "proceed"
+    if cross_project_obligations and open_risks:
+        return "proceed-with-open-risks"
+    if dependency_edges and open_risks:
+        return "record-open-risks"
+    if dependency_edges:
+        return "observe"
+    return "insufficient-context"
+
+
+def _req_011_recommendation_rationale(*, decision: str) -> str:
+    if decision == "proceed":
+        return "Cross-project dependency edges are corroborated strongly enough to emit obligations."
+    if decision == "proceed-with-open-risks":
+        return "Some dependency edges are obligation-ready, while weaker or under-evidenced edges remain open risks."
+    if decision == "record-open-risks":
+        return "Dependency edges were extracted, but evidence or confidence gaps prevent obligation promotion."
+    if decision == "observe":
+        return "Dependency edges were extracted for observation, but no cross-project obligation is warranted yet."
+    return "No cross-project dependency edges were extracted from the provided broad-sweep context."
+
+
+def _build_req_011_processing_behavior(
+    *,
+    broad_sweep_context: dict[str, Any],
+) -> dict[str, Any]:
+    earth_sweep_evidence_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
+    cross_project_context = list(broad_sweep_context["cross_project_context"])
+    dependency_edges = _build_req_011_dependency_edges(broad_sweep_context=broad_sweep_context)
+
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    matched_context_projects: set[str] = set()
+    for edge in dependency_edges:
+        supporting_context_project_ids = list(edge["supporting_context_project_ids"])
+        supporting_context_refs = list(edge["supporting_context_evidence_refs"])
+        matched_context_projects.update(supporting_context_project_ids)
+        required_refs = _collect_unique_refs(edge["evidence_refs"], supporting_context_refs)
+        if edge["confidence"] == "low":
+            open_risks.append(
+                {
+                    "risk_id": f"risk-dependency-confidence-{edge['dependency_edge_id']}",
+                    "reason_code": "dependency_confidence_below_commit_threshold",
+                    "summary": (
+                        f"Dependency edge '{edge['dependency_key']}' between '{edge['source_project_id']}' and "
+                        f"'{edge['target_project_id']}' remains an open risk because corroboration is weak."
+                    ),
+                    "required_evidence_refs": required_refs,
+                }
+            )
+            continue
+        if not earth_sweep_evidence_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-dependency-earth-evidence-{edge['dependency_edge_id']}",
+                    "reason_code": "missing_earth_sweep_evidence_refs",
+                    "summary": (
+                        f"Dependency edge '{edge['dependency_key']}' between '{edge['source_project_id']}' and "
+                        f"'{edge['target_project_id']}' cannot become a cross-project obligation until "
+                        "Earth-sweep evidence refs are attached."
+                    ),
+                    "required_evidence_refs": required_refs,
+                }
+            )
+            continue
+        if not supporting_context_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-dependency-context-evidence-{edge['dependency_edge_id']}",
+                    "reason_code": "missing_cross_project_context_evidence_refs",
+                    "summary": (
+                        f"Dependency edge '{edge['dependency_key']}' between '{edge['source_project_id']}' and "
+                        f"'{edge['target_project_id']}' lacks Earth-sweep cross-project context evidence refs."
+                    ),
+                    "required_evidence_refs": _collect_unique_refs(edge["evidence_refs"], earth_sweep_evidence_refs),
+                }
+            )
+            continue
+
+        cross_project_obligations.append(
+            {
+                "obligation_id": f"obligation-{edge['dependency_edge_id']}",
+                "project_id": edge["target_project_id"],
+                "summary": (
+                    f"Coordinate dependency '{edge['dependency_key']}' between '{edge['source_project_id']}' and "
+                    f"'{edge['target_project_id']}' before implementation."
+                ),
+                "confidence": edge["confidence"],
+                "evidence_refs": _collect_unique_refs(
+                    earth_sweep_evidence_refs,
+                    edge["evidence_refs"],
+                    supporting_context_refs,
+                ),
+            }
+        )
+
+    cross_project_obligations.sort(key=lambda row: (row["project_id"], row["obligation_id"]))
+    open_risks.sort(key=lambda row: row["risk_id"])
+    evidence_refs = _collect_unique_refs(
+        earth_sweep_evidence_refs,
+        *[row["evidence_refs"] for row in cross_project_context],
+        *[row["evidence_refs"] for row in dependency_edges],
+        *[row["supporting_context_evidence_refs"] for row in dependency_edges],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    decision = _req_011_recommendation_decision(
+        dependency_edges=dependency_edges,
+        cross_project_obligations=cross_project_obligations,
+        open_risks=open_risks,
+    )
+
+    contract_signal_ids = [row["signal_id"] for row in broad_sweep_context["contract_dependencies"]]
+    trace_signal_ids = [row["signal_id"] for row in broad_sweep_context["trace_dependencies"]]
+    integration_signal_ids = [row["signal_id"] for row in broad_sweep_context["declared_integration_points"]]
+    context_usage = {
+        "broad_sweep_context_used": any(
+            (
+                earth_sweep_evidence_refs,
+                cross_project_context,
+                broad_sweep_context["contract_dependencies"],
+                broad_sweep_context["trace_dependencies"],
+                broad_sweep_context["declared_integration_points"],
+            )
+        ),
+        "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+        "cross_project_context_used": bool(cross_project_context),
+        "contract_dependency_signal_ids_used": contract_signal_ids,
+        "trace_dependency_signal_ids_used": trace_signal_ids,
+        "declared_integration_point_signal_ids_used": integration_signal_ids,
+        "cross_project_projects_considered": [row["project_id"] for row in cross_project_context],
+        "cross_project_context_projects_matched": sorted(matched_context_projects),
+        "dependency_keys_extracted": [row["dependency_key"] for row in dependency_edges],
+        "dependency_edge_ids_extracted": [row["dependency_edge_id"] for row in dependency_edges],
+        "high_confidence_dependency_edge_ids": [
+            row["dependency_edge_id"] for row in dependency_edges if row["confidence"] == "high"
+        ],
+        "medium_confidence_dependency_edge_ids": [
+            row["dependency_edge_id"] for row in dependency_edges if row["confidence"] == "medium"
+        ],
+        "low_confidence_dependency_edge_ids": [
+            row["dependency_edge_id"] for row in dependency_edges if row["confidence"] == "low"
+        ],
+        "evidence_refs_used": evidence_refs,
+    }
+
+    return {
+        "strategy": "cross-project-dependency-extraction",
+        "reasoning_mode": EXECUTION_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": {
+            "broad_sweep_context": broad_sweep_context,
+        },
+        "context_usage": context_usage,
+        "recommendation": {
+            "decision": decision,
+            "rationale": _req_011_recommendation_rationale(decision=decision),
+            "confidence": _recommendation_confidence(evidence_refs=evidence_refs, open_risks=open_risks),
+            "evidence_refs": evidence_refs,
+            "dependency_edges": dependency_edges,
+            "cross_project_obligations": cross_project_obligations,
+            "open_risks": open_risks,
+        },
+    }
+
+
+def _canonical_req_011_processing_input(*, broad_sweep_context: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "broad_sweep_context": broad_sweep_context,
+    }
+
+
+def build_req_011_cross_project_dependency_extraction(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    broad_sweep_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_nonempty_text(revision_identity, field_name="revision_identity")
+    normalized_broad_sweep_context = _normalize_req_011_broad_sweep_context(broad_sweep_context)
+
+    canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    digest = _canonical_input_digest(canonical_input)
+    canonical_processing_input = _canonical_req_011_processing_input(
+        broad_sweep_context=normalized_broad_sweep_context,
+    )
+    processing_digest = _canonical_input_digest(canonical_processing_input)
+    processing_behavior = _build_req_011_processing_behavior(
+        broad_sweep_context=normalized_broad_sweep_context,
+    )
+
+    return {
+        "schema_version": REQ_011_SCHEMA_VERSION,
+        "requirement_id": REQ_011_REQUIREMENT_ID,
+        "cross_project_dependency_extraction": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+        },
+        "processing_behavior": processing_behavior,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req011-{digest[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_digest,
+            "processing_call_id": f"req011-processing-{processing_digest[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+        },
+    }
+
+
+def validate_req_011_cross_project_dependency_extraction(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    top_keys = set(payload.keys())
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "cross_project_dependency_extraction",
+        "processing_behavior",
+        "call_metadata",
+    }
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_011_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_011_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_011_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_011_REQUIREMENT_ID}")
+
+    extraction = payload.get("cross_project_dependency_extraction")
+    if not isinstance(extraction, Mapping):
+        errors.append("cross_project_dependency_extraction must be an object")
+        return errors
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+
+    required_processing = {
+        "strategy",
+        "reasoning_mode",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "recommendation",
+    }
+    missing_processing = sorted(required_processing - set(processing_behavior.keys()))
+    if missing_processing:
+        errors.append(f"processing_behavior missing keys: {missing_processing}")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        return errors
+    if "broad_sweep_context" not in context_inputs:
+        errors.append("processing_behavior.context_inputs missing broad_sweep_context")
+        return errors
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+        return errors
+    for required_field in (
+        "decision",
+        "rationale",
+        "confidence",
+        "evidence_refs",
+        "dependency_edges",
+        "cross_project_obligations",
+        "open_risks",
+    ):
+        if required_field not in recommendation:
+            errors.append(f"processing_behavior.recommendation missing {required_field}")
+
+    try:
+        normalized_target_root = _normalize_root(
+            extraction.get("target_project_root"),
+            field_name="cross_project_dependency_extraction.target_project_root",
+        )
+        normalized_earth_root = _normalize_root(
+            extraction.get("earth_root"),
+            field_name="cross_project_dependency_extraction.earth_root",
+        )
+        normalized_output_root = _normalize_root(
+            extraction.get("output_root"),
+            field_name="cross_project_dependency_extraction.output_root",
+        )
+        normalized_revision_identity = _require_nonempty_text(
+            extraction.get("revision_identity"),
+            field_name="cross_project_dependency_extraction.revision_identity",
+        )
+        normalized_broad_sweep_context = _normalize_req_011_broad_sweep_context(
+            context_inputs.get("broad_sweep_context")
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
+
+    if extraction.get("runtime_mode") != RUNTIME_MODE:
+        errors.append(f"cross_project_dependency_extraction.runtime_mode must be {RUNTIME_MODE}")
+    if extraction.get("execution_mode") != EXECUTION_MODE:
+        errors.append(f"cross_project_dependency_extraction.execution_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("strategy") != "cross-project-dependency-extraction":
+        errors.append("processing_behavior.strategy must be cross-project-dependency-extraction")
+    if processing_behavior.get("reasoning_mode") != EXECUTION_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    expected_canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+    if dict(canonical_input) != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+
+    expected_digest = _canonical_input_digest(expected_canonical_input)
+    if metadata.get("canonical_input_sha256") != expected_digest:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != f"req011-{expected_digest[:16]}":
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    expected_processing_behavior = _build_req_011_processing_behavior(
+        broad_sweep_context=normalized_broad_sweep_context,
+    )
+    if payload.get("processing_behavior") != expected_processing_behavior:
+        errors.append("processing_behavior must mirror deterministic broad-sweep processing output")
+
+    expected_canonical_processing_input = _canonical_req_011_processing_input(
+        broad_sweep_context=normalized_broad_sweep_context,
+    )
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+        return errors
+    if dict(canonical_processing_input) != expected_canonical_processing_input:
+        errors.append("call_metadata.canonical_processing_input must mirror normalized processing input")
+
+    expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
+    if metadata.get("processing_input_sha256") != expected_processing_digest:
+        errors.append("call_metadata.processing_input_sha256 does not match processing input")
+    if metadata.get("processing_call_id") != f"req011-processing-{expected_processing_digest[:16]}":
         errors.append("call_metadata.processing_call_id does not match processing digest")
 
     return errors
