@@ -260,6 +260,105 @@ def _validate_req014_target_project(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _validate_req014_broad_sweep_context(
+    payload: dict[str, Any],
+    *,
+    target_project_id: str,
+) -> dict[str, Any]:
+    raw = payload.get("broad_sweep_context")
+    if raw is None:
+        projects_considered = [target_project_id]
+        evidence_refs_by_project = {target_project_id: []}
+        cross_project = False
+    else:
+        if not isinstance(raw, dict):
+            raise SweepError("input_error", "broad_sweep_context must be an object", stage="input")
+
+        raw_evidence_refs = raw.get("evidence_refs_by_project")
+        if raw_evidence_refs is None:
+            raw_evidence_refs = {}
+        if not isinstance(raw_evidence_refs, dict):
+            raise SweepError("input_error", "broad_sweep_context.evidence_refs_by_project must be an object", stage="input")
+
+        evidence_refs_by_project: dict[str, list[str]] = {}
+        for raw_project_id, raw_refs in raw_evidence_refs.items():
+            project_id = _as_str(raw_project_id)
+            if not project_id:
+                raise SweepError(
+                    "input_error",
+                    "broad_sweep_context.evidence_refs_by_project keys must be non-empty strings",
+                    stage="input",
+                )
+            refs = _normalize_string_list(
+                raw_refs,
+                path=f"broad_sweep_context.evidence_refs_by_project.{project_id}",
+                allow_empty=True,
+            )
+            evidence_refs_by_project[project_id] = _dedupe_preserve_order(refs)
+
+        raw_projects_considered = raw.get("projects_considered")
+        if raw_projects_considered is None:
+            projects_considered = list(evidence_refs_by_project.keys())
+        else:
+            projects_considered = _normalize_string_list(
+                raw_projects_considered,
+                path="broad_sweep_context.projects_considered",
+                allow_empty=True,
+            )
+            projects_considered = _dedupe_preserve_order(projects_considered)
+
+        for project_id in evidence_refs_by_project:
+            if project_id not in projects_considered:
+                projects_considered.append(project_id)
+
+        if not projects_considered:
+            projects_considered = [target_project_id]
+        for project_id in projects_considered:
+            evidence_refs_by_project.setdefault(project_id, [])
+
+        raw_cross_project = raw.get("cross_project")
+        if raw_cross_project is None:
+            cross_project = len(projects_considered) > 1
+        elif isinstance(raw_cross_project, bool):
+            cross_project = raw_cross_project
+        else:
+            raise SweepError("input_error", "broad_sweep_context.cross_project must be boolean", stage="input")
+
+    projects_with_evidence_refs = [
+        project_id for project_id in projects_considered if evidence_refs_by_project.get(project_id)
+    ]
+    projects_without_evidence_refs = [
+        project_id for project_id in projects_considered if not evidence_refs_by_project.get(project_id)
+    ]
+    earth_sweep_evidence_refs = _dedupe_preserve_order(
+        [
+            evidence_ref
+            for project_id in projects_considered
+            for evidence_ref in evidence_refs_by_project.get(project_id, [])
+        ]
+    )
+
+    return {
+        "cross_project": cross_project,
+        "projects_considered": projects_considered,
+        "projects_with_evidence_refs": projects_with_evidence_refs,
+        "projects_without_evidence_refs": projects_without_evidence_refs,
+        "evidence_refs_by_project": evidence_refs_by_project,
+        "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+    }
+
+
 def _validate_req014_deficits(payload: dict[str, Any]) -> list[dict[str, Any]]:
     rows = _required_list(payload, "deficits")
     out: list[dict[str, Any]] = []
@@ -803,6 +902,10 @@ def extract_deficit_and_need_signals(payload: dict[str, Any]) -> dict[str, Any]:
     thresholds = _coerce_req014_thresholds(payload)
     max_signals = _coerce_req014_max_signals(payload)
     target_project = _validate_req014_target_project(payload)
+    broad_sweep_context = _validate_req014_broad_sweep_context(
+        payload,
+        target_project_id=target_project["project_id"],
+    )
     deficits = _validate_req014_deficits(payload)
 
     target_tags = set(target_project["capability_tags"])
@@ -900,7 +1003,43 @@ def extract_deficit_and_need_signals(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     all_evidence_refs = [str(row["citation_id"]) for row in evidence_references]
+    cross_project_evidence_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
+    recommendation_evidence_refs = _dedupe_preserve_order(all_evidence_refs + cross_project_evidence_refs)
     recommendation_decision = "prioritize_need_signals" if need_signals else "hold"
+
+    obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    if broad_sweep_context["cross_project"]:
+        _append_obligation_or_open_risk(
+            obligations=obligations,
+            open_risks=open_risks,
+            obligation_id="OBL-NEED-0001",
+            summary="Validate prioritized need signals against Earth-sweep cross-project evidence before execution.",
+            evidence_refs=cross_project_evidence_refs,
+            risk_id="RISK-NEED-0001",
+            risk_summary="Cross-project need validation is unresolved because Earth-sweep evidence refs are missing.",
+        )
+        missing_projects = list(broad_sweep_context["projects_without_evidence_refs"])
+        if missing_projects:
+            open_risks.append(
+                {
+                    "risk_id": "RISK-NEED-0002",
+                    "summary": (
+                        "Earth-sweep evidence refs are missing for cross-project context rows: "
+                        + ", ".join(missing_projects)
+                    ),
+                    "evidence_refs": [],
+                }
+            )
+    else:
+        open_risks.append(
+            {
+                "risk_id": "RISK-NEED-0003",
+                "summary": "Cross-project inference is unresolved because fewer than two projects were provided.",
+                "evidence_refs": [],
+            }
+        )
+
     recommendation = {
         "decision": recommendation_decision,
         "rationale": (
@@ -909,7 +1048,10 @@ def extract_deficit_and_need_signals(payload: dict[str, Any]) -> dict[str, Any]:
             f"{len(excluded_deficits)} deficit(s)."
         ),
         "top_signal_id": need_signals[0]["signal_id"] if need_signals else None,
-        "evidence_refs": all_evidence_refs,
+        "evidence_refs": recommendation_evidence_refs,
+        "cross_project_context": broad_sweep_context,
+        "obligations": obligations,
+        "open_risks": open_risks,
     }
 
     totals = {

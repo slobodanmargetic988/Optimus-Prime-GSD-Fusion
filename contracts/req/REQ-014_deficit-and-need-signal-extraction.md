@@ -27,6 +27,13 @@ Define the contract and data model for extracting unmet ecosystem needs that the
     "min_leverage_ratio": 0.5
   },
   "max_signals": 5,
+  "broad_sweep_context": {
+    "projects_considered": ["earth-north", "earth-south"],
+    "evidence_refs_by_project": {
+      "earth-north": ["SRC-1001"],
+      "earth-south": ["SRC-2001", "SRC-2002"]
+    }
+  },
   "deficits": [
     {
       "deficit_id": "DEF-001",
@@ -51,6 +58,10 @@ Rules:
   - `thresholds.min_urgency_score`: `0..10`
   - `thresholds.min_leverage_ratio`: `0..1`
 - `max_signals` must be an integer `> 0`.
+- `broad_sweep_context` is optional and, when present, must include deterministic cross-project inputs:
+  - `projects_considered`: string list.
+  - `evidence_refs_by_project`: object keyed by project id with string-list evidence refs.
+  - `cross_project` (optional): boolean override; default derives from project count.
 
 ## Output Contract
 REQ-014 output contains:
@@ -61,6 +72,10 @@ REQ-014 output contains:
 - bounded exclusions: `excluded_deficits[]`
 - linked evidence table: `evidence_references[]`
 - deterministic recommendation and counts: `recommendation`, `totals`
+- recommendation completeness:
+  - `recommendation.cross_project_context` (normalized broad-sweep usage)
+  - `recommendation.obligations` (evidence-grounded only)
+  - `recommendation.open_risks` (unresolved cross-project ideas when Earth-sweep refs are missing)
 
 Need signal row shape:
 
@@ -94,6 +109,7 @@ Evidence linkage:
 - Each included signal creates deterministic `evidence_references[]` citation ids (`EVD-0001`, ...).
 - Signal `evidence_refs[]` link to those citation ids.
 - Citation rows map back to upstream evidence via `upstream_evidence_ref` and `deficit_id`.
+- Cross-project obligations must include Earth-sweep evidence refs; if refs are missing, unresolved items are emitted as `open_risks` instead of obligations.
 
 ## Deterministic Fixtures and Samples
 - Input fixture: `examples/fixtures/deficit-and-need-signal-extraction.json`

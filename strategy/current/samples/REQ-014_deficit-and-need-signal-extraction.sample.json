@@ -127,6 +127,28 @@
       "EVD-0001",
       "EVD-0002",
       "EVD-0003"
+    ],
+    "cross_project_context": {
+      "cross_project": false,
+      "projects_considered": [
+        "optimus-prime-gsd-fusion"
+      ],
+      "projects_with_evidence_refs": [],
+      "projects_without_evidence_refs": [
+        "optimus-prime-gsd-fusion"
+      ],
+      "evidence_refs_by_project": {
+        "optimus-prime-gsd-fusion": []
+      },
+      "earth_sweep_evidence_refs": []
+    },
+    "obligations": [],
+    "open_risks": [
+      {
+        "risk_id": "RISK-NEED-0003",
+        "summary": "Cross-project inference is unresolved because fewer than two projects were provided.",
+        "evidence_refs": []
+      }
     ]
   },
   "totals": {
