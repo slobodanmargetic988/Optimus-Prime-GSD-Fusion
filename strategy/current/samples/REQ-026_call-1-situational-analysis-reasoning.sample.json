@@ -1,0 +1,121 @@
+{
+  "ok": true,
+  "tool": "strategy-llm-pipeline",
+  "tool_version": "1.0.0",
+  "schema_version": "req-026.call-1-situational-analysis-reasoning.v1",
+  "requirement_id": "REQ-026",
+  "analysis_type": "call_1_situational_analysis_reasoning",
+  "call_id": "call-1",
+  "checked_at_utc": "2026-03-16T09:30:00Z",
+  "situational_analysis": {
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "mission": {
+        "text": "Keep autonomous delivery loops deterministic, observable, and grounded in verifiable evidence.",
+        "source": "mission.md",
+        "authoritative": true
+      },
+      "scope": {
+        "text": "Limit this wave to contract and data-model surfaces backed by planning and runtime evidence, with later-call follow-up for unresolved gaps.",
+        "source": "scope.md",
+        "authoritative": true
+      },
+      "anchor_summary": "Mission: Keep autonomous delivery loops deterministic, observable, and grounded in verifiable evidence. Scope: Limit this wave to contract and data-model surfaces backed by planning and runtime evidence, with later-call follow-up for unresolved gaps."
+    },
+    "planning_state": {
+      "status": "partial",
+      "artifact_ids": [
+        "PLAN-001",
+        "PLAN-002"
+      ],
+      "evidence_refs": [
+        "reports/optimus-prime/planning/PLAN_PACKETS.json",
+        "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json"
+      ],
+      "key_signals": [
+        "Planner output satisfies the mandatory planning gate.",
+        "Contract, fixture, sample, and test work are all explicitly scoped.",
+        "Implementation intent is stable.",
+        "Verification evidence is not yet attached to the task state."
+      ]
+    },
+    "runtime_state": {
+      "status": "degraded",
+      "artifact_ids": [
+        "RUN-001",
+        "RUN-002"
+      ],
+      "evidence_refs": [
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "reports/optimus-prime/planning/STATE.json"
+      ],
+      "key_signals": [
+        "Primary canary lane completed successfully.",
+        "Fallback recovery still needs tighter evidence on current branch behavior.",
+        "Runtime evidence is still being emitted deterministically.",
+        "No total runtime blackout is present."
+      ]
+    },
+    "reasoning": {
+      "assessment_status": "needs-follow-up",
+      "anchor_set": [
+        "mission",
+        "scope",
+        "planning_evidence",
+        "runtime_evidence"
+      ],
+      "state_summary": "optimus-prime-gsd-fusion remains anchored to mission and scope, planning evidence is partial, runtime evidence is degraded, and 3 explicit unknown(s) must be resolved in later calls.",
+      "evidence_basis": [
+        "PLAN-001",
+        "PLAN-002",
+        "RUN-001",
+        "RUN-002"
+      ],
+      "follow_up_required": true
+    }
+  },
+  "unknowns": [
+    {
+      "unknown_id": "unknown.001",
+      "category": "planning",
+      "question": "Has task-state drift been reconciled against the latest implementation packet?",
+      "why_it_matters": "Call-2 needs a stable implementation target before expanding execution actions.",
+      "must_be_resolved_by": "call-2",
+      "provenance": {
+        "evidence_type": "planning",
+        "artifact_id": "PLAN-002",
+        "source_ref": "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json"
+      }
+    },
+    {
+      "unknown_id": "unknown.002",
+      "category": "planning",
+      "question": "Do current task packets already reserve follow-up work for unresolved Call-1 unknowns?",
+      "why_it_matters": "Call-2 must avoid duplicating work that is already planned elsewhere.",
+      "must_be_resolved_by": "call-2",
+      "provenance": {
+        "evidence_type": "planning",
+        "artifact_id": "PLAN-002",
+        "source_ref": "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json"
+      }
+    },
+    {
+      "unknown_id": "unknown.003",
+      "category": "runtime",
+      "question": "Is the degraded fallback behavior still reproducible on the current branch head?",
+      "why_it_matters": "Call-2 must know whether the runtime concern is active or stale before prescribing next actions.",
+      "must_be_resolved_by": "call-2",
+      "provenance": {
+        "evidence_type": "runtime",
+        "artifact_id": "RUN-001",
+        "source_ref": "reports/optimus-prime/planning/VERIFICATION.md"
+      }
+    }
+  ],
+  "source": {
+    "planning_artifact_count": 2,
+    "runtime_artifact_count": 2,
+    "mission_source": "mission.md",
+    "scope_source": "scope.md"
+  }
+}
