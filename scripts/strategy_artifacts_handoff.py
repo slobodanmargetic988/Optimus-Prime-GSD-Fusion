@@ -23,6 +23,11 @@ REQ_059_CALL_ID = "strategy-quality-report-artifact"
 _EXPECTED_DIRECTIONS = {"increase", "decrease", "maintain"}
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
 _REQ_059_GATE_IDS = ("citation_coverage", "contradiction_status", "confidence_distribution")
+_REQ_059_PLANNER_HOOK_ID = "planner.strategy-quality-report"
+_REQ_059_ACCEPTANCE_PACKET_TYPE = "strategy_quality_report_acceptance"
+_REQ_059_REASON_QUALITY_GATES_FAILED = "quality_gates_failed"
+_REQ_059_REASON_OPEN_RISKS_PRESENT = "open_risks_present"
+_REQ_059_REASON_BLOCKING_OPEN_RISKS_PRESENT = "blocking_open_risks_present"
 
 
 def _utc_timestamp() -> str:
@@ -635,6 +640,202 @@ def _compute_req_059_gate_verdicts(
     }
 
 
+def _normalize_req_059_recommendation_mappings(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("recommendation_mappings must be a list")
+    if not value:
+        raise ValueError("recommendation_mappings must include at least one row")
+
+    normalized: list[dict[str, Any]] = []
+    seen_recommendation_ids: set[str] = set()
+    for index, row in enumerate(value):
+        field_prefix = f"recommendation_mappings[{index}]"
+        raw = _require_mapping(row, field_name=field_prefix)
+        expected_keys = {
+            "recommendation_id",
+            "recommendation_summary",
+            "gate_ids",
+            "evidence_refs",
+            "open_risk_ids",
+        }
+        row_keys = set(raw.keys())
+        unexpected = sorted(row_keys - expected_keys)
+        if unexpected:
+            raise ValueError(f"{field_prefix} has unexpected keys: {unexpected}")
+        missing = sorted(expected_keys - row_keys)
+        if missing:
+            raise ValueError(f"{field_prefix} missing keys: {missing}")
+
+        recommendation_id = _require_nonempty_text(
+            raw.get("recommendation_id"),
+            field_name=f"{field_prefix}.recommendation_id",
+        )
+        if recommendation_id in seen_recommendation_ids:
+            raise ValueError(f"{field_prefix}.recommendation_id must be unique")
+        seen_recommendation_ids.add(recommendation_id)
+
+        recommendation_summary = _require_nonempty_text(
+            raw.get("recommendation_summary"),
+            field_name=f"{field_prefix}.recommendation_summary",
+        )
+        gate_ids = _normalize_text_list(raw.get("gate_ids"), field_name=f"{field_prefix}.gate_ids", min_items=1)
+        unknown_gate_ids = sorted(set(gate_ids) - set(_REQ_059_GATE_IDS))
+        if unknown_gate_ids:
+            raise ValueError(f"{field_prefix}.gate_ids has unknown gate ids: {unknown_gate_ids}")
+
+        evidence_refs = _normalize_text_list(
+            raw.get("evidence_refs"),
+            field_name=f"{field_prefix}.evidence_refs",
+            min_items=1,
+        )
+        open_risk_ids = _normalize_text_list(
+            raw.get("open_risk_ids"),
+            field_name=f"{field_prefix}.open_risk_ids",
+            min_items=0,
+        )
+
+        normalized.append(
+            {
+                "recommendation_id": recommendation_id,
+                "recommendation_summary": recommendation_summary,
+                "gate_ids": gate_ids,
+                "evidence_refs": evidence_refs,
+                "open_risk_ids": open_risk_ids,
+            }
+        )
+
+    return sorted(normalized, key=lambda row: row["recommendation_id"])
+
+
+def _normalize_req_059_open_risks(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("open_risks must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    seen_risk_ids: set[str] = set()
+    for index, row in enumerate(value):
+        field_prefix = f"open_risks[{index}]"
+        raw = _require_mapping(row, field_name=field_prefix)
+        expected_keys = {"risk_id", "summary", "reason_code", "evidence_refs", "blocking"}
+        row_keys = set(raw.keys())
+        unexpected = sorted(row_keys - expected_keys)
+        if unexpected:
+            raise ValueError(f"{field_prefix} has unexpected keys: {unexpected}")
+        missing = sorted(expected_keys - row_keys)
+        if missing:
+            raise ValueError(f"{field_prefix} missing keys: {missing}")
+
+        risk_id = _require_nonempty_text(raw.get("risk_id"), field_name=f"{field_prefix}.risk_id")
+        if risk_id in seen_risk_ids:
+            raise ValueError(f"{field_prefix}.risk_id must be unique")
+        seen_risk_ids.add(risk_id)
+
+        summary = _require_nonempty_text(raw.get("summary"), field_name=f"{field_prefix}.summary")
+        reason_code = _require_nonempty_text(raw.get("reason_code"), field_name=f"{field_prefix}.reason_code")
+        evidence_refs = _normalize_text_list(
+            raw.get("evidence_refs"),
+            field_name=f"{field_prefix}.evidence_refs",
+            min_items=1,
+        )
+        blocking = raw.get("blocking")
+        if not isinstance(blocking, bool):
+            raise ValueError(f"{field_prefix}.blocking must be a boolean")
+
+        normalized.append(
+            {
+                "risk_id": risk_id,
+                "summary": summary,
+                "reason_code": reason_code,
+                "evidence_refs": evidence_refs,
+                "blocking": blocking,
+            }
+        )
+
+    return sorted(normalized, key=lambda row: row["risk_id"])
+
+
+def _build_req_059_planner_hook(
+    *,
+    artifact: Mapping[str, Any],
+    recommendation_mappings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    target_project = artifact["target_project"]
+    gate_verdicts = artifact["strategy_quality_report_artifact"]["gate_verdicts"]
+    return {
+        "hook_id": _REQ_059_PLANNER_HOOK_ID,
+        "requirement_id": REQ_059_REQUIREMENT_ID,
+        "target_project_id": target_project["project_id"],
+        "target_project_root": target_project["project_root"],
+        "checked_at_utc": artifact["checked_at_utc"],
+        "ready_for_build": gate_verdicts["overall_pass"],
+        "failed_gate_ids": list(gate_verdicts["failed_gate_ids"]),
+        "mapped_gate_ids": sorted({gate_id for row in recommendation_mappings for gate_id in row["gate_ids"]}),
+        "recommendation_ids": [row["recommendation_id"] for row in recommendation_mappings],
+        "recommendation_mappings": recommendation_mappings,
+        "mapping_count": len(recommendation_mappings),
+        "complete_recommendation_mapping_set": True,
+    }
+
+
+def _build_req_059_acceptance_packet(
+    *,
+    artifact: Mapping[str, Any],
+    artifact_ref: str,
+    recommendation_mappings: list[dict[str, Any]],
+    acceptance_evidence_refs: list[str],
+    open_risks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    target_project = artifact["target_project"]
+    gate_verdicts = artifact["strategy_quality_report_artifact"]["gate_verdicts"]
+
+    required_evidence_refs = sorted(
+        {
+            evidence_ref
+            for evidence_ref in acceptance_evidence_refs
+            + [ref for row in recommendation_mappings for ref in row["evidence_refs"]]
+            + [ref for row in open_risks for ref in row["evidence_refs"]]
+        }
+    )
+    blocking_open_risk_count = sum(1 for row in open_risks if row["blocking"])
+
+    reason_codes: list[str] = []
+    if not gate_verdicts["overall_pass"]:
+        reason_codes.append(_REQ_059_REASON_QUALITY_GATES_FAILED)
+    if open_risks:
+        reason_codes.append(_REQ_059_REASON_OPEN_RISKS_PRESENT)
+    if blocking_open_risk_count:
+        reason_codes.append(_REQ_059_REASON_BLOCKING_OPEN_RISKS_PRESENT)
+
+    if not gate_verdicts["overall_pass"] or blocking_open_risk_count:
+        decision = "blocked"
+        open_risk_status = "blocked"
+    elif open_risks:
+        decision = "accepted-with-open-risks"
+        open_risk_status = "accepted-with-open-risks"
+    else:
+        decision = "accepted"
+        open_risk_status = "clear"
+
+    return {
+        "packet_type": _REQ_059_ACCEPTANCE_PACKET_TYPE,
+        "requirement_id": REQ_059_REQUIREMENT_ID,
+        "artifact_ref": artifact_ref,
+        "checked_at_utc": artifact["checked_at_utc"],
+        "target_project_id": target_project["project_id"],
+        "decision": decision,
+        "failed_gate_ids": list(gate_verdicts["failed_gate_ids"]),
+        "required_evidence_refs": required_evidence_refs,
+        "reason_codes": reason_codes,
+        "open_risk_handling": {
+            "status": open_risk_status,
+            "open_risk_count": len(open_risks),
+            "blocking_open_risk_count": blocking_open_risk_count,
+            "non_blocking_open_risk_count": len(open_risks) - blocking_open_risk_count,
+        },
+        "open_risks": open_risks,
+    }
+
+
 def build_req_059_strategy_quality_report_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Build normalized REQ-059 payload for strategy quality report artifact handoff."""
     raw = _require_mapping(payload, field_name="payload")
@@ -680,6 +881,46 @@ def build_req_059_strategy_quality_report_artifact(payload: Mapping[str, Any]) -
     if errors:
         raise ValueError(f"built REQ-059 payload failed validation: {errors}")
     return built
+
+
+def build_req_059_strategy_quality_report_delivery_bundle(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build REQ-059 report artifact plus planner and acceptance handoff payloads."""
+    raw = _require_mapping(payload, field_name="payload")
+    artifact = build_req_059_strategy_quality_report_artifact(raw)
+    recommendation_mappings = _normalize_req_059_recommendation_mappings(raw.get("recommendation_mappings"))
+    acceptance_evidence_refs = _normalize_text_list(
+        raw.get("acceptance_evidence_refs"),
+        field_name="acceptance_evidence_refs",
+        min_items=1,
+    )
+    open_risks = _normalize_req_059_open_risks(raw.get("open_risks", []))
+
+    raw_artifact_ref = raw.get("artifact_ref")
+    if raw_artifact_ref in (None, ""):
+        artifact_ref = (
+            f"strategy-quality-report:"
+            f"{artifact['target_project']['project_id']}:"
+            f"{artifact['checked_at_utc']}"
+        )
+    else:
+        artifact_ref = _require_nonempty_text(raw_artifact_ref, field_name="artifact_ref")
+
+    planner_hook = _build_req_059_planner_hook(
+        artifact=artifact,
+        recommendation_mappings=recommendation_mappings,
+    )
+    acceptance_packet = _build_req_059_acceptance_packet(
+        artifact=artifact,
+        artifact_ref=artifact_ref,
+        recommendation_mappings=recommendation_mappings,
+        acceptance_evidence_refs=acceptance_evidence_refs,
+        open_risks=open_risks,
+    )
+    return {
+        "quality_report_artifact": artifact,
+        "planner_hook": planner_hook,
+        "acceptance_packet": acceptance_packet,
+    }
 
 
 def validate_req_059_strategy_quality_report_artifact(payload: Mapping[str, Any]) -> list[str]:
