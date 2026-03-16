@@ -52,6 +52,9 @@ def test_req_033_sample_payload_is_valid_and_explicitly_grouped_for_planner() ->
     assert recommendation["open_risks"] == []
     assert sample["call_metadata"]["llm_call_trace_path"] == module.LLM_CALL_TRACE_RELATIVE_PATH
     assert sample["call_metadata"]["llm_call_trace_rows"][0]["call_objective"] == module.REQ_033_TRACE_CALL_OBJECTIVE
+    assert len(sample["call_metadata"]["llm_call_trace_rows"][0]["output_refs"]) == 1 + len(module.REQ_033_TRACE_BUCKET_OUTPUTS)
+    for expected_output in (module.REQ_033_TRACE_EXPECTED_OUTPUT, *module.REQ_033_TRACE_BUCKET_OUTPUTS):
+        assert any(output_ref.endswith(f"::output::{expected_output}") for output_ref in sample["call_metadata"]["llm_call_trace_rows"][0]["output_refs"])
 
 
 def test_req_033_contract_doc_includes_sample_structure_reference() -> None:

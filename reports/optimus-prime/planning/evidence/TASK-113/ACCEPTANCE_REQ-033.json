@@ -1,0 +1,59 @@
+{
+  "req_id": "REQ-033",
+  "task_id": "TASK-113",
+  "summary": "Call-8 trace rows now preserve replay-stable bucket output refs and planner-safe classification separation for downstream orchestration audits.",
+  "evidence_refs": [
+    "reports/optimus-prime/planning/evidence/TASK-113/contract_call-8-constraint-classification-reasoning.output.txt",
+    "reports/optimus-prime/planning/evidence/TASK-113/integration_call-8-constraint-classification-reasoning.output.txt",
+    "reports/optimus-prime/planning/evidence/TASK-113/e2e_strategy_llm_pipeline_smoke.output.txt",
+    "reports/optimus-prime/planning/evidence/TASK-113/REQ-033_call-8_trace.jsonl",
+    "strategy/current/samples/REQ-033_call-8-constraint-classification-reasoning.sample.json",
+    "strategy/current/llm_call_trace.jsonl"
+  ],
+  "trace_artifacts": {
+    "req_033_call_8_trace": "reports/optimus-prime/planning/evidence/TASK-113/REQ-033_call-8_trace.jsonl",
+    "req_033_sample_payload": "strategy/current/samples/REQ-033_call-8-constraint-classification-reasoning.sample.json",
+    "multi_call_pipeline_trace": "strategy/current/llm_call_trace.jsonl",
+    "call_objective": "Classify Call-8 strategy outputs into hard constraints, soft preferences, and speculative ideas without conflating planner obligations and suggestions.",
+    "input_refs": [
+      "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+      "reports/earth/sweeps/2026-03-16/shared-observability.json",
+      "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json",
+      "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json#/call_metadata/llm_call_trace_rows",
+      "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json#/processing_behavior/recommendation/recommended_opportunities",
+      "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/escalation_triggers",
+      "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/fallback_sequence"
+    ],
+    "output_refs": [
+      "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning",
+      "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_hard_constraints",
+      "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_soft_preferences",
+      "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_speculative_ideas",
+      "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_planner_contract"
+    ],
+    "handoff_summary": "Call 8 hands off call_8_constraint_classification_reasoning via req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning with explicit bucket outputs for hard constraints, soft preferences, speculative ideas, and planner contract reuse after classifying 2 hard constraint(s), 1 soft preference(s), and 1 speculative idea(s)."
+  },
+  "checks": [
+    {
+      "name": "req_033_contract_suite",
+      "command": "python3 -m pytest tests/contracts/test_call-8-constraint-classification-reasoning.py -q",
+      "summary": "4 passed in 0.01s",
+      "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-113/contract_call-8-constraint-classification-reasoning.output.txt"
+    },
+    {
+      "name": "req_033_integration_suite",
+      "command": "python3 -m pytest tests/integration/test_call-8-constraint-classification-reasoning.py -q",
+      "summary": "3 passed in 0.01s",
+      "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-113/integration_call-8-constraint-classification-reasoning.output.txt"
+    },
+    {
+      "name": "req_033_e2e_smoke",
+      "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+      "summary": "1 passed in 0.13s",
+      "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-113/e2e_strategy_llm_pipeline_smoke.output.txt"
+    }
+  ],
+  "consumability_verdict": "pass",
+  "open_risks": [],
+  "updated_at": "2026-03-16T08:56:59Z"
+}

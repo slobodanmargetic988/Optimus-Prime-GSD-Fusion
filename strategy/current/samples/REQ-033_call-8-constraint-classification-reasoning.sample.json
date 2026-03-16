@@ -376,7 +376,7 @@
     },
     "llm_call_trace_schema_version": "req-025.llm-call-trace-row.v1",
     "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
-    "llm_call_trace_sha256": "0fc61c95b2e03eb03aed51bbb525455fda528db64ac125bdd735095f04f7f040",
+    "llm_call_trace_sha256": "681430153374a88e4823a215fcd22836dbbd497033944df810a4fa3fc63f5471",
     "llm_call_trace_rows": [
       {
         "schema_version": "req-025.llm-call-trace-row.v1",
@@ -398,9 +398,13 @@
           "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/fallback_sequence"
         ],
         "output_refs": [
-          "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning"
+          "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning",
+          "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_hard_constraints",
+          "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_soft_preferences",
+          "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_speculative_ideas",
+          "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_planner_contract"
         ],
-        "handoff_summary": "Call 8 hands off call_8_constraint_classification_reasoning via req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning after classifying 2 hard constraint(s), 1 soft preference(s), and 1 speculative idea(s)."
+        "handoff_summary": "Call 8 hands off call_8_constraint_classification_reasoning via req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning with explicit bucket outputs for hard constraints, soft preferences, speculative ideas, and planner contract reuse after classifying 2 hard constraint(s), 1 soft preference(s), and 1 speculative idea(s)."
       }
     ]
   }

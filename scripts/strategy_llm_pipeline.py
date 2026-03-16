@@ -46,6 +46,12 @@ REQ_033_TRACE_CALL_OBJECTIVE = (
     "without conflating planner obligations and suggestions."
 )
 REQ_033_TRACE_EXPECTED_OUTPUT = "call_8_constraint_classification_reasoning"
+REQ_033_TRACE_BUCKET_OUTPUTS = (
+    "call_8_hard_constraints",
+    "call_8_soft_preferences",
+    "call_8_speculative_ideas",
+    "call_8_planner_contract",
+)
 REQ_028_REASONING_FOCUS = "strategic-gaps-and-opportunities-beyond-local-mission"
 REQ_028_CALL_SEQUENCE = 3
 REQ_028_TRACE_CALL_OBJECTIVE = "Reason about strategic gaps and opportunities not visible from the local mission alone."
@@ -4511,11 +4517,15 @@ def _build_req_033_llm_call_trace_rows(
 ) -> list[dict[str, Any]]:
     plan_id = f"req033-plan-{processing_input_sha[:16]}"
     call_id = f"req033-call-{REQ_033_CALL_SEQUENCE:02d}-{canonical_input_sha[:10]}"
-    output_ref = _build_call_output_ref(
-        plan_id=plan_id,
-        call_id=call_id,
-        expected_output=REQ_033_TRACE_EXPECTED_OUTPUT,
-    )
+    output_refs = [
+        _build_call_output_ref(
+            plan_id=plan_id,
+            call_id=call_id,
+            expected_output=expected_output,
+        )
+        for expected_output in (REQ_033_TRACE_EXPECTED_OUTPUT, *REQ_033_TRACE_BUCKET_OUTPUTS)
+    ]
+    primary_output_ref = output_refs[0]
     return [
         {
             "schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
@@ -4528,9 +4538,11 @@ def _build_req_033_llm_call_trace_rows(
             "depends_on": [],
             "expected_output": REQ_033_TRACE_EXPECTED_OUTPUT,
             "input_refs": _collect_req_033_trace_input_refs(canonical_processing_input),
-            "output_refs": [output_ref],
+            "output_refs": output_refs,
             "handoff_summary": (
-                f"Call {REQ_033_CALL_SEQUENCE} hands off {REQ_033_TRACE_EXPECTED_OUTPUT} via {output_ref} "
+                f"Call {REQ_033_CALL_SEQUENCE} hands off {REQ_033_TRACE_EXPECTED_OUTPUT} via {primary_output_ref} "
+                "with explicit bucket outputs for hard constraints, soft preferences, speculative ideas, "
+                "and planner contract reuse "
                 f"after classifying {hard_constraint_count} hard constraint(s), "
                 f"{soft_preference_count} soft preference(s), and {speculative_idea_count} speculative idea(s)."
             ),

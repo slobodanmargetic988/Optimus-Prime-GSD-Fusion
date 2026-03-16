@@ -95,10 +95,13 @@ def test_req_033_integration_emits_explicit_classification_groups_and_traceable_
     assert trace_rows[0]["call_objective"] == module.REQ_033_TRACE_CALL_OBJECTIVE
     for ref in [*EARTH_REFS, TASK_111_EVIDENCE_REF, *TRACE_SOURCE_REFS]:
         assert ref in trace_rows[0]["input_refs"]
-    assert trace_rows[0]["output_refs"]
+    assert len(trace_rows[0]["output_refs"]) == 1 + len(module.REQ_033_TRACE_BUCKET_OUTPUTS)
+    for expected_output in (module.REQ_033_TRACE_EXPECTED_OUTPUT, *module.REQ_033_TRACE_BUCKET_OUTPUTS):
+        assert any(output_ref.endswith(f"::output::{expected_output}") for output_ref in trace_rows[0]["output_refs"])
     assert "hard constraint" in trace_rows[0]["handoff_summary"]
     assert "soft preference" in trace_rows[0]["handoff_summary"]
     assert "speculative idea" in trace_rows[0]["handoff_summary"]
+    assert "planner contract reuse" in trace_rows[0]["handoff_summary"]
 
 
 def test_req_033_mixed_source_output_classification_becomes_open_risk() -> None:
@@ -138,3 +141,19 @@ def test_req_033_mixed_source_output_classification_becomes_open_risk() -> None:
     assert len(recommendation["planner_contract"]["soft_preferences"]) == 1
     assert len(recommendation["planner_contract"]["speculative_ideas"]) == 1
     assert payload["processing_behavior"]["context_usage"]["cross_project_context_used"] is True
+
+
+def test_req_033_trace_rows_are_jsonl_serializable_and_replay_stable() -> None:
+    fixture = _read_json(FIXTURE_PATH)
+
+    first_payload = module.build_req_033_call_8_constraint_classification_reasoning(**fixture["input"])
+    second_payload = module.build_req_033_call_8_constraint_classification_reasoning(**fixture["input"])
+
+    first_rows = first_payload["call_metadata"]["llm_call_trace_rows"]
+    second_rows = second_payload["call_metadata"]["llm_call_trace_rows"]
+    first_jsonl = module._jsonl_dumps(first_rows)
+    second_jsonl = module._jsonl_dumps(second_rows)
+
+    assert first_rows == second_rows
+    assert first_jsonl == second_jsonl
+    assert [json.loads(line) for line in first_jsonl.splitlines() if line.strip()] == first_rows

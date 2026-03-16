@@ -175,6 +175,11 @@ Each `llm_call_trace_rows[]` row must include the keys:
 - `output_refs`
 - `handoff_summary`
 
+Trace guarantees:
+
+- `output_refs[]` must keep the primary Call-8 reasoning output plus explicit replay-stable bucket outputs for `call_8_hard_constraints`, `call_8_soft_preferences`, `call_8_speculative_ideas`, and `call_8_planner_contract`.
+- `handoff_summary` must state that the call separated hard constraints, soft preferences, and speculative ideas before planner reuse.
+
 ## Executable artifacts
 
 - Fixture input: `examples/fixtures/call-8-constraint-classification-reasoning.json`
