@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-1",
+  "task_id": "TASK-106",
+  "requirement_ids": [
+    "REQ-031"
+  ],
+  "updated_at": "2026-03-16T04:37:45Z",
+  "dev": {
+    "status": "pass",
+    "checks": [
+      "python3 -m pytest tests/contracts/test_call-6-kpi-impact-estimation-reasoning.py -q",
+      "python3 -m pytest tests/integration/test_call-6-kpi-impact-estimation-reasoning.py -q",
+      "python3 -m pytest tests/hardening/test_call-6-kpi-impact-estimation-reasoning_hardening.py -q"
+    ],
+    "verify_results": [
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/contracts/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "passed": true
+      },
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/integration/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "passed": true
+      },
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/hardening/test_call-6-kpi-impact-estimation-reasoning_hardening.py -q",
+        "passed": true
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/contracts/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "passed": true
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/integration/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "passed": true
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/hardening/test_call-6-kpi-impact-estimation-reasoning_hardening.py -q",
+        "passed": true
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/contracts/test_call-6-kpi-impact-estimation-reasoning.py",
+      "tests/integration/test_call-6-kpi-impact-estimation-reasoning.py",
+      "tests/hardening/test_call-6-kpi-impact-estimation-reasoning_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-106/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "pending",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "edge_case_results": [
+    {
+      "edge_case": "cross-call contradiction between analysis and synthesis outputs",
+      "status": "pass",
+      "reason_codes": [
+        "cross_call_contradiction"
+      ],
+      "evidence_refs": [
+        "REQ-031::call-chain::01::analysis",
+        "REQ-031::call-chain::04::synthesis",
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "REQ-029::call::call-4::output::recommendation_synthesis"
+      ],
+      "unresolved_blockers": []
+    },
+    {
+      "edge_case": "uncited strategic claim blocked by citation discipline",
+      "status": "pass",
+      "reason_codes": [
+        "uncited_strategic_claim"
+      ],
+      "evidence_refs": [
+        "REQ-031::call-chain::01::analysis",
+        "reports/optimus-prime/planning/BRANCH_HEAD_ONLY.md"
+      ],
+      "unresolved_blockers": []
+    },
+    {
+      "edge_case": "call-chain replay producing stable recommendation IDs and ordering",
+      "status": "pass",
+      "reason_codes": [
+        "uncited_strategic_claim",
+        "cross_call_contradiction"
+      ],
+      "evidence_refs": [
+        "rec.local-replay-hardening",
+        "rec.runtime-sync",
+        "risk-claim-claim-branch-head-citation-citation",
+        "risk-claim-claim-replay-status-contradiction"
+      ],
+      "unresolved_blockers": []
+    }
+  ],
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_031_hardening_contradiction_reason_code_verified",
+      "req_031_hardening_citation_reason_code_verified",
+      "req_031_replay_ordering_stable_across_repeated_runs",
+      "task_evidence_path_resolved"
+    ]
+  }
+}

@@ -3543,6 +3543,77 @@ def _req_031_normalize_call_chain(
     return normalized
 
 
+def _req_031_claim_output_ref(*, source_call_sequence: int, phase: str) -> str:
+    return f"{REQ_031_REQUIREMENT_ID}::call-chain::{source_call_sequence:02d}::{phase}"
+
+
+def _req_031_normalize_strategic_claims(
+    value: Any,
+    *,
+    call_depth: int,
+    field_name: str = "strategic_claims",
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req031Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        phase = _require_text(row.get("phase"), field_name=f"{field_name}[{index}].phase").lower()
+        if phase not in REQ_026_ALLOWED_CLAIM_PHASES:
+            raise Req031Error(
+                f"{field_name}[{index}].phase must be one of {sorted(REQ_026_ALLOWED_CLAIM_PHASES)}"
+            )
+        source_call_sequence = row.get("source_call_sequence")
+        if (
+            isinstance(source_call_sequence, bool)
+            or not isinstance(source_call_sequence, int)
+            or source_call_sequence < 1
+            or source_call_sequence > call_depth
+        ):
+            raise Req031Error(
+                f"{field_name}[{index}].source_call_sequence must be an integer between 1 and {call_depth}"
+            )
+        normalized.append(
+            {
+                "claim_id": _require_text(
+                    row.get("claim_id"),
+                    field_name=f"{field_name}[{index}].claim_id",
+                ),
+                "phase": phase,
+                "summary": _require_text(
+                    row.get("summary"),
+                    field_name=f"{field_name}[{index}].summary",
+                ),
+                "position": _require_text(
+                    row.get("position"),
+                    field_name=f"{field_name}[{index}].position",
+                ),
+                "source_call_sequence": source_call_sequence,
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                    min_items=1,
+                ),
+            }
+        )
+
+    normalized.sort(
+        key=lambda row: (
+            row["claim_id"],
+            row["phase"],
+            row["source_call_sequence"],
+            row["position"],
+            row["summary"],
+        )
+    )
+    return normalized
+
+
 def _req_031_normalize_recommendation_adoptions(
     value: Any,
     *,
@@ -3788,6 +3859,7 @@ def _req_031_canonical_input(
     impact_assumptions: Sequence[Mapping[str, Any]],
     target_project_evidence_refs: Sequence[str],
     earth_sweep_evidence_refs: Sequence[str],
+    strategic_claims: Sequence[Mapping[str, Any]],
     checked_at_utc: str,
 ) -> dict[str, Any]:
     return {
@@ -3799,6 +3871,7 @@ def _req_031_canonical_input(
         "call_chain": [dict(row) for row in call_chain],
         "target_project_evidence_refs": list(target_project_evidence_refs),
         "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "strategic_claims": [dict(row) for row in strategic_claims],
         "recommendation_adoptions": [dict(row) for row in recommendation_adoptions],
         "kpi_definitions": [dict(row) for row in kpi_definitions],
         "impact_assumptions": [dict(row) for row in impact_assumptions],
@@ -3811,6 +3884,7 @@ def _build_req_031_llm_call_trace_rows(
     call_chain: Sequence[Mapping[str, Any]],
     target_project_evidence_refs: Sequence[str],
     earth_sweep_evidence_refs: Sequence[str],
+    strategic_claims: Sequence[Mapping[str, Any]],
     impact_assumptions: Sequence[Mapping[str, Any]],
     estimate_count: int,
 ) -> list[dict[str, Any]]:
@@ -3819,6 +3893,14 @@ def _build_req_031_llm_call_trace_rows(
     terminal_evidence_refs = _req_026_dedupe_preserving_order(
         list(target_project_evidence_refs)
         + list(earth_sweep_evidence_refs)
+        + [
+            _req_031_claim_output_ref(
+                source_call_sequence=int(row["source_call_sequence"]),
+                phase=str(row["phase"]),
+            )
+            for row in strategic_claims
+        ]
+        + [ref for row in strategic_claims for ref in row.get("evidence_refs", [])]
         + [ref for row in impact_assumptions for ref in row.get("evidence_refs", [])]
     )
 
@@ -3866,6 +3948,7 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
     impact_assumptions: Sequence[Mapping[str, Any]],
     target_project_evidence_refs: Sequence[Any] | None = None,
     earth_sweep_evidence_refs: Sequence[Any] | None = None,
+    strategic_claims: Sequence[Mapping[str, Any]] | None = None,
     analysis_type: str = REQ_031_ANALYSIS_TYPE,
     call_id: str = REQ_031_CALL_ID,
     checked_at_utc: str | None = None,
@@ -3888,6 +3971,10 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
         earth_sweep_evidence_refs,
         field_name="earth_sweep_evidence_refs",
     )
+    normalized_strategic_claims = _req_031_normalize_strategic_claims(
+        strategic_claims,
+        call_depth=len(normalized_call_chain),
+    )
     normalized_recommendation_adoptions = _req_031_normalize_recommendation_adoptions(recommendation_adoptions)
     normalized_kpi_definitions = _req_031_normalize_kpi_definitions(kpi_definitions)
 
@@ -3899,6 +3986,15 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
                 f"recommendation_adoptions[{index}] requires Earth evidence but no Earth-scoped refs were supplied"
             )
 
+    available_citation_refs = set(
+        _collect_unique_refs(
+            normalized_target_refs,
+            normalized_earth_refs,
+            [row["output_ref"] for row in normalized_call_chain],
+            [row["source_ref"] for row in normalized_kpi_definitions],
+            [ref for row in normalized_recommendation_adoptions for ref in row["evidence_refs"]],
+        )
+    )
     available_evidence_refs = set(
         _collect_unique_refs(
             normalized_target_refs,
@@ -3914,6 +4010,65 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
         kpi_ids={str(row["kpi_id"]) for row in normalized_kpi_definitions},
         available_evidence_refs=available_evidence_refs,
     )
+
+    open_risks: list[dict[str, Any]] = []
+    claims_by_id: dict[str, list[dict[str, Any]]] = {}
+    for claim in normalized_strategic_claims:
+        claim_id = str(claim["claim_id"])
+        claims_by_id.setdefault(claim_id, []).append(claim)
+        citation_refs = list(claim["evidence_refs"])
+        source_output_ref = _req_031_claim_output_ref(
+            source_call_sequence=int(claim["source_call_sequence"]),
+            phase=str(claim["phase"]),
+        )
+        if not set(citation_refs).issubset(available_citation_refs):
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim_id}-citation",
+                    "reason_code": "uncited_strategic_claim",
+                    "summary": str(claim["summary"]),
+                    "required_evidence_refs": _req_026_dedupe_preserving_order([source_output_ref] + citation_refs),
+                }
+            )
+
+    for claim_id, claim_rows in claims_by_id.items():
+        analysis_rows = [row for row in claim_rows if row["phase"] == "analysis"]
+        synthesis_rows = [row for row in claim_rows if row["phase"] == "synthesis"]
+        contradiction_refs: list[str] | None = None
+        contradiction_summary = ""
+        for analysis_row in analysis_rows:
+            for synthesis_row in synthesis_rows:
+                if analysis_row["position"] == synthesis_row["position"]:
+                    continue
+                contradiction_summary = str(synthesis_row["summary"])
+                contradiction_refs = _req_026_dedupe_preserving_order(
+                    [
+                        _req_031_claim_output_ref(
+                            source_call_sequence=int(analysis_row["source_call_sequence"]),
+                            phase=str(analysis_row["phase"]),
+                        ),
+                        _req_031_claim_output_ref(
+                            source_call_sequence=int(synthesis_row["source_call_sequence"]),
+                            phase=str(synthesis_row["phase"]),
+                        ),
+                    ]
+                    + list(analysis_row["evidence_refs"])
+                    + list(synthesis_row["evidence_refs"])
+                )
+                break
+            if contradiction_refs is not None:
+                break
+        if contradiction_refs is not None:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim_id}-contradiction",
+                    "reason_code": "cross_call_contradiction",
+                    "summary": contradiction_summary,
+                    "required_evidence_refs": contradiction_refs,
+                }
+            )
+
+    open_risks.sort(key=lambda row: str(row["risk_id"]))
 
     recommendation_by_id = {
         str(row["recommendation_id"]): row for row in normalized_recommendation_adoptions
@@ -3994,6 +4149,7 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
         list(normalized_target_refs)
         + list(normalized_earth_refs)
         + [ref for row in kpi_estimates for ref in row["evidence_refs"]]
+        + [ref for row in open_risks for ref in row["required_evidence_refs"]]
     )
 
     canonical_input = _req_031_canonical_input(
@@ -4004,6 +4160,7 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
         impact_assumptions=normalized_impact_assumptions,
         target_project_evidence_refs=normalized_target_refs,
         earth_sweep_evidence_refs=normalized_earth_refs,
+        strategic_claims=normalized_strategic_claims,
         checked_at_utc=normalized_checked_at_utc,
     )
     canonical_input_sha = _canonical_digest(canonical_input)
@@ -4013,6 +4170,7 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
         call_chain=normalized_call_chain,
         target_project_evidence_refs=normalized_target_refs,
         earth_sweep_evidence_refs=normalized_earth_refs,
+        strategic_claims=normalized_strategic_claims,
         impact_assumptions=normalized_impact_assumptions,
         estimate_count=len(kpi_estimates),
     )
@@ -4049,6 +4207,7 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
                 "call_chain": normalized_call_chain,
                 "target_project_evidence_refs": normalized_target_refs,
                 "earth_sweep_evidence_refs": normalized_earth_refs,
+                "strategic_claims": normalized_strategic_claims,
                 "recommendation_adoptions": normalized_recommendation_adoptions,
                 "kpi_definitions": normalized_kpi_definitions,
                 "impact_assumptions": normalized_impact_assumptions,
@@ -4065,6 +4224,8 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
                 "kpi_ids_considered": [str(row["kpi_id"]) for row in normalized_kpi_definitions],
                 "estimate_ids_emitted": [str(row["estimate_id"]) for row in kpi_estimates],
                 "low_confidence_estimate_ids": low_confidence_estimate_ids,
+                "open_risk_ids_emitted": [str(row["risk_id"]) for row in open_risks],
+                "reason_codes_emitted": [str(row["reason_code"]) for row in open_risks],
                 "caveat_count": sum(len(row["caveats"]) for row in kpi_estimates),
                 "evidence_refs_used": unique_evidence_refs,
             },
@@ -4074,6 +4235,9 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
                 "caveats_required": True,
                 "bounded_range_required": True,
                 "assumption_evidence_required": True,
+            },
+            "diagnostics": {
+                "open_risks": open_risks,
             },
         },
         "source": {
@@ -4334,6 +4498,38 @@ def validate_req_031_call_6_kpi_impact_estimation_reasoning(payload: Mapping[str
     ):
         if not isinstance(context_inputs.get(key), list):
             errors.append(f"processing_behavior.context_inputs.{key} must be an array")
+    strategic_claims = context_inputs.get("strategic_claims")
+    if strategic_claims is not None:
+        if not isinstance(strategic_claims, list):
+            errors.append("processing_behavior.context_inputs.strategic_claims must be an array")
+            strategic_claims = []
+        for index, row in enumerate(strategic_claims):
+            if not isinstance(row, Mapping):
+                errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}] must be an object")
+                continue
+            if not _as_text(row.get("claim_id")):
+                errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}].claim_id is required")
+            if _as_text(row.get("phase")) not in REQ_026_ALLOWED_CLAIM_PHASES:
+                errors.append(
+                    "processing_behavior.context_inputs.strategic_claims"
+                    f"[{index}].phase must be one of {sorted(REQ_026_ALLOWED_CLAIM_PHASES)}"
+                )
+            if not _as_text(row.get("summary")):
+                errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}].summary is required")
+            if not _as_text(row.get("position")):
+                errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}].position is required")
+            sequence = row.get("source_call_sequence")
+            if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1 or sequence > 6:
+                errors.append(
+                    "processing_behavior.context_inputs.strategic_claims"
+                    f"[{index}].source_call_sequence must be an integer between 1 and 6"
+                )
+            evidence_refs = row.get("evidence_refs")
+            if not isinstance(evidence_refs, list) or not evidence_refs or any(not _as_text(item) for item in evidence_refs):
+                errors.append(
+                    "processing_behavior.context_inputs.strategic_claims"
+                    f"[{index}].evidence_refs must be a non-empty string array"
+                )
 
     context_usage = processing_behavior.get("context_usage")
     if not isinstance(context_usage, Mapping):
@@ -4356,6 +4552,10 @@ def validate_req_031_call_6_kpi_impact_estimation_reasoning(payload: Mapping[str
         value = context_usage.get(key)
         if not isinstance(value, list) or any(not _as_text(item) for item in value):
             errors.append(f"processing_behavior.context_usage.{key} must be a string array")
+    for key in ("open_risk_ids_emitted", "reason_codes_emitted"):
+        value = context_usage.get(key)
+        if value is not None and (not isinstance(value, list) or any(not _as_text(item) for item in value)):
+            errors.append(f"processing_behavior.context_usage.{key} must be a string array when present")
     caveat_count = context_usage.get("caveat_count")
     if not isinstance(caveat_count, int) or caveat_count < 0:
         errors.append("processing_behavior.context_usage.caveat_count must be a non-negative integer")
@@ -4392,6 +4592,48 @@ def validate_req_031_call_6_kpi_impact_estimation_reasoning(payload: Mapping[str
         for key in ("caveats_required", "bounded_range_required", "assumption_evidence_required"):
             if estimation_rules.get(key) is not True:
                 errors.append(f"processing_behavior.estimation_rules.{key} must be true")
+
+    diagnostics = processing_behavior.get("diagnostics")
+    open_risks: list[Any] = []
+    if diagnostics is not None:
+        if not isinstance(diagnostics, Mapping):
+            errors.append("processing_behavior.diagnostics must be an object")
+        else:
+            open_risks = diagnostics.get("open_risks") if isinstance(diagnostics.get("open_risks"), list) else []
+            if not isinstance(diagnostics.get("open_risks"), list):
+                errors.append("processing_behavior.diagnostics.open_risks must be an array")
+            for index, row in enumerate(open_risks):
+                if not isinstance(row, Mapping):
+                    errors.append(f"processing_behavior.diagnostics.open_risks[{index}] must be an object")
+                    continue
+                if not _as_text(row.get("risk_id")):
+                    errors.append(f"processing_behavior.diagnostics.open_risks[{index}].risk_id is required")
+                if not _as_text(row.get("reason_code")):
+                    errors.append(f"processing_behavior.diagnostics.open_risks[{index}].reason_code is required")
+                if not _as_text(row.get("summary")):
+                    errors.append(f"processing_behavior.diagnostics.open_risks[{index}].summary is required")
+                required_evidence_refs = row.get("required_evidence_refs")
+                if (
+                    not isinstance(required_evidence_refs, list)
+                    or not required_evidence_refs
+                    or any(not _as_text(item) for item in required_evidence_refs)
+                ):
+                    errors.append(
+                        "processing_behavior.diagnostics.open_risks"
+                        f"[{index}].required_evidence_refs must be a non-empty string array"
+                    )
+            expected_open_risk_ids = [
+                _as_text(row.get("risk_id")) for row in open_risks if isinstance(row, Mapping) and _as_text(row.get("risk_id"))
+            ]
+            expected_reason_codes = [
+                _as_text(row.get("reason_code"))
+                for row in open_risks
+                if isinstance(row, Mapping) and _as_text(row.get("reason_code"))
+            ]
+            if context_usage.get("open_risk_ids_emitted") is not None and context_usage.get("open_risk_ids_emitted") != expected_open_risk_ids:
+                errors.append("processing_behavior.context_usage.open_risk_ids_emitted must match diagnostics.open_risks")
+            if context_usage.get("reason_codes_emitted") is not None and context_usage.get("reason_codes_emitted") != expected_reason_codes:
+                errors.append("processing_behavior.context_usage.reason_codes_emitted must match diagnostics.open_risks")
 
     source = payload.get("source")
     if not isinstance(source, Mapping):
@@ -4473,6 +4715,10 @@ def validate_req_031_call_6_kpi_impact_estimation_reasoning(payload: Mapping[str
                         earth_sweep_evidence_refs=[
                             _require_text(item, field_name=f"processing_behavior.context_inputs.earth_sweep_evidence_refs[{index}]")
                             for index, item in enumerate(context_inputs.get("earth_sweep_evidence_refs", []))
+                        ],
+                        strategic_claims=[
+                            _require_mapping(row, field_name=f"processing_behavior.context_inputs.strategic_claims[{index}]")
+                            for index, row in enumerate(context_inputs.get("strategic_claims", []))
                         ],
                         impact_assumptions=[
                             _require_mapping(row, field_name=f"processing_behavior.context_inputs.impact_assumptions[{index}]")
@@ -4573,6 +4819,7 @@ def run(payload: Mapping[str, Any]) -> dict[str, Any]:
             impact_assumptions=payload.get("impact_assumptions"),
             target_project_evidence_refs=payload.get("target_project_evidence_refs"),
             earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            strategic_claims=payload.get("strategic_claims"),
             analysis_type=_as_text(payload.get("analysis_type")) or REQ_031_ANALYSIS_TYPE,
             call_id=_as_text(payload.get("call_id")) or REQ_031_CALL_ID,
             checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
