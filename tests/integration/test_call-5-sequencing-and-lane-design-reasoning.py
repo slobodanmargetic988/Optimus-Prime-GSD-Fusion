@@ -140,8 +140,8 @@ def test_req030_processing_emits_lanes_sequence_and_evidence_gated_cross_project
     assert cross_item["coordination_dependencies"][0]["depends_on"] == "earth-ops"
     assert cross_item["why_now"]
 
-    row = _read_last_trace_row()
     metadata = result["call_metadata"]
+    row = metadata["llm_call_trace_rows"][0]
     assert metadata["llm_call_trace_rows"] == [row]
     assert metadata["llm_call_trace_schema_version"] == "optimus-prime.llm-call-trace.v1"
     assert metadata["llm_call_trace_path"] == "strategy/current/llm_call_trace.jsonl"
@@ -214,7 +214,7 @@ def test_req030_processing_without_earth_sweep_evidence_does_not_invent_cross_pr
     assert "rec.earth-ops-alignment" not in sequenced_ids
     assert "rec.local-verify" in sequenced_ids
 
-    row = _read_last_trace_row()
+    row = result["call_metadata"]["llm_call_trace_rows"][0]
     assert row["totals"]["sequence_items"] == len(result["sequencing_and_lane_design_reasoning"]["sequence"])
 
 
