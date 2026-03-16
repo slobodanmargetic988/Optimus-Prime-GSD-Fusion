@@ -1715,6 +1715,427 @@ def validate_req_060_strategy_packet_v1_schema_validator(payload: Mapping[str, A
     return errors
 
 
+def _json_stable_copy(value: Any) -> Any:
+    return json.loads(json.dumps(value, sort_keys=True))
+
+
+def _req_066_merge_recommendation_field_completeness(
+    rows: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    required_fields = set(REQUIRED_RECOMMENDATION_FIELDS)
+    by_recommendation_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        recommendation_id = str(row.get("recommendation_id") or "").strip()
+        if not recommendation_id:
+            continue
+        state = by_recommendation_id.setdefault(
+            recommendation_id,
+            {
+                "required_fields_present": set(),
+                "missing_required_fields": set(),
+                "evidence_refs": set(),
+                "planner_task_intent_handles": set(),
+            },
+        )
+        for field_name in _string_list_from_any(row.get("required_fields_present")):
+            if field_name in required_fields:
+                state["required_fields_present"].add(field_name)
+        for field_name in _string_list_from_any(row.get("missing_required_fields")):
+            if field_name in required_fields:
+                state["missing_required_fields"].add(field_name)
+        for evidence_ref in _string_list_from_any(row.get("evidence_refs")):
+            state["evidence_refs"].add(evidence_ref)
+        for planner_handle in _string_list_from_any(row.get("planner_task_intent_handles")):
+            state["planner_task_intent_handles"].add(planner_handle)
+
+    merged_rows: list[dict[str, Any]] = []
+    for recommendation_id in sorted(by_recommendation_id):
+        state = by_recommendation_id[recommendation_id]
+        missing_required_fields = sorted(state["missing_required_fields"])
+        required_fields_present = sorted(
+            set(state["required_fields_present"]).union(required_fields - set(missing_required_fields))
+        )
+        evidence_refs = sorted(state["evidence_refs"])
+        planner_task_intent_handles = sorted(state["planner_task_intent_handles"])
+        merged_rows.append(
+            {
+                "recommendation_id": recommendation_id,
+                "required_fields_present": required_fields_present,
+                "missing_required_fields": missing_required_fields,
+                "has_complete_required_fields": not missing_required_fields,
+                "evidence_refs": evidence_refs,
+                "has_evidence_refs": bool(evidence_refs),
+                "planner_task_intent_handles": planner_task_intent_handles,
+            }
+        )
+    return merged_rows
+
+
+def _req_066_merge_approved_cross_project_obligations(
+    rows: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    merged_by_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        obligation_id = str(row.get("obligation_id") or "").strip()
+        if not obligation_id:
+            continue
+        summary = str(row.get("summary") or "").strip()
+        state = merged_by_id.setdefault(
+            obligation_id,
+            {
+                "obligation_id": obligation_id,
+                "summary": summary,
+                "project_ids": set(),
+                "evidence_refs": set(),
+                "linked_recommendation_ids": set(),
+                "linked_planner_task_intent_handles": set(),
+            },
+        )
+        if summary and not str(state["summary"]).strip():
+            state["summary"] = summary
+        state["project_ids"].update(_string_list_from_any(row.get("project_ids")))
+        state["evidence_refs"].update(_string_list_from_any(row.get("evidence_refs")))
+        state["linked_recommendation_ids"].update(_string_list_from_any(row.get("linked_recommendation_ids")))
+        state["linked_planner_task_intent_handles"].update(
+            _string_list_from_any(row.get("linked_planner_task_intent_handles"))
+        )
+
+    merged_rows = []
+    for obligation_id in sorted(merged_by_id):
+        state = merged_by_id[obligation_id]
+        merged_rows.append(
+            {
+                "obligation_id": obligation_id,
+                "summary": str(state["summary"]),
+                "project_ids": sorted(state["project_ids"]),
+                "evidence_refs": sorted(state["evidence_refs"]),
+                "linked_recommendation_ids": sorted(state["linked_recommendation_ids"]),
+                "linked_planner_task_intent_handles": sorted(state["linked_planner_task_intent_handles"]),
+            }
+        )
+    return merged_rows
+
+
+def _req_066_merge_open_risks(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    merged_by_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        open_risk_id = str(row.get("open_risk_id") or "").strip()
+        if not open_risk_id:
+            continue
+        state = merged_by_id.setdefault(
+            open_risk_id,
+            {
+                "open_risk_id": open_risk_id,
+                "source_type": str(row.get("source_type") or "").strip(),
+                "source_id": str(row.get("source_id") or "").strip(),
+                "summary": str(row.get("summary") or "").strip(),
+                "reason_code": str(row.get("reason_code") or "").strip(),
+                "project_ids": set(),
+                "required_evidence_refs": set(),
+                "evidence_refs": set(),
+                "linked_recommendation_ids": set(),
+                "linked_planner_task_intent_handles": set(),
+            },
+        )
+        state["project_ids"].update(_string_list_from_any(row.get("project_ids")))
+        state["required_evidence_refs"].update(_string_list_from_any(row.get("required_evidence_refs")))
+        state["evidence_refs"].update(_string_list_from_any(row.get("evidence_refs")))
+        state["linked_recommendation_ids"].update(_string_list_from_any(row.get("linked_recommendation_ids")))
+        state["linked_planner_task_intent_handles"].update(
+            _string_list_from_any(row.get("linked_planner_task_intent_handles"))
+        )
+
+    merged_rows = []
+    for open_risk_id in sorted(merged_by_id):
+        state = merged_by_id[open_risk_id]
+        merged_rows.append(
+            {
+                "open_risk_id": open_risk_id,
+                "source_type": str(state["source_type"]),
+                "source_id": str(state["source_id"]),
+                "summary": str(state["summary"]),
+                "reason_code": str(state["reason_code"]),
+                "project_ids": sorted(state["project_ids"]),
+                "required_evidence_refs": sorted(state["required_evidence_refs"]),
+                "evidence_refs": sorted(state["evidence_refs"]),
+                "linked_recommendation_ids": sorted(state["linked_recommendation_ids"]),
+                "linked_planner_task_intent_handles": sorted(state["linked_planner_task_intent_handles"]),
+            }
+        )
+    return merged_rows
+
+
+def _req_066_merge_recommendation_processing(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+    decisions = []
+    evidence_refs: list[str] = []
+    context_project_ids: list[str] = []
+    mapped_recommendation_ids: list[str] = []
+    mapped_task_intent_handles: list[str] = []
+    recommendation_field_completeness_rows: list[Mapping[str, Any]] = []
+    approved_obligation_rows: list[Mapping[str, Any]] = []
+    open_risk_rows: list[Mapping[str, Any]] = []
+
+    for row in rows:
+        decision = str(row.get("decision") or "").strip()
+        if decision:
+            decisions.append(decision)
+        evidence_refs.extend(_string_list_from_any(row.get("evidence_refs")))
+        context_project_ids.extend(_string_list_from_any(row.get("context_project_ids")))
+        mapped_recommendation_ids.extend(_string_list_from_any(row.get("mapped_recommendation_ids")))
+        mapped_task_intent_handles.extend(_string_list_from_any(row.get("mapped_task_intent_handles")))
+        raw_completeness = row.get("recommendation_field_completeness")
+        if isinstance(raw_completeness, list):
+            recommendation_field_completeness_rows.extend(
+                item for item in raw_completeness if isinstance(item, Mapping)
+            )
+        raw_approved = row.get("approved_cross_project_obligations")
+        if isinstance(raw_approved, list):
+            approved_obligation_rows.extend(item for item in raw_approved if isinstance(item, Mapping))
+        raw_open_risks = row.get("open_risks")
+        if isinstance(raw_open_risks, list):
+            open_risk_rows.extend(item for item in raw_open_risks if isinstance(item, Mapping))
+
+    merged_completeness = _req_066_merge_recommendation_field_completeness(recommendation_field_completeness_rows)
+    merged_approved = _req_066_merge_approved_cross_project_obligations(approved_obligation_rows)
+    merged_open_risks = _req_066_merge_open_risks(open_risk_rows)
+
+    if any(decision == "planner_blocked" for decision in decisions):
+        merged_decision = "planner_blocked"
+    elif merged_open_risks or any(
+        decision in {"planner_ready_with_open_risks", "planning_with_open_risks", "blocked_by_open_risks"}
+        for decision in decisions
+    ):
+        merged_decision = "planner_ready_with_open_risks"
+    elif any(decision == "planner_ready" for decision in decisions):
+        merged_decision = "planner_ready"
+    else:
+        merged_decision = "planner_ready_with_open_risks" if merged_open_risks else "planner_ready"
+
+    complete_recommendation_count = sum(1 for row in merged_completeness if row["has_complete_required_fields"])
+    recommendations_with_evidence_count = sum(1 for row in merged_completeness if row["has_evidence_refs"])
+    rationale = (
+        f"validator_processing_behaviors={len(rows)} "
+        f"recommendation_rows={len(merged_completeness)} "
+        f"complete_recommendations={complete_recommendation_count} "
+        f"recommendations_with_evidence={recommendations_with_evidence_count} "
+        f"approved={len(merged_approved)} "
+        f"open_risks={len(merged_open_risks)}"
+    )
+
+    return {
+        "decision": merged_decision,
+        "rationale": rationale,
+        "evidence_refs": _collect_unique_refs(
+            evidence_refs,
+            *[list(row.get("evidence_refs") or []) for row in merged_approved],
+            *[list(row.get("required_evidence_refs") or []) for row in merged_open_risks],
+            *[list(row.get("evidence_refs") or []) for row in merged_open_risks],
+        ),
+        "context_project_ids": sorted(set(context_project_ids)),
+        "mapped_recommendation_ids": sorted(set(mapped_recommendation_ids)),
+        "mapped_task_intent_handles": sorted(set(mapped_task_intent_handles)),
+        "recommendation_field_completeness": merged_completeness,
+        "approved_cross_project_obligations": merged_approved,
+        "open_risks": merged_open_risks,
+    }
+
+
+def _req_066_merge_cross_project_context_usage(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+    return {
+        "cross_project_context_provided": any(bool(row.get("cross_project_context_provided")) for row in rows),
+        "cross_project_context_used": any(bool(row.get("cross_project_context_used")) for row in rows),
+        "projects_considered": _collect_unique_refs(
+            *[
+                _string_list_from_any(row.get("projects_considered"))
+                for row in rows
+            ]
+        ),
+        "earth_sweep_evidence_refs_considered": _collect_unique_refs(
+            *[
+                _string_list_from_any(row.get("earth_sweep_evidence_refs_considered"))
+                for row in rows
+            ]
+        ),
+        "cross_project_obligation_count": sum(
+            max(0, int(row.get("cross_project_obligation_count")))
+            for row in rows
+            if isinstance(row.get("cross_project_obligation_count"), int)
+        ),
+        "unresolved_idea_count": sum(
+            max(0, int(row.get("unresolved_idea_count")))
+            for row in rows
+            if isinstance(row.get("unresolved_idea_count"), int)
+        ),
+        "recommendation_ids_with_context": _collect_unique_refs(
+            *[
+                _string_list_from_any(row.get("recommendation_ids_with_context"))
+                for row in rows
+            ]
+        ),
+    }
+
+
+def _req_066_build_processing_behavior(validator_outputs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    behavior_rows: list[tuple[str, Mapping[str, Any]]] = []
+    for row in validator_outputs:
+        validator_id = str(row.get("validator_id") or "").strip()
+        result = row.get("result")
+        if not isinstance(result, Mapping):
+            continue
+        processing_behavior = result.get("processing_behavior")
+        if not isinstance(processing_behavior, Mapping):
+            continue
+        behavior_rows.append((validator_id, processing_behavior))
+
+    if not behavior_rows:
+        return None
+
+    behavior_rows.sort(key=lambda item: item[0])
+    if len(behavior_rows) == 1:
+        return _json_stable_copy(behavior_rows[0][1])
+
+    recommendation_rows: list[Mapping[str, Any]] = []
+    usage_rows: list[Mapping[str, Any]] = []
+    for _, processing_behavior in behavior_rows:
+        recommendation = processing_behavior.get("recommendation")
+        if isinstance(recommendation, Mapping):
+            recommendation_rows.append(recommendation)
+        usage = processing_behavior.get("cross_project_context_usage")
+        if isinstance(usage, Mapping):
+            usage_rows.append(usage)
+
+    return {
+        "recommendation": _req_066_merge_recommendation_processing(recommendation_rows),
+        "cross_project_context_usage": _req_066_merge_cross_project_context_usage(usage_rows),
+    }
+
+
+def _validate_processing_behavior_payload(
+    processing_behavior: Any,
+    *,
+    field_name: str,
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(processing_behavior, Mapping):
+        return [f"{field_name} must be an object"]
+
+    expected_behavior_keys = {"recommendation", "cross_project_context_usage"}
+    behavior_keys = set(processing_behavior.keys())
+    missing_behavior = sorted(expected_behavior_keys - behavior_keys)
+    if missing_behavior:
+        errors.append(f"{field_name} missing keys: {missing_behavior}")
+    unexpected_behavior = sorted(behavior_keys - expected_behavior_keys)
+    if unexpected_behavior:
+        errors.append(f"{field_name} has unexpected keys: {unexpected_behavior}")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append(f"{field_name}.recommendation must be an object")
+    else:
+        expected_recommendation_keys = {
+            "decision",
+            "rationale",
+            "evidence_refs",
+            "context_project_ids",
+            "mapped_recommendation_ids",
+            "mapped_task_intent_handles",
+            "recommendation_field_completeness",
+            "approved_cross_project_obligations",
+            "open_risks",
+        }
+        recommendation_keys = set(recommendation.keys())
+        missing_recommendation = sorted(expected_recommendation_keys - recommendation_keys)
+        if missing_recommendation:
+            errors.append(f"{field_name}.recommendation missing keys: {missing_recommendation}")
+        unexpected_recommendation = sorted(recommendation_keys - expected_recommendation_keys)
+        if unexpected_recommendation:
+            errors.append(f"{field_name}.recommendation has unexpected keys: {unexpected_recommendation}")
+        for key in ("decision", "rationale"):
+            value = recommendation.get(key)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"{field_name}.recommendation.{key} must be a non-empty string")
+        for key in (
+            "evidence_refs",
+            "context_project_ids",
+            "mapped_recommendation_ids",
+            "mapped_task_intent_handles",
+            "recommendation_field_completeness",
+            "approved_cross_project_obligations",
+            "open_risks",
+        ):
+            value = recommendation.get(key)
+            if not isinstance(value, list):
+                errors.append(f"{field_name}.recommendation.{key} must be a list")
+
+        recommendation_field_completeness = recommendation.get("recommendation_field_completeness")
+        if isinstance(recommendation_field_completeness, list):
+            for index, row in enumerate(recommendation_field_completeness):
+                if not isinstance(row, Mapping):
+                    errors.append(
+                        f"{field_name}.recommendation.recommendation_field_completeness[{index}] must be an object"
+                    )
+                    continue
+                expected_row_keys = {
+                    "recommendation_id",
+                    "required_fields_present",
+                    "missing_required_fields",
+                    "has_complete_required_fields",
+                    "evidence_refs",
+                    "has_evidence_refs",
+                    "planner_task_intent_handles",
+                }
+                row_keys = set(row.keys())
+                missing_row = sorted(expected_row_keys - row_keys)
+                if missing_row:
+                    errors.append(
+                        f"{field_name}.recommendation.recommendation_field_completeness[{index}] missing keys: {missing_row}"
+                    )
+                unexpected_row = sorted(row_keys - expected_row_keys)
+                if unexpected_row:
+                    errors.append(
+                        f"{field_name}.recommendation.recommendation_field_completeness[{index}] has unexpected keys: {unexpected_row}"
+                    )
+
+    usage = processing_behavior.get("cross_project_context_usage")
+    if not isinstance(usage, Mapping):
+        errors.append(f"{field_name}.cross_project_context_usage must be an object")
+    else:
+        expected_usage_keys = {
+            "cross_project_context_provided",
+            "cross_project_context_used",
+            "projects_considered",
+            "earth_sweep_evidence_refs_considered",
+            "cross_project_obligation_count",
+            "unresolved_idea_count",
+            "recommendation_ids_with_context",
+        }
+        usage_keys = set(usage.keys())
+        missing_usage = sorted(expected_usage_keys - usage_keys)
+        if missing_usage:
+            errors.append(f"{field_name}.cross_project_context_usage missing keys: {missing_usage}")
+        unexpected_usage = sorted(usage_keys - expected_usage_keys)
+        if unexpected_usage:
+            errors.append(f"{field_name}.cross_project_context_usage has unexpected keys: {unexpected_usage}")
+        for key in ("cross_project_context_provided", "cross_project_context_used"):
+            value = usage.get(key)
+            if not isinstance(value, bool):
+                errors.append(f"{field_name}.cross_project_context_usage.{key} must be a boolean")
+        for key in (
+            "projects_considered",
+            "earth_sweep_evidence_refs_considered",
+            "recommendation_ids_with_context",
+        ):
+            value = usage.get(key)
+            if not isinstance(value, list):
+                errors.append(f"{field_name}.cross_project_context_usage.{key} must be a list")
+        for key in ("cross_project_obligation_count", "unresolved_idea_count"):
+            value = usage.get(key)
+            if not isinstance(value, int) or value < 0:
+                errors.append(f"{field_name}.cross_project_context_usage.{key} must be a non-negative integer")
+
+    return errors
+
+
 def _req_066_validator_registry() -> tuple[dict[str, Any], ...]:
     return (
         {
@@ -1735,20 +2156,29 @@ def build_req_066_validator_runner_and_aggregate_verdict(payload: Mapping[str, A
     checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
 
     validators: list[dict[str, Any]] = []
+    validator_outputs: list[dict[str, Any]] = []
     for definition in _req_066_validator_registry():
         validator_input = dict(raw)
         validator_input["analysis_type"] = definition["analysis_type"]
         result = definition["builder"](validator_input)
-        validators.append(
+        row = {
+            "validator_id": definition["validator_id"],
+            "requirement_id": definition["requirement_id"],
+            "analysis_type": definition["analysis_type"],
+            "ok": result["ok"],
+            "verdict": result["verdict"],
+            "blocking_reason_codes": list(result["reason_codes"]),
+            "diagnostic_count": result["diagnostic_count"],
+            "summary": result["summary"],
+        }
+        validators.append(row)
+        validator_outputs.append(
             {
                 "validator_id": definition["validator_id"],
                 "requirement_id": definition["requirement_id"],
                 "analysis_type": definition["analysis_type"],
-                "ok": result["ok"],
-                "verdict": result["verdict"],
-                "blocking_reason_codes": list(result["reason_codes"]),
-                "diagnostic_count": result["diagnostic_count"],
-                "summary": result["summary"],
+                "row": row,
+                "result": result,
             }
         )
 
@@ -1779,6 +2209,10 @@ def build_req_066_validator_runner_and_aggregate_verdict(payload: Mapping[str, A
         ),
         "validators": validators,
     }
+    processing_behavior = _req_066_build_processing_behavior(validator_outputs)
+    if processing_behavior is not None:
+        output_payload["processing_behavior"] = processing_behavior
+
     errors = validate_req_066_validator_runner_and_aggregate_verdict(output_payload)
     if errors:
         raise ValueError(f"built REQ-066 payload failed validation: {errors}")
@@ -1804,11 +2238,12 @@ def validate_req_066_validator_runner_and_aggregate_verdict(payload: Mapping[str
         "summary",
         "validators",
     }
+    optional_top = {"processing_behavior"}
     top_keys = set(payload.keys())
     missing_top = sorted(required_top - top_keys)
     if missing_top:
         errors.append(f"missing top-level keys: {missing_top}")
-    unexpected_top = sorted(top_keys - required_top)
+    unexpected_top = sorted(top_keys - required_top - optional_top)
     if unexpected_top:
         errors.append(f"unexpected top-level keys: {unexpected_top}")
 
@@ -1954,6 +2389,15 @@ def validate_req_066_validator_runner_and_aggregate_verdict(payload: Mapping[str
             errors.append("failed_validator_count must be positive when ok is false")
         if not normalized_aggregate_reason_codes:
             errors.append("blocking_reason_codes must be non-empty when ok is false")
+
+    processing_behavior = payload.get("processing_behavior")
+    if processing_behavior is not None:
+        errors.extend(
+            _validate_processing_behavior_payload(
+                processing_behavior,
+                field_name="processing_behavior",
+            )
+        )
 
     return errors
 
