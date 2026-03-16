@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-025/REQ-028/REQ-037 contract/data-model surfaces for strategy pipeline artifacts."""
+"""REQ-025/REQ-028/REQ-032/REQ-037 contract/data-model surfaces for strategy pipeline artifacts."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 REQ_025_REQUIREMENT_ID = "REQ-025"
 REQ_025_SCHEMA_VERSION = "req-025.multi-call-strategy-pipeline-planner.v1"
 REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION = "req-025.llm-call-trace-row.v1"
+REQ_032_REQUIREMENT_ID = "REQ-032"
+REQ_032_SCHEMA_VERSION = "req-032.call-7-blocker-and-risk-policy-reasoning.v1"
 REQ_028_REQUIREMENT_ID = "REQ-028"
 REQ_028_SCHEMA_VERSION = "req-028.call-3-gap-and-opportunity-reasoning.v1"
 REQ_037_REQUIREMENT_ID = "REQ-037"
@@ -25,8 +27,15 @@ REQ_037_SCHEMA_VERSION = "req-037.recommendation-deduplication-and-merge.v1"
 RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 PIPELINE_STRATEGY = "multi-call-strategy-pipeline-planner"
+REQ_032_STRATEGY = "call-7-blocker-and-risk-policy-reasoning"
 REQ_028_STRATEGY = "call-3-gap-and-opportunity-reasoning"
 REQ_037_STRATEGY = "recommendation-deduplication-and-merge"
+REQ_032_REASONING_FOCUS = "blocker-escalation-and-risk-policy-resolution"
+REQ_032_CALL_SEQUENCE = 7
+REQ_032_TRACE_CALL_OBJECTIVE = (
+    "Reason about blocker escalation triggers and fallback sequencing paths before policy promotion."
+)
+REQ_032_TRACE_EXPECTED_OUTPUT = "call_7_blocker_and_risk_policy_reasoning"
 REQ_028_REASONING_FOCUS = "strategic-gaps-and-opportunities-beyond-local-mission"
 REQ_028_CALL_SEQUENCE = 3
 REQ_028_TRACE_CALL_OBJECTIVE = "Reason about strategic gaps and opportunities not visible from the local mission alone."
@@ -38,6 +47,7 @@ LLM_CALL_TRACE_RELATIVE_PATH = "strategy/current/llm_call_trace.jsonl"
 DEFAULT_TARGET_PROJECT_ROOT = "/workspace/projects/optimus-prime"
 DEFAULT_EARTH_ROOT = "/workspace/projects/Earth"
 DEFAULT_OUTPUT_ROOT = "/workspace/projects/optimus-prime/strategy/out"
+DEFAULT_REQ_032_REVISION_ID = "rev-req032-fixture-r1"
 DEFAULT_REQ_037_REVISION_ID = "rev-req037-fixture-r1"
 
 DEFAULT_STAGE_BLUEPRINTS = (
@@ -2837,6 +2847,1448 @@ def validate_req_037_recommendation_deduplication_and_merge(payload: Mapping[str
                 errors.append("call_metadata.llm_call_trace_rows must mirror deterministic REQ-037 trace rows")
             if metadata.get("llm_call_trace_sha256") != _canonical_digest(expected_trace_rows):
                 errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
+
+    return errors
+
+
+def _normalize_req_032_call_sequence(raw_value: Any) -> int:
+    if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+        raise ValueError("call_sequence must be an integer")
+    if raw_value != REQ_032_CALL_SEQUENCE:
+        raise ValueError(f"call_sequence must be {REQ_032_CALL_SEQUENCE}")
+    return raw_value
+
+
+def _normalize_req_032_blocker_severity(value: Any, *, field_name: str) -> str:
+    severity = _require_text(value, field_name=field_name).lower()
+    if severity not in {"low", "medium", "high", "critical"}:
+        raise ValueError(f"{field_name} must be low|medium|high|critical")
+    return severity
+
+
+def _normalize_req_032_escalation_triggers(raw_value: Any, *, field_name: str) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError(f"{field_name} must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_trigger_ids: set[str] = set()
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"{field_name}[{index}] must be an object")
+        trigger_id = _require_text(item.get("trigger_id"), field_name=f"{field_name}[{index}].trigger_id")
+        if trigger_id in seen_trigger_ids:
+            raise ValueError(f"{field_name}[{index}].trigger_id must be unique")
+        seen_trigger_ids.add(trigger_id)
+        project_id = _require_text(item.get("project_id"), field_name=f"{field_name}[{index}].project_id")
+        summary = _require_text(item.get("summary"), field_name=f"{field_name}[{index}].summary")
+        fire_when = _require_text(item.get("fire_when"), field_name=f"{field_name}[{index}].fire_when")
+        urgency = _normalize_req_032_blocker_severity(item.get("urgency"), field_name=f"{field_name}[{index}].urgency")
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"{field_name}[{index}].evidence_refs",
+            min_items=1,
+        )
+        normalized.append(
+            {
+                "trigger_id": trigger_id,
+                "project_id": project_id,
+                "summary": summary,
+                "fire_when": fire_when,
+                "urgency": urgency,
+                "evidence_refs": evidence_refs,
+            }
+        )
+    if not normalized:
+        raise ValueError(f"{field_name} must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: row["trigger_id"])
+    return normalized
+
+
+def _normalize_req_032_fallback_paths(raw_value: Any, *, field_name: str) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError(f"{field_name} must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_fallback_ids: set[str] = set()
+    seen_sequence: set[int] = set()
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"{field_name}[{index}] must be an object")
+        fallback_id = _require_text(item.get("fallback_id"), field_name=f"{field_name}[{index}].fallback_id")
+        if fallback_id in seen_fallback_ids:
+            raise ValueError(f"{field_name}[{index}].fallback_id must be unique")
+        seen_fallback_ids.add(fallback_id)
+        sequence = item.get("sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ValueError(f"{field_name}[{index}].sequence must be an integer >= 1")
+        if sequence in seen_sequence:
+            raise ValueError(f"{field_name}[{index}].sequence must be unique")
+        seen_sequence.add(sequence)
+        summary = _require_text(item.get("summary"), field_name=f"{field_name}[{index}].summary")
+        activates_when = _require_text(
+            item.get("activates_when"),
+            field_name=f"{field_name}[{index}].activates_when",
+        )
+        next_step = _require_text(item.get("next_step"), field_name=f"{field_name}[{index}].next_step")
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"{field_name}[{index}].evidence_refs",
+            min_items=1,
+        )
+        normalized.append(
+            {
+                "fallback_id": fallback_id,
+                "sequence": sequence,
+                "summary": summary,
+                "activates_when": activates_when,
+                "next_step": next_step,
+                "evidence_refs": evidence_refs,
+            }
+        )
+    if not normalized:
+        raise ValueError(f"{field_name} must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: (row["sequence"], row["fallback_id"]))
+    return normalized
+
+
+def _normalize_req_032_blocker_candidates(raw_value: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError("blocker_candidates must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_blocker_ids: set[str] = set()
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"blocker_candidates[{index}] must be an object")
+        blocker_id = _require_text(item.get("blocker_id"), field_name=f"blocker_candidates[{index}].blocker_id")
+        if blocker_id in seen_blocker_ids:
+            raise ValueError(f"blocker_candidates[{index}].blocker_id must be unique")
+        seen_blocker_ids.add(blocker_id)
+        summary = _require_text(item.get("summary"), field_name=f"blocker_candidates[{index}].summary")
+        severity = _normalize_req_032_blocker_severity(
+            item.get("severity"),
+            field_name=f"blocker_candidates[{index}].severity",
+        )
+        affected_project_ids = _normalize_string_list(
+            item.get("affected_project_ids"),
+            field_name=f"blocker_candidates[{index}].affected_project_ids",
+            min_items=1,
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"blocker_candidates[{index}].evidence_refs",
+            min_items=1,
+        )
+        escalation_triggers = _normalize_req_032_escalation_triggers(
+            item.get("escalation_triggers"),
+            field_name=f"blocker_candidates[{index}].escalation_triggers",
+        )
+        fallback_paths = _normalize_req_032_fallback_paths(
+            item.get("fallback_paths"),
+            field_name=f"blocker_candidates[{index}].fallback_paths",
+        )
+        normalized.append(
+            {
+                "blocker_id": blocker_id,
+                "summary": summary,
+                "severity": severity,
+                "affected_project_ids": affected_project_ids,
+                "evidence_refs": evidence_refs,
+                "escalation_triggers": escalation_triggers,
+                "fallback_paths": fallback_paths,
+            }
+        )
+    if not normalized:
+        raise ValueError("blocker_candidates must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: row["blocker_id"])
+    return normalized
+
+
+def _normalize_req_032_policy_decision(value: Any, *, field_name: str) -> str:
+    decision = _require_text(value, field_name=field_name).lower()
+    if decision not in {"monitor", "mitigate-locally", "fallback-then-escalate", "escalate-immediately"}:
+        raise ValueError(
+            f"{field_name} must be monitor|mitigate-locally|fallback-then-escalate|escalate-immediately"
+        )
+    return decision
+
+
+def _normalize_req_032_risk_policy_candidates(
+    raw_value: Any,
+    *,
+    blocker_candidates: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError("risk_policy_candidates must be an array")
+
+    blocker_index = {
+        _require_text(row.get("blocker_id"), field_name="blocker_candidates[].blocker_id"): row for row in blocker_candidates
+    }
+    normalized: list[dict[str, Any]] = []
+    seen_policy_ids: set[str] = set()
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"risk_policy_candidates[{index}] must be an object")
+        policy_id = _require_text(item.get("policy_id"), field_name=f"risk_policy_candidates[{index}].policy_id")
+        if policy_id in seen_policy_ids:
+            raise ValueError(f"risk_policy_candidates[{index}].policy_id must be unique")
+        seen_policy_ids.add(policy_id)
+        blocker_id = _require_text(item.get("blocker_id"), field_name=f"risk_policy_candidates[{index}].blocker_id")
+        blocker = blocker_index.get(blocker_id)
+        if blocker is None:
+            raise ValueError(f"risk_policy_candidates[{index}].blocker_id must reference a known blocker_id")
+        policy_decision = _normalize_req_032_policy_decision(
+            item.get("policy_decision"),
+            field_name=f"risk_policy_candidates[{index}].policy_decision",
+        )
+        rationale = _require_text(item.get("rationale"), field_name=f"risk_policy_candidates[{index}].rationale")
+        preferred_fallback_ids = _normalize_string_list(
+            item.get("preferred_fallback_ids"),
+            field_name=f"risk_policy_candidates[{index}].preferred_fallback_ids",
+        )
+        escalation_trigger_ids = _normalize_string_list(
+            item.get("escalation_trigger_ids"),
+            field_name=f"risk_policy_candidates[{index}].escalation_trigger_ids",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"risk_policy_candidates[{index}].evidence_refs",
+            min_items=1,
+        )
+
+        blocker_fallback_ids = {row["fallback_id"] for row in blocker.get("fallback_paths", []) if isinstance(row, Mapping)}
+        blocker_trigger_ids = {row["trigger_id"] for row in blocker.get("escalation_triggers", []) if isinstance(row, Mapping)}
+        if not set(preferred_fallback_ids).issubset(blocker_fallback_ids):
+            raise ValueError(
+                f"risk_policy_candidates[{index}].preferred_fallback_ids must reference blocker fallback_paths"
+            )
+        if not set(escalation_trigger_ids).issubset(blocker_trigger_ids):
+            raise ValueError(
+                f"risk_policy_candidates[{index}].escalation_trigger_ids must reference blocker escalation_triggers"
+            )
+        if policy_decision == "mitigate-locally" and not preferred_fallback_ids:
+            raise ValueError(
+                f"risk_policy_candidates[{index}].preferred_fallback_ids must not be empty for mitigate-locally"
+            )
+        if policy_decision == "fallback-then-escalate":
+            if not preferred_fallback_ids:
+                raise ValueError(
+                    f"risk_policy_candidates[{index}].preferred_fallback_ids must not be empty for fallback-then-escalate"
+                )
+            if not escalation_trigger_ids:
+                raise ValueError(
+                    f"risk_policy_candidates[{index}].escalation_trigger_ids must not be empty for fallback-then-escalate"
+                )
+        if policy_decision == "escalate-immediately" and not escalation_trigger_ids:
+            raise ValueError(
+                f"risk_policy_candidates[{index}].escalation_trigger_ids must not be empty for escalate-immediately"
+            )
+
+        normalized.append(
+            {
+                "policy_id": policy_id,
+                "blocker_id": blocker_id,
+                "policy_decision": policy_decision,
+                "rationale": rationale,
+                "preferred_fallback_ids": preferred_fallback_ids,
+                "escalation_trigger_ids": escalation_trigger_ids,
+                "evidence_refs": evidence_refs,
+            }
+        )
+    if not normalized:
+        raise ValueError("risk_policy_candidates must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: row["policy_id"])
+    return normalized
+
+
+def _canonical_req_032_input(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_sequence: int,
+) -> dict[str, Any]:
+    return {
+        "runtime_mode": RUNTIME_MODE,
+        "execution_mode": EXECUTION_MODE,
+        "target_project_root": target_project_root,
+        "earth_root": earth_root,
+        "output_root": output_root,
+        "revision_identity": revision_identity,
+        "strategy_goal": strategy_goal,
+        "call_sequence": call_sequence,
+    }
+
+
+def _canonical_req_032_processing_input(
+    *,
+    evidence_refs: list[str],
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    blocker_candidates: list[dict[str, Any]],
+    risk_policy_candidates: list[dict[str, Any]],
+    strategic_claims: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    processing_input = {
+        "required_evidence_refs": list(evidence_refs),
+        "target_project_evidence_refs": list(target_project_evidence_refs),
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "cross_project_context": [
+            {
+                "project_id": row["project_id"],
+                "project_root": row["project_root"],
+                "evidence_refs": list(row["evidence_refs"]),
+                "context_note": row["context_note"],
+            }
+            for row in cross_project_context
+        ],
+        "blocker_candidates": [
+            {
+                "blocker_id": row["blocker_id"],
+                "summary": row["summary"],
+                "severity": row["severity"],
+                "affected_project_ids": list(row["affected_project_ids"]),
+                "evidence_refs": list(row["evidence_refs"]),
+                "escalation_triggers": [
+                    {
+                        "trigger_id": trigger["trigger_id"],
+                        "project_id": trigger["project_id"],
+                        "summary": trigger["summary"],
+                        "fire_when": trigger["fire_when"],
+                        "urgency": trigger["urgency"],
+                        "evidence_refs": list(trigger["evidence_refs"]),
+                    }
+                    for trigger in row["escalation_triggers"]
+                ],
+                "fallback_paths": [
+                    {
+                        "fallback_id": fallback["fallback_id"],
+                        "sequence": fallback["sequence"],
+                        "summary": fallback["summary"],
+                        "activates_when": fallback["activates_when"],
+                        "next_step": fallback["next_step"],
+                        "evidence_refs": list(fallback["evidence_refs"]),
+                    }
+                    for fallback in row["fallback_paths"]
+                ],
+            }
+            for row in blocker_candidates
+        ],
+        "risk_policy_candidates": [
+            {
+                "policy_id": row["policy_id"],
+                "blocker_id": row["blocker_id"],
+                "policy_decision": row["policy_decision"],
+                "rationale": row["rationale"],
+                "preferred_fallback_ids": list(row["preferred_fallback_ids"]),
+                "escalation_trigger_ids": list(row["escalation_trigger_ids"]),
+                "evidence_refs": list(row["evidence_refs"]),
+            }
+            for row in risk_policy_candidates
+        ],
+    }
+    if strategic_claims:
+        processing_input["strategic_claims"] = [
+            {
+                "claim_id": row["claim_id"],
+                "phase": row["phase"],
+                "summary": row["summary"],
+                "position": row["position"],
+                "source_output_ref": row["source_output_ref"],
+                "evidence_refs": list(row["evidence_refs"]),
+            }
+            for row in strategic_claims
+        ]
+    return processing_input
+
+
+def _collect_req_032_trace_input_refs(canonical_processing_input: Mapping[str, Any]) -> list[str]:
+    blocker_candidates = canonical_processing_input.get("blocker_candidates")
+    risk_policy_candidates = canonical_processing_input.get("risk_policy_candidates")
+    cross_project_context = canonical_processing_input.get("cross_project_context")
+    strategic_claims = canonical_processing_input.get("strategic_claims")
+
+    def _rows_to_refs(rows: Any) -> list[list[str]]:
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
+            return []
+        refs: list[list[str]] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            row_refs = row.get("evidence_refs")
+            if isinstance(row_refs, Sequence) and not isinstance(row_refs, (str, bytes, bytearray)):
+                refs.append([_as_text(ref) for ref in row_refs if _as_text(ref)])
+        return refs
+
+    blocker_refs: list[list[str]] = []
+    if isinstance(blocker_candidates, Sequence) and not isinstance(blocker_candidates, (str, bytes, bytearray)):
+        for blocker in blocker_candidates:
+            if not isinstance(blocker, Mapping):
+                continue
+            blocker_refs.extend(_rows_to_refs([blocker]))
+            blocker_refs.extend(_rows_to_refs(blocker.get("escalation_triggers")))
+            blocker_refs.extend(_rows_to_refs(blocker.get("fallback_paths")))
+
+    claim_refs: list[list[str]] = []
+    claim_output_refs: list[str] = []
+    if isinstance(strategic_claims, Sequence) and not isinstance(strategic_claims, (str, bytes, bytearray)):
+        for row in strategic_claims:
+            if not isinstance(row, Mapping):
+                continue
+            row_refs = row.get("evidence_refs")
+            if isinstance(row_refs, Sequence) and not isinstance(row_refs, (str, bytes, bytearray)):
+                claim_refs.append([_as_text(ref) for ref in row_refs if _as_text(ref)])
+            source_output_ref = _as_text(row.get("source_output_ref"))
+            if source_output_ref:
+                claim_output_refs.append(source_output_ref)
+
+    required_evidence_refs = canonical_processing_input.get("required_evidence_refs")
+    if not isinstance(required_evidence_refs, Sequence) or isinstance(required_evidence_refs, (str, bytes, bytearray)):
+        required_evidence_refs = []
+
+    return _collect_unique_refs(
+        [_as_text(ref) for ref in required_evidence_refs if _as_text(ref)],
+        claim_output_refs,
+        *(_rows_to_refs(cross_project_context)),
+        *blocker_refs,
+        *(_rows_to_refs(risk_policy_candidates)),
+        *claim_refs,
+    )
+
+
+def _build_req_032_llm_call_trace_rows(
+    *,
+    canonical_input_sha: str,
+    processing_input_sha: str,
+    processing_call_id: str,
+    canonical_processing_input: Mapping[str, Any],
+    blocker_count: int,
+    escalation_trigger_count: int,
+    fallback_path_count: int,
+) -> list[dict[str, Any]]:
+    plan_id = f"req032-plan-{processing_input_sha[:16]}"
+    call_id = f"req032-call-{REQ_032_CALL_SEQUENCE:02d}-{canonical_input_sha[:10]}"
+    output_ref = _build_call_output_ref(
+        plan_id=plan_id,
+        call_id=call_id,
+        expected_output=REQ_032_TRACE_EXPECTED_OUTPUT,
+    )
+    return [
+        {
+            "schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "requirement_id": REQ_032_REQUIREMENT_ID,
+            "plan_id": plan_id,
+            "processing_call_id": processing_call_id,
+            "call_id": call_id,
+            "sequence": REQ_032_CALL_SEQUENCE,
+            "call_objective": REQ_032_TRACE_CALL_OBJECTIVE,
+            "depends_on": [],
+            "expected_output": REQ_032_TRACE_EXPECTED_OUTPUT,
+            "input_refs": _collect_req_032_trace_input_refs(canonical_processing_input),
+            "output_refs": [output_ref],
+            "handoff_summary": (
+                f"Call {REQ_032_CALL_SEQUENCE} hands off {REQ_032_TRACE_EXPECTED_OUTPUT} via {output_ref} "
+                f"after reasoning over {blocker_count} blockers, {escalation_trigger_count} escalation triggers, "
+                f"and {fallback_path_count} fallback paths."
+            ),
+        }
+    ]
+
+
+def _req_032_recommendation_decision(
+    *,
+    escalation_triggers: Sequence[Mapping[str, Any]],
+    fallback_sequence: Sequence[Mapping[str, Any]],
+    open_risks: Sequence[Mapping[str, Any]],
+    risk_policy_candidates: Sequence[Mapping[str, Any]],
+) -> str:
+    reason_codes = {_as_text(row.get("reason_code")) for row in open_risks}
+    if {"cross_call_contradiction", "uncited_strategic_claim"}.intersection(reason_codes):
+        return "resolve-strategy-gaps"
+    if fallback_sequence and escalation_triggers:
+        return "fallback-then-escalate"
+    if escalation_triggers:
+        return "escalate-blockers"
+    if fallback_sequence:
+        return "proceed-with-fallbacks"
+    if risk_policy_candidates and {
+        _as_text(row.get("policy_decision")) for row in risk_policy_candidates
+    } == {"monitor"} and not open_risks:
+        return "monitor"
+    if open_risks:
+        return "resolve-context-gaps"
+    return "insufficient-context"
+
+
+def _req_032_recommendation_rationale(*, decision: str) -> str:
+    if decision == "resolve-strategy-gaps":
+        return "Call-7 detected contradictory or uncited strategy claims that block reliable risk-policy promotion."
+    if decision == "fallback-then-escalate":
+        return "Risk policies require a bounded fallback sequence before escalation triggers are promoted."
+    if decision == "escalate-blockers":
+        return "Blocker severity and policy decisions require immediate escalation."
+    if decision == "proceed-with-fallbacks":
+        return "Fallback sequencing paths are evidence-backed and can proceed without immediate escalation."
+    if decision == "monitor":
+        return "Current blocker state is evidence-backed but only warrants monitoring."
+    if decision == "resolve-context-gaps":
+        return "Cross-project context or policy coverage is incomplete for reliable blocker promotion."
+    return "No evidence-backed blocker policy actions were supplied for Call-7."
+
+
+def _req_032_recommendation_confidence(
+    *,
+    evidence_refs: Sequence[str],
+    escalation_triggers: Sequence[Mapping[str, Any]],
+    fallback_sequence: Sequence[Mapping[str, Any]],
+    open_risks: Sequence[Mapping[str, Any]],
+) -> str:
+    if not evidence_refs:
+        return "low"
+    if (escalation_triggers or fallback_sequence) and not open_risks:
+        return "high"
+    if escalation_triggers or fallback_sequence:
+        return "medium"
+    if open_risks:
+        return "low"
+    return "medium"
+
+
+def _build_req_032_processing_behavior(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    strategy_goal: str,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    blocker_candidates: list[dict[str, Any]],
+    risk_policy_candidates: list[dict[str, Any]],
+    strategic_claims: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    if not earth_sweep_evidence_refs:
+        raise ValueError("earth_sweep_evidence_refs must contain at least 1 item(s)")
+
+    earth_ref_set = set(earth_sweep_evidence_refs)
+    context_by_project = {row["project_id"]: row for row in cross_project_context}
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    normalized_strategic_claims = list(strategic_claims or [])
+    policies_by_blocker: dict[str, list[dict[str, Any]]] = {}
+    for policy in risk_policy_candidates:
+        policies_by_blocker.setdefault(policy["blocker_id"], []).append(policy)
+
+    available_citation_refs = set(
+        _collect_unique_refs(
+            target_project_evidence_refs,
+            earth_sweep_evidence_refs,
+            cross_project_refs,
+            *[row["evidence_refs"] for row in blocker_candidates],
+            *[
+                trigger["evidence_refs"]
+                for row in blocker_candidates
+                for trigger in row["escalation_triggers"]
+            ],
+            *[
+                fallback["evidence_refs"]
+                for row in blocker_candidates
+                for fallback in row["fallback_paths"]
+            ],
+            *[row["evidence_refs"] for row in risk_policy_candidates],
+        )
+    )
+
+    blocker_reasoning: list[dict[str, Any]] = []
+    promoted_escalation_triggers: list[dict[str, Any]] = []
+    promoted_fallback_sequence: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+
+    claim_rows_by_id: dict[str, list[dict[str, Any]]] = {}
+    for claim in normalized_strategic_claims:
+        claim_rows_by_id.setdefault(claim["claim_id"], []).append(claim)
+        citation_refs = list(claim["evidence_refs"])
+        if not citation_refs or not set(citation_refs).issubset(available_citation_refs):
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim['claim_id']}-citation",
+                    "summary": claim["summary"],
+                    "reason_code": "uncited_strategic_claim",
+                    "required_evidence_refs": _collect_unique_refs([claim["source_output_ref"]], citation_refs),
+                }
+            )
+
+    for claim_id, claim_rows in claim_rows_by_id.items():
+        analysis_rows = [row for row in claim_rows if row["phase"] == "analysis"]
+        synthesis_rows = [row for row in claim_rows if row["phase"] == "synthesis"]
+        contradiction_row: dict[str, Any] | None = None
+        for analysis_row in analysis_rows:
+            for synthesis_row in synthesis_rows:
+                if analysis_row["position"] == synthesis_row["position"]:
+                    continue
+                contradiction_row = {
+                    "summary": synthesis_row["summary"],
+                    "required_evidence_refs": _collect_unique_refs(
+                        [analysis_row["source_output_ref"]],
+                        [synthesis_row["source_output_ref"]],
+                        analysis_row["evidence_refs"],
+                        synthesis_row["evidence_refs"],
+                    ),
+                }
+                break
+            if contradiction_row is not None:
+                break
+        if contradiction_row is not None:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim_id}-contradiction",
+                    "summary": contradiction_row["summary"],
+                    "reason_code": "cross_call_contradiction",
+                    "required_evidence_refs": contradiction_row["required_evidence_refs"],
+                }
+            )
+
+    escalation_rows_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    fallback_rows_by_key: dict[tuple[int, str, str], dict[str, Any]] = {}
+
+    for blocker in blocker_candidates:
+        if not set(blocker["evidence_refs"]).intersection(earth_ref_set):
+            raise ValueError(f"blocker_candidates[{blocker['blocker_id']}] must include earth_sweep evidence refs")
+
+        missing_context_projects: list[str] = []
+        missing_context_evidence_projects: list[str] = []
+        linked_context_projects: list[str] = []
+        linked_context_refs: list[str] = []
+        for project_id in blocker["affected_project_ids"]:
+            project_context = context_by_project.get(project_id)
+            if project_context is None:
+                missing_context_projects.append(project_id)
+                continue
+            linked_context_projects.append(project_id)
+            if project_context["evidence_refs"]:
+                linked_context_refs.extend(project_context["evidence_refs"])
+            else:
+                missing_context_evidence_projects.append(project_id)
+
+        if missing_context_projects:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{blocker['blocker_id']}-context",
+                    "summary": blocker["summary"],
+                    "reason_code": "missing_cross_project_context",
+                    "affected_project_ids": missing_context_projects,
+                    "required_evidence_refs": list(blocker["evidence_refs"]),
+                }
+            )
+        if missing_context_evidence_projects:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{blocker['blocker_id']}-context-evidence",
+                    "summary": blocker["summary"],
+                    "reason_code": "missing_cross_project_context_evidence_refs",
+                    "affected_project_ids": missing_context_evidence_projects,
+                    "required_evidence_refs": list(blocker["evidence_refs"]),
+                }
+            )
+
+        applicable_policies = policies_by_blocker.get(blocker["blocker_id"], [])
+        if not applicable_policies:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{blocker['blocker_id']}-policy",
+                    "summary": blocker["summary"],
+                    "reason_code": "missing_risk_policy",
+                    "affected_project_ids": list(blocker["affected_project_ids"]),
+                    "required_evidence_refs": list(blocker["evidence_refs"]),
+                }
+            )
+
+        escalation_triggers = [
+            {
+                "trigger_id": trigger["trigger_id"],
+                "project_id": trigger["project_id"],
+                "summary": trigger["summary"],
+                "fire_when": trigger["fire_when"],
+                "urgency": trigger["urgency"],
+                "evidence_refs": _collect_unique_refs(
+                    blocker["evidence_refs"],
+                    trigger["evidence_refs"],
+                    context_by_project.get(trigger["project_id"], {}).get("evidence_refs", []),
+                ),
+            }
+            for trigger in blocker["escalation_triggers"]
+        ]
+        fallback_paths = [
+            {
+                "fallback_id": fallback["fallback_id"],
+                "sequence": fallback["sequence"],
+                "summary": fallback["summary"],
+                "activates_when": fallback["activates_when"],
+                "next_step": fallback["next_step"],
+                "evidence_refs": _collect_unique_refs(
+                    blocker["evidence_refs"],
+                    fallback["evidence_refs"],
+                    linked_context_refs,
+                ),
+            }
+            for fallback in blocker["fallback_paths"]
+        ]
+
+        promoted_trigger_count = 0
+        for policy in applicable_policies:
+            should_promote_fallbacks = policy["policy_decision"] in {"mitigate-locally", "fallback-then-escalate"}
+            should_promote_triggers = policy["policy_decision"] in {"fallback-then-escalate", "escalate-immediately"}
+            if should_promote_fallbacks:
+                for fallback in fallback_paths:
+                    if fallback["fallback_id"] not in set(policy["preferred_fallback_ids"]):
+                        continue
+                    key = (fallback["sequence"], blocker["blocker_id"], fallback["fallback_id"])
+                    fallback_rows_by_key[key] = {
+                        "sequence": fallback["sequence"],
+                        "fallback_id": fallback["fallback_id"],
+                        "blocker_id": blocker["blocker_id"],
+                        "policy_id": policy["policy_id"],
+                        "summary": fallback["summary"],
+                        "activates_when": fallback["activates_when"],
+                        "next_step": fallback["next_step"],
+                        "evidence_refs": _collect_unique_refs(
+                            fallback["evidence_refs"],
+                            policy["evidence_refs"],
+                        ),
+                    }
+            if should_promote_triggers:
+                for trigger in escalation_triggers:
+                    if trigger["trigger_id"] not in set(policy["escalation_trigger_ids"]):
+                        continue
+                    key = (blocker["blocker_id"], policy["policy_id"], trigger["trigger_id"])
+                    escalation_rows_by_key[key] = {
+                        "trigger_id": trigger["trigger_id"],
+                        "blocker_id": blocker["blocker_id"],
+                        "policy_id": policy["policy_id"],
+                        "project_id": trigger["project_id"],
+                        "summary": trigger["summary"],
+                        "fire_when": trigger["fire_when"],
+                        "urgency": trigger["urgency"],
+                        "evidence_refs": _collect_unique_refs(
+                            trigger["evidence_refs"],
+                            policy["evidence_refs"],
+                        ),
+                    }
+                    promoted_trigger_count += 1
+
+        if blocker["severity"] == "critical" and promoted_trigger_count == 0:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{blocker['blocker_id']}-critical",
+                    "summary": blocker["summary"],
+                    "reason_code": "critical_blocker_without_escalation",
+                    "affected_project_ids": list(blocker["affected_project_ids"]),
+                    "required_evidence_refs": _collect_unique_refs(
+                        blocker["evidence_refs"],
+                        *[row["evidence_refs"] for row in escalation_triggers],
+                    ),
+                }
+            )
+
+        blocker_reasoning.append(
+            {
+                "blocker_id": blocker["blocker_id"],
+                "summary": blocker["summary"],
+                "severity": blocker["severity"],
+                "affected_project_ids": list(blocker["affected_project_ids"]),
+                "linked_context_projects": linked_context_projects,
+                "evidence_refs": _collect_unique_refs(
+                    blocker["evidence_refs"],
+                    linked_context_refs,
+                    *[row["evidence_refs"] for row in applicable_policies],
+                ),
+                "escalation_triggers": escalation_triggers,
+                "fallback_paths": fallback_paths,
+                "applicable_policies": [
+                    {
+                        "policy_id": policy["policy_id"],
+                        "policy_decision": policy["policy_decision"],
+                        "rationale": policy["rationale"],
+                        "preferred_fallback_ids": list(policy["preferred_fallback_ids"]),
+                        "escalation_trigger_ids": list(policy["escalation_trigger_ids"]),
+                        "evidence_refs": list(policy["evidence_refs"]),
+                    }
+                    for policy in applicable_policies
+                ],
+            }
+        )
+
+    promoted_escalation_triggers = [row for _, row in sorted(escalation_rows_by_key.items())]
+    promoted_fallback_sequence = [row for _, row in sorted(fallback_rows_by_key.items())]
+    blocker_reasoning.sort(key=lambda row: row["blocker_id"])
+    open_risks.sort(key=lambda row: row["risk_id"])
+
+    evidence_refs_used = _collect_unique_refs(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        *[row["evidence_refs"] for row in blocker_candidates],
+        *[
+            trigger["evidence_refs"]
+            for row in blocker_candidates
+            for trigger in row["escalation_triggers"]
+        ],
+        *[
+            fallback["evidence_refs"]
+            for row in blocker_candidates
+            for fallback in row["fallback_paths"]
+        ],
+        *[row["evidence_refs"] for row in risk_policy_candidates],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    recommendation_refs = _collect_unique_refs(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        *[row["evidence_refs"] for row in promoted_escalation_triggers],
+        *[row["evidence_refs"] for row in promoted_fallback_sequence],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    recommendation_decision = _req_032_recommendation_decision(
+        escalation_triggers=promoted_escalation_triggers,
+        fallback_sequence=promoted_fallback_sequence,
+        open_risks=open_risks,
+        risk_policy_candidates=risk_policy_candidates,
+    )
+
+    return {
+        "strategy": REQ_032_STRATEGY,
+        "reasoning_mode": EXECUTION_MODE,
+        "strict_evidence_discipline": True,
+        "heuristic_summarization_only": False,
+        "context_inputs": {
+            "target_project": {
+                "project_root": target_project_root,
+                "strategy_goal": strategy_goal,
+                "evidence_refs": list(target_project_evidence_refs),
+            },
+            "earth_sweep": {
+                "earth_root": earth_root,
+                "evidence_refs": list(earth_sweep_evidence_refs),
+            },
+            "cross_project_context": [
+                {
+                    "project_id": row["project_id"],
+                    "project_root": row["project_root"],
+                    "evidence_refs": list(row["evidence_refs"]),
+                    "context_note": row["context_note"],
+                }
+                for row in cross_project_context
+            ],
+            "blocker_candidates": [
+                {
+                    "blocker_id": row["blocker_id"],
+                    "summary": row["summary"],
+                    "severity": row["severity"],
+                    "affected_project_ids": list(row["affected_project_ids"]),
+                    "evidence_refs": list(row["evidence_refs"]),
+                    "escalation_triggers": [
+                        {
+                            "trigger_id": trigger["trigger_id"],
+                            "project_id": trigger["project_id"],
+                            "summary": trigger["summary"],
+                            "fire_when": trigger["fire_when"],
+                            "urgency": trigger["urgency"],
+                            "evidence_refs": list(trigger["evidence_refs"]),
+                        }
+                        for trigger in row["escalation_triggers"]
+                    ],
+                    "fallback_paths": [
+                        {
+                            "fallback_id": fallback["fallback_id"],
+                            "sequence": fallback["sequence"],
+                            "summary": fallback["summary"],
+                            "activates_when": fallback["activates_when"],
+                            "next_step": fallback["next_step"],
+                            "evidence_refs": list(fallback["evidence_refs"]),
+                        }
+                        for fallback in row["fallback_paths"]
+                    ],
+                }
+                for row in blocker_candidates
+            ],
+            "risk_policy_candidates": [
+                {
+                    "policy_id": row["policy_id"],
+                    "blocker_id": row["blocker_id"],
+                    "policy_decision": row["policy_decision"],
+                    "rationale": row["rationale"],
+                    "preferred_fallback_ids": list(row["preferred_fallback_ids"]),
+                    "escalation_trigger_ids": list(row["escalation_trigger_ids"]),
+                    "evidence_refs": list(row["evidence_refs"]),
+                }
+                for row in risk_policy_candidates
+            ],
+            "strategic_claims": [
+                {
+                    "claim_id": row["claim_id"],
+                    "phase": row["phase"],
+                    "summary": row["summary"],
+                    "position": row["position"],
+                    "source_output_ref": row["source_output_ref"],
+                    "evidence_refs": list(row["evidence_refs"]),
+                }
+                for row in normalized_strategic_claims
+            ],
+        },
+        "context_usage": {
+            "target_project_context_used": bool(strategy_goal or target_project_evidence_refs),
+            "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+            "cross_project_context_used": bool(cross_project_context),
+            "blocker_ids_considered": [row["blocker_id"] for row in blocker_candidates],
+            "policy_ids_considered": [row["policy_id"] for row in risk_policy_candidates],
+            "fallback_ids_considered": [
+                fallback["fallback_id"] for row in blocker_candidates for fallback in row["fallback_paths"]
+            ],
+            "cross_project_projects_considered": [row["project_id"] for row in cross_project_context],
+            "escalation_project_ids": sorted(
+                {row["project_id"] for row in promoted_escalation_triggers}
+            ),
+            "cross_project_refs_used": cross_project_refs,
+            "evidence_refs_used": evidence_refs_used,
+        },
+        "call_7_reasoning": {
+            "call_sequence": REQ_032_CALL_SEQUENCE,
+            "reasoning_focus": REQ_032_REASONING_FOCUS,
+            "blocker_reasoning": blocker_reasoning,
+            "blocker_count": len(blocker_reasoning),
+            "policy_count": len(risk_policy_candidates),
+            "escalation_trigger_count": sum(len(row["escalation_triggers"]) for row in blocker_reasoning),
+            "fallback_path_count": sum(len(row["fallback_paths"]) for row in blocker_reasoning),
+        },
+        "recommendation": {
+            "decision": recommendation_decision,
+            "rationale": _req_032_recommendation_rationale(decision=recommendation_decision),
+            "confidence": _req_032_recommendation_confidence(
+                evidence_refs=recommendation_refs,
+                escalation_triggers=promoted_escalation_triggers,
+                fallback_sequence=promoted_fallback_sequence,
+                open_risks=open_risks,
+            ),
+            "evidence_refs": recommendation_refs,
+            "escalation_triggers": promoted_escalation_triggers,
+            "fallback_sequence": promoted_fallback_sequence,
+            "open_risks": open_risks,
+        },
+        "summary": (
+            f"Call 7 reasoned over {len(blocker_reasoning)} blocker(s), "
+            f"{len(promoted_escalation_triggers)} promoted escalation trigger(s), and "
+            f"{len(promoted_fallback_sequence)} fallback sequence step(s)."
+        ),
+    }
+
+
+def build_req_032_call_7_blocker_and_risk_policy_reasoning(
+    *,
+    target_project_root: str = DEFAULT_TARGET_PROJECT_ROOT,
+    earth_root: str = DEFAULT_EARTH_ROOT,
+    output_root: str = DEFAULT_OUTPUT_ROOT,
+    revision_identity: str = DEFAULT_REQ_032_REVISION_ID,
+    strategy_goal: str,
+    call_sequence: int = REQ_032_CALL_SEQUENCE,
+    evidence_refs: Sequence[Any] | None = None,
+    target_project_evidence_refs: Sequence[Any] | None = None,
+    earth_sweep_evidence_refs: Sequence[Any] | None = None,
+    cross_project_context: Sequence[Mapping[str, Any]] | None = None,
+    blocker_candidates: Sequence[Mapping[str, Any]] | None = None,
+    risk_policy_candidates: Sequence[Mapping[str, Any]] | None = None,
+    strategic_claims: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the REQ-032 Call-7 blocker and risk policy reasoning payload."""
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_text(revision_identity, field_name="revision_identity")
+    normalized_strategy_goal = _require_text(strategy_goal, field_name="strategy_goal")
+    normalized_call_sequence = _normalize_req_032_call_sequence(call_sequence)
+    normalized_evidence_refs = _normalize_string_list(evidence_refs, field_name="evidence_refs", min_items=1)
+    default_target_refs = [ref for ref in normalized_evidence_refs if not _is_earth_evidence_ref(ref)]
+    default_earth_refs = [ref for ref in normalized_evidence_refs if _is_earth_evidence_ref(ref)]
+    normalized_target_project_evidence_refs = (
+        _normalize_string_list(target_project_evidence_refs, field_name="target_project_evidence_refs")
+        if target_project_evidence_refs is not None
+        else default_target_refs
+    )
+    normalized_earth_sweep_evidence_refs = (
+        _normalize_string_list(earth_sweep_evidence_refs, field_name="earth_sweep_evidence_refs")
+        if earth_sweep_evidence_refs is not None
+        else default_earth_refs
+    )
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
+    normalized_blocker_candidates = _normalize_req_032_blocker_candidates(blocker_candidates)
+    normalized_risk_policy_candidates = _normalize_req_032_risk_policy_candidates(
+        risk_policy_candidates,
+        blocker_candidates=normalized_blocker_candidates,
+    )
+    normalized_strategic_claims = _normalize_req_028_strategic_claims(strategic_claims)
+
+    canonical_input = _canonical_req_032_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+        strategy_goal=normalized_strategy_goal,
+        call_sequence=normalized_call_sequence,
+    )
+    canonical_input_sha = _canonical_digest(canonical_input)
+
+    canonical_processing_input = _canonical_req_032_processing_input(
+        evidence_refs=normalized_evidence_refs,
+        target_project_evidence_refs=normalized_target_project_evidence_refs,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
+        blocker_candidates=normalized_blocker_candidates,
+        risk_policy_candidates=normalized_risk_policy_candidates,
+        strategic_claims=normalized_strategic_claims,
+    )
+    processing_sha = _canonical_digest(canonical_processing_input)
+
+    processing_behavior = _build_req_032_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        strategy_goal=normalized_strategy_goal,
+        target_project_evidence_refs=normalized_target_project_evidence_refs,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
+        blocker_candidates=normalized_blocker_candidates,
+        risk_policy_candidates=normalized_risk_policy_candidates,
+        strategic_claims=normalized_strategic_claims,
+    )
+    processing_call_id = f"req032-processing-{processing_sha[:16]}"
+    llm_call_trace_rows = _build_req_032_llm_call_trace_rows(
+        canonical_input_sha=canonical_input_sha,
+        processing_input_sha=processing_sha,
+        processing_call_id=processing_call_id,
+        canonical_processing_input=canonical_processing_input,
+        blocker_count=len(normalized_blocker_candidates),
+        escalation_trigger_count=sum(
+            len(row["escalation_triggers"]) for row in normalized_blocker_candidates
+        ),
+        fallback_path_count=sum(len(row["fallback_paths"]) for row in normalized_blocker_candidates),
+    )
+    llm_call_trace_sha = _canonical_digest(llm_call_trace_rows)
+
+    return {
+        "schema_version": REQ_032_SCHEMA_VERSION,
+        "requirement_id": REQ_032_REQUIREMENT_ID,
+        "call_7_blocker_and_risk_policy_reasoning_entrypoint": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+            "strategy_goal": normalized_strategy_goal,
+            "call_sequence": normalized_call_sequence,
+        },
+        "processing_behavior": processing_behavior,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": canonical_input_sha,
+            "reproducible_call_id": f"req032-{canonical_input_sha[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_sha,
+            "processing_call_id": processing_call_id,
+            "canonical_processing_input": canonical_processing_input,
+            "llm_call_trace_schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": llm_call_trace_sha,
+            "llm_call_trace_rows": llm_call_trace_rows,
+        },
+    }
+
+
+def validate_req_032_call_7_blocker_and_risk_policy_reasoning(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-032 payload shape and deterministic Call-7 blocker reasoning content."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "call_7_blocker_and_risk_policy_reasoning_entrypoint",
+        "processing_behavior",
+        "call_metadata",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_032_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_032_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_032_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_032_REQUIREMENT_ID}")
+
+    entrypoint = payload.get("call_7_blocker_and_risk_policy_reasoning_entrypoint")
+    if not isinstance(entrypoint, Mapping):
+        errors.append("call_7_blocker_and_risk_policy_reasoning_entrypoint must be an object")
+        return errors
+
+    required_entrypoint = {
+        "runtime_mode",
+        "execution_mode",
+        "target_project_root",
+        "earth_root",
+        "output_root",
+        "revision_identity",
+        "strategy_goal",
+        "call_sequence",
+    }
+    entrypoint_keys = set(entrypoint.keys())
+    missing_entrypoint = sorted(required_entrypoint - entrypoint_keys)
+    if missing_entrypoint:
+        errors.append(f"call_7_blocker_and_risk_policy_reasoning_entrypoint missing keys: {missing_entrypoint}")
+    unexpected_entrypoint = sorted(entrypoint_keys - required_entrypoint)
+    if unexpected_entrypoint:
+        errors.append(f"call_7_blocker_and_risk_policy_reasoning_entrypoint unexpected keys: {unexpected_entrypoint}")
+
+    if entrypoint.get("runtime_mode") != RUNTIME_MODE:
+        errors.append(f"call_7_blocker_and_risk_policy_reasoning_entrypoint.runtime_mode must be {RUNTIME_MODE}")
+    if entrypoint.get("execution_mode") != EXECUTION_MODE:
+        errors.append(f"call_7_blocker_and_risk_policy_reasoning_entrypoint.execution_mode must be {EXECUTION_MODE}")
+    for root_field in ("target_project_root", "earth_root", "output_root"):
+        root_value = entrypoint.get(root_field)
+        if not isinstance(root_value, str) or not root_value.strip():
+            errors.append(f"{root_field} must be a non-empty string")
+        elif not root_value.startswith("/"):
+            errors.append(f"{root_field} must be an absolute path")
+
+    revision_identity = entrypoint.get("revision_identity")
+    strategy_goal = entrypoint.get("strategy_goal")
+    if not isinstance(revision_identity, str) or not revision_identity.strip():
+        errors.append("revision_identity must be a non-empty string")
+    if not isinstance(strategy_goal, str) or not strategy_goal.strip():
+        errors.append("strategy_goal must be a non-empty string")
+
+    call_sequence = entrypoint.get("call_sequence")
+    if call_sequence != REQ_032_CALL_SEQUENCE:
+        errors.append(f"call_sequence must be {REQ_032_CALL_SEQUENCE}")
+        call_sequence = REQ_032_CALL_SEQUENCE
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+
+    required_processing = {
+        "strategy",
+        "reasoning_mode",
+        "strict_evidence_discipline",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "call_7_reasoning",
+        "recommendation",
+        "summary",
+    }
+    processing_keys = set(processing_behavior.keys())
+    missing_processing = sorted(required_processing - processing_keys)
+    if missing_processing:
+        errors.append(f"processing_behavior missing keys: {missing_processing}")
+    unexpected_processing = sorted(processing_keys - required_processing)
+    if unexpected_processing:
+        errors.append(f"processing_behavior unexpected keys: {unexpected_processing}")
+
+    if processing_behavior.get("strategy") != REQ_032_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_032_STRATEGY}")
+    if processing_behavior.get("reasoning_mode") != EXECUTION_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("strict_evidence_discipline") is not True:
+        errors.append("processing_behavior.strict_evidence_discipline must be true")
+    if processing_behavior.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    normalized_target_project_refs: list[str] = []
+    normalized_earth_sweep_refs: list[str] = []
+    normalized_cross_project_context: list[dict[str, Any]] = []
+    normalized_blocker_candidates: list[dict[str, Any]] = []
+    normalized_risk_policy_candidates: list[dict[str, Any]] = []
+    normalized_strategic_claims: list[dict[str, Any]] = []
+
+    metadata = payload.get("call_metadata")
+    if isinstance(metadata, Mapping):
+        canonical_processing_input_preview = metadata.get("canonical_processing_input")
+        if isinstance(canonical_processing_input_preview, Mapping) and "strategic_claims" in canonical_processing_input_preview:
+            try:
+                normalized_strategic_claims = _normalize_req_028_strategic_claims(
+                    canonical_processing_input_preview.get("strategic_claims")
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+    else:
+        target_project = context_inputs.get("target_project")
+        if not isinstance(target_project, Mapping):
+            errors.append("processing_behavior.context_inputs.target_project must be an object")
+        else:
+            if target_project.get("project_root") != entrypoint.get("target_project_root"):
+                errors.append(
+                    "processing_behavior.context_inputs.target_project.project_root must match entrypoint.target_project_root"
+                )
+            if target_project.get("strategy_goal") != entrypoint.get("strategy_goal"):
+                errors.append(
+                    "processing_behavior.context_inputs.target_project.strategy_goal must match entrypoint.strategy_goal"
+                )
+            try:
+                normalized_target_project_refs = _normalize_string_list(
+                    target_project.get("evidence_refs"),
+                    field_name="processing_behavior.context_inputs.target_project.evidence_refs",
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
+
+        earth_sweep = context_inputs.get("earth_sweep")
+        if not isinstance(earth_sweep, Mapping):
+            errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+        else:
+            if earth_sweep.get("earth_root") != entrypoint.get("earth_root"):
+                errors.append("processing_behavior.context_inputs.earth_sweep.earth_root must match entrypoint.earth_root")
+            try:
+                normalized_earth_sweep_refs = _normalize_string_list(
+                    earth_sweep.get("evidence_refs"),
+                    field_name="processing_behavior.context_inputs.earth_sweep.evidence_refs",
+                    min_items=1,
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
+
+        try:
+            normalized_cross_project_context = _normalize_cross_project_context(
+                context_inputs.get("cross_project_context")
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+        try:
+            normalized_blocker_candidates = _normalize_req_032_blocker_candidates(
+                context_inputs.get("blocker_candidates")
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+        if normalized_blocker_candidates:
+            try:
+                normalized_risk_policy_candidates = _normalize_req_032_risk_policy_candidates(
+                    context_inputs.get("risk_policy_candidates"),
+                    blocker_candidates=normalized_blocker_candidates,
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        for key in (
+            "target_project_context_used",
+            "earth_sweep_context_used",
+            "cross_project_context_used",
+            "blocker_ids_considered",
+            "policy_ids_considered",
+            "fallback_ids_considered",
+            "cross_project_projects_considered",
+            "escalation_project_ids",
+            "cross_project_refs_used",
+            "evidence_refs_used",
+        ):
+            if key not in context_usage:
+                errors.append(f"processing_behavior.context_usage missing keys: ['{key}']")
+
+    call_7_reasoning = processing_behavior.get("call_7_reasoning")
+    if not isinstance(call_7_reasoning, Mapping):
+        errors.append("processing_behavior.call_7_reasoning must be an object")
+    else:
+        required_reasoning = {
+            "call_sequence",
+            "reasoning_focus",
+            "blocker_reasoning",
+            "blocker_count",
+            "policy_count",
+            "escalation_trigger_count",
+            "fallback_path_count",
+        }
+        reasoning_keys = set(call_7_reasoning.keys())
+        missing_reasoning = sorted(required_reasoning - reasoning_keys)
+        if missing_reasoning:
+            errors.append(f"processing_behavior.call_7_reasoning missing keys: {missing_reasoning}")
+        unexpected_reasoning = sorted(reasoning_keys - required_reasoning)
+        if unexpected_reasoning:
+            errors.append(f"processing_behavior.call_7_reasoning unexpected keys: {unexpected_reasoning}")
+        if call_7_reasoning.get("call_sequence") != REQ_032_CALL_SEQUENCE:
+            errors.append(f"processing_behavior.call_7_reasoning.call_sequence must be {REQ_032_CALL_SEQUENCE}")
+        if call_7_reasoning.get("reasoning_focus") != REQ_032_REASONING_FOCUS:
+            errors.append(f"processing_behavior.call_7_reasoning.reasoning_focus must be {REQ_032_REASONING_FOCUS}")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        required_recommendation = {
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "escalation_triggers",
+            "fallback_sequence",
+            "open_risks",
+        }
+        recommendation_keys = set(recommendation.keys())
+        missing_recommendation = sorted(required_recommendation - recommendation_keys)
+        if missing_recommendation:
+            errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+        if not isinstance(recommendation.get("evidence_refs"), list):
+            errors.append("processing_behavior.recommendation.evidence_refs must be a list")
+        if not isinstance(recommendation.get("escalation_triggers"), list):
+            errors.append("processing_behavior.recommendation.escalation_triggers must be a list")
+        if not isinstance(recommendation.get("fallback_sequence"), list):
+            errors.append("processing_behavior.recommendation.fallback_sequence must be a list")
+        if not isinstance(recommendation.get("open_risks"), list):
+            errors.append("processing_behavior.recommendation.open_risks must be a list")
+
+    if normalized_blocker_candidates and normalized_risk_policy_candidates and normalized_earth_sweep_refs:
+        try:
+            expected_processing_behavior = _build_req_032_processing_behavior(
+                target_project_root=_as_text(entrypoint.get("target_project_root")),
+                earth_root=_as_text(entrypoint.get("earth_root")),
+                strategy_goal=_as_text(entrypoint.get("strategy_goal")),
+                target_project_evidence_refs=normalized_target_project_refs,
+                earth_sweep_evidence_refs=normalized_earth_sweep_refs,
+                cross_project_context=normalized_cross_project_context,
+                blocker_candidates=normalized_blocker_candidates,
+                risk_policy_candidates=normalized_risk_policy_candidates,
+                strategic_claims=normalized_strategic_claims,
+            )
+        except ValueError as exc:
+            errors.append(f"processing_behavior could not be reconstructed: {exc}")
+        else:
+            if dict(processing_behavior) != expected_processing_behavior:
+                errors.append("processing_behavior must match deterministic Call-7 reasoning output")
+
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+
+    required_metadata = {
+        "reproducibility",
+        "canonical_input_sha256",
+        "reproducible_call_id",
+        "canonical_input",
+        "processing_input_sha256",
+        "processing_call_id",
+        "canonical_processing_input",
+        "llm_call_trace_schema_version",
+        "llm_call_trace_path",
+        "llm_call_trace_sha256",
+        "llm_call_trace_rows",
+    }
+    metadata_keys = set(metadata.keys())
+    missing_metadata = sorted(required_metadata - metadata_keys)
+    if missing_metadata:
+        errors.append(f"call_metadata missing keys: {missing_metadata}")
+    unexpected_metadata = sorted(metadata_keys - required_metadata)
+    if unexpected_metadata:
+        errors.append(f"call_metadata unexpected keys: {unexpected_metadata}")
+
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+    expected_canonical_input = _canonical_req_032_input(
+        target_project_root=_as_text(entrypoint.get("target_project_root")),
+        earth_root=_as_text(entrypoint.get("earth_root")),
+        output_root=_as_text(entrypoint.get("output_root")),
+        revision_identity=_as_text(entrypoint.get("revision_identity")),
+        strategy_goal=_as_text(entrypoint.get("strategy_goal")),
+        call_sequence=int(call_sequence),
+    )
+    if dict(canonical_input) != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+    expected_input_sha = _canonical_digest(expected_canonical_input)
+    if metadata.get("canonical_input_sha256") != expected_input_sha:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != f"req032-{expected_input_sha[:16]}":
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+        return errors
+
+    if metadata.get("llm_call_trace_schema_version") != REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION:
+        errors.append(
+            f"call_metadata.llm_call_trace_schema_version must be {REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION}"
+        )
+    if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+        errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+
+    if normalized_blocker_candidates and normalized_risk_policy_candidates and normalized_earth_sweep_refs:
+        expected_processing_input = _canonical_req_032_processing_input(
+            evidence_refs=sorted(
+                set(
+                    _collect_unique_refs(
+                        normalized_target_project_refs,
+                        normalized_earth_sweep_refs,
+                        *[row["evidence_refs"] for row in normalized_cross_project_context],
+                        *[row["evidence_refs"] for row in normalized_blocker_candidates],
+                        *[
+                            trigger["evidence_refs"]
+                            for row in normalized_blocker_candidates
+                            for trigger in row["escalation_triggers"]
+                        ],
+                        *[
+                            fallback["evidence_refs"]
+                            for row in normalized_blocker_candidates
+                            for fallback in row["fallback_paths"]
+                        ],
+                        *[row["evidence_refs"] for row in normalized_risk_policy_candidates],
+                    )
+                )
+            ),
+            target_project_evidence_refs=normalized_target_project_refs,
+            earth_sweep_evidence_refs=normalized_earth_sweep_refs,
+            cross_project_context=normalized_cross_project_context,
+            blocker_candidates=normalized_blocker_candidates,
+            risk_policy_candidates=normalized_risk_policy_candidates,
+            strategic_claims=normalized_strategic_claims,
+        )
+        if dict(canonical_processing_input) != expected_processing_input:
+            errors.append("call_metadata.canonical_processing_input must mirror processing inputs")
+        expected_processing_sha = _canonical_digest(expected_processing_input)
+        if metadata.get("processing_input_sha256") != expected_processing_sha:
+            errors.append("call_metadata.processing_input_sha256 does not match processing input")
+        if metadata.get("processing_call_id") != f"req032-processing-{expected_processing_sha[:16]}":
+            errors.append("call_metadata.processing_call_id does not match processing digest")
+
+        expected_trace_rows = _build_req_032_llm_call_trace_rows(
+            canonical_input_sha=expected_input_sha,
+            processing_input_sha=expected_processing_sha,
+            processing_call_id=f"req032-processing-{expected_processing_sha[:16]}",
+            canonical_processing_input=expected_processing_input,
+            blocker_count=len(normalized_blocker_candidates),
+            escalation_trigger_count=sum(
+                len(row["escalation_triggers"]) for row in normalized_blocker_candidates
+            ),
+            fallback_path_count=sum(len(row["fallback_paths"]) for row in normalized_blocker_candidates),
+        )
+        if metadata.get("llm_call_trace_rows") != expected_trace_rows:
+            errors.append("call_metadata.llm_call_trace_rows must mirror deterministic Call-7 trace rows")
+        if metadata.get("llm_call_trace_sha256") != _canonical_digest(expected_trace_rows):
+            errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
 
     return errors
 
