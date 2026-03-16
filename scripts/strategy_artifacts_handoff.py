@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-056 and REQ-057 strategy artifact handoff surfaces."""
+"""REQ-056, REQ-057, and REQ-063 strategy artifact handoff surfaces."""
 
 from __future__ import annotations
 
@@ -20,6 +20,11 @@ REQ_057_SCHEMA_VERSION = "1.0"
 REQ_057_ANALYSIS_TYPE = "blocker_handling_policy_artifact"
 REQ_057_CALL_ID = "blocker-handling-policy-artifact"
 
+REQ_063_REQUIREMENT_ID = "REQ-063"
+REQ_063_SCHEMA_VERSION = "1.0"
+REQ_063_ANALYSIS_TYPE = "ecosystem_link_map_integrity_validator"
+REQ_063_CALL_ID = "ecosystem-link-map-integrity-validator"
+
 _EXPECTED_DIRECTIONS = {"increase", "decrease", "maintain"}
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
 _ESCALATION_TRIGGER_TYPES = {
@@ -29,6 +34,10 @@ _ESCALATION_TRIGGER_TYPES = {
 }
 _ESCALATION_WINDOWS = {"attempts", "cycles", "minutes"}
 _REQ_057_MISSING_EARTH_SWEEP_REASON = "missing_earth_sweep_evidence_refs"
+_REQ_063_LINK_STATUSES = {"valid", "orphaned", "broken"}
+_REQ_063_DIAGNOSTIC_SEVERITIES = {"error"}
+_REQ_063_DIAGNOSTIC_CATEGORIES = {"referential_integrity", "schema_integrity"}
+_REQ_063_SUMMARY_STATUSES = {"passed", "failed"}
 
 
 def _utc_timestamp() -> str:
@@ -278,6 +287,105 @@ def _normalize_blocker_policies(value: Any) -> list[dict[str, Any]]:
     return sorted(normalized, key=lambda row: row["policy_id"])
 
 
+def _normalize_discovered_projects(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise ValueError("discovered_projects must be a list")
+    if not value:
+        raise ValueError("discovered_projects must include at least one row")
+
+    normalized: list[dict[str, str]] = []
+    seen_project_ids: set[str] = set()
+    for index, row in enumerate(value):
+        field_prefix = f"discovered_projects[{index}]"
+        raw = _require_mapping(row, field_name=field_prefix)
+        expected_keys = {"project_id", "project_root"}
+        row_keys = set(raw.keys())
+        unexpected = sorted(row_keys - expected_keys)
+        if unexpected:
+            raise ValueError(f"{field_prefix} has unexpected keys: {unexpected}")
+        missing = sorted(expected_keys - row_keys)
+        if missing:
+            raise ValueError(f"{field_prefix} missing keys: {missing}")
+
+        project_id = _require_nonempty_text(raw.get("project_id"), field_name=f"{field_prefix}.project_id")
+        if project_id in seen_project_ids:
+            raise ValueError(f"{field_prefix}.project_id must be unique")
+        seen_project_ids.add(project_id)
+
+        project_root = _require_nonempty_text(raw.get("project_root"), field_name=f"{field_prefix}.project_root")
+        normalized_root = str(Path(project_root).expanduser())
+        if not normalized_root.startswith("/"):
+            raise ValueError(f"{field_prefix}.project_root must be an absolute path")
+
+        normalized.append(
+            {
+                "project_id": project_id,
+                "project_root": normalized_root,
+            }
+        )
+
+    return sorted(normalized, key=lambda row: row["project_id"])
+
+
+def _normalize_link_map_links(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("links must be a list")
+    if not value:
+        raise ValueError("links must include at least one row")
+
+    normalized: list[dict[str, Any]] = []
+    seen_link_ids: set[str] = set()
+    for index, row in enumerate(value):
+        field_prefix = f"links[{index}]"
+        raw = _require_mapping(row, field_name=field_prefix)
+        expected_keys = {
+            "link_id",
+            "source_project_id",
+            "target_project_id",
+            "link_type",
+            "declared_in",
+            "source_refs",
+        }
+        row_keys = set(raw.keys())
+        unexpected = sorted(row_keys - expected_keys)
+        if unexpected:
+            raise ValueError(f"{field_prefix} has unexpected keys: {unexpected}")
+        missing = sorted(expected_keys - row_keys)
+        if missing:
+            raise ValueError(f"{field_prefix} missing keys: {missing}")
+
+        link_id = _require_nonempty_text(raw.get("link_id"), field_name=f"{field_prefix}.link_id")
+        if link_id in seen_link_ids:
+            raise ValueError(f"{field_prefix}.link_id must be unique")
+        seen_link_ids.add(link_id)
+
+        normalized.append(
+            {
+                "link_id": link_id,
+                "source_project_id": _require_nonempty_text(
+                    raw.get("source_project_id"),
+                    field_name=f"{field_prefix}.source_project_id",
+                ),
+                "target_project_id": _require_nonempty_text(
+                    raw.get("target_project_id"),
+                    field_name=f"{field_prefix}.target_project_id",
+                ),
+                "link_type": _require_nonempty_text(raw.get("link_type"), field_name=f"{field_prefix}.link_type"),
+                "declared_in": _require_nonempty_text(
+                    raw.get("declared_in"),
+                    field_name=f"{field_prefix}.declared_in",
+                ),
+                "source_refs": _normalize_text_list(
+                    raw.get("source_refs"),
+                    field_name=f"{field_prefix}.source_refs",
+                    min_items=1,
+                ),
+            }
+        )
+
+    return sorted(normalized, key=lambda row: row["link_id"])
+
+
 def _normalize_broad_sweep_context(value: Any) -> dict[str, list[str]]:
     if value is None:
         return {
@@ -428,6 +536,126 @@ def _build_req_057_processing_behavior(
     }
 
 
+def _build_req_063_integrity_report(
+    *,
+    link_map_ref: str,
+    discovered_projects: list[dict[str, str]],
+    links: list[dict[str, Any]],
+) -> dict[str, Any]:
+    discovered_project_ids = {row["project_id"] for row in discovered_projects}
+    diagnostics: list[dict[str, Any]] = []
+    evaluated_links: list[dict[str, Any]] = []
+    valid_link_ids: list[str] = []
+    orphaned_link_ids: list[str] = []
+    broken_link_ids: list[str] = []
+    missing_project_ids: set[str] = set()
+    diagnostic_codes: set[str] = set()
+
+    for link in links:
+        link_id = link["link_id"]
+        source_project_id = link["source_project_id"]
+        target_project_id = link["target_project_id"]
+        declared_in = link["declared_in"]
+
+        link_diagnostics: list[dict[str, Any]] = []
+
+        if source_project_id not in discovered_project_ids:
+            missing_project_ids.add(source_project_id)
+            diagnostic_codes.add("missing_source_project")
+            link_diagnostics.append(
+                {
+                    "diagnostic_id": f"diag.{link_id}.missing_source_project",
+                    "severity": "error",
+                    "category": "referential_integrity",
+                    "code": "missing_source_project",
+                    "message": "Link source_project_id does not reference a discovered project.",
+                    "link_id": link_id,
+                    "field_path": f"{declared_in}.source_project_id",
+                    "source_ref": declared_in,
+                    "project_ids": [source_project_id],
+                }
+            )
+
+        if target_project_id not in discovered_project_ids:
+            missing_project_ids.add(target_project_id)
+            diagnostic_codes.add("missing_target_project")
+            link_diagnostics.append(
+                {
+                    "diagnostic_id": f"diag.{link_id}.missing_target_project",
+                    "severity": "error",
+                    "category": "referential_integrity",
+                    "code": "missing_target_project",
+                    "message": "Link target_project_id does not reference a discovered project.",
+                    "link_id": link_id,
+                    "field_path": f"{declared_in}.target_project_id",
+                    "source_ref": declared_in,
+                    "project_ids": [target_project_id],
+                }
+            )
+
+        if source_project_id == target_project_id:
+            diagnostic_codes.add("self_referential_link")
+            link_diagnostics.append(
+                {
+                    "diagnostic_id": f"diag.{link_id}.self_referential_link",
+                    "severity": "error",
+                    "category": "schema_integrity",
+                    "code": "self_referential_link",
+                    "message": "Link source_project_id and target_project_id must not be identical.",
+                    "link_id": link_id,
+                    "field_path": f"{declared_in}.target_project_id",
+                    "source_ref": declared_in,
+                    "project_ids": [source_project_id],
+                }
+            )
+
+        has_schema_issue = any(row["category"] == "schema_integrity" for row in link_diagnostics)
+        has_referential_issue = any(row["category"] == "referential_integrity" for row in link_diagnostics)
+        if has_schema_issue:
+            integrity_status = "broken"
+            broken_link_ids.append(link_id)
+        elif has_referential_issue:
+            integrity_status = "orphaned"
+            orphaned_link_ids.append(link_id)
+        else:
+            integrity_status = "valid"
+            valid_link_ids.append(link_id)
+
+        evaluated_links.append(
+            {
+                "link_id": link_id,
+                "source_project_id": source_project_id,
+                "target_project_id": target_project_id,
+                "link_type": link["link_type"],
+                "declared_in": declared_in,
+                "source_refs": link["source_refs"],
+                "integrity_status": integrity_status,
+            }
+        )
+        diagnostics.extend(link_diagnostics)
+
+    evaluated_links.sort(key=lambda row: row["link_id"])
+    diagnostics.sort(key=lambda row: row["diagnostic_id"])
+    valid_link_ids.sort()
+    orphaned_link_ids.sort()
+    broken_link_ids.sort()
+
+    return {
+        "link_map_ref": link_map_ref,
+        "discovered_projects": discovered_projects,
+        "links": evaluated_links,
+        "diagnostics": diagnostics,
+        "summary": {
+            "integrity_status": "failed" if diagnostics else "passed",
+            "valid_link_ids": valid_link_ids,
+            "orphaned_link_ids": orphaned_link_ids,
+            "broken_link_ids": broken_link_ids,
+            "diagnostic_codes": sorted(diagnostic_codes),
+            "missing_project_ids": sorted(missing_project_ids),
+        },
+    }
+
+
 def build_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Build normalized REQ-056 payload for KPI target artifact handoff."""
     raw = _require_mapping(payload, field_name="payload")
@@ -520,6 +748,51 @@ def build_req_057_blocker_handling_policy_artifact(payload: Mapping[str, Any]) -
     errors = validate_req_057_blocker_handling_policy_artifact(built)
     if errors:
         raise ValueError(f"built REQ-057 payload failed validation: {errors}")
+    return built
+
+
+def build_req_063_ecosystem_link_map_integrity_validator(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build normalized REQ-063 payload for ecosystem link-map integrity validation."""
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_063_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_063_ANALYSIS_TYPE}")
+
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+    target_project = _normalize_target_project(raw.get("target_project"))
+    link_map_ref = _require_nonempty_text(raw.get("link_map_ref"), field_name="link_map_ref")
+    discovered_projects = _normalize_discovered_projects(raw.get("discovered_projects"))
+    links = _normalize_link_map_links(raw.get("links"))
+
+    report = _build_req_063_integrity_report(
+        link_map_ref=link_map_ref,
+        discovered_projects=discovered_projects,
+        links=links,
+    )
+    summary = report["summary"]
+
+    built = {
+        "ok": True,
+        "schema_version": REQ_063_SCHEMA_VERSION,
+        "requirement_id": REQ_063_REQUIREMENT_ID,
+        "analysis_type": REQ_063_ANALYSIS_TYPE,
+        "call_id": REQ_063_CALL_ID,
+        "checked_at_utc": checked_at_utc,
+        "target_project": target_project,
+        "ecosystem_link_map_integrity_validator": report,
+        "totals": {
+            "discovered_projects": len(discovered_projects),
+            "links": len(report["links"]),
+            "valid_links": len(summary["valid_link_ids"]),
+            "orphaned_links": len(summary["orphaned_link_ids"]),
+            "broken_links": len(summary["broken_link_ids"]),
+            "diagnostics": len(report["diagnostics"]),
+        },
+    }
+
+    errors = validate_req_063_ecosystem_link_map_integrity_validator(built)
+    if errors:
+        raise ValueError(f"built REQ-063 payload failed validation: {errors}")
     return built
 
 
@@ -1346,6 +1619,436 @@ def validate_req_057_blocker_handling_policy_artifact(payload: Mapping[str, Any]
     return errors
 
 
+def _validate_discovered_project_row(
+    *,
+    row: Any,
+    index: int,
+    seen_project_ids: set[str],
+) -> list[str]:
+    errors: list[str] = []
+    row_path = f"ecosystem_link_map_integrity_validator.discovered_projects[{index}]"
+    if not isinstance(row, Mapping):
+        return [f"{row_path} must be an object"]
+
+    expected_keys = {"project_id", "project_root"}
+    row_keys = set(row.keys())
+    missing = sorted(expected_keys - row_keys)
+    if missing:
+        errors.append(f"{row_path} missing keys: {missing}")
+    unexpected = sorted(row_keys - expected_keys)
+    if unexpected:
+        errors.append(f"{row_path} has unexpected keys: {unexpected}")
+
+    project_id = row.get("project_id")
+    if not isinstance(project_id, str) or not project_id.strip():
+        errors.append(f"{row_path}.project_id must be a non-empty string")
+    elif project_id in seen_project_ids:
+        errors.append(f"{row_path}.project_id must be unique")
+    else:
+        seen_project_ids.add(project_id)
+
+    project_root = row.get("project_root")
+    if not isinstance(project_root, str) or not project_root.strip():
+        errors.append(f"{row_path}.project_root must be a non-empty string")
+    elif not str(project_root).startswith("/"):
+        errors.append(f"{row_path}.project_root must be an absolute path")
+
+    return errors
+
+
+def _validate_req_063_link_row(
+    *,
+    row: Any,
+    index: int,
+    seen_link_ids: set[str],
+    discovered_project_ids: set[str],
+) -> tuple[list[str], str | None]:
+    errors: list[str] = []
+    row_path = f"ecosystem_link_map_integrity_validator.links[{index}]"
+    link_id_value: str | None = None
+
+    if not isinstance(row, Mapping):
+        return [f"{row_path} must be an object"], link_id_value
+
+    expected_keys = {
+        "link_id",
+        "source_project_id",
+        "target_project_id",
+        "link_type",
+        "declared_in",
+        "source_refs",
+        "integrity_status",
+    }
+    row_keys = set(row.keys())
+    missing = sorted(expected_keys - row_keys)
+    if missing:
+        errors.append(f"{row_path} missing keys: {missing}")
+    unexpected = sorted(row_keys - expected_keys)
+    if unexpected:
+        errors.append(f"{row_path} has unexpected keys: {unexpected}")
+
+    link_id = row.get("link_id")
+    if not isinstance(link_id, str) or not link_id.strip():
+        errors.append(f"{row_path}.link_id must be a non-empty string")
+    elif link_id in seen_link_ids:
+        errors.append(f"{row_path}.link_id must be unique")
+    else:
+        seen_link_ids.add(link_id)
+        link_id_value = link_id
+
+    for key in ("source_project_id", "target_project_id", "link_type", "declared_in"):
+        value_text = row.get(key)
+        if not isinstance(value_text, str) or not value_text.strip():
+            errors.append(f"{row_path}.{key} must be a non-empty string")
+
+    source_ref_errors, _ = _validate_nonempty_string_list(
+        value=row.get("source_refs"),
+        field_name=f"{row_path}.source_refs",
+        min_items=1,
+    )
+    errors.extend(source_ref_errors)
+
+    integrity_status = row.get("integrity_status")
+    if integrity_status not in _REQ_063_LINK_STATUSES:
+        errors.append(f"{row_path}.integrity_status must be one of: {sorted(_REQ_063_LINK_STATUSES)}")
+
+    source_project_id = row.get("source_project_id")
+    target_project_id = row.get("target_project_id")
+    has_schema_issue = isinstance(source_project_id, str) and isinstance(target_project_id, str) and source_project_id == target_project_id
+    has_referential_issue = (
+        isinstance(source_project_id, str)
+        and source_project_id not in discovered_project_ids
+    ) or (
+        isinstance(target_project_id, str)
+        and target_project_id not in discovered_project_ids
+    )
+    expected_status = "broken" if has_schema_issue else "orphaned" if has_referential_issue else "valid"
+    if integrity_status in _REQ_063_LINK_STATUSES and integrity_status != expected_status:
+        errors.append(f"{row_path}.integrity_status must equal derived status '{expected_status}'")
+
+    return errors, link_id_value
+
+
+def _validate_req_063_diagnostic_row(
+    *,
+    row: Any,
+    index: int,
+    link_ids: set[str],
+) -> tuple[list[str], str | None, list[str]]:
+    errors: list[str] = []
+    diagnostic_code: str | None = None
+    project_ids: list[str] = []
+    row_path = f"ecosystem_link_map_integrity_validator.diagnostics[{index}]"
+
+    if not isinstance(row, Mapping):
+        return [f"{row_path} must be an object"], diagnostic_code, project_ids
+
+    expected_keys = {
+        "diagnostic_id",
+        "severity",
+        "category",
+        "code",
+        "message",
+        "link_id",
+        "field_path",
+        "source_ref",
+        "project_ids",
+    }
+    row_keys = set(row.keys())
+    missing = sorted(expected_keys - row_keys)
+    if missing:
+        errors.append(f"{row_path} missing keys: {missing}")
+    unexpected = sorted(row_keys - expected_keys)
+    if unexpected:
+        errors.append(f"{row_path} has unexpected keys: {unexpected}")
+
+    for key in ("diagnostic_id", "message", "field_path", "source_ref"):
+        value_text = row.get(key)
+        if not isinstance(value_text, str) or not value_text.strip():
+            errors.append(f"{row_path}.{key} must be a non-empty string")
+
+    severity = row.get("severity")
+    if severity not in _REQ_063_DIAGNOSTIC_SEVERITIES:
+        errors.append(f"{row_path}.severity must be one of: {sorted(_REQ_063_DIAGNOSTIC_SEVERITIES)}")
+
+    category = row.get("category")
+    if category not in _REQ_063_DIAGNOSTIC_CATEGORIES:
+        errors.append(f"{row_path}.category must be one of: {sorted(_REQ_063_DIAGNOSTIC_CATEGORIES)}")
+
+    code = row.get("code")
+    if not isinstance(code, str) or not code.strip():
+        errors.append(f"{row_path}.code must be a non-empty string")
+    else:
+        diagnostic_code = code.strip()
+
+    link_id = row.get("link_id")
+    if not isinstance(link_id, str) or not link_id.strip():
+        errors.append(f"{row_path}.link_id must be a non-empty string")
+    elif link_id not in link_ids:
+        errors.append(f"{row_path}.link_id must reference ecosystem_link_map_integrity_validator.links[].link_id")
+
+    project_id_errors, normalized_project_ids = _validate_nonempty_string_list(
+        value=row.get("project_ids"),
+        field_name=f"{row_path}.project_ids",
+        min_items=1,
+    )
+    errors.extend(project_id_errors)
+    project_ids = normalized_project_ids
+
+    return errors, diagnostic_code, project_ids
+
+
+def validate_req_063_ecosystem_link_map_integrity_validator(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-063 ecosystem link-map integrity validator payload shape."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    expected_top = {
+        "ok",
+        "schema_version",
+        "requirement_id",
+        "analysis_type",
+        "call_id",
+        "checked_at_utc",
+        "target_project",
+        "ecosystem_link_map_integrity_validator",
+        "totals",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(expected_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - expected_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("ok") is not True:
+        errors.append("ok must be true")
+    if payload.get("schema_version") != REQ_063_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_063_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_063_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_063_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_063_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_063_ANALYSIS_TYPE}")
+    if payload.get("call_id") != REQ_063_CALL_ID:
+        errors.append(f"call_id must be {REQ_063_CALL_ID}")
+    if not isinstance(payload.get("checked_at_utc"), str) or not str(payload.get("checked_at_utc")).strip():
+        errors.append("checked_at_utc must be a non-empty string")
+
+    target_project = payload.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("target_project must be an object")
+    else:
+        expected_target = {"project_id", "project_root"}
+        target_keys = set(target_project.keys())
+        missing_target = sorted(expected_target - target_keys)
+        if missing_target:
+            errors.append(f"target_project missing keys: {missing_target}")
+        unexpected_target = sorted(target_keys - expected_target)
+        if unexpected_target:
+            errors.append(f"target_project has unexpected keys: {unexpected_target}")
+
+        project_id = target_project.get("project_id")
+        if not isinstance(project_id, str) or not project_id.strip():
+            errors.append("target_project.project_id must be a non-empty string")
+        project_root = target_project.get("project_root")
+        if not isinstance(project_root, str) or not project_root.strip():
+            errors.append("target_project.project_root must be a non-empty string")
+        elif not str(project_root).startswith("/"):
+            errors.append("target_project.project_root must be an absolute path")
+
+    validator_payload = payload.get("ecosystem_link_map_integrity_validator")
+    discovered_project_ids: set[str] = set()
+    link_ids: set[str] = set()
+    derived_valid_link_ids: list[str] = []
+    derived_orphaned_link_ids: list[str] = []
+    derived_broken_link_ids: list[str] = []
+    derived_diagnostic_codes: set[str] = set()
+    derived_missing_project_ids: set[str] = set()
+    diagnostics_count = 0
+    if not isinstance(validator_payload, Mapping):
+        errors.append("ecosystem_link_map_integrity_validator must be an object")
+    else:
+        expected_validator_keys = {
+            "link_map_ref",
+            "discovered_projects",
+            "links",
+            "diagnostics",
+            "summary",
+        }
+        validator_keys = set(validator_payload.keys())
+        missing_validator = sorted(expected_validator_keys - validator_keys)
+        if missing_validator:
+            errors.append(f"ecosystem_link_map_integrity_validator missing keys: {missing_validator}")
+        unexpected_validator = sorted(validator_keys - expected_validator_keys)
+        if unexpected_validator:
+            errors.append(f"ecosystem_link_map_integrity_validator has unexpected keys: {unexpected_validator}")
+
+        link_map_ref = validator_payload.get("link_map_ref")
+        if not isinstance(link_map_ref, str) or not link_map_ref.strip():
+            errors.append("ecosystem_link_map_integrity_validator.link_map_ref must be a non-empty string")
+
+        discovered_projects = validator_payload.get("discovered_projects")
+        if not isinstance(discovered_projects, list):
+            errors.append("ecosystem_link_map_integrity_validator.discovered_projects must be a list")
+        elif not discovered_projects:
+            errors.append("ecosystem_link_map_integrity_validator.discovered_projects must include at least one row")
+        else:
+            seen_project_ids: set[str] = set()
+            for index, row in enumerate(discovered_projects):
+                row_errors = _validate_discovered_project_row(
+                    row=row,
+                    index=index,
+                    seen_project_ids=seen_project_ids,
+                )
+                errors.extend(row_errors)
+            discovered_project_ids = seen_project_ids
+
+        link_rows = validator_payload.get("links")
+        if not isinstance(link_rows, list):
+            errors.append("ecosystem_link_map_integrity_validator.links must be a list")
+        elif not link_rows:
+            errors.append("ecosystem_link_map_integrity_validator.links must include at least one row")
+        else:
+            seen_link_ids: set[str] = set()
+            for index, row in enumerate(link_rows):
+                row_errors, link_id = _validate_req_063_link_row(
+                    row=row,
+                    index=index,
+                    seen_link_ids=seen_link_ids,
+                    discovered_project_ids=discovered_project_ids,
+                )
+                errors.extend(row_errors)
+                if link_id:
+                    link_ids.add(link_id)
+                if isinstance(row, Mapping):
+                    status = row.get("integrity_status")
+                    if status == "valid" and link_id:
+                        derived_valid_link_ids.append(link_id)
+                    elif status == "orphaned" and link_id:
+                        derived_orphaned_link_ids.append(link_id)
+                        for key in ("source_project_id", "target_project_id"):
+                            project_id = row.get(key)
+                            if isinstance(project_id, str) and project_id not in discovered_project_ids:
+                                derived_missing_project_ids.add(project_id)
+                    elif status == "broken" and link_id:
+                        derived_broken_link_ids.append(link_id)
+                        for key in ("source_project_id", "target_project_id"):
+                            project_id = row.get(key)
+                            if isinstance(project_id, str) and project_id not in discovered_project_ids:
+                                derived_missing_project_ids.add(project_id)
+
+        diagnostic_rows = validator_payload.get("diagnostics")
+        if not isinstance(diagnostic_rows, list):
+            errors.append("ecosystem_link_map_integrity_validator.diagnostics must be a list")
+        else:
+            diagnostics_count = len(diagnostic_rows)
+            for index, row in enumerate(diagnostic_rows):
+                row_errors, diagnostic_code, project_ids = _validate_req_063_diagnostic_row(
+                    row=row,
+                    index=index,
+                    link_ids=link_ids,
+                )
+                errors.extend(row_errors)
+                if diagnostic_code:
+                    derived_diagnostic_codes.add(diagnostic_code)
+                derived_missing_project_ids.update(
+                    project_id for project_id in project_ids if project_id not in discovered_project_ids
+                )
+
+        summary = validator_payload.get("summary")
+        if not isinstance(summary, Mapping):
+            errors.append("ecosystem_link_map_integrity_validator.summary must be an object")
+        else:
+            expected_summary_keys = {
+                "integrity_status",
+                "valid_link_ids",
+                "orphaned_link_ids",
+                "broken_link_ids",
+                "diagnostic_codes",
+                "missing_project_ids",
+            }
+            summary_keys = set(summary.keys())
+            missing_summary = sorted(expected_summary_keys - summary_keys)
+            if missing_summary:
+                errors.append(f"ecosystem_link_map_integrity_validator.summary missing keys: {missing_summary}")
+            unexpected_summary = sorted(summary_keys - expected_summary_keys)
+            if unexpected_summary:
+                errors.append(f"ecosystem_link_map_integrity_validator.summary has unexpected keys: {unexpected_summary}")
+
+            integrity_status = summary.get("integrity_status")
+            if integrity_status not in _REQ_063_SUMMARY_STATUSES:
+                errors.append(
+                    "ecosystem_link_map_integrity_validator.summary.integrity_status must be one of: "
+                    f"{sorted(_REQ_063_SUMMARY_STATUSES)}"
+                )
+            elif integrity_status != ("failed" if diagnostics_count else "passed"):
+                errors.append(
+                    "ecosystem_link_map_integrity_validator.summary.integrity_status must match diagnostics presence"
+                )
+
+            for key, expected_values in (
+                ("valid_link_ids", sorted(derived_valid_link_ids)),
+                ("orphaned_link_ids", sorted(derived_orphaned_link_ids)),
+                ("broken_link_ids", sorted(derived_broken_link_ids)),
+                ("diagnostic_codes", sorted(derived_diagnostic_codes)),
+                ("missing_project_ids", sorted(derived_missing_project_ids)),
+            ):
+                list_errors, normalized_values = _validate_nonempty_string_list(
+                    value=summary.get(key),
+                    field_name=f"ecosystem_link_map_integrity_validator.summary.{key}",
+                    min_items=0,
+                )
+                errors.extend(list_errors)
+                if normalized_values != expected_values:
+                    errors.append(
+                        f"ecosystem_link_map_integrity_validator.summary.{key} must equal derived values"
+                    )
+
+    totals = payload.get("totals")
+    if not isinstance(totals, Mapping):
+        errors.append("totals must be an object")
+    else:
+        expected_totals = {
+            "discovered_projects",
+            "links",
+            "valid_links",
+            "orphaned_links",
+            "broken_links",
+            "diagnostics",
+        }
+        total_keys = set(totals.keys())
+        missing_totals = sorted(expected_totals - total_keys)
+        if missing_totals:
+            errors.append(f"totals missing keys: {missing_totals}")
+        unexpected_totals = sorted(total_keys - expected_totals)
+        if unexpected_totals:
+            errors.append(f"totals has unexpected keys: {unexpected_totals}")
+
+        for key in expected_totals:
+            value = totals.get(key)
+            if not isinstance(value, int) or value < 0:
+                errors.append(f"totals.{key} must be a non-negative integer")
+
+        if totals.get("discovered_projects") != len(discovered_project_ids):
+            errors.append("totals.discovered_projects must equal discovered project count")
+        if totals.get("links") != len(link_ids):
+            errors.append("totals.links must equal ecosystem_link_map_integrity_validator.links count")
+        if totals.get("valid_links") != len(derived_valid_link_ids):
+            errors.append("totals.valid_links must equal ecosystem_link_map_integrity_validator.links valid count")
+        if totals.get("orphaned_links") != len(derived_orphaned_link_ids):
+            errors.append(
+                "totals.orphaned_links must equal ecosystem_link_map_integrity_validator.links orphaned count"
+            )
+        if totals.get("broken_links") != len(derived_broken_link_ids):
+            errors.append("totals.broken_links must equal ecosystem_link_map_integrity_validator.links broken count")
+        if totals.get("diagnostics") != diagnostics_count:
+            errors.append("totals.diagnostics must equal ecosystem_link_map_integrity_validator.diagnostics count")
+
+    return errors
+
+
 def _load_input_payload(path_value: str) -> dict[str, Any]:
     if path_value == "-":
         raw_text = sys.stdin.read()
@@ -1358,11 +2061,11 @@ def _load_input_payload(path_value: str) -> dict[str, Any]:
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Emit REQ-056/REQ-057 strategy artifact payload.")
+    parser = argparse.ArgumentParser(description="Emit REQ-056/REQ-057/REQ-063 strategy artifact payload.")
     parser.add_argument(
         "--input-json",
         required=True,
-        help="Path to REQ-056/REQ-057 input JSON (or '-' for stdin).",
+        help="Path to REQ-056/REQ-057/REQ-063 input JSON (or '-' for stdin).",
     )
     return parser
 
@@ -1373,9 +2076,11 @@ def _build_strategy_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
         return build_req_056_kpi_target_artifact(payload)
     if analysis_type == REQ_057_ANALYSIS_TYPE:
         return build_req_057_blocker_handling_policy_artifact(payload)
+    if analysis_type == REQ_063_ANALYSIS_TYPE:
+        return build_req_063_ecosystem_link_map_integrity_validator(payload)
     raise ValueError(
         "analysis_type must be one of: "
-        f"{sorted([REQ_056_ANALYSIS_TYPE, REQ_057_ANALYSIS_TYPE])}"
+        f"{sorted([REQ_056_ANALYSIS_TYPE, REQ_057_ANALYSIS_TYPE, REQ_063_ANALYSIS_TYPE])}"
     )
 
 
