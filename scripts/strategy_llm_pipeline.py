@@ -223,6 +223,51 @@ def _normalize_candidate_recommendations(raw_value: Any) -> list[dict[str, Any]]
     return normalized
 
 
+def _normalize_strategic_claims(raw_value: Any, *, call_depth: int) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError("strategic_claims must be an array when provided")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"strategic_claims[{index}] must be an object")
+        claim_id = _require_text(item.get("claim_id"), field_name=f"strategic_claims[{index}].claim_id")
+        phase = _require_text(item.get("phase"), field_name=f"strategic_claims[{index}].phase").lower()
+        summary = _require_text(item.get("summary"), field_name=f"strategic_claims[{index}].summary")
+        position = _require_text(item.get("position"), field_name=f"strategic_claims[{index}].position")
+        source_call_sequence = item.get("source_call_sequence")
+        if isinstance(source_call_sequence, bool) or not isinstance(source_call_sequence, int):
+            raise ValueError(f"strategic_claims[{index}].source_call_sequence must be an integer")
+        if source_call_sequence < 1 or source_call_sequence > call_depth:
+            raise ValueError(f"strategic_claims[{index}].source_call_sequence must be between 1 and {call_depth}")
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"strategic_claims[{index}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "claim_id": claim_id,
+                "phase": phase,
+                "summary": summary,
+                "position": position,
+                "source_call_sequence": source_call_sequence,
+                "evidence_refs": evidence_refs,
+            }
+        )
+    normalized.sort(
+        key=lambda row: (
+            row["claim_id"],
+            row["phase"],
+            row["source_call_sequence"],
+            row["position"],
+            row["summary"],
+        )
+    )
+    return normalized
+
+
 def _default_stage_blueprint(index: int) -> dict[str, str]:
     if index < len(DEFAULT_STAGE_BLUEPRINTS):
         row = DEFAULT_STAGE_BLUEPRINTS[index]
@@ -316,7 +361,9 @@ def _recommendation_decision(*, recommended_actions: list[dict[str, Any]], open_
     if recommended_actions and open_risks:
         return "proceed-with-open-risks"
     if open_risks:
-        return "collect-earth-evidence"
+        if all(row.get("reason_code") == "missing_earth_sweep_evidence_refs" for row in open_risks):
+            return "collect-earth-evidence"
+        return "resolve-strategy-gaps"
     return "insufficient-context"
 
 
@@ -327,6 +374,8 @@ def _recommendation_rationale(*, decision: str) -> str:
         return "Some recommendation paths are evidence-backed while unresolved ideas remain open risks."
     if decision == "collect-earth-evidence":
         return "Cross-project ideas require Earth-sweep evidence before obligations can be committed."
+    if decision == "resolve-strategy-gaps":
+        return "Contradictory or uncited strategy claims must be resolved before planner outputs can be promoted."
     return "No evidence-backed recommendation actions were supplied for this strategy run."
 
 
@@ -347,6 +396,7 @@ def _canonical_processing_input(
     earth_sweep_evidence_refs: list[str],
     cross_project_context: list[dict[str, Any]],
     candidate_recommendations: list[dict[str, Any]],
+    strategic_claims: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "call_depth": call_depth,
@@ -374,6 +424,17 @@ def _canonical_processing_input(
                 "next_step": row["next_step"],
             }
             for row in candidate_recommendations
+        ],
+        "strategic_claims": [
+            {
+                "claim_id": row["claim_id"],
+                "phase": row["phase"],
+                "summary": row["summary"],
+                "position": row["position"],
+                "source_call_sequence": row["source_call_sequence"],
+                "evidence_refs": list(row["evidence_refs"]),
+            }
+            for row in strategic_claims
         ],
         "stage_blueprints": [{"purpose": row["purpose"], "expected_output": row["expected_output"]} for row in stage_blueprints],
     }
@@ -478,11 +539,81 @@ def _build_req_025_processing_behavior(
     earth_sweep_evidence_refs: list[str],
     cross_project_context: list[dict[str, Any]],
     candidate_recommendations: list[dict[str, Any]],
+    strategic_claims: list[dict[str, Any]],
 ) -> dict[str, Any]:
     cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
     recommended_actions: list[dict[str, Any]] = []
     cross_project_obligations: list[dict[str, Any]] = []
     open_risks: list[dict[str, Any]] = []
+    plan_id = _require_text(pipeline_plan.get("plan_id"), field_name="pipeline_plan.plan_id")
+    available_citation_refs = set(
+        _collect_unique_refs(
+            target_project_evidence_refs,
+            earth_sweep_evidence_refs,
+            cross_project_refs,
+            list(pipeline_plan.get("required_evidence_refs", [])),
+        )
+    )
+    output_ref_by_sequence: dict[int, str] = {}
+    for call in pipeline_plan.get("calls", []):
+        if not isinstance(call, Mapping):
+            continue
+        sequence = call.get("sequence")
+        if not isinstance(sequence, int):
+            continue
+        output_ref_by_sequence[sequence] = _build_call_output_ref(
+            plan_id=plan_id,
+            call_id=_require_text(call.get("call_id"), field_name=f"pipeline_plan.calls[{sequence}].call_id"),
+            expected_output=_require_text(
+                call.get("expected_output"),
+                field_name=f"pipeline_plan.calls[{sequence}].expected_output",
+            ),
+        )
+
+    claim_rows_by_id: dict[str, list[dict[str, Any]]] = {}
+    for claim in strategic_claims:
+        claim_rows_by_id.setdefault(claim["claim_id"], []).append(claim)
+        citation_refs = list(claim["evidence_refs"])
+        source_output_ref = output_ref_by_sequence.get(claim["source_call_sequence"], "")
+        if not citation_refs or not set(citation_refs).issubset(available_citation_refs):
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim['claim_id']}-citation",
+                    "summary": claim["summary"],
+                    "reason_code": "uncited_strategic_claim",
+                    "required_evidence_refs": _collect_unique_refs([source_output_ref], citation_refs),
+                }
+            )
+
+    for claim_id, claim_rows in claim_rows_by_id.items():
+        analysis_rows = [row for row in claim_rows if row["phase"] == "analysis"]
+        synthesis_rows = [row for row in claim_rows if row["phase"] == "synthesis"]
+        contradiction_row: dict[str, Any] | None = None
+        for analysis_row in analysis_rows:
+            for synthesis_row in synthesis_rows:
+                if analysis_row["position"] == synthesis_row["position"]:
+                    continue
+                contradiction_row = {
+                    "summary": synthesis_row["summary"],
+                    "required_evidence_refs": _collect_unique_refs(
+                        [output_ref_by_sequence.get(analysis_row["source_call_sequence"], "")],
+                        [output_ref_by_sequence.get(synthesis_row["source_call_sequence"], "")],
+                        analysis_row["evidence_refs"],
+                        synthesis_row["evidence_refs"],
+                    ),
+                }
+                break
+            if contradiction_row is not None:
+                break
+        if contradiction_row is not None:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim_id}-contradiction",
+                    "summary": contradiction_row["summary"],
+                    "reason_code": "cross_call_contradiction",
+                    "required_evidence_refs": contradiction_row["required_evidence_refs"],
+                }
+            )
 
     for candidate in candidate_recommendations:
         action = {
@@ -497,6 +628,17 @@ def _build_req_025_processing_behavior(
             [ref for ref in candidate["evidence_refs"] if _is_earth_evidence_ref(ref)],
             earth_sweep_evidence_refs,
         )
+        uncited_candidate_refs = sorted(set(candidate["evidence_refs"]) - available_citation_refs)
+        if uncited_candidate_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{candidate['action_id']}-citation",
+                    "summary": candidate["summary"],
+                    "reason_code": "uncited_strategic_claim",
+                    "required_evidence_refs": list(uncited_candidate_refs),
+                }
+            )
+            continue
         if candidate["requires_earth_evidence"]:
             if candidate_earth_refs:
                 obligation_project_id = candidate["project_id"] or (
@@ -554,6 +696,7 @@ def _build_req_025_processing_behavior(
             },
             "cross_project_context": list(cross_project_context),
             "candidate_recommendations": list(candidate_recommendations),
+            "strategic_claims": list(strategic_claims),
         },
         "context_usage": {
             "target_project_context_used": bool(target_project_evidence_refs),
@@ -596,6 +739,7 @@ def build_req_025_multi_call_strategy_pipeline_planner(
     earth_sweep_evidence_refs: Sequence[Any] | None = None,
     cross_project_context: Sequence[Mapping[str, Any]] | None = None,
     candidate_recommendations: Sequence[Mapping[str, Any]] | None = None,
+    strategic_claims: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the REQ-025 multi-call strategy pipeline planner payload."""
     normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
@@ -620,6 +764,7 @@ def build_req_025_multi_call_strategy_pipeline_planner(
     )
     normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
     normalized_candidate_recommendations = _normalize_candidate_recommendations(candidate_recommendations)
+    normalized_strategic_claims = _normalize_strategic_claims(strategic_claims, call_depth=normalized_call_depth)
 
     calls: list[dict[str, Any]] = []
     for index, stage in enumerate(normalized_stage_blueprints):
@@ -668,6 +813,7 @@ def build_req_025_multi_call_strategy_pipeline_planner(
         earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
         cross_project_context=normalized_cross_project_context,
         candidate_recommendations=normalized_candidate_recommendations,
+        strategic_claims=normalized_strategic_claims,
     )
     processing_sha = _canonical_digest(canonical_processing_input)
 
@@ -689,6 +835,7 @@ def build_req_025_multi_call_strategy_pipeline_planner(
         earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
         cross_project_context=normalized_cross_project_context,
         candidate_recommendations=normalized_candidate_recommendations,
+        strategic_claims=normalized_strategic_claims,
     )
     processing_call_id = f"req025-processing-{processing_sha[:16]}"
     llm_call_trace_rows = _build_llm_call_trace_rows(
@@ -841,6 +988,7 @@ def validate_req_025_multi_call_strategy_pipeline_planner(payload: Mapping[str, 
     earth_sweep_refs_from_context: list[str] = []
     normalized_cross_project_context_for_digest: list[dict[str, Any]] = []
     normalized_candidate_recommendations_for_digest: list[dict[str, Any]] = []
+    normalized_strategic_claims_for_digest: list[dict[str, Any]] = []
     if not isinstance(context_inputs, Mapping):
         errors.append("processing_behavior.context_inputs must be an object")
     else:
@@ -967,6 +1115,58 @@ def validate_req_025_multi_call_strategy_pipeline_planner(payload: Mapping[str, 
                     }
                 )
             normalized_candidate_recommendations_for_digest.sort(key=lambda row: row["action_id"])
+
+        strategic_claims = context_inputs.get("strategic_claims")
+        if not isinstance(strategic_claims, list):
+            errors.append("processing_behavior.context_inputs.strategic_claims must be a list")
+        else:
+            for index, row in enumerate(strategic_claims):
+                if not isinstance(row, Mapping):
+                    errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}] must be an object")
+                    continue
+                claim_id = _as_text(row.get("claim_id"))
+                phase = _as_text(row.get("phase")).lower()
+                summary = _as_text(row.get("summary"))
+                position = _as_text(row.get("position"))
+                source_call_sequence = row.get("source_call_sequence")
+                evidence_refs = row.get("evidence_refs")
+                if not claim_id:
+                    errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}].claim_id must be non-empty")
+                if not phase:
+                    errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}].phase must be non-empty")
+                if not summary:
+                    errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}].summary must be non-empty")
+                if not position:
+                    errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}].position must be non-empty")
+                if isinstance(source_call_sequence, bool) or not isinstance(source_call_sequence, int):
+                    errors.append(
+                        f"processing_behavior.context_inputs.strategic_claims[{index}].source_call_sequence must be an integer"
+                    )
+                    source_call_sequence = 0
+                if not isinstance(evidence_refs, list):
+                    errors.append(
+                        f"processing_behavior.context_inputs.strategic_claims[{index}].evidence_refs must be a list"
+                    )
+                    evidence_refs = []
+                normalized_strategic_claims_for_digest.append(
+                    {
+                        "claim_id": claim_id,
+                        "phase": phase,
+                        "summary": summary,
+                        "position": position,
+                        "source_call_sequence": source_call_sequence,
+                        "evidence_refs": sorted({_as_text(ref) for ref in evidence_refs if _as_text(ref)}),
+                    }
+                )
+            normalized_strategic_claims_for_digest.sort(
+                key=lambda row: (
+                    row["claim_id"],
+                    row["phase"],
+                    row["source_call_sequence"],
+                    row["position"],
+                    row["summary"],
+                )
+            )
 
     context_usage = processing_behavior.get("context_usage")
     if not isinstance(context_usage, Mapping):
@@ -1230,6 +1430,7 @@ def validate_req_025_multi_call_strategy_pipeline_planner(payload: Mapping[str, 
         earth_sweep_evidence_refs=earth_sweep_refs_from_context,
         cross_project_context=normalized_cross_project_context_for_digest,
         candidate_recommendations=normalized_candidate_recommendations_for_digest,
+        strategic_claims=normalized_strategic_claims_for_digest,
     )
     if dict(canonical_processing_input) != expected_processing_input:
         errors.append("call_metadata.canonical_processing_input must mirror pipeline plan inputs")
@@ -1360,6 +1561,7 @@ def main(argv: list[str] | None = None) -> int:
             earth_sweep_evidence_refs=input_payload.get("earth_sweep_evidence_refs"),
             cross_project_context=input_payload.get("cross_project_context"),
             candidate_recommendations=input_payload.get("candidate_recommendations"),
+            strategic_claims=input_payload.get("strategic_claims"),
         )
     except (ValueError, json.JSONDecodeError) as exc:
         _timestamped_print(f"REQ-025 pipeline planning failed during input processing: {exc}")
