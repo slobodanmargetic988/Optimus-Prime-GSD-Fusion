@@ -13,6 +13,9 @@ REQ_036_SCHEMA_VERSION = "req-036.cross-call-contradiction-detection.v1"
 REQ_036_DETECTION_STRATEGY = "cross-call-claim-stance-comparison"
 REQ_036_REASON_CODE = "cross_call_contradiction"
 REQ_036_HANDLING_POLICY = "explicit-resolution-or-unresolved-risk"
+REQ_036_LLM_CALL_TRACE_SCHEMA_VERSION = "req-036.llm-call-trace.v1"
+REQ_036_LLM_CALL_TRACE_ROW_SCHEMA_VERSION = "req-036.llm-call-trace-row.v1"
+REQ_036_DEFAULT_LLM_CALL_TRACE_PATH = "strategy/current/llm_call_trace.jsonl"
 RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 
@@ -74,6 +77,35 @@ def _collect_unique_refs(*ref_groups: Sequence[Any]) -> list[str]:
 def _canonical_input_digest(canonical_input: Mapping[str, Any]) -> str:
     raw = json.dumps(canonical_input, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _normalize_trace_artifact_path(value: Any) -> str:
+    text = _require_text(value, field_name="llm_call_trace_path")
+    return str(Path(text).as_posix())
+
+
+def _resolve_trace_artifact_path(path_text: str) -> Path:
+    candidate = Path(path_text).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (_repo_root() / candidate).resolve()
+
+
+def _write_jsonl_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    rendered = "\n".join(
+        json.dumps(dict(row), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        for row in rows
+    )
+    if rendered:
+        rendered += "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(rendered, encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def _normalize_claim_stance(value: Any, *, field_name: str) -> str:
@@ -437,6 +469,127 @@ def _build_req_036_context_bundle(
     }
 
 
+def _build_req_036_llm_call_trace_rows(
+    *,
+    call_outputs: list[dict[str, Any]],
+    contradiction_report: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    contradiction_rows = contradiction_report.get("contradictions")
+    contradiction_lookup: dict[str, str] = {}
+    if isinstance(contradiction_rows, Sequence):
+        for row in contradiction_rows:
+            if not isinstance(row, Mapping):
+                continue
+            claim_id = _as_text(row.get("claim_id"))
+            resolution_status = _as_text(row.get("resolution_status"))
+            if not claim_id or resolution_status not in {"resolved", "unresolved"}:
+                continue
+            contradiction_lookup[claim_id] = resolution_status
+
+    trace_rows: list[dict[str, Any]] = []
+    for call in call_outputs:
+        call_id = call["call_id"]
+        call_requirement_id = call["call_requirement_id"]
+        emitted_claims = call["emitted_claims"]
+        emitted_claim_ids = sorted({claim["claim_id"] for claim in emitted_claims})
+        emitted_stances = sorted({f"{claim['claim_id']}:{claim['stance']}" for claim in emitted_claims})
+        output_refs = _collect_unique_refs(*[claim["evidence_refs"] for claim in emitted_claims])
+        contradiction_claim_ids = sorted([claim_id for claim_id in emitted_claim_ids if claim_id in contradiction_lookup])
+        unresolved_contradiction_claim_ids = sorted(
+            [
+                claim_id
+                for claim_id in contradiction_claim_ids
+                if contradiction_lookup.get(claim_id) == "unresolved"
+            ]
+        )
+        resolved_contradiction_claim_ids = sorted(
+            [claim_id for claim_id in contradiction_claim_ids if claim_id not in unresolved_contradiction_claim_ids]
+        )
+
+        if unresolved_contradiction_claim_ids:
+            handoff_decision = "requires-unresolved-risk-marking"
+        elif contradiction_claim_ids:
+            handoff_decision = "ready-with-resolved-contradictions"
+        else:
+            handoff_decision = "no-contradiction-observed"
+
+        call_objective = (
+            f"Assess {call_requirement_id or 'unspecified requirement'} claims for REQ-036 "
+            "cross-call contradiction detection before final synthesis."
+        )
+        input_refs = _collect_unique_refs(
+            [
+                "cross_call_contradiction_detection.target_project_root",
+                "cross_call_contradiction_detection.earth_root",
+                "cross_call_contradiction_detection.output_root",
+                "cross_call_contradiction_detection.revision_identity",
+                f"processing_behavior.context_inputs.call_outputs.call_id:{call_id}",
+            ],
+            [] if not call_requirement_id else [f"call_requirement_id:{call_requirement_id}"],
+        )
+        handoff_summary = {
+            "decision": handoff_decision,
+            "emitted_claim_count": len(emitted_claim_ids),
+            "emitted_claim_ids": emitted_claim_ids,
+            "emitted_claim_stances": emitted_stances,
+            "contradiction_claim_ids": contradiction_claim_ids,
+            "resolved_contradiction_claim_ids": resolved_contradiction_claim_ids,
+            "unresolved_contradiction_claim_ids": unresolved_contradiction_claim_ids,
+            "evidence_refs": output_refs,
+        }
+
+        row_seed = {
+            "call_id": call_id,
+            "call_requirement_id": call_requirement_id,
+            "call_objective": call_objective,
+            "input_refs": input_refs,
+            "output_refs": output_refs,
+            "handoff_summary": handoff_summary,
+        }
+        row_digest = _canonical_input_digest(row_seed)
+        trace_rows.append(
+            {
+                "schema_version": REQ_036_LLM_CALL_TRACE_ROW_SCHEMA_VERSION,
+                "trace_row_id": f"req036-trace-{call_id}-{row_digest[:16]}",
+                "call_id": call_id,
+                "call_requirement_id": call_requirement_id,
+                "call_objective": call_objective,
+                "input_refs": input_refs,
+                "output_refs": output_refs,
+                "handoff_summary": handoff_summary,
+            }
+        )
+
+    trace_rows.sort(key=lambda row: row["call_id"])
+    return trace_rows
+
+
+def _build_req_036_llm_call_trace(
+    *,
+    call_outputs: list[dict[str, Any]],
+    contradiction_report: Mapping[str, Any],
+    trace_artifact_path: str,
+) -> dict[str, Any]:
+    rows = _build_req_036_llm_call_trace_rows(
+        call_outputs=call_outputs,
+        contradiction_report=contradiction_report,
+    )
+    canonical_payload = {
+        "schema_version": REQ_036_LLM_CALL_TRACE_SCHEMA_VERSION,
+        "trace_artifact_path": trace_artifact_path,
+        "rows": rows,
+    }
+    canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return {
+        "schema_version": REQ_036_LLM_CALL_TRACE_SCHEMA_VERSION,
+        "trace_artifact_path": trace_artifact_path,
+        "row_count": len(rows),
+        "rows": rows,
+        "canonical_json": canonical_json,
+        "sha256": hashlib.sha256(canonical_json.encode("utf-8")).hexdigest(),
+    }
+
+
 def build_req_036_cross_call_contradiction_detection(
     *,
     target_project_root: str,
@@ -445,6 +598,8 @@ def build_req_036_cross_call_contradiction_detection(
     revision_identity: str,
     call_outputs: Sequence[Mapping[str, Any]],
     contradiction_resolutions: Sequence[Mapping[str, Any]] | None = None,
+    llm_call_trace_path: str = REQ_036_DEFAULT_LLM_CALL_TRACE_PATH,
+    persist_llm_call_trace: bool = True,
 ) -> dict[str, Any]:
     normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
     normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
@@ -452,6 +607,7 @@ def build_req_036_cross_call_contradiction_detection(
     normalized_revision_identity = _require_text(revision_identity, field_name="revision_identity")
     normalized_call_outputs = _normalize_call_outputs(call_outputs)
     normalized_resolutions = _normalize_contradiction_resolutions(contradiction_resolutions)
+    normalized_trace_artifact_path = _normalize_trace_artifact_path(llm_call_trace_path)
 
     canonical_input = _canonical_call_input(
         target_project_root=normalized_target_root,
@@ -481,6 +637,16 @@ def build_req_036_cross_call_contradiction_detection(
         processing_behavior=processing_behavior,
         contradiction_report=contradiction_report,
     )
+    llm_call_trace = _build_req_036_llm_call_trace(
+        call_outputs=normalized_call_outputs,
+        contradiction_report=contradiction_report,
+        trace_artifact_path=normalized_trace_artifact_path,
+    )
+    if persist_llm_call_trace:
+        _write_jsonl_rows(
+            _resolve_trace_artifact_path(normalized_trace_artifact_path),
+            llm_call_trace["rows"],
+        )
 
     canonical_processing_input = _canonical_req_036_processing_input(
         call_outputs=normalized_call_outputs,
@@ -503,6 +669,7 @@ def build_req_036_cross_call_contradiction_detection(
         "processing_behavior": processing_behavior,
         "contradiction_report": contradiction_report,
         "context_bundle": context_bundle,
+        "llm_call_trace": llm_call_trace,
         "call_metadata": {
             "reproducibility": "deterministic-input-fingerprint",
             "canonical_input": canonical_input,
@@ -527,6 +694,7 @@ def validate_req_036_cross_call_contradiction_detection(payload: Mapping[str, An
         "processing_behavior",
         "contradiction_report",
         "context_bundle",
+        "llm_call_trace",
         "call_metadata",
     }
     top_keys = set(payload.keys())
@@ -627,6 +795,23 @@ def validate_req_036_cross_call_contradiction_detection(payload: Mapping[str, An
     )
     if dict(context_bundle) != expected_context_bundle:
         errors.append("context_bundle must mirror deterministic contradiction context serialization")
+
+    llm_call_trace = payload.get("llm_call_trace")
+    if not isinstance(llm_call_trace, Mapping):
+        errors.append("llm_call_trace must be an object")
+        return errors
+    try:
+        normalized_trace_artifact_path = _normalize_trace_artifact_path(llm_call_trace.get("trace_artifact_path"))
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
+    expected_llm_call_trace = _build_req_036_llm_call_trace(
+        call_outputs=normalized_call_outputs,
+        contradiction_report=expected_contradiction_report,
+        trace_artifact_path=normalized_trace_artifact_path,
+    )
+    if dict(llm_call_trace) != expected_llm_call_trace:
+        errors.append("llm_call_trace must mirror deterministic per-call orchestration trace output")
 
     metadata = payload.get("call_metadata")
     if not isinstance(metadata, Mapping):

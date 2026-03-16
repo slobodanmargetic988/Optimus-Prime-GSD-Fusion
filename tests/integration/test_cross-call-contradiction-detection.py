@@ -14,7 +14,10 @@ def _read_fixture() -> dict:
 
 def test_req_036_integration_emits_evidence_refs_and_complete_recommendation() -> None:
     fixture = _read_fixture()
-    payload = module.build_req_036_cross_call_contradiction_detection(**fixture["input"])
+    payload = module.build_req_036_cross_call_contradiction_detection(
+        **fixture["input"],
+        persist_llm_call_trace=False,
+    )
 
     assert module.validate_req_036_cross_call_contradiction_detection(payload) == []
 
@@ -57,8 +60,14 @@ def test_req_036_integration_emits_evidence_refs_and_complete_recommendation() -
 def test_req_036_integration_uses_broad_sweep_context_deterministically() -> None:
     fixture = _read_fixture()
 
-    first = module.build_req_036_cross_call_contradiction_detection(**fixture["input"])
-    second = module.build_req_036_cross_call_contradiction_detection(**fixture["input"])
+    first = module.build_req_036_cross_call_contradiction_detection(
+        **fixture["input"],
+        persist_llm_call_trace=False,
+    )
+    second = module.build_req_036_cross_call_contradiction_detection(
+        **fixture["input"],
+        persist_llm_call_trace=False,
+    )
 
     assert first["processing_behavior"]["context_inputs"] == second["processing_behavior"]["context_inputs"]
     assert first["processing_behavior"]["context_usage"] == second["processing_behavior"]["context_usage"]
@@ -89,3 +98,9 @@ def test_req_036_integration_uses_broad_sweep_context_deterministically() -> Non
     assert unresolved
     assert all(row["required_evidence_refs"] for row in unresolved)
     assert "approved_cross_project_obligations" not in first["processing_behavior"]["recommendation"]
+
+    first_trace = first["llm_call_trace"]
+    second_trace = second["llm_call_trace"]
+    assert first_trace == second_trace
+    assert first_trace["row_count"] == context_usage["call_count"]
+    assert [row["call_id"] for row in first_trace["rows"]] == context_usage["call_ids_considered"]

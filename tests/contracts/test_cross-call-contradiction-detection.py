@@ -22,7 +22,10 @@ def _read_json(path: Path) -> dict:
 
 def test_req_036_builder_matches_expected_contract_anchors() -> None:
     fixture = _read_json(FIXTURE_PATH)
-    payload = module.build_req_036_cross_call_contradiction_detection(**fixture["input"])
+    payload = module.build_req_036_cross_call_contradiction_detection(
+        **fixture["input"],
+        persist_llm_call_trace=False,
+    )
     anchors = fixture["expected_contract_anchors"]
 
     assert module.validate_req_036_cross_call_contradiction_detection(payload) == []
@@ -47,7 +50,10 @@ def test_req_036_builder_matches_expected_contract_anchors() -> None:
 
 def test_req_036_policy_requires_resolution_or_unresolved_risk_marking() -> None:
     fixture = _read_json(FIXTURE_PATH)
-    payload = module.build_req_036_cross_call_contradiction_detection(**fixture["input"])
+    payload = module.build_req_036_cross_call_contradiction_detection(
+        **fixture["input"],
+        persist_llm_call_trace=False,
+    )
 
     for row in payload["contradiction_report"]["contradictions"]:
         if row["resolution_status"] == "resolved":
@@ -63,8 +69,14 @@ def test_req_036_policy_requires_resolution_or_unresolved_risk_marking() -> None
 def test_req_036_call_metadata_reproducibility_behavior() -> None:
     fixture = _read_json(FIXTURE_PATH)
 
-    first = module.build_req_036_cross_call_contradiction_detection(**fixture["input"])
-    second = module.build_req_036_cross_call_contradiction_detection(**fixture["input"])
+    first = module.build_req_036_cross_call_contradiction_detection(
+        **fixture["input"],
+        persist_llm_call_trace=False,
+    )
+    second = module.build_req_036_cross_call_contradiction_detection(
+        **fixture["input"],
+        persist_llm_call_trace=False,
+    )
     assert first["call_metadata"] == second["call_metadata"]
 
     changed_input = dict(fixture["input"])
@@ -72,7 +84,10 @@ def test_req_036_call_metadata_reproducibility_behavior() -> None:
         *fixture["input"]["contradiction_resolutions"],
         fixture["determinism_probe"]["append_resolution"],
     ]
-    changed = module.build_req_036_cross_call_contradiction_detection(**changed_input)
+    changed = module.build_req_036_cross_call_contradiction_detection(
+        **changed_input,
+        persist_llm_call_trace=False,
+    )
 
     assert changed["call_metadata"]["canonical_input_sha256"] == first["call_metadata"]["canonical_input_sha256"]
     assert changed["call_metadata"]["reproducible_call_id"] == first["call_metadata"]["reproducible_call_id"]
@@ -92,6 +107,44 @@ def test_req_036_sample_payload_and_contract_doc_are_aligned() -> None:
         "processing_behavior",
         "contradiction_report",
         "context_bundle",
+        "llm_call_trace",
         "call_metadata",
     ]:
         assert f"`{key}`" in contract_text
+
+
+def test_req_036_llm_call_trace_rows_are_one_per_call() -> None:
+    fixture = _read_json(FIXTURE_PATH)
+    payload = module.build_req_036_cross_call_contradiction_detection(
+        **fixture["input"],
+        persist_llm_call_trace=False,
+    )
+    llm_call_trace = payload["llm_call_trace"]
+
+    assert llm_call_trace["row_count"] == len(fixture["input"]["call_outputs"])
+    assert [row["call_id"] for row in llm_call_trace["rows"]] == ["call-1", "call-2", "call-3"]
+    for row in llm_call_trace["rows"]:
+        assert set(row.keys()) == {
+            "schema_version",
+            "trace_row_id",
+            "call_id",
+            "call_requirement_id",
+            "call_objective",
+            "input_refs",
+            "output_refs",
+            "handoff_summary",
+        }
+        assert row["schema_version"] == "req-036.llm-call-trace-row.v1"
+        assert row["call_objective"]
+        assert row["input_refs"]
+        assert row["output_refs"]
+        assert set(row["handoff_summary"].keys()) == {
+            "decision",
+            "emitted_claim_count",
+            "emitted_claim_ids",
+            "emitted_claim_stances",
+            "contradiction_claim_ids",
+            "resolved_contradiction_claim_ids",
+            "unresolved_contradiction_claim_ids",
+            "evidence_refs",
+        }

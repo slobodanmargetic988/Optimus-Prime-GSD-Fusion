@@ -63,6 +63,7 @@ Top-level required keys:
 - `processing_behavior`
 - `contradiction_report`
 - `context_bundle`
+- `llm_call_trace`
 - `call_metadata`
 
 `processing_behavior` required keys:
@@ -105,6 +106,26 @@ Policy semantics:
 
 - If contradiction has explicit `resolved` entry, `resolution_status` is `resolved` and `unresolved_risk` is `null`.
 - Otherwise contradiction remains `unresolved` and must emit `unresolved_risk` with reason code `cross_call_contradiction`.
+
+## Multi-Call Orchestration Trace
+
+`llm_call_trace` is deterministic and replay-stable for reruns.
+
+Required keys:
+
+- `schema_version` (must be `req-036.llm-call-trace.v1`)
+- `trace_artifact_path` (default `strategy/current/llm_call_trace.jsonl`)
+- `row_count`
+- `rows`
+- `canonical_json`
+- `sha256`
+
+Each row in `rows[]` and `strategy/current/llm_call_trace.jsonl` is one LLM call (no collapsed aggregate row) and must include:
+
+- `call_objective`
+- `input_refs`
+- `output_refs`
+- `handoff_summary`
 
 ## Sample Structure
 
