@@ -1,0 +1,297 @@
+{
+  "analysis_type": "op_plan_strategy_ingestion_hook",
+  "call_id": "op-plan-strategy-ingestion-hook",
+  "checked_at_utc": "2026-03-16T11:10:00Z",
+  "ok": true,
+  "op_plan_strategy_ingestion": {
+    "canonical_strategy_artifacts": {
+      "final_recommendations_ref": "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json#final_strategy_synthesis.final_recommendations",
+      "final_strategy_artifact_ref": "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json#final_strategy_synthesis",
+      "kpi_target_artifact_ref": "strategy/current/samples/REQ-056_kpi-target-artifact.sample.json#kpi_target_artifact",
+      "kpi_targets_ref": "strategy/current/samples/REQ-056_kpi-target-artifact.sample.json#kpi_target_artifact.kpi_targets",
+      "recommendation_id_validator_ref": "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics",
+      "recommendation_id_validator_verdict_ref": "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#verdict",
+      "strategy_packet_inputs_ref": "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json#final_strategy_synthesis.strategy_packet_inputs"
+    },
+    "planner_inputs": {
+      "recommendation_traceability_index": [
+        {
+          "call_trace_lineage": [
+            {
+              "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json",
+              "call_id": "call-2",
+              "checked_at_utc": "2026-03-16T08:10:00Z",
+              "requirement_id": "REQ-027",
+              "trace_id": "trace-call-2-001",
+              "trace_ref": "strategy/current/llm_call_trace.jsonl#call-2-001"
+            },
+            {
+              "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-039/rationale-quality-001.json",
+              "call_id": "rationale-quality-scoring",
+              "checked_at_utc": "2026-03-16T08:30:00Z",
+              "requirement_id": "REQ-039",
+              "trace_id": "trace-rationale-quality-001",
+              "trace_ref": "strategy/current/llm_call_trace.jsonl#rationale-quality-001"
+            }
+          ],
+          "contributing_call_ids": [
+            "call-2",
+            "rationale-quality-scoring"
+          ],
+          "contributing_requirement_ids": [
+            "REQ-027",
+            "REQ-039"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+            "reports/quality/req-039-rationale-quality-score.json",
+            "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json"
+          ],
+          "id_validation_status": "collision",
+          "lane": "coordination",
+          "linked_kpi_target_ids": [
+            "kpi.cross-project-integration-latency"
+          ],
+          "linked_kpi_target_refs": [
+            "strategy/current/samples/REQ-056_kpi-target-artifact.sample.json#kpi_target_artifact.kpi_targets"
+          ],
+          "packet_kind": "cross-project",
+          "peer_project_id": "earth-core-runtime",
+          "priority": "high",
+          "rationale": "Call-2 linkage reasoning confirmed the rollout depends on shared runtime stabilization evidence.",
+          "recommendation_id": "rec.align-earth-runtime-canary",
+          "sequence_hint": 2,
+          "strategy_packet_input_id": "pkt.c3c7c38214ae",
+          "summary": "Align the Earth runtime canary stabilization window before widening rollout.",
+          "supporting_call_count": 2,
+          "traceability_refs": [
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+            "reports/quality/req-039-rationale-quality-score.json",
+            "strategy/current/llm_call_trace.jsonl#call-2-001",
+            "strategy/current/llm_call_trace.jsonl#rationale-quality-001",
+            "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json",
+            "strategy/current/llm_call_trace_artifacts/req-039/rationale-quality-001.json",
+            "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json#final_strategy_synthesis.final_recommendations",
+            "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json#final_strategy_synthesis.strategy_packet_inputs",
+            "strategy/current/samples/REQ-056_kpi-target-artifact.sample.json#kpi_target_artifact.kpi_targets",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_collisions",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#verdict"
+          ],
+          "validator_diagnostic_refs": [
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_collisions",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#verdict"
+          ]
+        },
+        {
+          "call_trace_lineage": [
+            {
+              "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-030/call-5/trace-call-5-001.json",
+              "call_id": "call-5",
+              "checked_at_utc": "2026-03-16T08:20:00Z",
+              "requirement_id": "REQ-030",
+              "trace_id": "trace-call-5-001",
+              "trace_ref": "strategy/current/llm_call_trace.jsonl#call-5-001"
+            },
+            {
+              "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-039/rationale-quality-001.json",
+              "call_id": "rationale-quality-scoring",
+              "checked_at_utc": "2026-03-16T08:30:00Z",
+              "requirement_id": "REQ-039",
+              "trace_id": "trace-rationale-quality-001",
+              "trace_ref": "strategy/current/llm_call_trace.jsonl#rationale-quality-001"
+            }
+          ],
+          "contributing_call_ids": [
+            "call-5",
+            "rationale-quality-scoring"
+          ],
+          "contributing_requirement_ids": [
+            "REQ-030",
+            "REQ-039"
+          ],
+          "evidence_refs": [
+            "reports/quality/req-039-rationale-quality-score.json",
+            "reports/runtime/telemetry/freshness-gap-2026-03-15.json"
+          ],
+          "id_validation_status": "drifted",
+          "lane": "execution",
+          "linked_kpi_target_ids": [
+            "kpi.cross-project-integration-latency",
+            "kpi.telemetry-freshness-slo"
+          ],
+          "linked_kpi_target_refs": [
+            "strategy/current/samples/REQ-056_kpi-target-artifact.sample.json#kpi_target_artifact.kpi_targets"
+          ],
+          "packet_kind": "target-project",
+          "peer_project_id": "",
+          "priority": "high",
+          "rationale": "Call-5 sequencing ranked telemetry freshness first because it unblocks downstream verification work.",
+          "recommendation_id": "rec.harden-telemetry-freshness",
+          "sequence_hint": 1,
+          "strategy_packet_input_id": "pkt.9e0c566d663e",
+          "summary": "Harden telemetry freshness checks before the next autonomous canary pass.",
+          "supporting_call_count": 2,
+          "traceability_refs": [
+            "reports/quality/req-039-rationale-quality-score.json",
+            "reports/runtime/telemetry/freshness-gap-2026-03-15.json",
+            "strategy/current/llm_call_trace.jsonl#call-5-001",
+            "strategy/current/llm_call_trace.jsonl#rationale-quality-001",
+            "strategy/current/llm_call_trace_artifacts/req-030/call-5/trace-call-5-001.json",
+            "strategy/current/llm_call_trace_artifacts/req-039/rationale-quality-001.json",
+            "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json#final_strategy_synthesis.final_recommendations",
+            "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json#final_strategy_synthesis.strategy_packet_inputs",
+            "strategy/current/samples/REQ-056_kpi-target-artifact.sample.json#kpi_target_artifact.kpi_targets",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_drift",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#verdict"
+          ],
+          "validator_diagnostic_refs": [
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_drift",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#verdict"
+          ]
+        }
+      ],
+      "strategy_packet_inputs": [
+        {
+          "earliest_sequence_hint": 2,
+          "evidence_refs": [
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+            "reports/quality/req-039-rationale-quality-score.json",
+            "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json"
+          ],
+          "lane": "coordination",
+          "packet_input_id": "pkt.c3c7c38214ae",
+          "packet_kind": "cross-project",
+          "peer_project_id": "earth-core-runtime",
+          "recommendation_count": 1,
+          "recommendation_ids": [
+            "rec.align-earth-runtime-canary"
+          ],
+          "target_project_id": "optimus-prime-gsd-fusion"
+        },
+        {
+          "earliest_sequence_hint": 1,
+          "evidence_refs": [
+            "reports/quality/req-039-rationale-quality-score.json",
+            "reports/runtime/telemetry/freshness-gap-2026-03-15.json"
+          ],
+          "lane": "execution",
+          "packet_input_id": "pkt.9e0c566d663e",
+          "packet_kind": "target-project",
+          "peer_project_id": "",
+          "recommendation_count": 1,
+          "recommendation_ids": [
+            "rec.harden-telemetry-freshness"
+          ],
+          "target_project_id": "optimus-prime-gsd-fusion"
+        }
+      ]
+    },
+    "planning_alerts": {
+      "deferred_recommendations": [
+        {
+          "call_trace_lineage": [
+            {
+              "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json",
+              "call_id": "call-2",
+              "checked_at_utc": "2026-03-16T08:10:00Z",
+              "requirement_id": "REQ-027",
+              "trace_id": "trace-call-2-001",
+              "trace_ref": "strategy/current/llm_call_trace.jsonl#call-2-001"
+            },
+            {
+              "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-030/call-5/trace-call-5-001.json",
+              "call_id": "call-5",
+              "checked_at_utc": "2026-03-16T08:20:00Z",
+              "requirement_id": "REQ-030",
+              "trace_id": "trace-call-5-001",
+              "trace_ref": "strategy/current/llm_call_trace.jsonl#call-5-001"
+            }
+          ],
+          "contributing_call_ids": [
+            "call-2",
+            "call-5"
+          ],
+          "deferred_reason_code": "conflicting_packet_routing",
+          "evidence_refs": [
+            "contracts/req/REQ-016_reuse-opportunity-detection.md",
+            "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          ],
+          "packet_kind_candidates": [
+            "cross-project",
+            "target-project"
+          ],
+          "peer_project_candidates": [
+            "earth-shared-observability"
+          ],
+          "recommendation_id": "rec.review-reuse-contracts",
+          "summary": "Review reuse-contract drift before promoting more shared interfaces."
+        }
+      ],
+      "id_collisions": [
+        {
+          "diagnostic_id": "collision.b5e17bd1cd43",
+          "occurrence_count": 2,
+          "recommendation_id": "rec.align-earth-runtime-canary",
+          "recommendation_keys": [
+            "integration-latency-watch",
+            "runtime-canary-alignment"
+          ],
+          "revision_id": "strategy-rev-042"
+        }
+      ],
+      "id_drift": [
+        {
+          "current_recommendation_ids": [
+            "rec.harden-telemetry-freshness-v2"
+          ],
+          "diagnostic_id": "drift.a2249178fdcf",
+          "previous_recommendation_ids": [
+            "rec.harden-telemetry-freshness"
+          ],
+          "recommendation_key": "telemetry-freshness"
+        }
+      ],
+      "open_risks": [
+        {
+          "call_trace_lineage": [],
+          "contributing_call_ids": [],
+          "evidence_refs": [
+            "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          ],
+          "linked_recommendation_ids": [
+            "rec.review-reuse-contracts"
+          ],
+          "open_risk_id": "open-risk.c6d73dbb8f81",
+          "project_id": "earth-shared-observability",
+          "reason_code": "unresolved_idea_open_risk",
+          "recommendation_id": "idea.review-reuse-contracts-follow-up",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+            "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          ],
+          "summary": "Validate earth-shared-observability ownership handoff before scheduling additional integration obligations."
+        }
+      ],
+      "validator_verdict": {
+        "ids_stable_across_revisions": false,
+        "is_unique_within_revision": false,
+        "passed": false
+      }
+    }
+  },
+  "requirement_id": "REQ-068",
+  "schema_version": "1.0",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "totals": {
+    "deferred_recommendations": 1,
+    "id_collisions": 1,
+    "id_drift": 1,
+    "linked_kpi_targets": 2,
+    "open_risks": 1,
+    "planner_ready_recommendations": 2,
+    "strategy_packet_inputs": 2
+  }
+}

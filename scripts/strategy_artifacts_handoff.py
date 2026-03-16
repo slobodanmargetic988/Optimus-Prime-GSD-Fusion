@@ -23,9 +23,15 @@ REQ_062_ANALYSIS_TYPE = "recommendation_id_uniqueness_validator"
 REQ_062_CALL_ID = "recommendation-id-uniqueness-validator"
 REQ_062_PROCESSING_STRATEGY = "recommendation-id-uniqueness-broad-sweep"
 REQ_062_REASONING_MODE = "deterministic-broad-sweep"
+REQ_068_REQUIREMENT_ID = "REQ-068"
+REQ_068_SCHEMA_VERSION = "1.0"
+REQ_068_ANALYSIS_TYPE = "op_plan_strategy_ingestion_hook"
+REQ_068_CALL_ID = "op-plan-strategy-ingestion-hook"
 
 _EXPECTED_DIRECTIONS = {"increase", "decrease", "maintain"}
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
+_REQ_068_PACKET_KINDS = {"target-project", "cross-project"}
+_REQ_068_PRIORITY_LEVELS = {"high", "medium", "low"}
 _EARTH_SWEEP_PREFIX = "reports/earth/sweeps/"
 _MISSING_EARTH_SWEEP_EVIDENCE = "missing_earth_sweep_evidence_refs"
 _UNRESOLVED_CROSS_PROJECT_IDEA = "unresolved_cross_project_idea"
@@ -45,6 +51,27 @@ _REQ_062_RECOMMENDATION_FIELDS = [
     "evidence_refs",
     "cross_project_obligations",
     "open_risks",
+]
+_REQ_068_TRACEABILITY_INDEX_FIELDS = [
+    "recommendation_id",
+    "strategy_packet_input_id",
+    "packet_kind",
+    "peer_project_id",
+    "lane",
+    "sequence_hint",
+    "priority",
+    "summary",
+    "rationale",
+    "evidence_refs",
+    "traceability_refs",
+    "call_trace_lineage",
+    "contributing_call_ids",
+    "contributing_requirement_ids",
+    "supporting_call_count",
+    "linked_kpi_target_ids",
+    "linked_kpi_target_refs",
+    "id_validation_status",
+    "validator_diagnostic_refs",
 ]
 
 
@@ -2177,6 +2204,729 @@ def validate_req_062_recommendation_id_uniqueness_validator(payload: Mapping[str
             errors.append("verdict.passed must equal is_unique_within_revision and ids_stable_across_revisions")
 
     errors.extend(_validate_req_062_processing_behavior(payload.get("processing_behavior")))
+
+    return errors
+
+
+def _validate_req_046_final_strategy_artifact(payload: Mapping[str, Any]) -> list[str]:
+    from scripts import strategy_llm_pipeline as pipeline
+
+    return pipeline.validate_req_046_final_strategy_synthesis_composer(payload)
+
+
+def _normalize_req_068_artifact_envelope(
+    value: Any,
+    *,
+    field_name: str,
+    expected_requirement_id: str,
+    expected_analysis_type: str,
+    validator: Any,
+) -> dict[str, Any]:
+    raw = _require_mapping(value, field_name=field_name)
+    expected_keys = {"artifact_ref", "payload"}
+    raw_keys = set(raw.keys())
+    unexpected = sorted(raw_keys - expected_keys)
+    if unexpected:
+        raise ValueError(f"{field_name} has unexpected keys: {unexpected}")
+    missing = sorted(expected_keys - raw_keys)
+    if missing:
+        raise ValueError(f"{field_name} missing keys: {missing}")
+
+    artifact_ref = _normalize_reference(raw.get("artifact_ref"), field_name=f"{field_name}.artifact_ref")
+    payload_mapping = _require_mapping(raw.get("payload"), field_name=f"{field_name}.payload")
+    payload_dict = dict(payload_mapping)
+
+    if payload_dict.get("requirement_id") != expected_requirement_id:
+        raise ValueError(f"{field_name}.payload.requirement_id must be {expected_requirement_id}")
+    if payload_dict.get("analysis_type") != expected_analysis_type:
+        raise ValueError(f"{field_name}.payload.analysis_type must be {expected_analysis_type}")
+
+    errors = validator(payload_dict)
+    if errors:
+        raise ValueError(f"{field_name}.payload failed validation: {errors}")
+
+    return {
+        "artifact_ref": artifact_ref.split("#", 1)[0],
+        "payload": payload_dict,
+    }
+
+
+def _req_068_anchor(artifact_ref: str, anchor: str) -> str:
+    base_ref = artifact_ref.split("#", 1)[0]
+    return f"{base_ref}#{anchor}"
+
+
+def _req_068_validate_trace_lineage(*, value: Any, field_name: str) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(value, list) or not value:
+        return [f"{field_name} must be a non-empty list"]
+
+    seen_trace_ids: set[str] = set()
+    for index, row in enumerate(value):
+        item_field = f"{field_name}[{index}]"
+        if not isinstance(row, Mapping):
+            errors.append(f"{item_field} must be an object")
+            continue
+
+        expected_keys = {"call_id", "requirement_id", "trace_id", "trace_ref", "artifact_ref", "checked_at_utc"}
+        row_keys = set(row.keys())
+        missing = sorted(expected_keys - row_keys)
+        if missing:
+            errors.append(f"{item_field} missing keys: {missing}")
+        unexpected = sorted(row_keys - expected_keys)
+        if unexpected:
+            errors.append(f"{item_field} has unexpected keys: {unexpected}")
+
+        trace_id = str(row.get("trace_id") or "").strip()
+        if not trace_id:
+            errors.append(f"{item_field}.trace_id must be a non-empty string")
+        elif trace_id in seen_trace_ids:
+            errors.append(f"{item_field}.trace_id must be unique within the lineage list")
+        else:
+            seen_trace_ids.add(trace_id)
+
+        for key in ("call_id", "requirement_id", "checked_at_utc"):
+            if not isinstance(row.get(key), str) or not str(row.get(key)).strip():
+                errors.append(f"{item_field}.{key} must be a non-empty string")
+
+        trace_ref_value = row.get("trace_ref")
+        if not isinstance(trace_ref_value, str) or not trace_ref_value.strip():
+            errors.append(f"{item_field}.trace_ref must be a non-empty string")
+        else:
+            try:
+                normalized = _normalize_reference(trace_ref_value, field_name=f"{item_field}.trace_ref")
+            except ValueError as exc:
+                errors.append(str(exc))
+            else:
+                if "#" not in normalized:
+                    errors.append(f"{item_field}.trace_ref must include a '#<anchor>' traceability anchor")
+
+        artifact_ref_value = row.get("artifact_ref")
+        if not isinstance(artifact_ref_value, str) or not artifact_ref_value.strip():
+            errors.append(f"{item_field}.artifact_ref must be a non-empty string")
+        else:
+            try:
+                _normalize_reference(artifact_ref_value, field_name=f"{item_field}.artifact_ref")
+            except ValueError as exc:
+                errors.append(str(exc))
+
+    return errors
+
+
+def _req_068_validate_canonical_artifacts(payload: Any) -> tuple[list[str], dict[str, str]]:
+    errors: list[str] = []
+    refs: dict[str, str] = {}
+    if not isinstance(payload, Mapping):
+        return ["op_plan_strategy_ingestion.canonical_strategy_artifacts must be an object"], refs
+
+    expected_keys = {
+        "final_strategy_artifact_ref",
+        "final_recommendations_ref",
+        "strategy_packet_inputs_ref",
+        "kpi_target_artifact_ref",
+        "kpi_targets_ref",
+        "recommendation_id_validator_ref",
+        "recommendation_id_validator_verdict_ref",
+    }
+    payload_keys = set(payload.keys())
+    missing = sorted(expected_keys - payload_keys)
+    if missing:
+        errors.append(f"op_plan_strategy_ingestion.canonical_strategy_artifacts missing keys: {missing}")
+    unexpected = sorted(payload_keys - expected_keys)
+    if unexpected:
+        errors.append(f"op_plan_strategy_ingestion.canonical_strategy_artifacts has unexpected keys: {unexpected}")
+
+    for key in expected_keys:
+        value = payload.get(key)
+        field_name = f"op_plan_strategy_ingestion.canonical_strategy_artifacts.{key}"
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{field_name} must be a non-empty string")
+            continue
+        try:
+            normalized = _normalize_reference(value, field_name=field_name)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        if "#" not in normalized:
+            errors.append(f"{field_name} must include a '#<anchor>' traceability anchor")
+            continue
+        refs[key] = normalized
+
+    return errors, refs
+
+
+def _req_068_linked_kpi_target_ids(*, recommendation_id: str, kpi_targets: list[dict[str, Any]]) -> list[str]:
+    linked_ids = [
+        str(row["target_id"])
+        for row in kpi_targets
+        if recommendation_id in row.get("originating_recommendation_ids", [])
+    ]
+    return sorted(set(linked_ids))
+
+
+def _req_068_diagnostic_refs_for_recommendation(
+    *,
+    recommendation_id: str,
+    validator_artifact_ref: str,
+    diagnostics: Mapping[str, Any],
+) -> tuple[str, list[str]]:
+    collision_rows = diagnostics.get("id_collisions") if isinstance(diagnostics.get("id_collisions"), list) else []
+    drift_rows = diagnostics.get("id_drift") if isinstance(diagnostics.get("id_drift"), list) else []
+
+    has_collision = any(str(row.get("recommendation_id") or "") == recommendation_id for row in collision_rows)
+    has_drift = any(
+        recommendation_id in [str(item) for item in row.get("previous_recommendation_ids", []) if isinstance(item, str)]
+        or recommendation_id in [str(item) for item in row.get("current_recommendation_ids", []) if isinstance(item, str)]
+        for row in drift_rows
+        if isinstance(row, Mapping)
+    )
+
+    diagnostic_refs: list[str] = [_req_068_anchor(validator_artifact_ref, "verdict")]
+    if has_collision:
+        diagnostic_refs.append(_req_068_anchor(validator_artifact_ref, "diagnostics.id_collisions"))
+    if has_drift:
+        diagnostic_refs.append(_req_068_anchor(validator_artifact_ref, "diagnostics.id_drift"))
+
+    status = "collision" if has_collision else "drifted" if has_drift else "stable"
+    return status, sorted(set(diagnostic_refs))
+
+
+def build_req_068_op_plan_strategy_ingestion_hook(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build normalized REQ-068 payload for canonical strategy ingestion into op-plan."""
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_068_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_068_ANALYSIS_TYPE}")
+
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc") or raw.get("checked_at_utc"), field_name="now_utc")
+    target_project = _normalize_target_project(raw.get("target_project"))
+    final_strategy_artifact = _normalize_req_068_artifact_envelope(
+        raw.get("final_strategy_artifact"),
+        field_name="final_strategy_artifact",
+        expected_requirement_id="REQ-046",
+        expected_analysis_type="final_strategy_synthesis_composer",
+        validator=_validate_req_046_final_strategy_artifact,
+    )
+    kpi_target_artifact = _normalize_req_068_artifact_envelope(
+        raw.get("kpi_target_artifact"),
+        field_name="kpi_target_artifact",
+        expected_requirement_id=REQ_056_REQUIREMENT_ID,
+        expected_analysis_type=REQ_056_ANALYSIS_TYPE,
+        validator=validate_req_056_kpi_target_artifact,
+    )
+    recommendation_id_validator = _normalize_req_068_artifact_envelope(
+        raw.get("recommendation_id_validator"),
+        field_name="recommendation_id_validator",
+        expected_requirement_id=REQ_062_REQUIREMENT_ID,
+        expected_analysis_type=REQ_062_ANALYSIS_TYPE,
+        validator=validate_req_062_recommendation_id_uniqueness_validator,
+    )
+
+    final_strategy_payload = final_strategy_artifact["payload"]
+    kpi_target_payload = kpi_target_artifact["payload"]
+    if final_strategy_payload.get("target_project") != target_project:
+        raise ValueError("final_strategy_artifact.payload.target_project must match target_project")
+    if kpi_target_payload.get("target_project") != target_project:
+        raise ValueError("kpi_target_artifact.payload.target_project must match target_project")
+
+    final_synthesis = final_strategy_payload["final_strategy_synthesis"]
+    kpi_targets = kpi_target_payload["kpi_target_artifact"]["kpi_targets"]
+    diagnostics = recommendation_id_validator["payload"]["diagnostics"]
+    verdict = recommendation_id_validator["payload"]["verdict"]
+
+    canonical_strategy_artifacts = {
+        "final_strategy_artifact_ref": _req_068_anchor(
+            final_strategy_artifact["artifact_ref"],
+            "final_strategy_synthesis",
+        ),
+        "final_recommendations_ref": _req_068_anchor(
+            final_strategy_artifact["artifact_ref"],
+            "final_strategy_synthesis.final_recommendations",
+        ),
+        "strategy_packet_inputs_ref": _req_068_anchor(
+            final_strategy_artifact["artifact_ref"],
+            "final_strategy_synthesis.strategy_packet_inputs",
+        ),
+        "kpi_target_artifact_ref": _req_068_anchor(
+            kpi_target_artifact["artifact_ref"],
+            "kpi_target_artifact",
+        ),
+        "kpi_targets_ref": _req_068_anchor(
+            kpi_target_artifact["artifact_ref"],
+            "kpi_target_artifact.kpi_targets",
+        ),
+        "recommendation_id_validator_ref": _req_068_anchor(
+            recommendation_id_validator["artifact_ref"],
+            "diagnostics",
+        ),
+        "recommendation_id_validator_verdict_ref": _req_068_anchor(
+            recommendation_id_validator["artifact_ref"],
+            "verdict",
+        ),
+    }
+
+    recommendation_traceability_index: list[dict[str, Any]] = []
+    for recommendation in final_synthesis["final_recommendations"]:
+        recommendation_id = str(recommendation["recommendation_id"])
+        linked_kpi_target_ids = _req_068_linked_kpi_target_ids(
+            recommendation_id=recommendation_id,
+            kpi_targets=kpi_targets,
+        )
+        linked_kpi_target_refs = (
+            [canonical_strategy_artifacts["kpi_targets_ref"]]
+            if linked_kpi_target_ids
+            else []
+        )
+        id_validation_status, validator_diagnostic_refs = _req_068_diagnostic_refs_for_recommendation(
+            recommendation_id=recommendation_id,
+            validator_artifact_ref=recommendation_id_validator["artifact_ref"],
+            diagnostics=diagnostics,
+        )
+        traceability_refs = _collect_unique_refs(
+            recommendation["evidence_refs"],
+            [row["trace_ref"] for row in recommendation["call_trace_lineage"]],
+            [row["artifact_ref"] for row in recommendation["call_trace_lineage"]],
+            [
+                canonical_strategy_artifacts["final_recommendations_ref"],
+                canonical_strategy_artifacts["strategy_packet_inputs_ref"],
+            ],
+            linked_kpi_target_refs,
+            validator_diagnostic_refs,
+        )
+        recommendation_traceability_index.append(
+            {
+                "recommendation_id": recommendation_id,
+                "strategy_packet_input_id": recommendation["strategy_packet_input_id"],
+                "packet_kind": recommendation["packet_kind"],
+                "peer_project_id": recommendation["peer_project_id"],
+                "lane": recommendation["lane"],
+                "sequence_hint": recommendation["sequence_hint"],
+                "priority": recommendation["priority"],
+                "summary": recommendation["summary"],
+                "rationale": recommendation["rationale"],
+                "evidence_refs": list(recommendation["evidence_refs"]),
+                "traceability_refs": traceability_refs,
+                "call_trace_lineage": list(recommendation["call_trace_lineage"]),
+                "contributing_call_ids": list(recommendation["contributing_call_ids"]),
+                "contributing_requirement_ids": list(recommendation["contributing_requirement_ids"]),
+                "supporting_call_count": recommendation["supporting_call_count"],
+                "linked_kpi_target_ids": linked_kpi_target_ids,
+                "linked_kpi_target_refs": linked_kpi_target_refs,
+                "id_validation_status": id_validation_status,
+                "validator_diagnostic_refs": validator_diagnostic_refs,
+            }
+        )
+    recommendation_traceability_index.sort(key=lambda row: str(row["recommendation_id"]))
+
+    built: dict[str, Any] = {
+        "ok": True,
+        "schema_version": REQ_068_SCHEMA_VERSION,
+        "requirement_id": REQ_068_REQUIREMENT_ID,
+        "analysis_type": REQ_068_ANALYSIS_TYPE,
+        "call_id": REQ_068_CALL_ID,
+        "checked_at_utc": checked_at_utc,
+        "target_project": target_project,
+        "op_plan_strategy_ingestion": {
+            "canonical_strategy_artifacts": canonical_strategy_artifacts,
+            "planner_inputs": {
+                "strategy_packet_inputs": list(final_synthesis["strategy_packet_inputs"]),
+                "recommendation_traceability_index": recommendation_traceability_index,
+            },
+            "planning_alerts": {
+                "deferred_recommendations": list(final_synthesis["deferred_recommendations"]),
+                "open_risks": list(final_synthesis["open_risks"]),
+                "id_collisions": list(diagnostics["id_collisions"]),
+                "id_drift": list(diagnostics["id_drift"]),
+                "validator_verdict": dict(verdict),
+            },
+        },
+        "totals": {
+            "strategy_packet_inputs": len(final_synthesis["strategy_packet_inputs"]),
+            "planner_ready_recommendations": len(recommendation_traceability_index),
+            "linked_kpi_targets": len(
+                {target_id for row in recommendation_traceability_index for target_id in row["linked_kpi_target_ids"]}
+            ),
+            "deferred_recommendations": len(final_synthesis["deferred_recommendations"]),
+            "open_risks": len(final_synthesis["open_risks"]),
+            "id_collisions": len(diagnostics["id_collisions"]),
+            "id_drift": len(diagnostics["id_drift"]),
+        },
+    }
+
+    errors = validate_req_068_op_plan_strategy_ingestion_hook(built)
+    if errors:
+        raise ValueError(f"built REQ-068 payload failed validation: {errors}")
+    return built
+
+
+def validate_req_068_op_plan_strategy_ingestion_hook(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-068 op-plan strategy ingestion hook payload shape."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    expected_top = {
+        "ok",
+        "schema_version",
+        "requirement_id",
+        "analysis_type",
+        "call_id",
+        "checked_at_utc",
+        "target_project",
+        "op_plan_strategy_ingestion",
+        "totals",
+    }
+    payload_keys = set(payload.keys())
+    missing = sorted(expected_top - payload_keys)
+    if missing:
+        errors.append(f"missing top-level keys: {missing}")
+    unexpected = sorted(payload_keys - expected_top)
+    if unexpected:
+        errors.append(f"unexpected top-level keys: {unexpected}")
+
+    if payload.get("ok") is not True:
+        errors.append("ok must be true")
+    if payload.get("schema_version") != REQ_068_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_068_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_068_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_068_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_068_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_068_ANALYSIS_TYPE}")
+    if payload.get("call_id") != REQ_068_CALL_ID:
+        errors.append(f"call_id must be {REQ_068_CALL_ID}")
+    if not isinstance(payload.get("checked_at_utc"), str) or not str(payload.get("checked_at_utc")).strip():
+        errors.append("checked_at_utc must be a non-empty string")
+
+    try:
+        normalized_target_project = _normalize_target_project(payload.get("target_project"))
+    except ValueError as exc:
+        errors.append(str(exc))
+        normalized_target_project = {}
+
+    ingestion = payload.get("op_plan_strategy_ingestion")
+    strategy_packet_input_ids: set[str] = set()
+    recommendation_traceability_index: list[Any] = []
+    planning_alerts: Mapping[str, Any] | None = None
+    if not isinstance(ingestion, Mapping):
+        errors.append("op_plan_strategy_ingestion must be an object")
+    else:
+        expected_ingestion_keys = {"canonical_strategy_artifacts", "planner_inputs", "planning_alerts"}
+        ingestion_keys = set(ingestion.keys())
+        missing_ingestion = sorted(expected_ingestion_keys - ingestion_keys)
+        if missing_ingestion:
+            errors.append(f"op_plan_strategy_ingestion missing keys: {missing_ingestion}")
+        unexpected_ingestion = sorted(ingestion_keys - expected_ingestion_keys)
+        if unexpected_ingestion:
+            errors.append(f"op_plan_strategy_ingestion has unexpected keys: {unexpected_ingestion}")
+
+        artifact_errors, canonical_refs = _req_068_validate_canonical_artifacts(ingestion.get("canonical_strategy_artifacts"))
+        errors.extend(artifact_errors)
+
+        planner_inputs = ingestion.get("planner_inputs")
+        if not isinstance(planner_inputs, Mapping):
+            errors.append("op_plan_strategy_ingestion.planner_inputs must be an object")
+        else:
+            expected_planner_keys = {"strategy_packet_inputs", "recommendation_traceability_index"}
+            planner_keys = set(planner_inputs.keys())
+            missing_planner = sorted(expected_planner_keys - planner_keys)
+            if missing_planner:
+                errors.append(f"op_plan_strategy_ingestion.planner_inputs missing keys: {missing_planner}")
+            unexpected_planner = sorted(planner_keys - expected_planner_keys)
+            if unexpected_planner:
+                errors.append(f"op_plan_strategy_ingestion.planner_inputs has unexpected keys: {unexpected_planner}")
+
+            strategy_packet_inputs = planner_inputs.get("strategy_packet_inputs")
+            if not isinstance(strategy_packet_inputs, list) or not strategy_packet_inputs:
+                errors.append("op_plan_strategy_ingestion.planner_inputs.strategy_packet_inputs must be a non-empty list")
+            else:
+                for index, row in enumerate(strategy_packet_inputs):
+                    row_path = f"op_plan_strategy_ingestion.planner_inputs.strategy_packet_inputs[{index}]"
+                    if not isinstance(row, Mapping):
+                        errors.append(f"{row_path} must be an object")
+                        continue
+                    expected_packet_keys = {
+                        "packet_input_id",
+                        "packet_kind",
+                        "target_project_id",
+                        "peer_project_id",
+                        "lane",
+                        "recommendation_ids",
+                        "recommendation_count",
+                        "earliest_sequence_hint",
+                        "evidence_refs",
+                    }
+                    row_keys = set(row.keys())
+                    missing_packet = sorted(expected_packet_keys - row_keys)
+                    if missing_packet:
+                        errors.append(f"{row_path} missing keys: {missing_packet}")
+                    unexpected_packet = sorted(row_keys - expected_packet_keys)
+                    if unexpected_packet:
+                        errors.append(f"{row_path} has unexpected keys: {unexpected_packet}")
+
+                    packet_input_id = str(row.get("packet_input_id") or "").strip()
+                    if not packet_input_id:
+                        errors.append(f"{row_path}.packet_input_id must be a non-empty string")
+                    elif packet_input_id in strategy_packet_input_ids:
+                        errors.append(f"{row_path}.packet_input_id must be unique")
+                    else:
+                        strategy_packet_input_ids.add(packet_input_id)
+                    if row.get("packet_kind") not in _REQ_068_PACKET_KINDS:
+                        errors.append(f"{row_path}.packet_kind must be one of: {sorted(_REQ_068_PACKET_KINDS)}")
+                    if row.get("target_project_id") != normalized_target_project.get("project_id"):
+                        errors.append(f"{row_path}.target_project_id must match target_project.project_id")
+                    if not isinstance(row.get("lane"), str) or not str(row.get("lane")).strip():
+                        errors.append(f"{row_path}.lane must be a non-empty string")
+                    recommendation_ids_errors, recommendation_ids = _validate_nonempty_string_list(
+                        value=row.get("recommendation_ids"),
+                        field_name=f"{row_path}.recommendation_ids",
+                        min_items=1,
+                    )
+                    errors.extend(recommendation_ids_errors)
+                    recommendation_count = row.get("recommendation_count")
+                    if not isinstance(recommendation_count, int) or recommendation_count < 1:
+                        errors.append(f"{row_path}.recommendation_count must be a positive integer")
+                    elif recommendation_count != len(recommendation_ids):
+                        errors.append(f"{row_path}.recommendation_count must match recommendation_ids length")
+                    earliest_sequence_hint = row.get("earliest_sequence_hint")
+                    if not isinstance(earliest_sequence_hint, int) or earliest_sequence_hint < 1:
+                        errors.append(f"{row_path}.earliest_sequence_hint must be a positive integer")
+                    evidence_errors, _ = _validate_nonempty_string_list(
+                        value=row.get("evidence_refs"),
+                        field_name=f"{row_path}.evidence_refs",
+                        min_items=1,
+                    )
+                    errors.extend(evidence_errors)
+
+            traceability_rows = planner_inputs.get("recommendation_traceability_index")
+            if not isinstance(traceability_rows, list) or not traceability_rows:
+                errors.append(
+                    "op_plan_strategy_ingestion.planner_inputs.recommendation_traceability_index must be a non-empty list"
+                )
+            else:
+                recommendation_traceability_index = traceability_rows
+                seen_recommendation_ids: set[str] = set()
+                for index, row in enumerate(traceability_rows):
+                    row_path = f"op_plan_strategy_ingestion.planner_inputs.recommendation_traceability_index[{index}]"
+                    if not isinstance(row, Mapping):
+                        errors.append(f"{row_path} must be an object")
+                        continue
+                    row_keys = set(row.keys())
+                    expected_row_keys = set(_REQ_068_TRACEABILITY_INDEX_FIELDS)
+                    missing_row = sorted(expected_row_keys - row_keys)
+                    if missing_row:
+                        errors.append(f"{row_path} missing keys: {missing_row}")
+                    unexpected_row = sorted(row_keys - expected_row_keys)
+                    if unexpected_row:
+                        errors.append(f"{row_path} has unexpected keys: {unexpected_row}")
+
+                    recommendation_id = str(row.get("recommendation_id") or "").strip()
+                    if not recommendation_id:
+                        errors.append(f"{row_path}.recommendation_id must be a non-empty string")
+                    elif recommendation_id in seen_recommendation_ids:
+                        errors.append(f"{row_path}.recommendation_id must be unique")
+                    else:
+                        seen_recommendation_ids.add(recommendation_id)
+
+                    strategy_packet_input_id = str(row.get("strategy_packet_input_id") or "").strip()
+                    if not strategy_packet_input_id:
+                        errors.append(f"{row_path}.strategy_packet_input_id must be a non-empty string")
+                    elif strategy_packet_input_ids and strategy_packet_input_id not in strategy_packet_input_ids:
+                        errors.append(f"{row_path}.strategy_packet_input_id must exist in planner_inputs.strategy_packet_inputs")
+
+                    if row.get("packet_kind") not in _REQ_068_PACKET_KINDS:
+                        errors.append(f"{row_path}.packet_kind must be one of: {sorted(_REQ_068_PACKET_KINDS)}")
+                    if not isinstance(row.get("peer_project_id"), str):
+                        errors.append(f"{row_path}.peer_project_id must be a string")
+                    elif row.get("packet_kind") == "cross-project" and not str(row.get("peer_project_id")).strip():
+                        errors.append(f"{row_path}.peer_project_id must be set for cross-project recommendations")
+                    elif row.get("packet_kind") == "target-project" and str(row.get("peer_project_id")).strip():
+                        errors.append(f"{row_path}.peer_project_id must be empty for target-project recommendations")
+
+                    for key in ("lane", "summary", "rationale"):
+                        if not isinstance(row.get(key), str) or not str(row.get(key)).strip():
+                            errors.append(f"{row_path}.{key} must be a non-empty string")
+                    if row.get("priority") not in _REQ_068_PRIORITY_LEVELS:
+                        errors.append(f"{row_path}.priority must be one of: {sorted(_REQ_068_PRIORITY_LEVELS)}")
+
+                    sequence_hint = row.get("sequence_hint")
+                    if not isinstance(sequence_hint, int) or sequence_hint < 1:
+                        errors.append(f"{row_path}.sequence_hint must be a positive integer")
+                    supporting_call_count = row.get("supporting_call_count")
+                    if not isinstance(supporting_call_count, int) or supporting_call_count < 1:
+                        errors.append(f"{row_path}.supporting_call_count must be a positive integer")
+
+                    evidence_errors, _ = _validate_nonempty_string_list(
+                        value=row.get("evidence_refs"),
+                        field_name=f"{row_path}.evidence_refs",
+                        min_items=1,
+                    )
+                    traceability_errors, _ = _validate_nonempty_string_list(
+                        value=row.get("traceability_refs"),
+                        field_name=f"{row_path}.traceability_refs",
+                        min_items=1,
+                    )
+                    linked_kpi_target_errors, _ = _validate_nonempty_string_list(
+                        value=row.get("linked_kpi_target_ids"),
+                        field_name=f"{row_path}.linked_kpi_target_ids",
+                        min_items=0,
+                    )
+                    linked_kpi_target_ref_errors, _ = _validate_traceability_ref_list(
+                        value=row.get("linked_kpi_target_refs"),
+                        field_name=f"{row_path}.linked_kpi_target_refs",
+                        min_items=0,
+                    )
+                    validator_ref_errors, _ = _validate_traceability_ref_list(
+                        value=row.get("validator_diagnostic_refs"),
+                        field_name=f"{row_path}.validator_diagnostic_refs",
+                        min_items=1,
+                    )
+                    errors.extend(evidence_errors)
+                    errors.extend(traceability_errors)
+                    errors.extend(linked_kpi_target_errors)
+                    errors.extend(linked_kpi_target_ref_errors)
+                    errors.extend(validator_ref_errors)
+
+                    if row.get("id_validation_status") not in {"stable", "drifted", "collision"}:
+                        errors.append(f"{row_path}.id_validation_status must be one of: ['collision', 'drifted', 'stable']")
+
+                    lineage_errors = _req_068_validate_trace_lineage(
+                        value=row.get("call_trace_lineage"),
+                        field_name=f"{row_path}.call_trace_lineage",
+                    )
+                    errors.extend(lineage_errors)
+                    lineage_rows = row.get("call_trace_lineage") if isinstance(row.get("call_trace_lineage"), list) else []
+                    if lineage_rows and isinstance(supporting_call_count, int) and supporting_call_count != len(lineage_rows):
+                        errors.append(f"{row_path}.supporting_call_count must match call_trace_lineage length")
+
+                    contributing_call_ids_errors, _ = _validate_nonempty_string_list(
+                        value=row.get("contributing_call_ids"),
+                        field_name=f"{row_path}.contributing_call_ids",
+                        min_items=1,
+                    )
+                    contributing_requirement_ids_errors, _ = _validate_nonempty_string_list(
+                        value=row.get("contributing_requirement_ids"),
+                        field_name=f"{row_path}.contributing_requirement_ids",
+                        min_items=1,
+                    )
+                    errors.extend(contributing_call_ids_errors)
+                    errors.extend(contributing_requirement_ids_errors)
+
+                    if canonical_refs:
+                        if canonical_refs.get("final_recommendations_ref") and canonical_refs["final_recommendations_ref"] not in (
+                            row.get("traceability_refs") or []
+                        ):
+                            errors.append(f"{row_path}.traceability_refs must include canonical final_recommendations_ref")
+                        if canonical_refs.get("strategy_packet_inputs_ref") and canonical_refs["strategy_packet_inputs_ref"] not in (
+                            row.get("traceability_refs") or []
+                        ):
+                            errors.append(f"{row_path}.traceability_refs must include canonical strategy_packet_inputs_ref")
+                        if canonical_refs.get("recommendation_id_validator_verdict_ref") and canonical_refs[
+                            "recommendation_id_validator_verdict_ref"
+                        ] not in (row.get("validator_diagnostic_refs") or []):
+                            errors.append(f"{row_path}.validator_diagnostic_refs must include canonical verdict ref")
+
+        planning_alerts_value = ingestion.get("planning_alerts")
+        if not isinstance(planning_alerts_value, Mapping):
+            errors.append("op_plan_strategy_ingestion.planning_alerts must be an object")
+        else:
+            planning_alerts = planning_alerts_value
+            expected_alert_keys = {
+                "deferred_recommendations",
+                "open_risks",
+                "id_collisions",
+                "id_drift",
+                "validator_verdict",
+            }
+            alert_keys = set(planning_alerts.keys())
+            missing_alerts = sorted(expected_alert_keys - alert_keys)
+            if missing_alerts:
+                errors.append(f"op_plan_strategy_ingestion.planning_alerts missing keys: {missing_alerts}")
+            unexpected_alerts = sorted(alert_keys - expected_alert_keys)
+            if unexpected_alerts:
+                errors.append(f"op_plan_strategy_ingestion.planning_alerts has unexpected keys: {unexpected_alerts}")
+
+            for key in ("deferred_recommendations", "open_risks", "id_collisions", "id_drift"):
+                if not isinstance(planning_alerts.get(key), list):
+                    errors.append(f"op_plan_strategy_ingestion.planning_alerts.{key} must be a list")
+
+            verdict_value = planning_alerts.get("validator_verdict")
+            if not isinstance(verdict_value, Mapping):
+                errors.append("op_plan_strategy_ingestion.planning_alerts.validator_verdict must be an object")
+            else:
+                expected_verdict_keys = {"is_unique_within_revision", "ids_stable_across_revisions", "passed"}
+                verdict_keys = set(verdict_value.keys())
+                missing_verdict = sorted(expected_verdict_keys - verdict_keys)
+                if missing_verdict:
+                    errors.append(
+                        "op_plan_strategy_ingestion.planning_alerts.validator_verdict "
+                        f"missing keys: {missing_verdict}"
+                    )
+                unexpected_verdict = sorted(verdict_keys - expected_verdict_keys)
+                if unexpected_verdict:
+                    errors.append(
+                        "op_plan_strategy_ingestion.planning_alerts.validator_verdict "
+                        f"has unexpected keys: {unexpected_verdict}"
+                    )
+                for key in expected_verdict_keys:
+                    if verdict_value.get(key) not in {True, False}:
+                        errors.append(f"op_plan_strategy_ingestion.planning_alerts.validator_verdict.{key} must be a boolean")
+
+    totals = payload.get("totals")
+    if not isinstance(totals, Mapping):
+        errors.append("totals must be an object")
+    else:
+        expected_total_keys = {
+            "strategy_packet_inputs",
+            "planner_ready_recommendations",
+            "linked_kpi_targets",
+            "deferred_recommendations",
+            "open_risks",
+            "id_collisions",
+            "id_drift",
+        }
+        total_keys = set(totals.keys())
+        missing_totals = sorted(expected_total_keys - total_keys)
+        if missing_totals:
+            errors.append(f"totals missing keys: {missing_totals}")
+        unexpected_totals = sorted(total_keys - expected_total_keys)
+        if unexpected_totals:
+            errors.append(f"totals has unexpected keys: {unexpected_totals}")
+
+        for key in expected_total_keys:
+            value = totals.get(key)
+            if not isinstance(value, int) or value < 0:
+                errors.append(f"totals.{key} must be a non-negative integer")
+
+        if totals.get("strategy_packet_inputs") != len(strategy_packet_input_ids):
+            errors.append("totals.strategy_packet_inputs must equal planner_inputs.strategy_packet_inputs count")
+        if totals.get("planner_ready_recommendations") != len(recommendation_traceability_index):
+            errors.append(
+                "totals.planner_ready_recommendations must equal planner_inputs.recommendation_traceability_index count"
+            )
+
+        linked_target_count = len(
+            {
+                str(target_id)
+                for row in recommendation_traceability_index
+                if isinstance(row, Mapping)
+                for target_id in (row.get("linked_kpi_target_ids") or [])
+                if isinstance(target_id, str) and target_id.strip()
+            }
+        )
+        if totals.get("linked_kpi_targets") != linked_target_count:
+            errors.append("totals.linked_kpi_targets must equal unique linked_kpi_target_ids count")
+
+        if isinstance(planning_alerts, Mapping):
+            if totals.get("deferred_recommendations") != len(planning_alerts.get("deferred_recommendations") or []):
+                errors.append(
+                    "totals.deferred_recommendations must equal planning_alerts.deferred_recommendations count"
+                )
+            if totals.get("open_risks") != len(planning_alerts.get("open_risks") or []):
+                errors.append("totals.open_risks must equal planning_alerts.open_risks count")
+            if totals.get("id_collisions") != len(planning_alerts.get("id_collisions") or []):
+                errors.append("totals.id_collisions must equal planning_alerts.id_collisions count")
+            if totals.get("id_drift") != len(planning_alerts.get("id_drift") or []):
+                errors.append("totals.id_drift must equal planning_alerts.id_drift count")
 
     return errors
 
