@@ -541,6 +541,7 @@ def _collect_req_028_trace_input_refs(canonical_processing_input: Mapping[str, A
     unresolved_ideas = canonical_processing_input.get("unresolved_ideas")
     gap_candidates = canonical_processing_input.get("gap_candidates")
     opportunity_candidates = canonical_processing_input.get("opportunity_candidates")
+    strategic_claims = canonical_processing_input.get("strategic_claims")
 
     def _rows_to_refs(rows: Any) -> list[list[str]]:
         if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
@@ -558,8 +559,23 @@ def _collect_req_028_trace_input_refs(canonical_processing_input: Mapping[str, A
     if not isinstance(required_evidence_refs, Sequence) or isinstance(required_evidence_refs, (str, bytes, bytearray)):
         required_evidence_refs = []
 
+    claim_refs: list[list[str]] = []
+    claim_output_refs: list[str] = []
+    if isinstance(strategic_claims, Sequence) and not isinstance(strategic_claims, (str, bytes, bytearray)):
+        for row in strategic_claims:
+            if not isinstance(row, Mapping):
+                continue
+            row_refs = row.get("evidence_refs")
+            if isinstance(row_refs, Sequence) and not isinstance(row_refs, (str, bytes, bytearray)):
+                claim_refs.append([_as_text(ref) for ref in row_refs if _as_text(ref)])
+            source_output_ref = _as_text(row.get("source_output_ref"))
+            if source_output_ref:
+                claim_output_refs.append(source_output_ref)
+
     return _collect_unique_refs(
         [_as_text(ref) for ref in required_evidence_refs if _as_text(ref)],
+        claim_output_refs,
+        *claim_refs,
         *(_rows_to_refs(cross_project_context)),
         *(_rows_to_refs(unresolved_ideas)),
         *(_rows_to_refs(gap_candidates)),
@@ -1698,6 +1714,51 @@ def _normalize_req_028_opportunity_candidates(raw_value: Any) -> list[dict[str, 
     return normalized
 
 
+def _normalize_req_028_strategic_claims(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError("strategic_claims must be an array when provided")
+
+    normalized: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str, str]] = set()
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"strategic_claims[{index}] must be an object")
+        claim_id = _require_text(item.get("claim_id"), field_name=f"strategic_claims[{index}].claim_id")
+        phase = _require_text(item.get("phase"), field_name=f"strategic_claims[{index}].phase").lower()
+        if phase not in {"analysis", "synthesis"}:
+            raise ValueError(f"strategic_claims[{index}].phase must be analysis or synthesis")
+        summary = _require_text(item.get("summary"), field_name=f"strategic_claims[{index}].summary")
+        position = _require_text(item.get("position"), field_name=f"strategic_claims[{index}].position")
+        source_output_ref = _require_text(
+            item.get("source_output_ref"),
+            field_name=f"strategic_claims[{index}].source_output_ref",
+        )
+        claim_key = (claim_id, phase, source_output_ref)
+        if claim_key in seen_keys:
+            raise ValueError(
+                f"strategic_claims[{index}] duplicates claim_id/phase/source_output_ref for {claim_id}"
+            )
+        seen_keys.add(claim_key)
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"strategic_claims[{index}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "claim_id": claim_id,
+                "phase": phase,
+                "summary": summary,
+                "position": position,
+                "source_output_ref": source_output_ref,
+                "evidence_refs": evidence_refs,
+            }
+        )
+    normalized.sort(key=lambda row: (row["claim_id"], row["phase"], row["source_output_ref"], row["position"]))
+    return normalized
+
+
 def _normalize_req_028_unresolved_ideas(raw_value: Any) -> list[dict[str, Any]]:
     if raw_value is None:
         return []
@@ -1771,8 +1832,9 @@ def _canonical_req_028_processing_input(
     unresolved_ideas: list[dict[str, Any]],
     gap_candidates: list[dict[str, Any]],
     opportunity_candidates: list[dict[str, Any]],
+    strategic_claims: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return {
+    processing_input = {
         "required_evidence_refs": list(evidence_refs),
         "target_project_evidence_refs": list(target_project_evidence_refs),
         "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
@@ -1828,6 +1890,19 @@ def _canonical_req_028_processing_input(
             for row in opportunity_candidates
         ],
     }
+    if strategic_claims:
+        processing_input["strategic_claims"] = [
+            {
+                "claim_id": row["claim_id"],
+                "phase": row["phase"],
+                "summary": row["summary"],
+                "position": row["position"],
+                "source_output_ref": row["source_output_ref"],
+                "evidence_refs": list(row["evidence_refs"]),
+            }
+            for row in strategic_claims
+        ]
+    return processing_input
 
 
 def _req_028_recommendation_decision(
@@ -1835,12 +1910,14 @@ def _req_028_recommendation_decision(
     recommended_opportunities: Sequence[Mapping[str, Any]],
     open_risks: Sequence[Mapping[str, Any]],
 ) -> str:
+    reason_codes = {_as_text(row.get("reason_code")) for row in open_risks}
+    if {"cross_call_contradiction", "uncited_strategic_claim"}.intersection(reason_codes):
+        return "resolve-strategy-gaps"
     if recommended_opportunities and not open_risks:
         return "proceed"
     if recommended_opportunities and open_risks:
         return "proceed-with-open-risks"
     if open_risks:
-        reason_codes = {_as_text(row.get("reason_code")) for row in open_risks}
         if reason_codes and reason_codes == {"missing_earth_sweep_evidence_refs"}:
             return "collect-earth-evidence"
         return "resolve-context-gaps"
@@ -1848,6 +1925,8 @@ def _req_028_recommendation_decision(
 
 
 def _req_028_recommendation_rationale(*, decision: str) -> str:
+    if decision == "resolve-strategy-gaps":
+        return "Call-3 detected contradictory or uncited strategic claims that must be resolved before promotion."
     if decision == "proceed":
         return "Earth-sweep evidence and cross-project context are sufficient to promote Call-3 opportunities."
     if decision == "proceed-with-open-risks":
@@ -1885,6 +1964,7 @@ def _build_req_028_processing_behavior(
     unresolved_ideas: list[dict[str, Any]],
     gap_candidates: list[dict[str, Any]],
     opportunity_candidates: list[dict[str, Any]],
+    strategic_claims: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not earth_sweep_evidence_refs:
         raise ValueError("earth_sweep_evidence_refs must contain at least 1 item(s)")
@@ -1897,6 +1977,61 @@ def _build_req_028_processing_behavior(
     recommended_opportunities: list[dict[str, Any]] = []
     cross_project_obligations: list[dict[str, Any]] = []
     open_risks: list[dict[str, Any]] = []
+    normalized_strategic_claims = list(strategic_claims or [])
+    available_citation_refs = set(
+        _collect_unique_refs(
+            target_project_evidence_refs,
+            earth_sweep_evidence_refs,
+            cross_project_refs,
+            *[row["evidence_refs"] for row in unresolved_ideas],
+            *[row["evidence_refs"] for row in gap_candidates],
+            *[row["evidence_refs"] for row in opportunity_candidates],
+        )
+    )
+
+    claim_rows_by_id: dict[str, list[dict[str, Any]]] = {}
+    for claim in normalized_strategic_claims:
+        claim_rows_by_id.setdefault(claim["claim_id"], []).append(claim)
+        citation_refs = list(claim["evidence_refs"])
+        if not citation_refs or not set(citation_refs).issubset(available_citation_refs):
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim['claim_id']}-citation",
+                    "summary": claim["summary"],
+                    "reason_code": "uncited_strategic_claim",
+                    "required_evidence_refs": _collect_unique_refs([claim["source_output_ref"]], citation_refs),
+                }
+            )
+
+    for claim_id, claim_rows in claim_rows_by_id.items():
+        analysis_rows = [row for row in claim_rows if row["phase"] == "analysis"]
+        synthesis_rows = [row for row in claim_rows if row["phase"] == "synthesis"]
+        contradiction_row: dict[str, Any] | None = None
+        for analysis_row in analysis_rows:
+            for synthesis_row in synthesis_rows:
+                if analysis_row["position"] == synthesis_row["position"]:
+                    continue
+                contradiction_row = {
+                    "summary": synthesis_row["summary"],
+                    "required_evidence_refs": _collect_unique_refs(
+                        [analysis_row["source_output_ref"]],
+                        [synthesis_row["source_output_ref"]],
+                        analysis_row["evidence_refs"],
+                        synthesis_row["evidence_refs"],
+                    ),
+                }
+                break
+            if contradiction_row is not None:
+                break
+        if contradiction_row is not None:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim_id}-contradiction",
+                    "summary": contradiction_row["summary"],
+                    "reason_code": "cross_call_contradiction",
+                    "required_evidence_refs": contradiction_row["required_evidence_refs"],
+                }
+            )
 
     for gap in gap_candidates:
         if not set(gap["evidence_refs"]).intersection(earth_ref_set):
@@ -2190,6 +2325,7 @@ def build_req_028_call_3_gap_and_opportunity_reasoning(
     unresolved_ideas: Sequence[Mapping[str, Any]] | None = None,
     gap_candidates: Sequence[Mapping[str, Any]] | None = None,
     opportunity_candidates: Sequence[Mapping[str, Any]] | None = None,
+    strategic_claims: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the REQ-028 Call-3 gap and opportunity reasoning payload."""
     normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
@@ -2216,6 +2352,7 @@ def build_req_028_call_3_gap_and_opportunity_reasoning(
     normalized_unresolved_ideas = _normalize_req_028_unresolved_ideas(unresolved_ideas)
     normalized_gap_candidates = _normalize_req_028_gap_candidates(gap_candidates)
     normalized_opportunity_candidates = _normalize_req_028_opportunity_candidates(opportunity_candidates)
+    normalized_strategic_claims = _normalize_req_028_strategic_claims(strategic_claims)
 
     canonical_input = _canonical_req_028_input(
         target_project_root=normalized_target_root,
@@ -2236,6 +2373,7 @@ def build_req_028_call_3_gap_and_opportunity_reasoning(
         unresolved_ideas=normalized_unresolved_ideas,
         gap_candidates=normalized_gap_candidates,
         opportunity_candidates=normalized_opportunity_candidates,
+        strategic_claims=normalized_strategic_claims,
     )
     processing_sha = _canonical_digest(canonical_processing_input)
 
@@ -2249,6 +2387,7 @@ def build_req_028_call_3_gap_and_opportunity_reasoning(
         unresolved_ideas=normalized_unresolved_ideas,
         gap_candidates=normalized_gap_candidates,
         opportunity_candidates=normalized_opportunity_candidates,
+        strategic_claims=normalized_strategic_claims,
     )
     processing_call_id = f"req028-processing-{processing_sha[:16]}"
     llm_call_trace_rows = _build_req_028_llm_call_trace_rows(
@@ -2403,6 +2542,17 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
     normalized_unresolved_ideas: list[dict[str, Any]] = []
     normalized_gap_candidates: list[dict[str, Any]] = []
     normalized_opportunity_candidates: list[dict[str, Any]] = []
+    normalized_strategic_claims: list[dict[str, Any]] = []
+    metadata = payload.get("call_metadata")
+    if isinstance(metadata, Mapping):
+        canonical_processing_input_preview = metadata.get("canonical_processing_input")
+        if isinstance(canonical_processing_input_preview, Mapping) and "strategic_claims" in canonical_processing_input_preview:
+            try:
+                normalized_strategic_claims = _normalize_req_028_strategic_claims(
+                    canonical_processing_input_preview.get("strategic_claims")
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
     context_inputs = processing_behavior.get("context_inputs")
     if not isinstance(context_inputs, Mapping):
         errors.append("processing_behavior.context_inputs must be an object")
@@ -2568,6 +2718,7 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
                 unresolved_ideas=normalized_unresolved_ideas,
                 gap_candidates=normalized_gap_candidates,
                 opportunity_candidates=normalized_opportunity_candidates,
+                strategic_claims=normalized_strategic_claims,
             )
         except ValueError as exc:
             errors.append(f"processing_behavior could not be reconstructed: {exc}")
@@ -2575,7 +2726,6 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
             if dict(processing_behavior) != expected_processing_behavior:
                 errors.append("processing_behavior must match deterministic Call-3 reasoning output")
 
-    metadata = payload.get("call_metadata")
     if not isinstance(metadata, Mapping):
         errors.append("call_metadata must be an object")
         return errors
@@ -2662,6 +2812,7 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
             unresolved_ideas=normalized_unresolved_ideas,
             gap_candidates=normalized_gap_candidates,
             opportunity_candidates=normalized_opportunity_candidates,
+            strategic_claims=normalized_strategic_claims,
         )
         if dict(canonical_processing_input) != expected_processing_input:
             errors.append("call_metadata.canonical_processing_input must mirror processing inputs")
