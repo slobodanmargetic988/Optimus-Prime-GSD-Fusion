@@ -14,11 +14,11 @@ def _reset_call_trace() -> None:
         shutil.rmtree(artifacts_dir, ignore_errors=True)
 
 
-def _read_last_trace_row() -> dict:
+def _read_trace_rows() -> list[dict]:
     trace_path = Path("strategy/current/llm_call_trace.jsonl")
     lines = trace_path.read_text(encoding="utf-8").splitlines()
     assert lines
-    return json.loads(lines[-1])
+    return [json.loads(line) for line in lines]
 
 
 def test_req035_processing_enforces_citations_and_uses_cross_project_context() -> None:
@@ -169,23 +169,24 @@ def test_req035_processing_enforces_citations_and_uses_cross_project_context() -
     )
 
     metadata = result["call_metadata"]
-    row = metadata["llm_call_trace_rows"][0]
-    assert metadata["llm_call_trace_rows"] == [row]
+    rows = metadata["llm_call_trace_rows"]
+    assert [row["call_id"] for row in rows] == ["call-2", "call-5"]
     assert metadata["llm_call_trace_schema_version"] == "optimus-prime.llm-call-trace.v1"
     assert metadata["llm_call_trace_path"] == "strategy/current/llm_call_trace.jsonl"
     assert metadata["reproducibility"] == "deterministic-input-fingerprint"
     assert metadata["reproducible_call_id"].startswith("req035-")
     assert metadata["processing_call_id"].startswith("req035-processing-")
 
-    trace_row = _read_last_trace_row()
-    assert trace_row == row
-    assert row["requirement_id"] == pipeline.REQ_035_REQUIREMENT_ID
-    assert row["call_id"] == pipeline.REQ_035_CALL_ID
-    assert row["input_refs"]
-    assert row["output_refs"]
-    assert row["handoff_summary"]
-    for artifact in row["artifacts"]:
-        assert Path(artifact["path"]).exists()
+    trace_rows = _read_trace_rows()
+    assert trace_rows == rows
+    for row in rows:
+        assert row["requirement_id"] == pipeline.REQ_035_REQUIREMENT_ID
+        assert row["call_id"] in {"call-2", "call-5"}
+        assert row["input_refs"]
+        assert row["output_refs"]
+        assert row["handoff_summary"]
+        for artifact in row["artifacts"]:
+            assert Path(artifact["path"]).exists()
 
 
 def test_req035_processing_without_earth_refs_gates_cross_project_obligations() -> None:
@@ -244,3 +245,4 @@ def test_req035_processing_without_earth_refs_gates_cross_project_obligations() 
     assert recommendation["decision"] == "collect-earth-evidence"
     assert usage["cross_project_context_used"] is True
     assert usage["earth_sweep_context_used"] is False
+    assert [row["call_id"] for row in result["call_metadata"]["llm_call_trace_rows"]] == ["call-5"]

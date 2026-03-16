@@ -467,22 +467,23 @@ def _record_req_030_call_5_llm_call_trace(
     return row
 
 
-def _handoff_summary_for_req_035_reasoning_calls(result: Mapping[str, Any]) -> str:
-    behavior = result.get("processing_behavior") if isinstance(result.get("processing_behavior"), Mapping) else {}
-    recommendation = behavior.get("recommendation") if isinstance(behavior.get("recommendation"), Mapping) else {}
-    decision = str(recommendation.get("decision") or "").strip() or "unknown"
-    confidence = str(recommendation.get("confidence") or "").strip() or "unknown"
-    obligations = recommendation.get("cross_project_obligations") if isinstance(recommendation.get("cross_project_obligations"), list) else []
-    risks = recommendation.get("open_risks") if isinstance(recommendation.get("open_risks"), list) else []
-    totals = result.get("totals") if isinstance(result.get("totals"), Mapping) else {}
+def _handoff_summary_for_req_035_reasoning_call(
+    *,
+    call_id: str,
+    call_totals: Mapping[str, Any],
+    call_actions_count: int,
+    overall_recommendation: Mapping[str, Any],
+) -> str:
+    decision = str(overall_recommendation.get("decision") or "").strip() or "unknown"
+    confidence = str(overall_recommendation.get("confidence") or "").strip() or "unknown"
     return (
-        f"{REQ_035_REQUIREMENT_ID} {REQ_035_CALL_ID} handoff: "
+        f"{REQ_035_REQUIREMENT_ID} {call_id} handoff: "
         f"decision={decision} confidence={confidence} "
-        f"reasoning_calls={int(totals.get('reasoning_calls') or 0)} "
-        f"strategic_claims={int(totals.get('strategic_claims') or 0)} "
-        f"flagged_claims={int(totals.get('flagged_claims') or 0)} "
-        f"final_recommendations={int(totals.get('final_recommendations') or 0)} "
-        f"obligations={len(obligations)} open_risks={len(risks)}"
+        f"strategic_claims={int(call_totals.get('strategic_claims') or 0)} "
+        f"cited_claims={int(call_totals.get('cited_claims') or 0)} "
+        f"flagged_claims={int(call_totals.get('flagged_claims') or 0)} "
+        f"final_recommendations={int(call_totals.get('final_recommendations') or 0)} "
+        f"promoted_actions={call_actions_count}"
     )
 
 
@@ -529,90 +530,156 @@ def _record_req_035_reasoning_calls_llm_call_trace(
     result: Mapping[str, Any],
     trace_path: Path | None = None,
     artifacts_dir: Path | None = None,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     trace_file = trace_path or _default_llm_call_trace_path()
     artifacts_root = artifacts_dir or _default_llm_call_trace_artifacts_dir()
-
-    input_snapshot = {
-        "schema_version": "optimus-prime.req-035.reasoning-calls-input-snapshot.v1",
-        "checked_at_utc": checked_at_utc,
-        "requirement_id": REQ_035_REQUIREMENT_ID,
-        "analysis_type": REQ_035_ANALYSIS_TYPE,
-        "call_id": REQ_035_CALL_ID,
-        "context_provenance_ledger": dict(context_provenance_ledger),
-        "reasoning_calls": [dict(row) for row in reasoning_calls],
-        "broad_sweep_context": {
-            "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
-            "earth_sweep_projects": earth_sweep_projects,
-            "cross_project_context": cross_project_context,
-        },
-    }
-    output_snapshot = {
-        "schema_version": "optimus-prime.req-035.reasoning-calls-output-snapshot.v1",
-        "checked_at_utc": checked_at_utc,
-        "requirement_id": REQ_035_REQUIREMENT_ID,
-        "analysis_type": REQ_035_ANALYSIS_TYPE,
-        "call_id": REQ_035_CALL_ID,
-        "result": dict(result),
-    }
-
-    input_digest = _sha256_hex(input_snapshot)
-    output_digest = _sha256_hex(output_snapshot)
-    bundle_dir = artifacts_root / "req-035" / "reasoning-calls" / input_digest[:16]
-    input_path = bundle_dir / "input.normalized.json"
-    output_path = bundle_dir / "output.normalized.json"
-    _write_json_artifact(input_path, input_snapshot)
-    _write_json_artifact(output_path, output_snapshot)
 
     trace_input_refs = _trace_input_refs(
         earth_sweep_evidence_refs=earth_sweep_evidence_refs,
         cross_project_context=cross_project_context,
         earth_sweep_projects=earth_sweep_projects,
     )
-    input_refs = sorted(
-        set(trace_input_refs)
-        | {
-            str(ref)
-            for ref in (context_provenance_ledger.get("evidence_ids") or [])
+    ledger_refs = {
+        str(ref)
+        for ref in (context_provenance_ledger.get("evidence_ids") or [])
+        if isinstance(ref, str) and ref.strip()
+    }
+
+    discipline = result.get("evidence_citation_discipline")
+    discipline_map = discipline if isinstance(discipline, Mapping) else {}
+    status_rows = discipline_map.get("strategic_claim_citation_status")
+    flagged_rows = discipline_map.get("flagged_claims")
+    final_rows = discipline_map.get("final_recommendations")
+    status_rows = status_rows if isinstance(status_rows, list) else []
+    flagged_rows = flagged_rows if isinstance(flagged_rows, list) else []
+    final_rows = final_rows if isinstance(final_rows, list) else []
+
+    behavior = result.get("processing_behavior")
+    behavior_map = behavior if isinstance(behavior, Mapping) else {}
+    recommendation = behavior_map.get("recommendation")
+    recommendation_map = recommendation if isinstance(recommendation, Mapping) else {}
+    recommended_actions = recommendation_map.get("recommended_actions")
+    recommended_actions = recommended_actions if isinstance(recommended_actions, list) else []
+
+    call_rows: list[dict[str, Any]] = []
+    for call in sorted(reasoning_calls, key=lambda row: str(row.get("call_id") or "")):
+        call_id = str(call.get("call_id") or "").strip()
+        if not call_id:
+            continue
+        call_claims = call.get("strategic_claims")
+        call_claims = call_claims if isinstance(call_claims, list) else []
+        claim_evidence_refs = {
+            str(ref).strip()
+            for claim in call_claims
+            if isinstance(claim, Mapping)
+            for ref in (claim.get("evidence_ids") or [])
             if isinstance(ref, str) and ref.strip()
         }
-    )
-    recommendation = {}
-    if isinstance(result.get("processing_behavior"), Mapping):
-        recommendation = result["processing_behavior"].get("recommendation") or {}
-    output_refs = [
-        f"{REQ_035_REQUIREMENT_ID}::call::{REQ_035_CALL_ID}::output::evidence_citation_discipline",
-        f"{REQ_035_REQUIREMENT_ID}::call::{REQ_035_CALL_ID}::output::final_recommendations",
-        f"{REQ_035_REQUIREMENT_ID}::call::{REQ_035_CALL_ID}::output::flagged_claims",
-        _repo_relative_path(output_path),
-    ]
-    if isinstance(recommendation, Mapping) and recommendation.get("cross_project_obligations"):
-        output_refs.append(f"{REQ_035_REQUIREMENT_ID}::call::{REQ_035_CALL_ID}::output::cross_project_obligations")
-    if isinstance(recommendation, Mapping) and recommendation.get("open_risks"):
-        output_refs.append(f"{REQ_035_REQUIREMENT_ID}::call::{REQ_035_CALL_ID}::output::open_risks")
+        call_input_refs = sorted(set(trace_input_refs) | ledger_refs | claim_evidence_refs)
 
-    row = {
-        "schema_version": _LLM_CALL_TRACE_SCHEMA_VERSION,
-        "checked_at_utc": checked_at_utc,
-        "requirement_id": REQ_035_REQUIREMENT_ID,
-        "analysis_type": REQ_035_ANALYSIS_TYPE,
-        "call_id": REQ_035_CALL_ID,
-        "call_objective": _REQ_035_CALL_OBJECTIVE,
-        "target_project_id": "",
-        "peer_project_ids": sorted(
-            {str(row.get("project_id") or "").strip() for row in cross_project_context if row.get("project_id")}
-        ),
-        "input_refs": input_refs,
-        "output_refs": sorted(set(output_refs)),
-        "artifacts": [
-            {"kind": "input_snapshot", "path": _repo_relative_path(input_path), "sha256": input_digest},
-            {"kind": "output_snapshot", "path": _repo_relative_path(output_path), "sha256": output_digest},
-        ],
-        "handoff_summary": _handoff_summary_for_req_035_reasoning_calls(result),
-        "totals": dict(result.get("totals") or {}) if isinstance(result.get("totals"), Mapping) else {},
-    }
-    _append_jsonl_row(trace_file, row)
-    return row
+        call_status_rows = [
+            row for row in status_rows if isinstance(row, Mapping) and str(row.get("call_id") or "").strip() == call_id
+        ]
+        call_flagged_rows = [
+            row for row in flagged_rows if isinstance(row, Mapping) and str(row.get("call_id") or "").strip() == call_id
+        ]
+        call_final_rows = [
+            row for row in final_rows if isinstance(row, Mapping) and str(row.get("call_id") or "").strip() == call_id
+        ]
+        call_actions = [
+            row
+            for row in recommended_actions
+            if isinstance(row, Mapping) and str(row.get("call_id") or "").strip() == call_id
+        ]
+        call_actions = sorted(call_actions, key=lambda row: (str(row.get("recommendation_id") or ""), str(row.get("action_id") or "")))
+
+        call_totals = {
+            "reasoning_calls": 1,
+            "strategic_claims": len(call_status_rows),
+            "cited_claims": sum(1 for row in call_status_rows if str(row.get("citation_status") or "") == "cited"),
+            "flagged_claims": len(call_flagged_rows),
+            "final_recommendations": len(call_final_rows),
+        }
+
+        input_snapshot = {
+            "schema_version": "optimus-prime.req-035.reasoning-call-input-snapshot.v1",
+            "checked_at_utc": checked_at_utc,
+            "requirement_id": REQ_035_REQUIREMENT_ID,
+            "analysis_type": REQ_035_ANALYSIS_TYPE,
+            "call_id": call_id,
+            "context_provenance_ledger": dict(context_provenance_ledger),
+            "reasoning_call": dict(call),
+            "broad_sweep_context": {
+                "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+                "earth_sweep_projects": earth_sweep_projects,
+                "cross_project_context": cross_project_context,
+            },
+        }
+        output_snapshot = {
+            "schema_version": "optimus-prime.req-035.reasoning-call-output-snapshot.v1",
+            "checked_at_utc": checked_at_utc,
+            "requirement_id": REQ_035_REQUIREMENT_ID,
+            "analysis_type": REQ_035_ANALYSIS_TYPE,
+            "call_id": call_id,
+            "result": {
+                "evidence_citation_discipline": {
+                    "strategic_claim_citation_status": call_status_rows,
+                    "flagged_claims": call_flagged_rows,
+                    "final_recommendations": call_final_rows,
+                },
+                "recommended_actions": call_actions,
+                "totals": call_totals,
+            },
+        }
+
+        input_digest = _sha256_hex(input_snapshot)
+        output_digest = _sha256_hex(output_snapshot)
+        bundle_dir = artifacts_root / "req-035" / call_id / input_digest[:16]
+        input_path = bundle_dir / "input.normalized.json"
+        output_path = bundle_dir / "output.normalized.json"
+        _write_json_artifact(input_path, input_snapshot)
+        _write_json_artifact(output_path, output_snapshot)
+
+        output_refs = [
+            f"{REQ_035_REQUIREMENT_ID}::call::{call_id}::output::strategic_claim_citation_status",
+            _repo_relative_path(output_path),
+        ]
+        if call_flagged_rows:
+            output_refs.append(f"{REQ_035_REQUIREMENT_ID}::call::{call_id}::output::flagged_claims")
+        if call_final_rows:
+            output_refs.append(f"{REQ_035_REQUIREMENT_ID}::call::{call_id}::output::final_recommendations")
+        if call_actions:
+            output_refs.append(f"{REQ_035_REQUIREMENT_ID}::call::{call_id}::output::recommended_actions")
+
+        row = {
+            "schema_version": _LLM_CALL_TRACE_SCHEMA_VERSION,
+            "checked_at_utc": checked_at_utc,
+            "requirement_id": REQ_035_REQUIREMENT_ID,
+            "analysis_type": REQ_035_ANALYSIS_TYPE,
+            "call_id": call_id,
+            "call_objective": _REQ_035_CALL_OBJECTIVE,
+            "target_project_id": "",
+            "peer_project_ids": sorted(
+                {str(item.get("project_id") or "").strip() for item in cross_project_context if item.get("project_id")}
+            ),
+            "input_refs": call_input_refs,
+            "output_refs": sorted(set(output_refs)),
+            "artifacts": [
+                {"kind": "input_snapshot", "path": _repo_relative_path(input_path), "sha256": input_digest},
+                {"kind": "output_snapshot", "path": _repo_relative_path(output_path), "sha256": output_digest},
+            ],
+            "handoff_summary": _handoff_summary_for_req_035_reasoning_call(
+                call_id=call_id,
+                call_totals=call_totals,
+                call_actions_count=len(call_actions),
+                overall_recommendation=recommendation_map,
+            ),
+            "totals": call_totals,
+        }
+        _append_jsonl_row(trace_file, row)
+        call_rows.append(row)
+
+    return call_rows
 
 
 def _tail_file(path: Path, *, keep_bytes: int) -> bytes:
@@ -2385,7 +2452,7 @@ def process_req_035_evidence_citation_discipline_in_reasoning_calls(
         "processing_behavior": processing_behavior,
     }
 
-    trace_row = _record_req_035_reasoning_calls_llm_call_trace(
+    trace_rows = _record_req_035_reasoning_calls_llm_call_trace(
         checked_at_utc=checked_at_utc,
         context_provenance_ledger=context_provenance_ledger,
         reasoning_calls=reasoning_calls,
@@ -2420,8 +2487,8 @@ def process_req_035_evidence_citation_discipline_in_reasoning_calls(
         "processing_call_id": f"req035-processing-{processing_input_sha[:16]}",
         "llm_call_trace_schema_version": _LLM_CALL_TRACE_SCHEMA_VERSION,
         "llm_call_trace_path": _LLM_CALL_TRACE_RELATIVE_PATH,
-        "llm_call_trace_sha256": _sha256_hex([trace_row]),
-        "llm_call_trace_rows": [trace_row],
+        "llm_call_trace_sha256": _sha256_hex(trace_rows),
+        "llm_call_trace_rows": trace_rows,
     }
     return result
 

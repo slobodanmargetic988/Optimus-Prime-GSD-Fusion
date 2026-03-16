@@ -175,3 +175,98 @@ def test_strategy_llm_pipeline_emits_req030_call_trace_metadata_and_task_evidenc
     artifacts = evidence["dev"]["artifacts"]
     assert "strategy/current/llm_call_trace.jsonl" in artifacts
     assert any("strategy/current/llm_call_trace_artifacts/req-030/call-5" in item for item in artifacts)
+
+
+def test_strategy_llm_pipeline_emits_req035_multi_call_trace_and_task_evidence_refs() -> None:
+    _reset_trace_state()
+    payload = {
+        "analysis_type": pipeline.REQ_035_ANALYSIS_TYPE,
+        "now_utc": "2026-03-16T13:10:00Z",
+        "context_provenance_ledger": {
+            "ledger_requirement_id": "REQ-021",
+            "ledger_scope": "strategy_context_sweep.processing_behavior",
+            "evidence_ids": [
+                "claim-111111111111",
+                "claim-222222222222",
+            ],
+        },
+        "reasoning_calls": [
+            {
+                "call_id": "call-2",
+                "strategic_claims": [
+                    {
+                        "strategic_claim_id": "sc.call2.local",
+                        "summary": "Local claim has valid citations.",
+                        "evidence_ids": [
+                            "claim-111111111111",
+                        ],
+                        "recommendation": {
+                            "recommendation_id": "rec.req-035.local",
+                            "summary": "Promote local recommendation.",
+                            "rationale": "Local recommendation is evidence-backed.",
+                            "confidence_tag": "high",
+                        },
+                    }
+                ],
+            },
+            {
+                "call_id": "call-5",
+                "strategic_claims": [
+                    {
+                        "strategic_claim_id": "sc.call5.cross-project",
+                        "summary": "Cross-project recommendation should stay cited.",
+                        "evidence_ids": [
+                            "claim-222222222222",
+                        ],
+                        "recommendation": {
+                            "recommendation_id": "rec.req-035.cross-project",
+                            "summary": "Coordinate evidence review with earth-ops.",
+                            "rationale": "Cross-project output remains evidence-backed.",
+                            "confidence_tag": "medium",
+                        },
+                    }
+                ],
+            },
+        ],
+        "broad_sweep_context": {
+            "earth_sweep_evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/portfolio.json",
+            ],
+            "cross_project_context": [
+                {
+                    "project_id": "earth-ops",
+                    "project_root": "/workspace/projects/Earth/earth-ops",
+                    "evidence_refs": [
+                        "reports/earth/sweeps/2026-03-16/earth-ops.json",
+                    ],
+                    "context_note": "Earth-ops owns cross-project evidence-review conventions.",
+                }
+            ],
+        },
+    }
+
+    result = pipeline.process_req_035_evidence_citation_discipline_in_reasoning_calls(payload)
+    assert result["ok"] is True
+
+    rows = result["call_metadata"]["llm_call_trace_rows"]
+    assert [row["call_id"] for row in rows] == ["call-2", "call-5"]
+    assert all(row["call_objective"] for row in rows)
+    assert all(row["input_refs"] for row in rows)
+    assert all(row["output_refs"] for row in rows)
+    assert all(row["handoff_summary"] for row in rows)
+
+    trace_path = Path("strategy/current/llm_call_trace.jsonl")
+    trace_rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    assert trace_rows == rows
+
+    for row in rows:
+        for artifact in row["artifacts"]:
+            assert Path(artifact["path"]).exists()
+            assert artifact["sha256"]
+
+    evidence_path = Path("reports/optimus-prime/planning/evidence/TASK-121/TASK_EVIDENCE.json")
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    artifacts = evidence["dev"]["artifacts"]
+    assert "strategy/current/llm_call_trace.jsonl" in artifacts
+    assert any("strategy/current/llm_call_trace_artifacts/req-035/call-2" in item for item in artifacts)
+    assert any("strategy/current/llm_call_trace_artifacts/req-035/call-5" in item for item in artifacts)
