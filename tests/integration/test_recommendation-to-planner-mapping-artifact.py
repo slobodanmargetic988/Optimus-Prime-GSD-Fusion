@@ -1,5 +1,7 @@
 import copy
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from scripts import strategy_artifacts_handoff as module
@@ -7,6 +9,11 @@ from scripts import strategy_artifacts_handoff as module
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_PATH = REPO_ROOT / "examples" / "fixtures" / "recommendation-to-planner-mapping-artifact.json"
+PACKET_PATH = REPO_ROOT / "strategy" / "current" / "strategy_packet.v1.json"
+SCHEMA_PATH = REPO_ROOT / "contracts" / "strategy_packet.v1.schema.json"
+OP_TOOLS_SCHEMA_PATH = REPO_ROOT / "op-tools" / "strategy" / "contracts" / "strategy_packet.v1.schema.json"
+OP_TOOLS_SAMPLE_PATH = REPO_ROOT / "op-tools" / "strategy" / "examples" / "strategy_packet.sample.v1.json"
+VALIDATOR_SCRIPT_PATH = REPO_ROOT / "scripts" / "strategy_packet_validate.py"
 
 
 def _read_json(path: Path) -> dict:
@@ -162,3 +169,109 @@ def test_req_054_integration_without_broad_context_keeps_contract_output_stable(
 
     assert "processing_behavior" not in out
     assert module.validate_req_054_recommendation_to_planner_mapping_artifact(out) == []
+
+
+def test_req_054_strategy_packet_contract_files_stay_in_sync() -> None:
+    assert _read_json(SCHEMA_PATH) == _read_json(OP_TOOLS_SCHEMA_PATH)
+    assert _read_json(PACKET_PATH) == _read_json(OP_TOOLS_SAMPLE_PATH)
+
+
+def test_req_054_strategy_packet_validator_accepts_current_packet() -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(VALIDATOR_SCRIPT_PATH),
+            "--input",
+            str(PACKET_PATH),
+            "--schema",
+            str(SCHEMA_PATH),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0
+    assert proc.stderr == ""
+
+    payload = json.loads(proc.stdout)
+    assert payload == {
+        "ok": True,
+        "checked_at_utc": payload["checked_at_utc"],
+        "verdict": "pass",
+        "planner_consumability": "planner_ready",
+        "reason_codes": [],
+        "diagnostic_count": 0,
+        "summary": "Strategy packet is planner-consumable.",
+        "diagnostics": [],
+    }
+    assert payload["checked_at_utc"].endswith("Z")
+
+
+def test_req_054_strategy_packet_validator_rejects_unmapped_recommendation_with_machine_readable_diagnostics(
+    tmp_path: Path,
+) -> None:
+    broken_packet = copy.deepcopy(_read_json(PACKET_PATH))
+    broken_packet["recommendation_to_planner_mapping_artifact"]["recommendation_to_task_intent_mappings"] = [
+        row
+        for row in broken_packet["recommendation_to_planner_mapping_artifact"]["recommendation_to_task_intent_mappings"]
+        if row["recommendation_id"] != "rec.review-reuse-contracts"
+    ]
+    broken_packet["recommendation_to_planner_mapping_artifact"]["recommendation_ids"] = [
+        "rec.align-earth-runtime-canary",
+        "rec.harden-telemetry-freshness",
+    ]
+    broken_packet["recommendation_to_planner_mapping_artifact"]["planner_task_intent_handles"] = [
+        "intent.cross-project-runtime-canary-alignment",
+        "intent.telemetry-freshness-hardening",
+    ]
+    packet_path = tmp_path / "invalid-strategy-packet.json"
+    packet_path.write_text(json.dumps(broken_packet), encoding="utf-8")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(VALIDATOR_SCRIPT_PATH),
+            "--input",
+            str(packet_path),
+            "--schema",
+            str(SCHEMA_PATH),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 1
+    assert proc.stderr == ""
+
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["verdict"] == "fail"
+    assert payload["planner_consumability"] == "planner_blocked"
+    assert payload["reason_codes"] == [
+        "mapping_artifact_recommendation_ids_mismatch",
+        "packet_recommendation_missing_mapping",
+    ]
+    assert payload["diagnostic_count"] == 2
+    assert payload["summary"] == "Strategy packet is not planner-consumable; 2 blocking diagnostics detected."
+    assert payload["diagnostics"] == [
+        {
+            "severity": "error",
+            "reason_code": "mapping_artifact_recommendation_ids_mismatch",
+            "field_path": "recommendation_to_planner_mapping_artifact.recommendation_ids",
+            "message": (
+                "recommendation_ids must exactly match the strategy packet recommendation_id set "
+                "for planner consumability"
+            ),
+        },
+        {
+            "severity": "error",
+            "reason_code": "packet_recommendation_missing_mapping",
+            "field_path": "recommendations[2].recommendation_id",
+            "message": (
+                "recommendation_id must have at least one REQ-054 planner task intent mapping "
+                "for planner consumability"
+            ),
+        },
+    ]

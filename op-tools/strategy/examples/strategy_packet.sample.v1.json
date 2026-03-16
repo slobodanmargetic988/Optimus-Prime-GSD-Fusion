@@ -1,45 +1,194 @@
 {
   "schema_version": "strategy-packet.v1",
   "identity": {
-    "project_id": "prj.myownmint",
-    "run_id": "run.20260312t201000z-s001",
-    "event_id": "event.20260312t201400z-strategy-packet",
+    "project_id": "prj.optimus-prime-gsd-fusion",
+    "run_id": "run.20260316t090500z-r054",
+    "event_id": "event.20260316t091000z-strategy-packet",
     "era_id": "era.2026q1-execution",
-    "plan_id": "plan.myownmint-phase2"
+    "plan_id": "plan.optimus-prime-phase2"
   },
   "strategy": {
-    "revision_id": "strat.20260312-r1",
-    "summary": "Prioritize dispatch quality and deterministic continuation to unlock reliable autonomous throughput.",
+    "revision_id": "strat.20260316-r054",
+    "summary": "Package recommendation-to-planner traceability into the canonical strategy packet so planner gating remains deterministic.",
     "link_map_ref": "strategy/current/ECOSYSTEM_LINK_MAP.json"
   },
   "recommendations": [
     {
-      "recommendation_id": "rec.dispatch-quality-first",
+      "recommendation_id": "rec.harden-telemetry-freshness",
       "priority": "high",
-      "summary": "Implement watcher-driven cycle release and redispatch-quality controls before broader runtime features.",
-      "rationale": "This directly reduces non-actionable cycles and improves output per token budget.",
-      "expected_impact": "Lower idle loops and better per-cycle productivity under constrained hardware/rate limits.",
+      "summary": "Harden telemetry freshness checks before the next autonomous canary pass.",
+      "rationale": "Telemetry freshness is the first unblocker for deterministic verification cycles.",
+      "expected_impact": "Reduce stale evidence handoffs before planner packet execution.",
+      "risk_level": "medium"
+    },
+    {
+      "recommendation_id": "rec.align-earth-runtime-canary",
+      "priority": "high",
+      "summary": "Align the Earth runtime canary stabilization window before widening rollout.",
+      "rationale": "Cross-project rollout sequencing depends on runtime stabilization evidence from Earth.",
+      "expected_impact": "Lower rollout regressions caused by unsynchronized cross-project canary windows.",
+      "risk_level": "high"
+    },
+    {
+      "recommendation_id": "rec.review-reuse-contracts",
+      "priority": "medium",
+      "summary": "Review reuse-contract drift before promoting more shared interfaces.",
+      "rationale": "Planner packets need explicit ownership and reuse-contract evidence before scaling shared work.",
+      "expected_impact": "Improve planner task traceability for shared contract and ownership work.",
       "risk_level": "medium"
     }
   ],
+  "recommendation_to_planner_mapping_artifact": {
+    "recommendation_to_task_intent_mappings": [
+      {
+        "mapping_id": "rtp.668359b98d09",
+        "recommendation_id": "rec.harden-telemetry-freshness",
+        "planner_task_intent_handle": "intent.telemetry-freshness-hardening",
+        "planner_task_intent_summary": "Harden telemetry freshness checks before the next autonomous canary pass.",
+        "planner_lane": "execution",
+        "sequence_hint": 1,
+        "traceability_refs": [
+          "reports/optimus-prime/planning/PLAN_PACKETS.json#execution.telemetry-freshness",
+          "reports/quality/req-039-rationale-quality-score.json",
+          "reports/runtime/telemetry/freshness-gap-2026-03-15.json",
+          "strategy/current/llm_call_trace.jsonl#call-5-001",
+          "strategy/current/llm_call_trace.jsonl#rationale-quality-001"
+        ],
+        "downstream_audit_trail": {
+          "source_call_trace_refs": [
+            "strategy/current/llm_call_trace.jsonl#call-5-001",
+            "strategy/current/llm_call_trace.jsonl#rationale-quality-001"
+          ],
+          "source_evidence_refs": [
+            "reports/quality/req-039-rationale-quality-score.json",
+            "reports/runtime/telemetry/freshness-gap-2026-03-15.json"
+          ],
+          "source_packet_refs": [
+            "reports/optimus-prime/planning/PLAN_PACKETS.json#execution.telemetry-freshness"
+          ],
+          "emitted_at_utc": "2026-03-16T09:05:00Z",
+          "emitted_by_requirement_id": "REQ-054"
+        }
+      },
+      {
+        "mapping_id": "rtp.ba8b9f068a81",
+        "recommendation_id": "rec.align-earth-runtime-canary",
+        "planner_task_intent_handle": "intent.cross-project-runtime-canary-alignment",
+        "planner_task_intent_summary": "Align Earth runtime canary stabilization windows before widening rollout.",
+        "planner_lane": "coordination",
+        "sequence_hint": 2,
+        "traceability_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/optimus-prime/planning/PLAN_PACKETS.json#coordination.runtime-canary",
+          "reports/quality/req-039-rationale-quality-score.json",
+          "strategy/current/llm_call_trace.jsonl#call-2-001",
+          "strategy/current/llm_call_trace.jsonl#rationale-quality-001"
+        ],
+        "downstream_audit_trail": {
+          "source_call_trace_refs": [
+            "strategy/current/llm_call_trace.jsonl#call-2-001",
+            "strategy/current/llm_call_trace.jsonl#rationale-quality-001"
+          ],
+          "source_evidence_refs": [
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+            "reports/quality/req-039-rationale-quality-score.json"
+          ],
+          "source_packet_refs": [
+            "reports/optimus-prime/planning/PLAN_PACKETS.json#coordination.runtime-canary"
+          ],
+          "emitted_at_utc": "2026-03-16T09:05:00Z",
+          "emitted_by_requirement_id": "REQ-054"
+        }
+      },
+      {
+        "mapping_id": "rtp.ad285f7126ce",
+        "recommendation_id": "rec.review-reuse-contracts",
+        "planner_task_intent_handle": "intent.reuse-contract-review",
+        "planner_task_intent_summary": "Review reuse-contract drift before promoting more shared interfaces.",
+        "planner_lane": "analysis",
+        "sequence_hint": 3,
+        "traceability_refs": [
+          "contracts/req/REQ-016_reuse-opportunity-detection.md",
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json",
+          "reports/optimus-prime/planning/PLAN_PACKETS.json#analysis.reuse-contract-review",
+          "strategy/current/llm_call_trace.jsonl#call-2-001",
+          "strategy/current/llm_call_trace.jsonl#call-5-001"
+        ],
+        "downstream_audit_trail": {
+          "source_call_trace_refs": [
+            "strategy/current/llm_call_trace.jsonl#call-2-001",
+            "strategy/current/llm_call_trace.jsonl#call-5-001"
+          ],
+          "source_evidence_refs": [
+            "contracts/req/REQ-016_reuse-opportunity-detection.md",
+            "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          ],
+          "source_packet_refs": [
+            "reports/optimus-prime/planning/PLAN_PACKETS.json#analysis.reuse-contract-review"
+          ],
+          "emitted_at_utc": "2026-03-16T09:05:00Z",
+          "emitted_by_requirement_id": "REQ-054"
+        }
+      },
+      {
+        "mapping_id": "rtp.60b70cb83320",
+        "recommendation_id": "rec.review-reuse-contracts",
+        "planner_task_intent_handle": "intent.cross-project-reuse-ownership-clarification",
+        "planner_task_intent_summary": "Clarify cross-project ownership for shared reuse contracts.",
+        "planner_lane": "coordination",
+        "sequence_hint": 4,
+        "traceability_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json",
+          "reports/optimus-prime/planning/PLAN_PACKETS.json#coordination.reuse-ownership",
+          "strategy/current/llm_call_trace.jsonl#call-2-001",
+          "strategy/current/llm_call_trace.jsonl#call-5-001"
+        ],
+        "downstream_audit_trail": {
+          "source_call_trace_refs": [
+            "strategy/current/llm_call_trace.jsonl#call-2-001",
+            "strategy/current/llm_call_trace.jsonl#call-5-001"
+          ],
+          "source_evidence_refs": [
+            "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          ],
+          "source_packet_refs": [
+            "reports/optimus-prime/planning/PLAN_PACKETS.json#coordination.reuse-ownership"
+          ],
+          "emitted_at_utc": "2026-03-16T09:05:00Z",
+          "emitted_by_requirement_id": "REQ-054"
+        }
+      }
+    ],
+    "recommendation_ids": [
+      "rec.align-earth-runtime-canary",
+      "rec.harden-telemetry-freshness",
+      "rec.review-reuse-contracts"
+    ],
+    "planner_task_intent_handles": [
+      "intent.cross-project-reuse-ownership-clarification",
+      "intent.cross-project-runtime-canary-alignment",
+      "intent.reuse-contract-review",
+      "intent.telemetry-freshness-hardening"
+    ]
+  },
   "constraints": {
     "hard": [
-      "Preserve existing OP behavior unless feature flags explicitly enable new cycle-release mode."
+      "Do not allow planner intake when a strategy recommendation lacks at least one intent mapping."
     ],
     "soft": [
-      "Default to token-conservative mode in low budget environments."
+      "Preserve deterministic recommendation-to-intent traceability for downstream audit trails."
     ]
   },
   "kpi_targets": [
     {
-      "metric": "non_actionable_cycle_ratio",
+      "metric": "planner_intake_blockers",
       "direction": "decrease",
-      "target": ">=20% reduction versus baseline"
+      "target": "0 unmapped recommendations per strategy packet"
     },
     {
-      "metric": "redispatch_loop_ratio",
-      "direction": "decrease",
-      "target": ">=15% reduction versus baseline"
+      "metric": "traceability_coverage",
+      "direction": "maintain",
+      "target": "100% of recommendations mapped to at least one planner task intent"
     }
   ],
   "source": {
