@@ -38,6 +38,8 @@ _REQ_063_LINK_STATUSES = {"valid", "orphaned", "broken"}
 _REQ_063_DIAGNOSTIC_SEVERITIES = {"error"}
 _REQ_063_DIAGNOSTIC_CATEGORIES = {"referential_integrity", "schema_integrity"}
 _REQ_063_SUMMARY_STATUSES = {"passed", "failed"}
+_REQ_063_MISSING_DISCOVERED_PROJECT_REASON = "missing_discovered_project"
+_REQ_063_MISSING_EARTH_SWEEP_REASON = "missing_earth_sweep_evidence_refs"
 
 
 def _utc_timestamp() -> str:
@@ -656,6 +658,204 @@ def _build_req_063_integrity_report(
     }
 
 
+def _req_063_external_project_ids(
+    *,
+    target_project_id: str,
+    link: Mapping[str, Any],
+) -> list[str]:
+    project_ids = {
+        str(project_id).strip()
+        for project_id in (link.get("source_project_id"), link.get("target_project_id"))
+        if isinstance(project_id, str) and project_id.strip() and project_id != target_project_id
+    }
+    return sorted(project_ids)
+
+
+def _build_req_063_processing_behavior(
+    *,
+    target_project: Mapping[str, str],
+    report: Mapping[str, Any],
+    broad_sweep_context: dict[str, list[str]],
+) -> dict[str, Any]:
+    target_project_id = str(target_project["project_id"])
+    earth_sweep_refs = set(broad_sweep_context["earth_sweep_evidence_refs"])
+    projects_considered = set(broad_sweep_context["projects_considered"])
+    discovered_project_ids = {
+        str(row["project_id"])
+        for row in report["discovered_projects"]
+        if isinstance(row, Mapping) and isinstance(row.get("project_id"), str)
+    }
+    diagnostics_by_link_id: dict[str, list[dict[str, Any]]] = {}
+    for row in report["diagnostics"]:
+        if not isinstance(row, Mapping):
+            continue
+        link_id = row.get("link_id")
+        if not isinstance(link_id, str) or not link_id:
+            continue
+        diagnostics_by_link_id.setdefault(link_id, []).append(dict(row))
+
+    recommended_actions: list[dict[str, Any]] = []
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    link_ids_with_cross_project_context: set[str] = set()
+    evidence_refs_used: set[str] = set(earth_sweep_refs)
+
+    summary = report["summary"]
+    valid_link_ids = set(summary["valid_link_ids"])
+    orphaned_link_ids = set(summary["orphaned_link_ids"])
+    broken_link_ids = set(summary["broken_link_ids"])
+
+    for link in report["links"]:
+        link_id = str(link["link_id"])
+        integrity_status = str(link["integrity_status"])
+        external_project_ids = _req_063_external_project_ids(
+            target_project_id=target_project_id,
+            link=link,
+        )
+        if external_project_ids:
+            link_ids_with_cross_project_context.add(link_id)
+            projects_considered.update(external_project_ids)
+
+        action_scope = "cross-project" if external_project_ids else "local"
+        action_evidence_refs = sorted(set(link["source_refs"]) | (earth_sweep_refs if external_project_ids else set()))
+        evidence_refs_used.update(action_evidence_refs)
+
+        if integrity_status == "valid":
+            action_summary = f"Keep ecosystem link '{link_id}' aligned with discovered project context."
+            action_rationale = (
+                "Both link endpoints resolve to discovered projects, so the link can remain active while "
+                "cross-project evidence is kept current."
+            )
+            action_next_step = "Retain the link row and refresh broad-sweep evidence refs before the next strategy pass."
+        elif integrity_status == "orphaned":
+            action_summary = f"Investigate orphaned ecosystem link '{link_id}' before planner handoff."
+            action_rationale = (
+                "At least one link endpoint does not resolve to a discovered project, so the map row cannot be "
+                "treated as referentially complete."
+            )
+            action_next_step = "Confirm the missing project in Earth sweep or remove the orphaned link row."
+        else:
+            action_summary = f"Repair broken ecosystem link '{link_id}' before downstream consumption."
+            action_rationale = (
+                "Self-referential link rows violate the bounded link-map schema and should be corrected at the source."
+            )
+            action_next_step = "Replace the self-referential endpoint with the intended peer project or remove the row."
+
+        recommended_actions.append(
+            {
+                "action_id": f"action.{link_id}",
+                "link_id": link_id,
+                "action_scope": action_scope,
+                "summary": action_summary,
+                "rationale": action_rationale,
+                "next_step": action_next_step,
+                "evidence_refs": action_evidence_refs,
+            }
+        )
+
+        if integrity_status == "valid" and external_project_ids:
+            if earth_sweep_refs:
+                for project_id in external_project_ids:
+                    cross_project_obligations.append(
+                        {
+                            "obligation_id": f"obligation.{link_id}.{project_id}",
+                            "link_id": link_id,
+                            "project_id": project_id,
+                            "summary": (
+                                f"Keep ecosystem link '{link_id}' synchronized with discovered project '{project_id}'."
+                            ),
+                            "evidence_refs": sorted(earth_sweep_refs),
+                        }
+                    )
+            else:
+                open_risks.append(
+                    {
+                        "risk_id": f"risk.{link_id}",
+                        "link_id": link_id,
+                        "summary": (
+                            f"Cross-project link '{link_id}' should stay evidence-backed, but Earth-sweep refs are "
+                            "missing."
+                        ),
+                        "reason_code": _REQ_063_MISSING_EARTH_SWEEP_REASON,
+                        "required_evidence_refs": ["missing:earth-sweep-evidence-ref"],
+                    }
+                )
+            continue
+
+        if integrity_status == "orphaned":
+            missing_project_ids = sorted(
+                {
+                    project_id
+                    for diagnostic in diagnostics_by_link_id.get(link_id, [])
+                    for project_id in diagnostic.get("project_ids", [])
+                    if isinstance(project_id, str) and project_id not in discovered_project_ids
+                }
+            )
+            open_risks.append(
+                {
+                    "risk_id": f"risk.{link_id}",
+                    "link_id": link_id,
+                    "summary": (
+                        f"Link '{link_id}' references undiscovered project ids: {', '.join(missing_project_ids)}."
+                    ),
+                    "reason_code": _REQ_063_MISSING_DISCOVERED_PROJECT_REASON,
+                    "required_evidence_refs": action_evidence_refs,
+                }
+            )
+
+    recommended_actions.sort(key=lambda row: str(row["action_id"]))
+    cross_project_obligations.sort(key=lambda row: str(row["obligation_id"]))
+    open_risks.sort(key=lambda row: str(row["risk_id"]))
+
+    if open_risks and not cross_project_obligations:
+        recommendation_decision = "collect-earth-evidence"
+        recommendation_confidence = "medium"
+    elif open_risks:
+        recommendation_decision = "proceed-with-open-risks"
+        recommendation_confidence = "medium"
+    elif orphaned_link_ids or broken_link_ids:
+        recommendation_decision = "proceed"
+        recommendation_confidence = "medium"
+    else:
+        recommendation_decision = "proceed"
+        recommendation_confidence = "high"
+
+    usage = {
+        "cross_project_context_provided": bool(
+            broad_sweep_context["projects_considered"] or broad_sweep_context["earth_sweep_evidence_refs"]
+        ),
+        "cross_project_context_used": bool(link_ids_with_cross_project_context),
+        "projects_considered": sorted(projects_considered),
+        "earth_sweep_evidence_refs_considered": broad_sweep_context["earth_sweep_evidence_refs"],
+        "link_ids_with_cross_project_context": sorted(link_ids_with_cross_project_context),
+        "cross_project_obligation_count": len(cross_project_obligations),
+        "open_risk_count": len(open_risks),
+        "evidence_refs_used": sorted(evidence_refs_used),
+    }
+    recommendation = {
+        "decision": recommendation_decision,
+        "rationale": (
+            f"links={len(report['links'])} valid={len(valid_link_ids)} orphaned={len(orphaned_link_ids)} "
+            f"broken={len(broken_link_ids)} obligations={len(cross_project_obligations)} "
+            f"open_risks={len(open_risks)}"
+        ),
+        "confidence": recommendation_confidence,
+        "evidence_refs": usage["evidence_refs_used"],
+        "recommended_actions": recommended_actions,
+        "cross_project_obligations": cross_project_obligations,
+        "open_risks": open_risks,
+    }
+
+    return {
+        "strategy": "ecosystem-link-map-integrity-remediation",
+        "context_inputs": {
+            "broad_sweep_context": broad_sweep_context,
+        },
+        "cross_project_context_usage": usage,
+        "recommendation": recommendation,
+    }
+
+
 def build_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Build normalized REQ-056 payload for KPI target artifact handoff."""
     raw = _require_mapping(payload, field_name="payload")
@@ -763,6 +963,11 @@ def build_req_063_ecosystem_link_map_integrity_validator(payload: Mapping[str, A
     link_map_ref = _require_nonempty_text(raw.get("link_map_ref"), field_name="link_map_ref")
     discovered_projects = _normalize_discovered_projects(raw.get("discovered_projects"))
     links = _normalize_link_map_links(raw.get("links"))
+    broad_sweep_context = (
+        _normalize_broad_sweep_context(raw.get("broad_sweep_context"))
+        if raw.get("broad_sweep_context") is not None
+        else None
+    )
 
     report = _build_req_063_integrity_report(
         link_map_ref=link_map_ref,
@@ -789,6 +994,12 @@ def build_req_063_ecosystem_link_map_integrity_validator(payload: Mapping[str, A
             "diagnostics": len(report["diagnostics"]),
         },
     }
+    if broad_sweep_context is not None:
+        built["processing_behavior"] = _build_req_063_processing_behavior(
+            target_project=target_project,
+            report=report,
+            broad_sweep_context=broad_sweep_context,
+        )
 
     errors = validate_req_063_ecosystem_link_map_integrity_validator(built)
     if errors:
@@ -1798,13 +2009,347 @@ def _validate_req_063_diagnostic_row(
     return errors, diagnostic_code, project_ids
 
 
+def _validate_req_063_processing_behavior(
+    value: Any,
+    *,
+    link_ids: set[str],
+    discovered_project_ids: set[str],
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return ["processing_behavior must be an object"]
+
+    errors: list[str] = []
+    expected_keys = {
+        "strategy",
+        "context_inputs",
+        "cross_project_context_usage",
+        "recommendation",
+    }
+    value_keys = set(value.keys())
+    missing = sorted(expected_keys - value_keys)
+    if missing:
+        errors.append(f"processing_behavior missing keys: {missing}")
+    unexpected = sorted(value_keys - expected_keys)
+    if unexpected:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected}")
+
+    strategy = value.get("strategy")
+    if not isinstance(strategy, str) or not strategy.strip():
+        errors.append("processing_behavior.strategy must be a non-empty string")
+
+    context_inputs = value.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+    else:
+        expected_context_keys = {"broad_sweep_context"}
+        context_keys = set(context_inputs.keys())
+        context_missing = sorted(expected_context_keys - context_keys)
+        if context_missing:
+            errors.append(f"processing_behavior.context_inputs missing keys: {context_missing}")
+        context_unexpected = sorted(context_keys - expected_context_keys)
+        if context_unexpected:
+            errors.append(f"processing_behavior.context_inputs has unexpected keys: {context_unexpected}")
+
+        broad_sweep_context = context_inputs.get("broad_sweep_context")
+        if not isinstance(broad_sweep_context, Mapping):
+            errors.append("processing_behavior.context_inputs.broad_sweep_context must be an object")
+        else:
+            expected_broad_keys = {"projects_considered", "earth_sweep_evidence_refs"}
+            broad_keys = set(broad_sweep_context.keys())
+            broad_missing = sorted(expected_broad_keys - broad_keys)
+            if broad_missing:
+                errors.append(
+                    "processing_behavior.context_inputs.broad_sweep_context "
+                    f"missing keys: {broad_missing}"
+                )
+            broad_unexpected = sorted(broad_keys - expected_broad_keys)
+            if broad_unexpected:
+                errors.append(
+                    "processing_behavior.context_inputs.broad_sweep_context "
+                    f"has unexpected keys: {broad_unexpected}"
+                )
+            broad_project_errors, _ = _validate_nonempty_string_list(
+                value=broad_sweep_context.get("projects_considered"),
+                field_name="processing_behavior.context_inputs.broad_sweep_context.projects_considered",
+                min_items=0,
+            )
+            errors.extend(broad_project_errors)
+            broad_evidence_errors, _ = _validate_nonempty_string_list(
+                value=broad_sweep_context.get("earth_sweep_evidence_refs"),
+                field_name="processing_behavior.context_inputs.broad_sweep_context.earth_sweep_evidence_refs",
+                min_items=0,
+            )
+            errors.extend(broad_evidence_errors)
+
+    usage = value.get("cross_project_context_usage")
+    usage_evidence_refs: list[str] = []
+    usage_earth_refs: list[str] = []
+    if not isinstance(usage, Mapping):
+        errors.append("processing_behavior.cross_project_context_usage must be an object")
+    else:
+        expected_usage_keys = {
+            "cross_project_context_provided",
+            "cross_project_context_used",
+            "projects_considered",
+            "earth_sweep_evidence_refs_considered",
+            "link_ids_with_cross_project_context",
+            "cross_project_obligation_count",
+            "open_risk_count",
+            "evidence_refs_used",
+        }
+        usage_keys = set(usage.keys())
+        usage_missing = sorted(expected_usage_keys - usage_keys)
+        if usage_missing:
+            errors.append(f"processing_behavior.cross_project_context_usage missing keys: {usage_missing}")
+        usage_unexpected = sorted(usage_keys - expected_usage_keys)
+        if usage_unexpected:
+            errors.append(f"processing_behavior.cross_project_context_usage has unexpected keys: {usage_unexpected}")
+
+        for bool_key in ("cross_project_context_provided", "cross_project_context_used"):
+            if not isinstance(usage.get(bool_key), bool):
+                errors.append(f"processing_behavior.cross_project_context_usage.{bool_key} must be a boolean")
+
+        for count_key in ("cross_project_obligation_count", "open_risk_count"):
+            count_value = usage.get(count_key)
+            if not isinstance(count_value, int) or count_value < 0:
+                errors.append(
+                    f"processing_behavior.cross_project_context_usage.{count_key} must be a non-negative integer"
+                )
+
+        usage_project_errors, _ = _validate_nonempty_string_list(
+            value=usage.get("projects_considered"),
+            field_name="processing_behavior.cross_project_context_usage.projects_considered",
+            min_items=0,
+        )
+        errors.extend(usage_project_errors)
+        usage_earth_errors, usage_earth_refs = _validate_nonempty_string_list(
+            value=usage.get("earth_sweep_evidence_refs_considered"),
+            field_name="processing_behavior.cross_project_context_usage.earth_sweep_evidence_refs_considered",
+            min_items=0,
+        )
+        errors.extend(usage_earth_errors)
+        context_link_errors, context_link_ids = _validate_nonempty_string_list(
+            value=usage.get("link_ids_with_cross_project_context"),
+            field_name="processing_behavior.cross_project_context_usage.link_ids_with_cross_project_context",
+            min_items=0,
+        )
+        errors.extend(context_link_errors)
+        for link_id in context_link_ids:
+            if link_id not in link_ids:
+                errors.append(
+                    "processing_behavior.cross_project_context_usage.link_ids_with_cross_project_context "
+                    "must reference ecosystem_link_map_integrity_validator.links[].link_id"
+                )
+        usage_evidence_errors, usage_evidence_refs = _validate_nonempty_string_list(
+            value=usage.get("evidence_refs_used"),
+            field_name="processing_behavior.cross_project_context_usage.evidence_refs_used",
+            min_items=1,
+        )
+        errors.extend(usage_evidence_errors)
+
+    recommendation = value.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        expected_recommendation_keys = {
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "recommended_actions",
+            "cross_project_obligations",
+            "open_risks",
+        }
+        recommendation_keys = set(recommendation.keys())
+        recommendation_missing = sorted(expected_recommendation_keys - recommendation_keys)
+        if recommendation_missing:
+            errors.append(f"processing_behavior.recommendation missing keys: {recommendation_missing}")
+        recommendation_unexpected = sorted(recommendation_keys - expected_recommendation_keys)
+        if recommendation_unexpected:
+            errors.append(f"processing_behavior.recommendation has unexpected keys: {recommendation_unexpected}")
+
+        decision = recommendation.get("decision")
+        if decision not in {"proceed", "proceed-with-open-risks", "collect-earth-evidence"}:
+            errors.append(
+                "processing_behavior.recommendation.decision must be one of: "
+                "['collect-earth-evidence', 'proceed', 'proceed-with-open-risks']"
+            )
+
+        rationale = recommendation.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            errors.append("processing_behavior.recommendation.rationale must be a non-empty string")
+
+        confidence = recommendation.get("confidence")
+        if confidence not in _CONFIDENCE_LEVELS:
+            errors.append(
+                "processing_behavior.recommendation.confidence must be one of: "
+                f"{sorted(_CONFIDENCE_LEVELS)}"
+            )
+
+        recommendation_evidence_errors, recommendation_evidence_refs = _validate_nonempty_string_list(
+            value=recommendation.get("evidence_refs"),
+            field_name="processing_behavior.recommendation.evidence_refs",
+            min_items=1,
+        )
+        errors.extend(recommendation_evidence_errors)
+        if usage_evidence_refs and recommendation_evidence_refs != usage_evidence_refs:
+            errors.append(
+                "processing_behavior.recommendation.evidence_refs must equal "
+                "processing_behavior.cross_project_context_usage.evidence_refs_used"
+            )
+
+        action_rows = recommendation.get("recommended_actions")
+        if not isinstance(action_rows, list):
+            errors.append("processing_behavior.recommendation.recommended_actions must be a list")
+        elif not action_rows:
+            errors.append("processing_behavior.recommendation.recommended_actions must include at least one row")
+        else:
+            action_ids: set[str] = set()
+            for index, row in enumerate(action_rows):
+                row_path = f"processing_behavior.recommendation.recommended_actions[{index}]"
+                if not isinstance(row, Mapping):
+                    errors.append(f"{row_path} must be an object")
+                    continue
+                expected_action_keys = {
+                    "action_id",
+                    "link_id",
+                    "action_scope",
+                    "summary",
+                    "rationale",
+                    "next_step",
+                    "evidence_refs",
+                }
+                row_keys = set(row.keys())
+                action_missing = sorted(expected_action_keys - row_keys)
+                if action_missing:
+                    errors.append(f"{row_path} missing keys: {action_missing}")
+                action_unexpected = sorted(row_keys - expected_action_keys)
+                if action_unexpected:
+                    errors.append(f"{row_path} has unexpected keys: {action_unexpected}")
+
+                action_id = row.get("action_id")
+                if not isinstance(action_id, str) or not action_id.strip():
+                    errors.append(f"{row_path}.action_id must be a non-empty string")
+                elif action_id in action_ids:
+                    errors.append(f"{row_path}.action_id must be unique")
+                else:
+                    action_ids.add(action_id)
+
+                link_id = row.get("link_id")
+                if not isinstance(link_id, str) or not link_id.strip():
+                    errors.append(f"{row_path}.link_id must be a non-empty string")
+                elif link_id not in link_ids:
+                    errors.append(f"{row_path}.link_id must reference ecosystem_link_map_integrity_validator.links[]")
+
+                action_scope = row.get("action_scope")
+                if action_scope not in {"cross-project", "local"}:
+                    errors.append(f"{row_path}.action_scope must be one of: ['cross-project', 'local']")
+
+                for key in ("summary", "rationale", "next_step"):
+                    value_text = row.get(key)
+                    if not isinstance(value_text, str) or not value_text.strip():
+                        errors.append(f"{row_path}.{key} must be a non-empty string")
+
+                action_evidence_errors, _ = _validate_nonempty_string_list(
+                    value=row.get("evidence_refs"),
+                    field_name=f"{row_path}.evidence_refs",
+                    min_items=1,
+                )
+                errors.extend(action_evidence_errors)
+
+        obligation_rows = recommendation.get("cross_project_obligations")
+        if not isinstance(obligation_rows, list):
+            errors.append("processing_behavior.recommendation.cross_project_obligations must be a list")
+            obligation_rows = []
+        for index, row in enumerate(obligation_rows):
+            row_path = f"processing_behavior.recommendation.cross_project_obligations[{index}]"
+            if not isinstance(row, Mapping):
+                errors.append(f"{row_path} must be an object")
+                continue
+            expected_obligation_keys = {"obligation_id", "link_id", "project_id", "summary", "evidence_refs"}
+            row_keys = set(row.keys())
+            obligation_missing = sorted(expected_obligation_keys - row_keys)
+            if obligation_missing:
+                errors.append(f"{row_path} missing keys: {obligation_missing}")
+            obligation_unexpected = sorted(row_keys - expected_obligation_keys)
+            if obligation_unexpected:
+                errors.append(f"{row_path} has unexpected keys: {obligation_unexpected}")
+            for key in ("obligation_id", "link_id", "project_id", "summary"):
+                value_text = row.get(key)
+                if not isinstance(value_text, str) or not value_text.strip():
+                    errors.append(f"{row_path}.{key} must be a non-empty string")
+            if isinstance(row.get("link_id"), str) and row.get("link_id") not in link_ids:
+                errors.append(f"{row_path}.link_id must reference ecosystem_link_map_integrity_validator.links[]")
+            if isinstance(row.get("project_id"), str) and row.get("project_id") not in discovered_project_ids:
+                errors.append(
+                    f"{row_path}.project_id must reference ecosystem_link_map_integrity_validator.discovered_projects[]"
+                )
+            obligation_evidence_errors, obligation_evidence_refs = _validate_nonempty_string_list(
+                value=row.get("evidence_refs"),
+                field_name=f"{row_path}.evidence_refs",
+                min_items=1,
+            )
+            errors.extend(obligation_evidence_errors)
+            if usage_earth_refs and not set(obligation_evidence_refs).issubset(set(usage_earth_refs)):
+                errors.append(
+                    f"{row_path}.evidence_refs must be a subset of "
+                    "processing_behavior.cross_project_context_usage.earth_sweep_evidence_refs_considered"
+                )
+
+        open_risk_rows = recommendation.get("open_risks")
+        if not isinstance(open_risk_rows, list):
+            errors.append("processing_behavior.recommendation.open_risks must be a list")
+            open_risk_rows = []
+        for index, row in enumerate(open_risk_rows):
+            row_path = f"processing_behavior.recommendation.open_risks[{index}]"
+            if not isinstance(row, Mapping):
+                errors.append(f"{row_path} must be an object")
+                continue
+            expected_risk_keys = {"risk_id", "link_id", "summary", "reason_code", "required_evidence_refs"}
+            row_keys = set(row.keys())
+            risk_missing = sorted(expected_risk_keys - row_keys)
+            if risk_missing:
+                errors.append(f"{row_path} missing keys: {risk_missing}")
+            risk_unexpected = sorted(row_keys - expected_risk_keys)
+            if risk_unexpected:
+                errors.append(f"{row_path} has unexpected keys: {risk_unexpected}")
+            for key in ("risk_id", "link_id", "summary", "reason_code"):
+                value_text = row.get(key)
+                if not isinstance(value_text, str) or not value_text.strip():
+                    errors.append(f"{row_path}.{key} must be a non-empty string")
+            if isinstance(row.get("link_id"), str) and row.get("link_id") not in link_ids:
+                errors.append(f"{row_path}.link_id must reference ecosystem_link_map_integrity_validator.links[]")
+            required_refs_errors, _ = _validate_nonempty_string_list(
+                value=row.get("required_evidence_refs"),
+                field_name=f"{row_path}.required_evidence_refs",
+                min_items=1,
+                require_sorted_unique=False,
+            )
+            errors.extend(required_refs_errors)
+
+        if isinstance(usage.get("cross_project_obligation_count"), int) and usage.get(
+            "cross_project_obligation_count"
+        ) != len(obligation_rows):
+            errors.append(
+                "processing_behavior.cross_project_context_usage.cross_project_obligation_count must equal "
+                "processing_behavior.recommendation.cross_project_obligations count"
+            )
+        if isinstance(usage.get("open_risk_count"), int) and usage.get("open_risk_count") != len(open_risk_rows):
+            errors.append(
+                "processing_behavior.cross_project_context_usage.open_risk_count must equal "
+                "processing_behavior.recommendation.open_risks count"
+            )
+
+    return errors
+
+
 def validate_req_063_ecosystem_link_map_integrity_validator(payload: Mapping[str, Any]) -> list[str]:
     """Validate REQ-063 ecosystem link-map integrity validator payload shape."""
     errors: list[str] = []
     if not isinstance(payload, Mapping):
         return ["payload must be a JSON object"]
 
-    expected_top = {
+    required_top = {
         "ok",
         "schema_version",
         "requirement_id",
@@ -1815,11 +2360,12 @@ def validate_req_063_ecosystem_link_map_integrity_validator(payload: Mapping[str
         "ecosystem_link_map_integrity_validator",
         "totals",
     }
+    optional_top = {"processing_behavior"}
     top_keys = set(payload.keys())
-    missing_top = sorted(expected_top - top_keys)
+    missing_top = sorted(required_top - top_keys)
     if missing_top:
         errors.append(f"missing top-level keys: {missing_top}")
-    unexpected_top = sorted(top_keys - expected_top)
+    unexpected_top = sorted(top_keys - (required_top | optional_top))
     if unexpected_top:
         errors.append(f"unexpected top-level keys: {unexpected_top}")
 
@@ -2045,6 +2591,15 @@ def validate_req_063_ecosystem_link_map_integrity_validator(payload: Mapping[str
             errors.append("totals.broken_links must equal ecosystem_link_map_integrity_validator.links broken count")
         if totals.get("diagnostics") != diagnostics_count:
             errors.append("totals.diagnostics must equal ecosystem_link_map_integrity_validator.diagnostics count")
+
+    if "processing_behavior" in payload:
+        errors.extend(
+            _validate_req_063_processing_behavior(
+                payload.get("processing_behavior"),
+                link_ids=link_ids,
+                discovered_project_ids=discovered_project_ids,
+            )
+        )
 
     return errors
 
