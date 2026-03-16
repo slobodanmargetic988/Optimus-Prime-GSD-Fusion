@@ -689,6 +689,51 @@ def _validate_nonempty_string_list(
     return errors, unique_sorted
 
 
+def _validate_traceability_ref_list(
+    *,
+    value: Any,
+    field_name: str,
+    min_items: int,
+    allow_missing_placeholder: bool = False,
+) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    normalized: list[str] = []
+    if not isinstance(value, list):
+        return [f"{field_name} must be a list"], normalized
+
+    for index, item in enumerate(value):
+        item_field = f"{field_name}[{index}]"
+        if not isinstance(item, str) or not item.strip():
+            errors.append(f"{item_field} must be a non-empty string")
+            continue
+        candidate = item.strip()
+        if allow_missing_placeholder and candidate.startswith("missing:"):
+            normalized_ref = candidate
+        else:
+            try:
+                normalized_ref = _normalize_reference(candidate, field_name=item_field)
+            except ValueError as exc:
+                errors.append(str(exc))
+                continue
+            if "#" not in normalized_ref and not normalized_ref.startswith(_EARTH_SWEEP_PREFIX):
+                errors.append(
+                    f"{item_field} must be a traceability ref with '#<anchor>' or start with '{_EARTH_SWEEP_PREFIX}'"
+                )
+                continue
+        normalized.append(normalized_ref)
+
+    if len(normalized) < min_items:
+        errors.append(f"{field_name} must include at least {min_items} value(s)")
+
+    unique_sorted = sorted(set(normalized))
+    if len(unique_sorted) != len(normalized):
+        errors.append(f"{field_name} must not contain duplicates")
+    if normalized != unique_sorted:
+        errors.append(f"{field_name} must be sorted")
+
+    return errors, unique_sorted
+
+
 def _validate_kpi_target_row(
     *,
     row: Any,
@@ -1767,6 +1812,14 @@ def _validate_req_062_processing_behavior(payload: Any) -> list[str]:
         ):
             if key in context_usage and not isinstance(context_usage.get(key), list):
                 errors.append(f"processing_behavior.context_usage.{key} must be a list")
+        if "evidence_refs_used" in context_usage and isinstance(context_usage.get("evidence_refs_used"), list):
+            evidence_errors, _ = _validate_traceability_ref_list(
+                value=context_usage.get("evidence_refs_used"),
+                field_name="processing_behavior.context_usage.evidence_refs_used",
+                min_items=1,
+                allow_missing_placeholder=True,
+            )
+            errors.extend(evidence_errors)
 
     recommendation_generation = payload.get("recommendation_generation")
     if not isinstance(recommendation_generation, Mapping):
@@ -1796,6 +1849,16 @@ def _validate_req_062_processing_behavior(payload: Any) -> list[str]:
         for key in ("required_recommendation_fields", "evidence_refs_used"):
             if key in recommendation_generation and not isinstance(recommendation_generation.get(key), list):
                 errors.append(f"processing_behavior.recommendation_generation.{key} must be a list")
+        if "evidence_refs_used" in recommendation_generation and isinstance(
+            recommendation_generation.get("evidence_refs_used"), list
+        ):
+            evidence_errors, _ = _validate_traceability_ref_list(
+                value=recommendation_generation.get("evidence_refs_used"),
+                field_name="processing_behavior.recommendation_generation.evidence_refs_used",
+                min_items=1,
+                allow_missing_placeholder=True,
+            )
+            errors.extend(evidence_errors)
 
     recommendation = payload.get("recommendation")
     if not isinstance(recommendation, Mapping):
@@ -1823,6 +1886,14 @@ def _validate_req_062_processing_behavior(payload: Any) -> list[str]:
         for key in ("evidence_refs", "cross_project_obligations", "open_risks"):
             if key in recommendation and not isinstance(recommendation.get(key), list):
                 errors.append(f"processing_behavior.recommendation.{key} must be a list")
+        if "evidence_refs" in recommendation and isinstance(recommendation.get("evidence_refs"), list):
+            evidence_errors, _ = _validate_traceability_ref_list(
+                value=recommendation.get("evidence_refs"),
+                field_name="processing_behavior.recommendation.evidence_refs",
+                min_items=1,
+                allow_missing_placeholder=True,
+            )
+            errors.extend(evidence_errors)
 
         if isinstance(recommendation_generation, Mapping):
             expected_complete = recommendation_keys == expected_recommendation_keys
