@@ -179,6 +179,14 @@ Normalization rules:
   - `required_draft_fields`
   - `allowed_source_call_ids`
 
+`call_metadata` required sections:
+
+- `llm_call_trace_path` = `strategy/current/llm_call_trace.jsonl`
+- `llm_call_trace_rows[]`
+  - exactly 4 rows
+  - one row each for `call-1`, `call-2`, `call-3`, and `call-4`
+  - every row must include `call_objective`, `input_refs[]`, `output_refs[]`, and `handoff_summary`
+
 `source` required fields:
 
 - `earlier_call_output_count`

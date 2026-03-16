@@ -1,0 +1,143 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-2",
+  "task_id": "TASK-097",
+  "requirement_ids": [
+    "REQ-029"
+  ],
+  "updated_at": "2026-03-16T02:05:13Z",
+  "dev": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-e2e-strategy-llm-pipeline-smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-097/e2e_strategy_llm_pipeline_smoke.output.txt"
+      },
+      {
+        "name": "pytest-integration-call-4-recommendation-synthesis",
+        "command": "python3 -m pytest tests/integration/test_call-4-recommendation-synthesis.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-097/integration_call-4-recommendation-synthesis.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "req029-multi-call-trace",
+        "status": "passed",
+        "details": "Call-1 through Call-4 rows serialize to strategy/current/llm_call_trace.jsonl and are copied into TASK-097 evidence."
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      {
+        "label": "strategy-llm-pipeline-source",
+        "path": "scripts/strategy_llm_pipeline.py",
+        "kind": "source"
+      },
+      {
+        "label": "req029-contract",
+        "path": "contracts/req/REQ-029_call-4-recommendation-synthesis.md",
+        "kind": "markdown"
+      },
+      {
+        "label": "req029-sample",
+        "path": "strategy/current/samples/REQ-029_call-4-recommendation-synthesis.sample.json",
+        "kind": "json"
+      },
+      {
+        "label": "req029-runtime-trace",
+        "path": "strategy/current/llm_call_trace.jsonl",
+        "kind": "jsonl"
+      },
+      {
+        "label": "req029-trace-evidence",
+        "path": "reports/optimus-prime/planning/evidence/TASK-097/call-4-recommendation-synthesis-trace.jsonl",
+        "kind": "jsonl"
+      },
+      {
+        "label": "req029-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-097/call-4-recommendation-synthesis.output.json",
+        "kind": "json"
+      },
+      {
+        "label": "req029-integration-test",
+        "path": "tests/integration/test_call-4-recommendation-synthesis.py",
+        "kind": "test"
+      },
+      {
+        "label": "req029-e2e-test",
+        "path": "tests/e2e/test_strategy_llm_pipeline_smoke.py",
+        "kind": "test"
+      }
+    ]
+  },
+  "test": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-e2e-strategy-llm-pipeline-smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-097/e2e_strategy_llm_pipeline_smoke.output.txt"
+      },
+      {
+        "name": "pytest-integration-call-4-recommendation-synthesis",
+        "command": "python3 -m pytest tests/integration/test_call-4-recommendation-synthesis.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-097/integration_call-4-recommendation-synthesis.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "call-trace-artifacts-recorded",
+        "status": "passed",
+        "details": "TASK_EVIDENCE references both strategy/current/llm_call_trace.jsonl and the copied TASK-097 multi-call trace artifact."
+      }
+    ],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": [
+      {
+        "label": "pytest-e2e-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-097/e2e_strategy_llm_pipeline_smoke.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "pytest-integration-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-097/integration_call-4-recommendation-synthesis.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "req029-trace-evidence",
+        "path": "reports/optimus-prime/planning/evidence/TASK-097/call-4-recommendation-synthesis-trace.jsonl",
+        "kind": "jsonl"
+      }
+    ]
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "passed",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "acceptance_checks_passed",
+      "multi_call_trace_artifacts_recorded"
+    ]
+  },
+  "task_kind": "implementation"
+}

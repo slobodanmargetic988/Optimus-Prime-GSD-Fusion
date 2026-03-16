@@ -66,10 +66,21 @@ def test_req_029_recommendation_drafts_are_complete_and_use_cross_project_contex
     assert "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json" in usage["evidence_refs_used"]
     assert usage["open_risk_ids_emitted"] == []
 
-    assert len(trace_rows) == 1
-    assert trace_rows[0]["call_id"] == "call-4"
-    assert trace_rows[0]["sequence"] == 4
-    assert "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json" in trace_rows[0]["input_refs"]
+    assert [row["call_id"] for row in trace_rows] == ["call-1", "call-2", "call-3", "call-4"]
+    assert [row["sequence"] for row in trace_rows] == [1, 2, 3, 4]
+    assert trace_rows[0]["output_refs"] == ["REQ-026::call::call-1::output::situational_analysis"]
+    assert trace_rows[1]["input_refs"][0] == "REQ-026::call::call-1::output::situational_analysis"
+    assert trace_rows[2]["input_refs"][0] == "REQ-027::call::call-2::output::constraint_refinement"
+    assert trace_rows[3]["input_refs"][:3] == [
+        "REQ-026::call::call-1::output::situational_analysis",
+        "REQ-027::call::call-2::output::constraint_refinement",
+        "REQ-028::call::call-3::output::execution_alignment",
+    ]
+    assert "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json" in trace_rows[3]["input_refs"]
+    assert trace_rows[3]["handoff_summary"] == (
+        "Call 4 hands off recommendation_synthesis via REQ-029::call::call-4::output::recommendation_synthesis "
+        "as the terminal recommendation synthesis output with 4 draft(s) and 0 open risk(s)."
+    )
 
 
 def test_req_029_cross_project_candidate_without_earth_evidence_becomes_open_risk() -> None:
@@ -114,3 +125,7 @@ def test_req_029_cross_project_candidate_without_earth_evidence_becomes_open_ris
     assert usage["cross_project_project_ids_used"] == ["runtime-orchestrator"]
     assert usage["earth_sweep_evidence_refs_used"] == []
     assert usage["open_risk_ids_emitted"] == ["risk-rec-call-4-call-3-runtime-coordination"]
+    assert payload["call_metadata"]["llm_call_trace_rows"][3]["handoff_summary"] == (
+        "Call 4 hands off recommendation_synthesis via REQ-029::call::call-4::output::recommendation_synthesis "
+        "as the terminal recommendation synthesis output with 3 draft(s) and 1 open risk(s)."
+    )

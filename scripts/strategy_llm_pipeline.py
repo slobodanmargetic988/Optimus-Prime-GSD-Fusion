@@ -46,6 +46,12 @@ REQ_029_REQUIRED_DRAFT_FIELDS = [
     "risk",
     "evidence_refs",
 ]
+REQ_029_CALL_OBJECTIVES = {
+    "call-1": "Assess target state and surface deterministic unknown-resolution candidates.",
+    "call-2": "Refine situational constraints into bounded implementation follow-up candidates.",
+    "call-3": "Align execution dependencies and cross-project coordination candidates.",
+    "call-4": "Synthesize candidate recommendations from earlier call outputs into deterministic structured recommendation drafts.",
+}
 RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 PIPELINE_STRATEGY = "multi-call-strategy-pipeline-planner"
@@ -2857,6 +2863,11 @@ def _req_029_normalize_earlier_call_outputs(
 
     if not normalized_outputs:
         raise Req029Error(f"{field_name} must contain at least 1 item(s)")
+    expected_call_ids = set(REQ_029_ALLOWED_SOURCE_CALL_IDS)
+    if seen_call_ids != expected_call_ids:
+        raise Req029Error(
+            f"{field_name} must include exactly {list(REQ_029_ALLOWED_SOURCE_CALL_IDS)} so the Call-4 trace can emit one row per LLM call"
+        )
     normalized_outputs.sort(key=lambda row: row["call_id"])
     recommendation_drafts.sort(key=lambda row: row["recommendation_id"])
     open_risks.sort(key=lambda row: row["risk_id"])
@@ -2907,6 +2918,32 @@ def _req_029_trace_output_ref() -> str:
     return f"{REQ_029_REQUIREMENT_ID}::call::{REQ_029_CALL_ID}::output::recommendation_synthesis"
 
 
+def _req_029_trace_output_name(output_ref: str) -> str:
+    _, _, output_name = output_ref.rpartition("::output::")
+    return output_name or output_ref
+
+
+def _req_029_trace_handoff_summary(
+    *,
+    sequence: int,
+    output_name: str,
+    output_ref: str,
+    input_ref_count: int,
+    next_call_id: str,
+    recommendation_draft_count: int = 0,
+    open_risk_count: int = 0,
+) -> str:
+    if next_call_id:
+        return (
+            f"Call {sequence} hands off {output_name} via {output_ref} to {next_call_id} "
+            f"after consuming {input_ref_count} input refs."
+        )
+    return (
+        f"Call {sequence} hands off {output_name} via {output_ref} as the terminal recommendation synthesis output "
+        f"with {recommendation_draft_count} draft(s) and {open_risk_count} open risk(s)."
+    )
+
+
 def _build_req_029_llm_call_trace_rows(
     *,
     processing_call_id: str,
@@ -2914,38 +2951,67 @@ def _build_req_029_llm_call_trace_rows(
     recommendation_drafts: Sequence[Mapping[str, Any]],
     open_risks: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    input_refs = _collect_unique_refs(
-        [row["output_ref"] for row in earlier_call_outputs],
-        [
-            ref
-            for row in recommendation_drafts
-            for ref in row.get("evidence_refs", [])
-        ],
-        [
-            ref
-            for row in open_risks
-            for ref in row.get("required_evidence_refs", [])
-        ],
+    outputs_by_call_id = {str(row["call_id"]): row for row in earlier_call_outputs}
+    trace_rows: list[dict[str, Any]] = []
+    previous_output_ref = ""
+
+    for sequence, call_id in enumerate(REQ_029_ALLOWED_SOURCE_CALL_IDS, start=1):
+        row = outputs_by_call_id[call_id]
+        evidence_refs = _req_026_dedupe_preserving_order(
+            [ref for candidate in row.get("candidate_recommendations", []) for ref in candidate.get("evidence_refs", [])]
+        )
+        input_refs = _req_026_dedupe_preserving_order(([previous_output_ref] if previous_output_ref else []) + evidence_refs)
+        output_ref = _require_text(row.get("output_ref"), field_name=f"earlier_call_outputs[{call_id}].output_ref")
+        next_call_id = REQ_029_ALLOWED_SOURCE_CALL_IDS[sequence] if sequence < len(REQ_029_ALLOWED_SOURCE_CALL_IDS) else REQ_029_CALL_ID
+        trace_rows.append(
+            {
+                "schema_version": REQ_029_LLM_CALL_TRACE_SCHEMA_VERSION,
+                "requirement_id": REQ_029_REQUIREMENT_ID,
+                "processing_call_id": processing_call_id,
+                "call_id": call_id,
+                "sequence": sequence,
+                "call_objective": REQ_029_CALL_OBJECTIVES[call_id],
+                "input_refs": input_refs,
+                "output_refs": [output_ref],
+                "handoff_summary": _req_029_trace_handoff_summary(
+                    sequence=sequence,
+                    output_name=_req_029_trace_output_name(output_ref),
+                    output_ref=output_ref,
+                    input_ref_count=len(input_refs),
+                    next_call_id=next_call_id,
+                ),
+            }
+        )
+        previous_output_ref = output_ref
+
+    terminal_output_ref = _req_029_trace_output_ref()
+    terminal_input_refs = _req_026_dedupe_preserving_order(
+        [str(row["output_ref"]) for row in earlier_call_outputs]
+        + [ref for row in recommendation_drafts for ref in row.get("evidence_refs", [])]
+        + [ref for row in open_risks for ref in row.get("required_evidence_refs", [])]
     )
-    output_ref = _req_029_trace_output_ref()
-    return [
+    trace_rows.append(
         {
             "schema_version": REQ_029_LLM_CALL_TRACE_SCHEMA_VERSION,
             "requirement_id": REQ_029_REQUIREMENT_ID,
             "processing_call_id": processing_call_id,
             "call_id": REQ_029_CALL_ID,
             "sequence": 4,
-            "call_objective": (
-                "Synthesize earlier-call candidate recommendations into deterministic Call-4 recommendation drafts."
-            ),
-            "input_refs": input_refs,
-            "output_refs": [output_ref],
-            "handoff_summary": (
-                f"Call 4 synthesized {len(recommendation_drafts)} recommendation draft(s) from "
-                f"{len(earlier_call_outputs)} earlier call output(s)."
+            "call_objective": REQ_029_CALL_OBJECTIVES[REQ_029_CALL_ID],
+            "input_refs": terminal_input_refs,
+            "output_refs": [terminal_output_ref],
+            "handoff_summary": _req_029_trace_handoff_summary(
+                sequence=4,
+                output_name=_req_029_trace_output_name(terminal_output_ref),
+                output_ref=terminal_output_ref,
+                input_ref_count=len(terminal_input_refs),
+                next_call_id="",
+                recommendation_draft_count=len(recommendation_drafts),
+                open_risk_count=len(open_risks),
             ),
         }
-    ]
+    )
+    return trace_rows
 
 
 def build_req_029_call_4_recommendation_synthesis(
@@ -3333,26 +3399,57 @@ def validate_req_029_call_4_recommendation_synthesis(payload: Mapping[str, Any])
             if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
                 errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
             rows = metadata.get("llm_call_trace_rows")
-            if not isinstance(rows, list) or len(rows) != 1:
-                errors.append("call_metadata.llm_call_trace_rows must contain exactly one row")
-            else:
-                row = rows[0]
+            if not isinstance(rows, list) or len(rows) != 4:
+                errors.append("call_metadata.llm_call_trace_rows must contain exactly four rows")
+                rows = []
+            for index, row in enumerate(rows):
                 if not isinstance(row, Mapping):
-                    errors.append("call_metadata.llm_call_trace_rows[0] must be an object")
-                else:
-                    if row.get("call_id") != REQ_029_CALL_ID:
-                        errors.append("call_metadata.llm_call_trace_rows[0].call_id must be call-4")
-                    if row.get("sequence") != 4:
-                        errors.append("call_metadata.llm_call_trace_rows[0].sequence must be 4")
-                    for key in ("call_objective", "handoff_summary"):
-                        if not _as_text(row.get(key)):
-                            errors.append(f"call_metadata.llm_call_trace_rows[0].{key} is required")
-                    for key in ("input_refs", "output_refs"):
-                        value = row.get(key)
-                        if not isinstance(value, list) or not value or any(not _as_text(item) for item in value):
-                            errors.append(
-                                f"call_metadata.llm_call_trace_rows[0].{key} must be a non-empty string array"
-                            )
+                    errors.append(f"call_metadata.llm_call_trace_rows[{index}] must be an object")
+                    continue
+                for key in ("call_id", "call_objective", "handoff_summary"):
+                    if not _as_text(row.get(key)):
+                        errors.append(f"call_metadata.llm_call_trace_rows[{index}].{key} is required")
+                for key in ("input_refs", "output_refs"):
+                    value = row.get(key)
+                    if not isinstance(value, list) or not value or any(not _as_text(item) for item in value):
+                        errors.append(
+                            f"call_metadata.llm_call_trace_rows[{index}].{key} must be a non-empty string array"
+                        )
+                if row.get("sequence") != index + 1:
+                    errors.append(f"call_metadata.llm_call_trace_rows[{index}].sequence must be {index + 1}")
+            expected_trace_rows: list[dict[str, Any]] = []
+            if isinstance(context_inputs, Mapping):
+                expected_earlier_call_outputs = context_inputs.get("earlier_call_outputs")
+                if isinstance(expected_earlier_call_outputs, list):
+                    try:
+                        expected_trace_rows = _build_req_029_llm_call_trace_rows(
+                            processing_call_id=_require_text(
+                                metadata.get("processing_call_id"),
+                                field_name="call_metadata.processing_call_id",
+                            ),
+                            earlier_call_outputs=[
+                                _require_mapping(row, field_name=f"processing_behavior.context_inputs.earlier_call_outputs[{index}]")
+                                for index, row in enumerate(expected_earlier_call_outputs)
+                            ],
+                            recommendation_drafts=[
+                                _require_mapping(row, field_name=f"recommendation_synthesis.recommendation_drafts[{index}]")
+                                for index, row in enumerate(recommendation_drafts)
+                                if isinstance(row, Mapping)
+                            ],
+                            open_risks=[
+                                _require_mapping(row, field_name=f"recommendation_synthesis.open_risks[{index}]")
+                                for index, row in enumerate(open_risks)
+                                if isinstance(row, Mapping)
+                            ],
+                        )
+                    except ValueError as exc:
+                        errors.append(f"call_metadata.llm_call_trace_rows could not be reconstructed: {exc}")
+            if expected_trace_rows:
+                if rows != expected_trace_rows:
+                    errors.append("call_metadata.llm_call_trace_rows must mirror the deterministic per-call trace rows")
+                expected_trace_sha = _canonical_digest(expected_trace_rows)
+                if metadata.get("llm_call_trace_sha256") != expected_trace_sha:
+                    errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
 
     return errors
 
