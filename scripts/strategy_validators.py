@@ -31,6 +31,8 @@ REASON_REQ_054_CONTRACT_VIOLATION = "req_054_contract_violation"
 REASON_PACKET_RECOMMENDATION_MISSING_MAPPING = "packet_recommendation_missing_mapping"
 REASON_MAPPING_REFERENCES_UNKNOWN_PACKET_RECOMMENDATION = "mapping_references_unknown_packet_recommendation"
 REASON_MAPPING_ARTIFACT_RECOMMENDATION_IDS_MISMATCH = "mapping_artifact_recommendation_ids_mismatch"
+REASON_DUPLICATE_RECOMMENDATION_ID_COLLISION = "duplicate_recommendation_id_collision"
+REASON_TRACEABILITY_GATE_FAILURE = "traceability_gate_failure"
 
 _SCHEMA_REASON_CODE_BY_VALIDATOR = {
     "additionalProperties": "schema_additional_property",
@@ -194,6 +196,115 @@ def _packet_recommendation_index(packet: Mapping[str, Any]) -> dict[str, int]:
     return index_by_recommendation_id
 
 
+def _packet_recommendation_ids(packet: Mapping[str, Any]) -> list[str]:
+    raw_recommendations = packet.get("recommendations")
+    if not isinstance(raw_recommendations, list):
+        return []
+
+    recommendation_ids: list[str] = []
+    for row in raw_recommendations:
+        if not isinstance(row, Mapping):
+            continue
+        recommendation_id = row.get("recommendation_id")
+        if isinstance(recommendation_id, str) and recommendation_id.strip():
+            recommendation_ids.append(recommendation_id)
+    return recommendation_ids
+
+
+def _validate_duplicate_recommendation_ids(packet: Mapping[str, Any]) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+    recommendation_ids = _packet_recommendation_ids(packet)
+    if not recommendation_ids:
+        return diagnostics
+
+    index_by_recommendation_id: dict[str, list[int]] = {}
+    for index, recommendation_id in enumerate(recommendation_ids):
+        index_by_recommendation_id.setdefault(recommendation_id, []).append(index)
+
+    artifact = packet.get("recommendation_to_planner_mapping_artifact")
+    expected_ids: list[str] = []
+    if isinstance(artifact, Mapping):
+        raw_expected_ids = artifact.get("recommendation_ids")
+        if isinstance(raw_expected_ids, list):
+            expected_ids = sorted(
+                item for item in raw_expected_ids if isinstance(item, str) and item.strip()
+            )
+    observed_unique_ids = sorted(index_by_recommendation_id)
+
+    for recommendation_id, indexes in sorted(index_by_recommendation_id.items()):
+        if len(indexes) < 2:
+            continue
+        missing_from_packet = sorted(set(expected_ids) - set(observed_unique_ids))
+        unexpected_in_packet = sorted(set(observed_unique_ids) - set(expected_ids))
+        diagnostics.append(
+            _diagnostic(
+                field_path=f"recommendations[{indexes[1]}].recommendation_id",
+                reason_code=REASON_DUPLICATE_RECOMMENDATION_ID_COLLISION,
+                message=(
+                    f"recommendation_id '{recommendation_id}' must be unique; "
+                    f"collision_indexes={indexes} "
+                    f"missing_from_packet={missing_from_packet} "
+                    f"unexpected_in_packet={unexpected_in_packet}"
+                ),
+            )
+        )
+
+    return diagnostics
+
+
+def _validate_traceability_gate(packet: Mapping[str, Any]) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+    artifact = packet.get("recommendation_to_planner_mapping_artifact")
+    if not isinstance(artifact, Mapping):
+        return diagnostics
+
+    raw_mappings = artifact.get("recommendation_to_task_intent_mappings")
+    if not isinstance(raw_mappings, list):
+        return diagnostics
+
+    for index, row in enumerate(raw_mappings):
+        if not isinstance(row, Mapping):
+            continue
+        traceability_refs = row.get("traceability_refs")
+        downstream_audit_trail = row.get("downstream_audit_trail")
+        if not isinstance(traceability_refs, list) or not isinstance(downstream_audit_trail, Mapping):
+            continue
+
+        emitted_refs = sorted({ref for ref in traceability_refs if isinstance(ref, str) and ref.strip()})
+        required_refs: set[str] = set()
+        for key in ("source_call_trace_refs", "source_evidence_refs", "source_packet_refs"):
+            value = downstream_audit_trail.get(key)
+            if isinstance(value, list):
+                required_refs.update(ref for ref in value if isinstance(ref, str) and ref.strip())
+        expected_refs = sorted(required_refs)
+
+        missing_refs = sorted(set(expected_refs) - set(emitted_refs))
+        unexpected_refs = sorted(set(emitted_refs) - set(expected_refs))
+        if not missing_refs and not unexpected_refs:
+            continue
+
+        recommendation_id = row.get("recommendation_id")
+        planner_task_intent_handle = row.get("planner_task_intent_handle")
+        diagnostics.append(
+            _diagnostic(
+                field_path=(
+                    "recommendation_to_planner_mapping_artifact.recommendation_to_task_intent_mappings"
+                    f"[{index}].traceability_refs"
+                ),
+                reason_code=REASON_TRACEABILITY_GATE_FAILURE,
+                message=(
+                    "traceability_refs must exactly cover downstream_audit_trail refs; "
+                    f"recommendation_id={recommendation_id!r} "
+                    f"planner_task_intent_handle={planner_task_intent_handle!r} "
+                    f"missing_refs={missing_refs} "
+                    f"unexpected_refs={unexpected_refs}"
+                ),
+            )
+        )
+
+    return diagnostics
+
+
 def _validate_req_054_consumability(packet: Mapping[str, Any]) -> list[dict[str, str]]:
     artifact = packet.get("recommendation_to_planner_mapping_artifact")
     if not isinstance(artifact, Mapping):
@@ -254,13 +365,17 @@ def _validate_req_054_consumability(packet: Mapping[str, Any]) -> list[dict[str,
             }
         )
         if normalized_artifact_ids != packet_recommendation_ids:
+            missing_from_packet = sorted(set(normalized_artifact_ids) - set(packet_recommendation_ids))
+            unexpected_in_packet = sorted(set(packet_recommendation_ids) - set(normalized_artifact_ids))
             diagnostics.append(
                 _diagnostic(
                     field_path="recommendation_to_planner_mapping_artifact.recommendation_ids",
                     reason_code=REASON_MAPPING_ARTIFACT_RECOMMENDATION_IDS_MISMATCH,
                     message=(
                         "recommendation_ids must exactly match the strategy packet recommendation_id set "
-                        "for planner consumability"
+                        "for planner consumability; "
+                        f"missing_from_packet={missing_from_packet} "
+                        f"unexpected_in_packet={unexpected_in_packet}"
                     ),
                 )
             )
@@ -291,6 +406,8 @@ def validate_strategy_packet_payload(
             )
         )
 
+    diagnostics.extend(_validate_duplicate_recommendation_ids(packet))
+    diagnostics.extend(_validate_traceability_gate(packet))
     diagnostics.extend(_validate_req_054_consumability(packet))
     diagnostics = _sorted_diagnostics(diagnostics)
     reason_codes = sorted({row["reason_code"] for row in diagnostics})

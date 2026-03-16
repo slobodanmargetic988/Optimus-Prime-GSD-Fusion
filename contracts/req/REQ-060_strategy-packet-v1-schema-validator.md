@@ -120,15 +120,19 @@ Deterministic reason-code families:
 - Packet root:
   - `packet_payload_not_object`
 - Embedded REQ-054 coverage checks:
+  - `duplicate_recommendation_id_collision`
   - `req_054_contract_violation`
   - `mapping_references_unknown_packet_recommendation`
   - `packet_recommendation_missing_mapping`
   - `mapping_artifact_recommendation_ids_mismatch`
+  - `traceability_gate_failure`
 
 Handoff behavior:
 - Schema failures surface exact `field_path` values such as `identity.project_id` and preserve the validator message for operator action.
 - `recommendations[].recommendation_id` must remain fully covered by `recommendation_to_planner_mapping_artifact.recommendation_to_task_intent_mappings[]`.
+- `recommendations[].recommendation_id` values must be unique so canonical recommendation IDs remain replay-safe.
 - Mapping rows must not reference recommendation IDs absent from `recommendations[]`.
+- `traceability_refs` must exactly cover the embedded `downstream_audit_trail` refs for each mapping row so broken evidence references fail before handoff.
 - When `broad_sweep_context` is present, cross-project obligations are approved only when matching Earth-sweep evidence refs exist.
 - Missing-evidence obligations and unresolved ideas are surfaced under `processing_behavior.recommendation.open_risks[]`, not silently promoted.
 
