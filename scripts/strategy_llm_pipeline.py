@@ -235,10 +235,12 @@ def _canonical_req_036_processing_input(
     *,
     call_outputs: list[dict[str, Any]],
     contradiction_resolutions: list[dict[str, Any]],
+    broad_sweep_context: Mapping[str, str],
 ) -> dict[str, Any]:
     return {
         "call_outputs": call_outputs,
         "contradiction_resolutions": contradiction_resolutions,
+        "broad_sweep_context": dict(broad_sweep_context),
     }
 
 
@@ -340,6 +342,7 @@ def _build_req_036_contradiction_report(
 
 def _build_req_036_processing_behavior(
     *,
+    broad_sweep_context: Mapping[str, str],
     call_outputs: list[dict[str, Any]],
     contradiction_resolutions: list[dict[str, Any]],
     contradiction_report: Mapping[str, Any],
@@ -385,6 +388,7 @@ def _build_req_036_processing_behavior(
         "heuristic_summarization_only": False,
         "contradiction_handling_policy": REQ_036_HANDLING_POLICY,
         "context_inputs": {
+            "broad_sweep_context": dict(broad_sweep_context),
             "call_outputs": call_outputs,
             "contradiction_resolutions": contradiction_resolutions,
         },
@@ -396,6 +400,12 @@ def _build_req_036_processing_behavior(
             "resolved_contradictions": int(contradiction_report.get("resolved_contradictions", 0)),
             "unresolved_contradictions": unresolved_count,
             "evidence_refs_used": recommendation_evidence_refs,
+            "broad_sweep_context_used": True,
+            "broad_sweep_context_scope": "earth-wide",
+            "target_project_root": broad_sweep_context["target_project_root"],
+            "earth_root": broad_sweep_context["earth_root"],
+            "output_root": broad_sweep_context["output_root"],
+            "revision_identity": broad_sweep_context["revision_identity"],
         },
         "recommendation": {
             "decision": decision,
@@ -455,7 +465,14 @@ def build_req_036_cross_call_contradiction_detection(
         call_outputs=normalized_call_outputs,
         contradiction_resolutions=normalized_resolutions,
     )
+    normalized_broad_sweep_context = {
+        "target_project_root": normalized_target_root,
+        "earth_root": normalized_earth_root,
+        "output_root": normalized_output_root,
+        "revision_identity": normalized_revision_identity,
+    }
     processing_behavior = _build_req_036_processing_behavior(
+        broad_sweep_context=normalized_broad_sweep_context,
         call_outputs=normalized_call_outputs,
         contradiction_resolutions=normalized_resolutions,
         contradiction_report=contradiction_report,
@@ -468,6 +485,7 @@ def build_req_036_cross_call_contradiction_detection(
     canonical_processing_input = _canonical_req_036_processing_input(
         call_outputs=normalized_call_outputs,
         contradiction_resolutions=normalized_resolutions,
+        broad_sweep_context=normalized_broad_sweep_context,
     )
     processing_digest = _canonical_input_digest(canonical_processing_input)
 
@@ -586,6 +604,12 @@ def validate_req_036_cross_call_contradiction_detection(payload: Mapping[str, An
         errors.append("contradiction_report must mirror deterministic contradiction detection output")
 
     expected_processing_behavior = _build_req_036_processing_behavior(
+        broad_sweep_context={
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+        },
         call_outputs=normalized_call_outputs,
         contradiction_resolutions=normalized_resolutions,
         contradiction_report=expected_contradiction_report,
@@ -626,6 +650,12 @@ def validate_req_036_cross_call_contradiction_detection(payload: Mapping[str, An
     expected_processing_input = _canonical_req_036_processing_input(
         call_outputs=normalized_call_outputs,
         contradiction_resolutions=normalized_resolutions,
+        broad_sweep_context={
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+        },
     )
     expected_processing_digest = _canonical_input_digest(expected_processing_input)
     if metadata.get("canonical_processing_input") != expected_processing_input:
