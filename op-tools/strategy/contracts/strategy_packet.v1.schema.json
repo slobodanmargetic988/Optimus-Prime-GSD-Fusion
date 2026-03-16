@@ -9,6 +9,7 @@
     "identity",
     "strategy",
     "recommendations",
+    "recommendation_mapping",
     "constraints",
     "kpi_targets",
     "source",
@@ -85,6 +86,29 @@
           "risk_level": {
             "type": "string",
             "enum": ["low", "medium", "high", "critical"]
+          }
+        }
+      }
+    },
+    "recommendation_mapping": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["recommendation_id", "op_plan_ref", "op_initialize_ref"],
+        "properties": {
+          "recommendation_id": {
+            "type": "string",
+            "pattern": "^rec\\.[a-z0-9][a-z0-9-]{1,95}$"
+          },
+          "op_plan_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "op_initialize_ref": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }

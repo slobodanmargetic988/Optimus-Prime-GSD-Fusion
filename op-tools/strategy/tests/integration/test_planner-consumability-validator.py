@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "strategy_artifacts_handoff.py"
+VALIDATOR_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "strategy_packet_validate.py"
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "contracts" / "strategy_packet.v1.schema.json"
+CURRENT_PACKET_PATH = Path(__file__).resolve().parents[2] / "strategy" / "current" / "strategy_packet.v1.json"
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 SPEC = importlib.util.spec_from_file_location("strategy_artifacts_handoff", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
@@ -200,3 +207,65 @@ def test_planner_consumability_validator_records_unsupported_obligations_as_open
     assert report["checks"]["required_keys"]["pass"] is True
     assert report["checks"]["recommendation_mapping"]["pass"] is True
     assert report["gate_verdict"]["verdict"] == "pass"
+
+
+def test_strategy_packet_validator_passes_req_065_consumable_packet() -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(VALIDATOR_SCRIPT_PATH),
+            "--input",
+            str(CURRENT_PACKET_PATH),
+            "--schema",
+            str(SCHEMA_PATH),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["verdict"] == "pass"
+    assert payload["ready_for_consumption"] is True
+    assert payload["diagnostics"] == []
+
+
+def test_strategy_packet_validator_reports_req_065_mapping_completeness_diagnostics() -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(VALIDATOR_SCRIPT_PATH),
+            "--input",
+            str(FIXTURES_DIR / "strategy_packet.req065.invalid-mapping.json"),
+            "--schema",
+            str(SCHEMA_PATH),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+
+    assert payload["ok"] is False
+    assert payload["verdict"] == "fail"
+    assert payload["ready_for_consumption"] is False
+    assert payload["summary"] == {
+        "diagnostic_count": 1,
+        "error_count": 1,
+        "warning_count": 0,
+    }
+    assert payload["diagnostics"] == [
+        {
+            "field_path": "recommendation_mapping[rec.dispatch-quality-first]",
+            "message": (
+                "REQ-065 recommendation 'rec.dispatch-quality-first' must have a "
+                "recommendation_mapping entry."
+            ),
+            "reason_code": "req065.missing_recommendation_mapping",
+            "severity": "error",
+        }
+    ]

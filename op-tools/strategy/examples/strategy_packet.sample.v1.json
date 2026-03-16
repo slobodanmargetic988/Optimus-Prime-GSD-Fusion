@@ -22,6 +22,13 @@
       "risk_level": "medium"
     }
   ],
+  "recommendation_mapping": [
+    {
+      "recommendation_id": "rec.dispatch-quality-first",
+      "op_plan_ref": "op-plan.input.recommendations[rec.dispatch-quality-first]",
+      "op_initialize_ref": "op-initialize.input.recommendations[rec.dispatch-quality-first]"
+    }
+  ],
   "constraints": {
     "hard": [
       "Preserve existing OP behavior unless feature flags explicitly enable new cycle-release mode."

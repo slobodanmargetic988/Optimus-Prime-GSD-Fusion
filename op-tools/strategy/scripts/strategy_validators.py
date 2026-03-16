@@ -17,6 +17,18 @@ GATE_IDS = (
     "contradiction_status",
     "confidence_distribution",
 )
+REQ065_REQUIRED_FILES = (
+    "strategy/current/strategy_packet.v1.json",
+    "strategy/current/samples/REQ-065_planner-consumability-validator.sample.json",
+)
+REQ065_REQUIRED_KEYS = (
+    "identity.project_id",
+    "strategy.summary",
+    "recommendations[0].recommendation_id",
+    "recommendation_mapping[0].op_plan_ref",
+    "recommendation_mapping[0].op_initialize_ref",
+)
+REQ065_MAPPING_REQUIRED_FIELDS = ("op_plan_ref", "op_initialize_ref")
 
 SCHEMA_REASON_CODES = {
     "required": "schema.required",
@@ -51,20 +63,28 @@ def validate_strategy_packet_file(
     input_path: str | Path,
     schema_path: str | Path,
 ) -> dict[str, Any]:
-    packet = load_json_file(input_path)
-    schema = load_json_file(schema_path)
-    return validate_strategy_packet_payload(packet, schema)
+    packet_path = Path(input_path).resolve()
+    schema_path_obj = Path(schema_path).resolve()
+    packet = load_json_file(packet_path)
+    schema = load_json_file(schema_path_obj)
+    return validate_strategy_packet_payload(
+        packet,
+        schema,
+        repo_root=_discover_repo_root(packet_path, schema_path_obj),
+    )
 
 
 def validate_strategy_packet_payload(
     packet: Any,
     schema: Mapping[str, Any],
+    repo_root: str | Path | None = None,
 ) -> dict[str, Any]:
     diagnostics: list[Diagnostic] = []
 
     diagnostics.extend(_collect_schema_diagnostics(packet, schema))
     if isinstance(packet, Mapping):
         diagnostics.extend(_collect_req_059_diagnostics(packet))
+        diagnostics.extend(_collect_req_065_diagnostics(packet, repo_root=repo_root))
 
     ordered_diagnostics = sorted(
         diagnostics,
@@ -163,6 +183,200 @@ def _collect_req_059_diagnostics(packet: Mapping[str, Any]) -> list[Diagnostic]:
 
     _validate_gate_verdicts(gate_verdicts, expected_gate_verdicts, diagnostics)
     return diagnostics
+
+
+def _collect_req_065_diagnostics(
+    packet: Mapping[str, Any],
+    repo_root: str | Path | None,
+) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+
+    normalized_repo_root: Path | None = None
+    if repo_root is not None:
+        normalized_repo_root = Path(repo_root)
+    _validate_req_065_required_files(normalized_repo_root, diagnostics)
+    _validate_req_065_required_keys(packet, diagnostics)
+    _validate_req_065_recommendation_mapping(packet, diagnostics)
+
+    return diagnostics
+
+
+def _validate_req_065_required_files(
+    repo_root: Path | None,
+    diagnostics: list[Diagnostic],
+) -> None:
+    if repo_root is None:
+        return
+
+    for index, relative_path in enumerate(REQ065_REQUIRED_FILES):
+        if (repo_root / relative_path).is_file():
+            continue
+        diagnostics.append(
+            _diagnostic(
+                "req065.required_file_missing",
+                f"planner_consumability.required_files[{index}]",
+                f"REQ-065 required file '{relative_path}' is missing.",
+            )
+        )
+
+
+def _validate_req_065_required_keys(
+    packet: Mapping[str, Any],
+    diagnostics: list[Diagnostic],
+) -> None:
+    for key_path in REQ065_REQUIRED_KEYS:
+        found, value = _resolve_path(packet, key_path)
+        if not found:
+            diagnostics.append(
+                _diagnostic(
+                    "req065.required_key_missing",
+                    key_path,
+                    f"REQ-065 required key '{key_path}' is missing.",
+                )
+            )
+            continue
+        if not _is_present_value(value):
+            diagnostics.append(
+                _diagnostic(
+                    "req065.required_key_empty",
+                    key_path,
+                    f"REQ-065 required key '{key_path}' must be non-empty.",
+                )
+            )
+
+
+def _validate_req_065_recommendation_mapping(
+    packet: Mapping[str, Any],
+    diagnostics: list[Diagnostic],
+) -> None:
+    recommendations = packet.get("recommendations")
+    if not isinstance(recommendations, list):
+        return
+
+    recommendation_ids: list[str] = []
+    seen_recommendation_ids: set[str] = set()
+    for index, recommendation in enumerate(recommendations):
+        if not isinstance(recommendation, Mapping):
+            diagnostics.append(
+                _diagnostic(
+                    "req065.invalid_recommendation_entry",
+                    f"recommendations[{index}]",
+                    "REQ-065 recommendations entries must be objects.",
+                )
+            )
+            continue
+        recommendation_id = recommendation.get("recommendation_id")
+        if not _is_present_string(recommendation_id):
+            diagnostics.append(
+                _diagnostic(
+                    "req065.recommendation_id_missing",
+                    f"recommendations[{index}].recommendation_id",
+                    "REQ-065 each recommendation must include recommendation_id.",
+                )
+            )
+            continue
+        normalized_recommendation_id = str(recommendation_id).strip()
+        if normalized_recommendation_id in seen_recommendation_ids:
+            diagnostics.append(
+                _diagnostic(
+                    "req065.duplicate_recommendation_id",
+                    f"recommendations[{index}].recommendation_id",
+                    f"REQ-065 recommendation_id '{normalized_recommendation_id}' must be unique.",
+                )
+            )
+            continue
+        seen_recommendation_ids.add(normalized_recommendation_id)
+        recommendation_ids.append(normalized_recommendation_id)
+
+    mapping_index = _normalize_req_065_mapping(packet.get("recommendation_mapping"), diagnostics)
+    if not recommendation_ids:
+        return
+
+    for recommendation_id in recommendation_ids:
+        if recommendation_id in mapping_index:
+            continue
+        diagnostics.append(
+            _diagnostic(
+                "req065.missing_recommendation_mapping",
+                f"recommendation_mapping[{recommendation_id}]",
+                f"REQ-065 recommendation '{recommendation_id}' must have a recommendation_mapping entry.",
+            )
+        )
+
+
+def _normalize_req_065_mapping(
+    recommendation_mapping: Any,
+    diagnostics: list[Diagnostic],
+) -> dict[str, Mapping[str, Any]]:
+    if not isinstance(recommendation_mapping, list):
+        diagnostics.append(
+            _diagnostic(
+                "req065.recommendation_mapping_missing",
+                "recommendation_mapping",
+                "REQ-065 recommendation_mapping must be a non-empty list.",
+            )
+        )
+        return {}
+    if not recommendation_mapping:
+        diagnostics.append(
+            _diagnostic(
+                "req065.recommendation_mapping_missing",
+                "recommendation_mapping",
+                "REQ-065 recommendation_mapping must contain at least one mapping entry.",
+            )
+        )
+        return {}
+
+    mapping_index: dict[str, Mapping[str, Any]] = {}
+    for index, mapping_entry in enumerate(recommendation_mapping):
+        if not isinstance(mapping_entry, Mapping):
+            diagnostics.append(
+                _diagnostic(
+                    "req065.invalid_mapping_entry",
+                    f"recommendation_mapping[{index}]",
+                    "REQ-065 recommendation_mapping entries must be objects.",
+                )
+            )
+            continue
+        recommendation_id = mapping_entry.get("recommendation_id")
+        if not _is_present_string(recommendation_id):
+            diagnostics.append(
+                _diagnostic(
+                    "req065.mapping_recommendation_id_missing",
+                    f"recommendation_mapping[{index}].recommendation_id",
+                    "REQ-065 recommendation_mapping entries must include recommendation_id.",
+                )
+            )
+            continue
+        normalized_recommendation_id = str(recommendation_id).strip()
+        if normalized_recommendation_id in mapping_index:
+            diagnostics.append(
+                _diagnostic(
+                    "req065.duplicate_mapping_recommendation_id",
+                    f"recommendation_mapping[{index}].recommendation_id",
+                    f"REQ-065 mapping recommendation_id '{normalized_recommendation_id}' must be unique.",
+                )
+            )
+            continue
+
+        missing_fields: list[str] = []
+        for field_name in REQ065_MAPPING_REQUIRED_FIELDS:
+            if _is_present_value(mapping_entry.get(field_name)):
+                continue
+            missing_fields.append(field_name)
+            diagnostics.append(
+                _diagnostic(
+                    "req065.mapping_field_missing",
+                    f"recommendation_mapping[{index}].{field_name}",
+                    f"REQ-065 mapping field '{field_name}' must be non-empty.",
+                )
+            )
+        if missing_fields:
+            continue
+
+        mapping_index[normalized_recommendation_id] = mapping_entry
+
+    return mapping_index
 
 
 def _validate_citation_coverage(
@@ -578,6 +792,92 @@ def _is_non_negative_int(value: Any) -> bool:
 
 def _is_ratio_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= float(value) <= 1
+
+
+def _is_present_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, dict, set)):
+        return len(value) > 0
+    return True
+
+
+def _is_present_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _path_tokens(path: str) -> list[str]:
+    if not isinstance(path, str):
+        return []
+    normalized = path.strip()
+    if not normalized:
+        return []
+
+    tokens: list[str] = []
+    for segment in normalized.split("."):
+        cursor = segment.strip()
+        if not cursor:
+            return []
+        while cursor:
+            if "[" not in cursor:
+                tokens.append(cursor)
+                break
+            prefix, separator, suffix = cursor.partition("[")
+            if prefix:
+                tokens.append(prefix)
+            if not separator:
+                return []
+            closing = suffix.find("]")
+            if closing == -1:
+                return []
+            tokens.append("[" + suffix[:closing] + "]")
+            cursor = suffix[closing + 1 :]
+            if cursor and not cursor.startswith("["):
+                return []
+    return tokens
+
+
+def _resolve_path(payload: Any, path: str) -> tuple[bool, Any]:
+    tokens = _path_tokens(path)
+    if not tokens:
+        return False, None
+
+    current = payload
+    for token in tokens:
+        if token.startswith("[") and token.endswith("]"):
+            if not isinstance(current, list):
+                return False, None
+            index_token = token[1:-1]
+            if not index_token.isdigit():
+                return False, None
+            index = int(index_token)
+            if index < 0 or index >= len(current):
+                return False, None
+            current = current[index]
+            continue
+        if not isinstance(current, Mapping) or token not in current:
+            return False, None
+        current = current[token]
+    return True, current
+
+
+def _find_repo_root(path: Path) -> Path | None:
+    for candidate in (path.parent, *path.parents):
+        if (candidate / "contracts" / "strategy_packet.v1.schema.json").is_file():
+            return candidate
+    return None
+
+
+def _discover_repo_root(packet_path: Path, schema_path: Path) -> Path:
+    packet_root = _find_repo_root(packet_path)
+    if packet_root is not None:
+        return packet_root
+    schema_root = _find_repo_root(schema_path)
+    if schema_root is not None:
+        return schema_root
+    return Path.cwd()
 
 
 def _normalize_sorted_unique_strings(value: Any) -> list[str] | None:

@@ -14,6 +14,7 @@ Define a deterministic strategy output contract that planners and runtime orches
 - `identity`: canonical ID object with required cross-project IDs
 - `strategy`: versioned strategic baseline metadata
 - `recommendations`: prioritized recommendation objects
+- `recommendation_mapping`: deterministic per-recommendation refs for `op-plan` and `op-initialize`
 - `constraints`: explicit hard/soft constraints for planning and dispatch
 - `kpi_targets`: expected measurable outcomes
 - `source`: generator context
@@ -43,6 +44,14 @@ Each recommendation entry must include:
 - `rationale`
 - `expected_impact`
 - `risk_level` (`low` | `medium` | `high` | `critical`)
+
+## Recommendation Mapping Contract
+
+Each mapping entry must include:
+
+- `recommendation_id`
+- `op_plan_ref`
+- `op_initialize_ref`
 
 ## Validation
 

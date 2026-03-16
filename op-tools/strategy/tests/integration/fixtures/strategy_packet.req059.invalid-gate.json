@@ -19,6 +19,13 @@
       "risk_level": "medium"
     }
   ],
+  "recommendation_mapping": [
+    {
+      "recommendation_id": "rec.dispatch-quality-first",
+      "op_plan_ref": "op-plan.input.recommendations[rec.dispatch-quality-first]",
+      "op_initialize_ref": "op-initialize.input.recommendations[rec.dispatch-quality-first]"
+    }
+  ],
   "constraints": {
     "hard": [
       "Do not auto-heal malformed gate fields."

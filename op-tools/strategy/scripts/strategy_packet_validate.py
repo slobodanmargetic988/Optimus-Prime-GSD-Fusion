@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate strategy packets for schema compliance and REQ-059 consumability."""
+"""Validate strategy packets for schema compliance and REQ-059/REQ-065 consumability."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def _print_status(message: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Validate strategy packets with schema and REQ-059 consumability checks."
+        description="Validate strategy packets with schema and REQ-059/REQ-065 consumability checks."
     )
     parser.add_argument("--input", required=True, help="Path to the strategy packet JSON file.")
     parser.add_argument("--schema", required=True, help="Path to the strategy packet schema JSON file.")
@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     sys.stdout.write("\n")
 
     if result["ok"]:
-        _print_status("Strategy packet passed schema and REQ-059 consumability validation.")
+        _print_status("Strategy packet passed schema and REQ-059/REQ-065 consumability validation.")
         return 0
 
     _print_status(
