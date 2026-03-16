@@ -37,6 +37,178 @@
     ]
   },
   "ok": true,
+  "processing_behavior": {
+    "context_inputs": {
+      "broad_sweep_context": {
+        "cross_project_obligations": [],
+        "earth_sweep_evidence_refs": [],
+        "projects_considered": [],
+        "unresolved_ideas": []
+      },
+      "current_revision": {
+        "recommendations": [
+          {
+            "recommendation_id": "rec.map-cross-project-obligations",
+            "recommendation_key": "cross-project-obligation-map"
+          },
+          {
+            "recommendation_id": "rec.align-earth-runtime-canary",
+            "recommendation_key": "integration-latency-watch"
+          },
+          {
+            "recommendation_id": "rec.align-earth-runtime-canary",
+            "recommendation_key": "runtime-canary-alignment"
+          },
+          {
+            "recommendation_id": "rec.harden-telemetry-freshness-v2",
+            "recommendation_key": "telemetry-freshness"
+          }
+        ],
+        "revision_id": "strategy-rev-042"
+      },
+      "previous_revision": {
+        "recommendations": [
+          {
+            "recommendation_id": "rec.review-reuse-contracts",
+            "recommendation_key": "reuse-contract-review"
+          },
+          {
+            "recommendation_id": "rec.align-earth-runtime-canary",
+            "recommendation_key": "runtime-canary-alignment"
+          },
+          {
+            "recommendation_id": "rec.harden-telemetry-freshness",
+            "recommendation_key": "telemetry-freshness"
+          }
+        ],
+        "revision_id": "strategy-rev-041"
+      }
+    },
+    "context_usage": {
+      "broad_sweep_context_used": false,
+      "cross_project_context_used": false,
+      "current_revision_context_used": true,
+      "earth_sweep_context_used": false,
+      "earth_sweep_evidence_refs_used": [],
+      "evidence_refs_used": [
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.added_ids",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_collisions",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_drift",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.removed_ids",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.current.recommendation_ids",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.previous.recommendation_ids"
+      ],
+      "linked_diagnostic_ids_used": [
+        "collision.b5e17bd1cd43",
+        "drift.a2249178fdcf"
+      ],
+      "linked_recommendation_ids_used": [
+        "rec.align-earth-runtime-canary",
+        "rec.harden-telemetry-freshness",
+        "rec.harden-telemetry-freshness-v2",
+        "rec.map-cross-project-obligations",
+        "rec.review-reuse-contracts"
+      ],
+      "previous_revision_context_used": true,
+      "projects_considered": []
+    },
+    "heuristic_summarization_only": false,
+    "reasoning_mode": "deterministic-broad-sweep",
+    "recommendation": {
+      "confidence": "low",
+      "cross_project_obligations": [],
+      "decision": "proceed-with-open-risks",
+      "evidence_refs": [
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.added_ids",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_collisions",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_drift",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.removed_ids",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.current.recommendation_ids",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.previous.recommendation_ids"
+      ],
+      "open_risks": [
+        {
+          "evidence_refs": [
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.added_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_collisions",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_drift",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.removed_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.current.recommendation_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.previous.recommendation_ids"
+          ],
+          "linked_diagnostic_ids": [
+            "collision.b5e17bd1cd43"
+          ],
+          "linked_recommendation_ids": [
+            "rec.align-earth-runtime-canary"
+          ],
+          "project_id": "",
+          "reason_code": "recommendation_id_collision",
+          "required_evidence_refs": [
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.added_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_collisions",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_drift",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.removed_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.current.recommendation_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.previous.recommendation_ids"
+          ],
+          "risk_id": "risk.66675f0d7ee3",
+          "summary": "Recommendation ID 'rec.align-earth-runtime-canary' collides within revision 'strategy-rev-042'."
+        },
+        {
+          "evidence_refs": [
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.added_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_collisions",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_drift",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.removed_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.current.recommendation_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.previous.recommendation_ids"
+          ],
+          "linked_diagnostic_ids": [
+            "drift.a2249178fdcf"
+          ],
+          "linked_recommendation_ids": [
+            "rec.harden-telemetry-freshness",
+            "rec.harden-telemetry-freshness-v2"
+          ],
+          "project_id": "",
+          "reason_code": "recommendation_id_drift",
+          "required_evidence_refs": [
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.added_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_collisions",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_drift",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.removed_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.current.recommendation_ids",
+            "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.previous.recommendation_ids"
+          ],
+          "risk_id": "risk.a410534522f1",
+          "summary": "Recommendation key 'telemetry-freshness' drifted across revisions."
+        }
+      ],
+      "rationale": "id_collisions=1 id_drift=1 cross_project_obligations=0 open_risks=2"
+    },
+    "recommendation_generation": {
+      "cross_project_context_used": false,
+      "evidence_refs_used": [
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.added_ids",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_collisions",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.id_drift",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#diagnostics.removed_ids",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.current.recommendation_ids",
+        "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json#revision_snapshots.previous.recommendation_ids"
+      ],
+      "recommendation_fields_complete": true,
+      "required_recommendation_fields": [
+        "decision",
+        "rationale",
+        "confidence",
+        "evidence_refs",
+        "cross_project_obligations",
+        "open_risks"
+      ]
+    },
+    "strategy": "recommendation-id-uniqueness-broad-sweep"
+  },
   "requirement_id": "REQ-062",
   "revision_pair": {
     "current_revision_id": "strategy-rev-042",

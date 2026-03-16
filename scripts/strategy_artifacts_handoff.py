@@ -21,6 +21,8 @@ REQ_062_REQUIREMENT_ID = "REQ-062"
 REQ_062_SCHEMA_VERSION = "1.0"
 REQ_062_ANALYSIS_TYPE = "recommendation_id_uniqueness_validator"
 REQ_062_CALL_ID = "recommendation-id-uniqueness-validator"
+REQ_062_PROCESSING_STRATEGY = "recommendation-id-uniqueness-broad-sweep"
+REQ_062_REASONING_MODE = "deterministic-broad-sweep"
 
 _EXPECTED_DIRECTIONS = {"increase", "decrease", "maintain"}
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
@@ -33,6 +35,14 @@ _REQ_056_RECOMMENDATION_FIELDS = [
     "confidence",
     "evidence_refs",
     "linked_kpi_target_ids",
+    "cross_project_obligations",
+    "open_risks",
+]
+_REQ_062_RECOMMENDATION_FIELDS = [
+    "decision",
+    "rationale",
+    "confidence",
+    "evidence_refs",
     "cross_project_obligations",
     "open_risks",
 ]
@@ -1165,6 +1175,297 @@ def _build_req_062_id_collisions(*, revision_id: str, index: Mapping[str, Any]) 
     return collisions
 
 
+def _req_062_diagnostic_base_refs() -> list[str]:
+    sample_path = "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json"
+    return [
+        f"{sample_path}#revision_snapshots.previous.recommendation_ids",
+        f"{sample_path}#revision_snapshots.current.recommendation_ids",
+        f"{sample_path}#diagnostics.id_collisions",
+        f"{sample_path}#diagnostics.id_drift",
+        f"{sample_path}#diagnostics.added_ids",
+        f"{sample_path}#diagnostics.removed_ids",
+    ]
+
+
+def _req_062_linked_recommendation_ids(
+    *,
+    previous_revision: Mapping[str, Any],
+    current_revision: Mapping[str, Any],
+    diagnostics: Mapping[str, Any],
+) -> list[str]:
+    linked_ids: set[str] = set()
+    for revision in (previous_revision, current_revision):
+        for row in revision.get("recommendations", []):
+            if isinstance(row, Mapping) and isinstance(row.get("recommendation_id"), str):
+                recommendation_id = str(row["recommendation_id"]).strip()
+                if recommendation_id:
+                    linked_ids.add(recommendation_id)
+    for row in diagnostics.get("id_collisions", []):
+        if isinstance(row, Mapping):
+            recommendation_id = str(row.get("recommendation_id") or "").strip()
+            if recommendation_id:
+                linked_ids.add(recommendation_id)
+    for row in diagnostics.get("id_drift", []):
+        if not isinstance(row, Mapping):
+            continue
+        for key in ("previous_recommendation_ids", "current_recommendation_ids"):
+            for recommendation_id in row.get(key, []):
+                if isinstance(recommendation_id, str) and recommendation_id.strip():
+                    linked_ids.add(recommendation_id.strip())
+    for key in ("added_ids", "removed_ids"):
+        for recommendation_id in diagnostics.get(key, []):
+            if isinstance(recommendation_id, str) and recommendation_id.strip():
+                linked_ids.add(recommendation_id.strip())
+    return sorted(linked_ids)
+
+
+def _req_062_recommendation_decision(
+    *,
+    open_risks: list[dict[str, Any]],
+    cross_project_obligations: list[dict[str, Any]],
+) -> str:
+    missing_earth_risks = [row for row in open_risks if row.get("reason_code") == _MISSING_EARTH_SWEEP_EVIDENCE]
+    if missing_earth_risks and not cross_project_obligations:
+        return "collect-earth-evidence"
+    if open_risks:
+        return "proceed-with-open-risks"
+    return "proceed"
+
+
+def _req_062_recommendation_confidence(
+    *,
+    diagnostics: Mapping[str, Any],
+    open_risks: list[dict[str, Any]],
+) -> str:
+    if open_risks:
+        return "low"
+    if diagnostics.get("id_collisions") or diagnostics.get("id_drift"):
+        return "medium"
+    return "high"
+
+
+def _req_062_recommendation_rationale(
+    *,
+    diagnostics: Mapping[str, Any],
+    cross_project_obligations: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+) -> str:
+    return (
+        f"id_collisions={len(diagnostics.get('id_collisions', []))} "
+        f"id_drift={len(diagnostics.get('id_drift', []))} "
+        f"cross_project_obligations={len(cross_project_obligations)} "
+        f"open_risks={len(open_risks)}"
+    )
+
+
+def _build_req_062_processing_behavior(
+    *,
+    previous_revision: dict[str, Any],
+    current_revision: dict[str, Any],
+    diagnostics: Mapping[str, Any],
+    broad_sweep_context: dict[str, Any],
+) -> dict[str, Any]:
+    linked_recommendation_ids = _req_062_linked_recommendation_ids(
+        previous_revision=previous_revision,
+        current_revision=current_revision,
+        diagnostics=diagnostics,
+    )
+    linked_diagnostic_ids = sorted(
+        {
+            str(row.get("diagnostic_id"))
+            for key in ("id_collisions", "id_drift")
+            for row in diagnostics.get(key, [])
+            if isinstance(row, Mapping) and str(row.get("diagnostic_id") or "").strip()
+        }
+    )
+    diagnostic_base_refs = _req_062_diagnostic_base_refs()
+    context_earth_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
+
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+
+    for row in diagnostics.get("id_collisions", []):
+        if not isinstance(row, Mapping):
+            continue
+        recommendation_id = str(row.get("recommendation_id") or "").strip()
+        diagnostic_id = str(row.get("diagnostic_id") or "").strip()
+        open_risks.append(
+            {
+                "risk_id": f"risk.{_stable_id_fragment('collision', recommendation_id, diagnostic_id)}",
+                "summary": (
+                    f"Recommendation ID '{recommendation_id}' collides within revision "
+                    f"'{str(row.get('revision_id') or '').strip()}'."
+                ),
+                "reason_code": "recommendation_id_collision",
+                "project_id": "",
+                "linked_recommendation_ids": [recommendation_id] if recommendation_id else [],
+                "linked_diagnostic_ids": [diagnostic_id] if diagnostic_id else [],
+                "evidence_refs": _collect_unique_refs(diagnostic_base_refs),
+                "required_evidence_refs": _collect_unique_refs(diagnostic_base_refs),
+            }
+        )
+
+    for row in diagnostics.get("id_drift", []):
+        if not isinstance(row, Mapping):
+            continue
+        recommendation_key = str(row.get("recommendation_key") or "").strip()
+        diagnostic_id = str(row.get("diagnostic_id") or "").strip()
+        linked_ids = _normalize_text_list(
+            list(row.get("previous_recommendation_ids", [])) + list(row.get("current_recommendation_ids", [])),
+            field_name="diagnostics.id_drift.linked_recommendation_ids",
+        )
+        open_risks.append(
+            {
+                "risk_id": f"risk.{_stable_id_fragment('drift', recommendation_key, diagnostic_id)}",
+                "summary": f"Recommendation key '{recommendation_key}' drifted across revisions.",
+                "reason_code": "recommendation_id_drift",
+                "project_id": "",
+                "linked_recommendation_ids": linked_ids,
+                "linked_diagnostic_ids": [diagnostic_id] if diagnostic_id else [],
+                "evidence_refs": _collect_unique_refs(diagnostic_base_refs),
+                "required_evidence_refs": _collect_unique_refs(diagnostic_base_refs),
+            }
+        )
+
+    for row in broad_sweep_context["cross_project_obligations"]:
+        linked_ids = sorted(set(row["recommendation_ids"]).intersection(linked_recommendation_ids))
+        if not linked_ids:
+            continue
+        obligation_refs = sorted(
+            {ref for ref in row["earth_sweep_evidence_refs"] if ref.startswith(_EARTH_SWEEP_PREFIX)}
+        )
+        if obligation_refs:
+            cross_project_obligations.append(
+                {
+                    "obligation_id": f"obligation.{_stable_id_fragment(row['project_id'], linked_ids)}",
+                    "project_id": row["project_id"],
+                    "recommendation_ids": linked_ids,
+                    "linked_diagnostic_ids": linked_diagnostic_ids,
+                    "evidence_refs": obligation_refs,
+                }
+            )
+            continue
+        open_risks.append(
+            {
+                "risk_id": f"risk.{_stable_id_fragment(row['project_id'], linked_ids, 'missing-earth-evidence')}",
+                "summary": f"Cross-project recommendation dependency for {row['project_id']} lacks Earth-sweep evidence refs.",
+                "reason_code": _MISSING_EARTH_SWEEP_EVIDENCE,
+                "project_id": row["project_id"],
+                "linked_recommendation_ids": linked_ids,
+                "linked_diagnostic_ids": linked_diagnostic_ids,
+                "evidence_refs": [],
+                "required_evidence_refs": context_earth_refs or ["missing:earth-sweep-evidence-ref"],
+            }
+        )
+
+    for row in broad_sweep_context["unresolved_ideas"]:
+        if row["recommendation_ids"]:
+            linked_ids = sorted(set(row["recommendation_ids"]).intersection(linked_recommendation_ids))
+            if not linked_ids:
+                continue
+        else:
+            linked_ids = []
+        required_refs = _collect_unique_refs(row["earth_sweep_evidence_refs"], context_earth_refs) or [
+            "missing:earth-sweep-evidence-ref"
+        ]
+        open_risks.append(
+            {
+                "risk_id": f"risk.{_stable_id_fragment(row['idea_id'], row['project_id'])}",
+                "summary": row["summary"],
+                "reason_code": _UNRESOLVED_CROSS_PROJECT_IDEA,
+                "project_id": row["project_id"],
+                "linked_recommendation_ids": linked_ids,
+                "linked_diagnostic_ids": [],
+                "evidence_refs": row["earth_sweep_evidence_refs"],
+                "required_evidence_refs": required_refs,
+            }
+        )
+
+    cross_project_obligations = sorted(
+        cross_project_obligations,
+        key=lambda row: (row["project_id"], row["recommendation_ids"], row["evidence_refs"]),
+    )
+    open_risks = sorted(
+        open_risks,
+        key=lambda row: (row["project_id"], row["reason_code"], row["risk_id"]),
+    )
+
+    projects_considered = sorted(
+        set(broad_sweep_context["projects_considered"])
+        | {row["project_id"] for row in broad_sweep_context["cross_project_obligations"]}
+        | {row["project_id"] for row in broad_sweep_context["unresolved_ideas"]}
+    )
+    context_refs_used = _collect_unique_refs(
+        context_earth_refs,
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["evidence_refs"] for row in open_risks],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    earth_refs_used = sorted({ref for ref in context_refs_used if ref.startswith(_EARTH_SWEEP_PREFIX)})
+    recommendation_refs = _collect_unique_refs(
+        diagnostic_base_refs,
+        context_refs_used,
+    )
+    cross_project_context_used = bool(
+        projects_considered or cross_project_obligations or [row for row in open_risks if row.get("project_id")]
+    )
+    decision = _req_062_recommendation_decision(
+        open_risks=open_risks,
+        cross_project_obligations=cross_project_obligations,
+    )
+    recommendation = {
+        "decision": decision,
+        "rationale": _req_062_recommendation_rationale(
+            diagnostics=diagnostics,
+            cross_project_obligations=cross_project_obligations,
+            open_risks=open_risks,
+        ),
+        "confidence": _req_062_recommendation_confidence(
+            diagnostics=diagnostics,
+            open_risks=open_risks,
+        ),
+        "evidence_refs": recommendation_refs,
+        "cross_project_obligations": cross_project_obligations,
+        "open_risks": open_risks,
+    }
+    recommendation_generation = {
+        "recommendation_fields_complete": set(recommendation.keys()) == set(_REQ_062_RECOMMENDATION_FIELDS),
+        "required_recommendation_fields": list(_REQ_062_RECOMMENDATION_FIELDS),
+        "cross_project_context_used": cross_project_context_used,
+        "evidence_refs_used": recommendation_refs,
+    }
+
+    return {
+        "strategy": REQ_062_PROCESSING_STRATEGY,
+        "reasoning_mode": REQ_062_REASONING_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": {
+            "previous_revision": previous_revision,
+            "current_revision": current_revision,
+            "broad_sweep_context": broad_sweep_context,
+        },
+        "context_usage": {
+            "previous_revision_context_used": True,
+            "current_revision_context_used": True,
+            "broad_sweep_context_used": bool(
+                projects_considered
+                or broad_sweep_context["earth_sweep_evidence_refs"]
+                or broad_sweep_context["cross_project_obligations"]
+                or broad_sweep_context["unresolved_ideas"]
+            ),
+            "cross_project_context_used": cross_project_context_used,
+            "earth_sweep_context_used": bool(earth_refs_used),
+            "projects_considered": projects_considered,
+            "earth_sweep_evidence_refs_used": earth_refs_used,
+            "linked_recommendation_ids_used": linked_recommendation_ids,
+            "linked_diagnostic_ids_used": linked_diagnostic_ids,
+            "evidence_refs_used": recommendation_refs,
+        },
+        "recommendation_generation": recommendation_generation,
+        "recommendation": recommendation,
+    }
+
+
 def build_req_062_recommendation_id_uniqueness_validator(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Build normalized REQ-062 payload for recommendation ID uniqueness/stability validation."""
     raw = _require_mapping(payload, field_name="payload")
@@ -1175,6 +1476,7 @@ def build_req_062_recommendation_id_uniqueness_validator(payload: Mapping[str, A
     checked_at_utc = _require_nonempty_text(raw.get("now_utc") or raw.get("checked_at_utc"), field_name="now_utc")
     previous_revision = _normalize_req_062_revision(raw.get("previous_revision"), field_name="previous_revision")
     current_revision = _normalize_req_062_revision(raw.get("current_revision"), field_name="current_revision")
+    broad_sweep_context = _normalize_broad_sweep_context(raw.get("broad_sweep_context"))
 
     previous_index = _build_req_062_revision_index(previous_revision["recommendations"])
     current_index = _build_req_062_revision_index(current_revision["recommendations"])
@@ -1255,6 +1557,17 @@ def build_req_062_recommendation_id_uniqueness_validator(payload: Mapping[str, A
             "ids_stable_across_revisions": ids_stable_across_revisions,
             "passed": is_unique_within_revision and ids_stable_across_revisions,
         },
+        "processing_behavior": _build_req_062_processing_behavior(
+            previous_revision=previous_revision,
+            current_revision=current_revision,
+            diagnostics={
+                "id_collisions": id_collisions,
+                "id_drift": id_drift,
+                "added_ids": added_ids,
+                "removed_ids": removed_ids,
+            },
+            broad_sweep_context=broad_sweep_context,
+        ),
     }
 
     errors = validate_req_062_recommendation_id_uniqueness_validator(built)
@@ -1380,6 +1693,173 @@ def _validate_req_062_id_drift_row(*, row: Any, index: int) -> list[str]:
     return errors
 
 
+def _validate_req_062_processing_behavior(payload: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["processing_behavior must be an object"]
+
+    expected_keys = {
+        "strategy",
+        "reasoning_mode",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "recommendation_generation",
+        "recommendation",
+    }
+    payload_keys = set(payload.keys())
+    missing_keys = sorted(expected_keys - payload_keys)
+    if missing_keys:
+        errors.append(f"processing_behavior missing keys: {missing_keys}")
+    unexpected_keys = sorted(payload_keys - expected_keys)
+    if unexpected_keys:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected_keys}")
+
+    if payload.get("strategy") != REQ_062_PROCESSING_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_062_PROCESSING_STRATEGY}")
+    if payload.get("reasoning_mode") != REQ_062_REASONING_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {REQ_062_REASONING_MODE}")
+    if payload.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    context_inputs = payload.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+    else:
+        for key in ("previous_revision", "current_revision", "broad_sweep_context"):
+            if key not in context_inputs:
+                errors.append(f"processing_behavior.context_inputs missing {key}")
+
+    context_usage = payload.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        expected_usage_fields = {
+            "previous_revision_context_used",
+            "current_revision_context_used",
+            "broad_sweep_context_used",
+            "cross_project_context_used",
+            "earth_sweep_context_used",
+            "projects_considered",
+            "earth_sweep_evidence_refs_used",
+            "linked_recommendation_ids_used",
+            "linked_diagnostic_ids_used",
+            "evidence_refs_used",
+        }
+        missing_usage = sorted(expected_usage_fields - set(context_usage.keys()))
+        if missing_usage:
+            errors.append(f"processing_behavior.context_usage missing keys: {missing_usage}")
+        for key in (
+            "previous_revision_context_used",
+            "current_revision_context_used",
+            "broad_sweep_context_used",
+            "cross_project_context_used",
+            "earth_sweep_context_used",
+        ):
+            if key in context_usage and not isinstance(context_usage.get(key), bool):
+                errors.append(f"processing_behavior.context_usage.{key} must be a boolean")
+        for key in (
+            "projects_considered",
+            "earth_sweep_evidence_refs_used",
+            "linked_recommendation_ids_used",
+            "linked_diagnostic_ids_used",
+            "evidence_refs_used",
+        ):
+            if key in context_usage and not isinstance(context_usage.get(key), list):
+                errors.append(f"processing_behavior.context_usage.{key} must be a list")
+
+    recommendation_generation = payload.get("recommendation_generation")
+    if not isinstance(recommendation_generation, Mapping):
+        errors.append("processing_behavior.recommendation_generation must be an object")
+    else:
+        expected_generation_fields = {
+            "recommendation_fields_complete",
+            "required_recommendation_fields",
+            "cross_project_context_used",
+            "evidence_refs_used",
+        }
+        missing_generation = sorted(expected_generation_fields - set(recommendation_generation.keys()))
+        if missing_generation:
+            errors.append(f"processing_behavior.recommendation_generation missing keys: {missing_generation}")
+        if (
+            "recommendation_fields_complete" in recommendation_generation
+            and not isinstance(recommendation_generation.get("recommendation_fields_complete"), bool)
+        ):
+            errors.append(
+                "processing_behavior.recommendation_generation.recommendation_fields_complete must be a boolean"
+            )
+        if (
+            "cross_project_context_used" in recommendation_generation
+            and not isinstance(recommendation_generation.get("cross_project_context_used"), bool)
+        ):
+            errors.append("processing_behavior.recommendation_generation.cross_project_context_used must be a boolean")
+        for key in ("required_recommendation_fields", "evidence_refs_used"):
+            if key in recommendation_generation and not isinstance(recommendation_generation.get(key), list):
+                errors.append(f"processing_behavior.recommendation_generation.{key} must be a list")
+
+    recommendation = payload.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        recommendation_keys = set(recommendation.keys())
+        expected_recommendation_keys = set(_REQ_062_RECOMMENDATION_FIELDS)
+        missing_recommendation = sorted(expected_recommendation_keys - recommendation_keys)
+        if missing_recommendation:
+            errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+        unexpected_recommendation = sorted(recommendation_keys - expected_recommendation_keys)
+        if unexpected_recommendation:
+            errors.append(f"processing_behavior.recommendation has unexpected keys: {unexpected_recommendation}")
+        if recommendation.get("decision") not in {"proceed", "proceed-with-open-risks", "collect-earth-evidence"}:
+            errors.append(
+                "processing_behavior.recommendation.decision must be one of: "
+                "['collect-earth-evidence', 'proceed', 'proceed-with-open-risks']"
+            )
+        if recommendation.get("confidence") not in _CONFIDENCE_LEVELS:
+            errors.append(
+                f"processing_behavior.recommendation.confidence must be one of: {sorted(_CONFIDENCE_LEVELS)}"
+            )
+        if not isinstance(recommendation.get("rationale"), str) or not str(recommendation.get("rationale")).strip():
+            errors.append("processing_behavior.recommendation.rationale must be a non-empty string")
+        for key in ("evidence_refs", "cross_project_obligations", "open_risks"):
+            if key in recommendation and not isinstance(recommendation.get(key), list):
+                errors.append(f"processing_behavior.recommendation.{key} must be a list")
+
+        if isinstance(recommendation_generation, Mapping):
+            expected_complete = recommendation_keys == expected_recommendation_keys
+            if recommendation_generation.get("recommendation_fields_complete") != expected_complete:
+                errors.append(
+                    "processing_behavior.recommendation_generation.recommendation_fields_complete "
+                    "must match recommendation field completeness"
+                )
+            if recommendation_generation.get("required_recommendation_fields") != _REQ_062_RECOMMENDATION_FIELDS:
+                errors.append(
+                    "processing_behavior.recommendation_generation.required_recommendation_fields "
+                    "must match REQ-062 recommendation fields"
+                )
+            if recommendation_generation.get("evidence_refs_used") != recommendation.get("evidence_refs"):
+                errors.append(
+                    "processing_behavior.recommendation_generation.evidence_refs_used must match "
+                    "processing_behavior.recommendation.evidence_refs"
+                )
+
+        if isinstance(context_usage, Mapping):
+            if context_usage.get("evidence_refs_used") != recommendation.get("evidence_refs"):
+                errors.append(
+                    "processing_behavior.context_usage.evidence_refs_used must match "
+                    "processing_behavior.recommendation.evidence_refs"
+                )
+        if isinstance(recommendation_generation, Mapping) and isinstance(context_usage, Mapping):
+            if recommendation_generation.get("cross_project_context_used") != context_usage.get(
+                "cross_project_context_used"
+            ):
+                errors.append(
+                    "processing_behavior.recommendation_generation.cross_project_context_used must match "
+                    "processing_behavior.context_usage.cross_project_context_used"
+                )
+
+    return errors
+
+
 def validate_req_062_recommendation_id_uniqueness_validator(payload: Mapping[str, Any]) -> list[str]:
     """Validate REQ-062 recommendation ID uniqueness/stability payload shape."""
     errors: list[str] = []
@@ -1398,6 +1878,7 @@ def validate_req_062_recommendation_id_uniqueness_validator(payload: Mapping[str
         "diagnostics",
         "totals",
         "verdict",
+        "processing_behavior",
     }
     top_keys = set(payload.keys())
     missing_top = sorted(expected_top - top_keys)
@@ -1623,6 +2104,8 @@ def validate_req_062_recommendation_id_uniqueness_validator(payload: Mapping[str
             errors.append("verdict.passed must be a boolean")
         elif verdict.get("passed") != expected_passed:
             errors.append("verdict.passed must equal is_unique_within_revision and ids_stable_across_revisions")
+
+    errors.extend(_validate_req_062_processing_behavior(payload.get("processing_behavior")))
 
     return errors
 
