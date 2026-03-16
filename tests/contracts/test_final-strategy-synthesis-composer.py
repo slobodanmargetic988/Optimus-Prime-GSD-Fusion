@@ -35,6 +35,8 @@ def test_req_046_builder_matches_sample_and_validates() -> None:
     assert pipeline.validate_req_046_final_strategy_synthesis_composer(built_payload) == []
     assert pipeline.validate_req_046_final_strategy_synthesis_composer(sample_payload) == []
     assert built_payload == sample_payload
+    assert built_payload["totals"]["open_risks"] == 1
+    assert built_payload["final_strategy_synthesis"]["cross_project_context_usage"]["cross_project_context_used"] is True
 
 
 def test_req_046_finalized_recommendations_preserve_multi_call_lineage() -> None:
@@ -100,7 +102,9 @@ def test_req_046_contract_doc_references_documented_sample_structure() -> None:
     for key in (
         "final_strategy_synthesis.final_recommendations",
         "final_strategy_synthesis.deferred_recommendations",
+        "final_strategy_synthesis.open_risks",
         "final_strategy_synthesis.strategy_packet_inputs",
+        "final_strategy_synthesis.cross_project_context_usage",
         "call_trace_lineage",
         "totals",
     ):

@@ -137,6 +137,27 @@
         ]
       }
     ],
+    "open_risks": [
+      {
+        "open_risk_id": "open-risk.c6d73dbb8f81",
+        "recommendation_id": "idea.review-reuse-contracts-follow-up",
+        "summary": "Validate earth-shared-observability ownership handoff before scheduling additional integration obligations.",
+        "reason_code": "unresolved_idea_open_risk",
+        "project_id": "earth-shared-observability",
+        "required_evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "linked_recommendation_ids": [
+          "rec.review-reuse-contracts"
+        ],
+        "call_trace_lineage": [],
+        "contributing_call_ids": []
+      }
+    ],
     "strategy_packet_inputs": [
       {
         "packet_input_id": "pkt.c3c7c38214ae",
@@ -171,13 +192,32 @@
           "reports/runtime/telemetry/freshness-gap-2026-03-15.json"
         ]
       }
-    ]
+    ],
+    "cross_project_context_usage": {
+      "cross_project_context_provided": true,
+      "cross_project_context_used": true,
+      "projects_considered": [
+        "earth-core-runtime",
+        "earth-shared-observability"
+      ],
+      "earth_sweep_evidence_refs_considered": [
+        "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ],
+      "cross_project_obligation_count": 2,
+      "unresolved_idea_count": 1,
+      "recommendation_ids_with_context": [
+        "rec.align-earth-runtime-canary",
+        "rec.review-reuse-contracts"
+      ]
+    }
   },
   "totals": {
     "validated_calls": 3,
     "candidate_recommendations": 6,
     "final_recommendations": 2,
     "deferred_recommendations": 1,
+    "open_risks": 1,
     "strategy_packet_inputs": 2,
     "call_trace_lineage_rows": 6
   }

@@ -33,6 +33,35 @@ CLI:
     "project_id": "optimus-prime-gsd-fusion",
     "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
   },
+  "broad_sweep_context": {
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+    ],
+    "cross_project_obligations": [
+      {
+        "target_project_id": "earth-core-runtime",
+        "recommendation_ids": [
+          "rec.align-earth-runtime-canary"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+        ]
+      }
+    ],
+    "unresolved_ideas": [
+      {
+        "idea_id": "idea.review-reuse-contracts-follow-up",
+        "summary": "Validate shared ownership before adding extra cross-project obligations.",
+        "target_project_id": "earth-shared-observability",
+        "recommendation_ids": [
+          "rec.review-reuse-contracts"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ]
+      }
+    ]
+  },
   "validated_call_outputs": [
     {
       "requirement_id": "REQ-027",
@@ -69,6 +98,11 @@ Rules:
 - `target_project.project_id` must be non-empty.
 - `target_project.project_root` must normalize to an absolute path.
 - `validated_call_outputs[]` must be a non-empty list.
+- `broad_sweep_context` is optional; when present it may contain:
+  - `earth_sweep_evidence_refs[]`
+  - `projects_considered[]`
+  - `cross_project_obligations[]`
+  - `unresolved_ideas[]`
 - Each `validated_call_outputs[]` row is strict and limited to:
   - `requirement_id`
   - `call_id`
@@ -109,7 +143,9 @@ REQ-046 output payload contains:
 `final_strategy_synthesis` contains:
 - `final_recommendations[]`
 - `deferred_recommendations[]`
+- `open_risks[]`
 - `strategy_packet_inputs[]`
+- `cross_project_context_usage`
 
 Each `final_recommendations[]` row includes:
 - `recommendation_id`
@@ -156,12 +192,35 @@ Each `deferred_recommendations[]` row includes:
 - `call_trace_lineage[]`
 - `contributing_call_ids[]`
 
+Each `open_risks[]` row includes:
+- `open_risk_id`
+- `recommendation_id`
+- `summary`
+- `reason_code`
+- `project_id`
+- `required_evidence_refs[]`
+- `evidence_refs[]`
+- `linked_recommendation_ids[]`
+- `call_trace_lineage[]`
+- `contributing_call_ids[]`
+
+`cross_project_context_usage` includes:
+- `cross_project_context_provided`
+- `cross_project_context_used`
+- `projects_considered[]`
+- `earth_sweep_evidence_refs_considered[]`
+- `cross_project_obligation_count`
+- `unresolved_idea_count`
+- `recommendation_ids_with_context[]`
+
 Synthesis behavior:
 - Recommendations are grouped by `recommendation_id` across validated calls.
 - Finalized recommendations preserve every contributing `call_trace` row in sorted `call_trace_lineage[]`.
 - `strategy_packet_inputs[]` are grouped by `packet_kind + peer_project_id + lane`.
 - When packet routing conflicts across contributing calls, the recommendation is emitted in `deferred_recommendations[]` with `deferred_reason_code = conflicting_packet_routing`.
 - Only finalized recommendations contribute to `strategy_packet_inputs[]`.
+- Cross-project recommendations must keep Earth-sweep evidence refs; recommendations missing Earth-sweep refs are emitted as `open_risks[]` with `reason_code = missing_earth_sweep_evidence_refs`.
+- `broad_sweep_context.unresolved_ideas[]` are surfaced as deterministic `open_risks[]` rows with `reason_code = unresolved_idea_open_risk`.
 
 ## Deterministic fixtures and samples
 - Input fixture: `examples/fixtures/final-strategy-synthesis-composer.json`
@@ -172,6 +231,8 @@ The structure in `strategy/current/samples/REQ-046_final-strategy-synthesis-comp
 is the canonical contract shape for REQ-046 and documents:
 - `final_strategy_synthesis.final_recommendations`
 - `final_strategy_synthesis.deferred_recommendations`
+- `final_strategy_synthesis.open_risks`
 - `final_strategy_synthesis.strategy_packet_inputs`
+- `final_strategy_synthesis.cross_project_context_usage`
 - `final_strategy_synthesis.final_recommendations[].call_trace_lineage`
 - `totals`

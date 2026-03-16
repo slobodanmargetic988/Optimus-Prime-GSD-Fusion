@@ -5,6 +5,46 @@
     "project_id": "optimus-prime-gsd-fusion",
     "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
   },
+  "broad_sweep_context": {
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+    ],
+    "projects_considered": [
+      "earth-core-runtime",
+      "earth-shared-observability"
+    ],
+    "cross_project_obligations": [
+      {
+        "target_project_id": "earth-core-runtime",
+        "recommendation_ids": [
+          "rec.align-earth-runtime-canary"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+        ]
+      },
+      {
+        "target_project_id": "earth-shared-observability",
+        "recommendation_ids": [
+          "rec.review-reuse-contracts"
+        ]
+      }
+    ],
+    "unresolved_ideas": [
+      {
+        "idea_id": "idea.review-reuse-contracts-follow-up",
+        "summary": "Validate earth-shared-observability ownership handoff before scheduling additional integration obligations.",
+        "target_project_id": "earth-shared-observability",
+        "recommendation_ids": [
+          "rec.review-reuse-contracts"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ]
+      }
+    ]
+  },
   "validated_call_outputs": [
     {
       "requirement_id": "REQ-027",

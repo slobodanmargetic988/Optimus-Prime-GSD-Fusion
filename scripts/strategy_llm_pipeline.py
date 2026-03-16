@@ -20,6 +20,9 @@ REQ_046_CALL_ID = "final-strategy-synthesis"
 _PACKET_KINDS = ("target-project", "cross-project")
 _PRIORITY_LEVELS = ("high", "medium", "low")
 _ROUTING_CONFLICT_REASON = "conflicting_packet_routing"
+_OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE = "missing_earth_sweep_evidence_refs"
+_OPEN_RISK_REASON_UNRESOLVED_IDEA = "unresolved_idea_open_risk"
+_EARTH_SWEEP_REF_PREFIXES = ("earth-sweep/", "reports/earth/sweeps/")
 _LOG_BUDGET_MAX_BYTES = 3 * 1024 * 1024 * 1024
 _LOG_BUDGET_CHECK_INTERVAL_SECONDS = 15 * 60
 
@@ -131,6 +134,11 @@ def _collect_unique_refs(*ref_groups: list[str]) -> list[str]:
     for group in ref_groups:
         refs.update(group)
     return sorted(refs)
+
+
+def _is_earth_sweep_ref(value: str) -> bool:
+    ref = str(value).strip().lower()
+    return any(ref.startswith(prefix) for prefix in _EARTH_SWEEP_REF_PREFIXES)
 
 
 def _priority_rank(priority: str) -> int:
@@ -302,6 +310,107 @@ def _normalize_validated_call_outputs(raw_value: Any) -> list[dict[str, Any]]:
     return normalized_calls
 
 
+def _normalize_broad_sweep_context(raw_value: Any) -> dict[str, Any]:
+    if raw_value is None:
+        return {
+            "earth_sweep_evidence_refs": [],
+            "projects_considered": [],
+            "cross_project_obligations": [],
+            "unresolved_ideas": [],
+        }
+
+    broad_sweep_context = _require_mapping(raw_value, field_name="broad_sweep_context")
+    earth_sweep_evidence_refs = _normalize_string_list(
+        broad_sweep_context.get("earth_sweep_evidence_refs"),
+        field_name="broad_sweep_context.earth_sweep_evidence_refs",
+    )
+    projects_considered = set(
+        _normalize_string_list(
+            broad_sweep_context.get("projects_considered"),
+            field_name="broad_sweep_context.projects_considered",
+        )
+    )
+
+    cross_project_obligations_raw = broad_sweep_context.get("cross_project_obligations")
+    if cross_project_obligations_raw is None:
+        cross_project_obligations_raw = []
+    if not isinstance(cross_project_obligations_raw, list):
+        raise ValueError("broad_sweep_context.cross_project_obligations must be a list")
+    cross_project_obligations: list[dict[str, Any]] = []
+    for index, item in enumerate(cross_project_obligations_raw):
+        field_name = f"broad_sweep_context.cross_project_obligations[{index}]"
+        row = _require_mapping(item, field_name=field_name)
+        target_project_id = ""
+        if row.get("target_project_id") is not None:
+            target_project_id = _require_nonempty_text(row.get("target_project_id"), field_name=f"{field_name}.target_project_id")
+            projects_considered.add(target_project_id)
+        recommendation_ids = _normalize_string_list(
+            row.get("recommendation_ids"),
+            field_name=f"{field_name}.recommendation_ids",
+        )
+        obligation_refs = _normalize_string_list(
+            row.get("earth_sweep_evidence_refs"),
+            field_name=f"{field_name}.earth_sweep_evidence_refs",
+        )
+        cross_project_obligations.append(
+            {
+                "target_project_id": target_project_id,
+                "recommendation_ids": recommendation_ids,
+                "earth_sweep_evidence_refs": obligation_refs,
+            }
+        )
+    cross_project_obligations.sort(
+        key=lambda row: (
+            row["target_project_id"],
+            ",".join(row["recommendation_ids"]),
+            ",".join(row["earth_sweep_evidence_refs"]),
+        )
+    )
+
+    unresolved_ideas_raw = broad_sweep_context.get("unresolved_ideas")
+    if unresolved_ideas_raw is None:
+        unresolved_ideas_raw = []
+    if not isinstance(unresolved_ideas_raw, list):
+        raise ValueError("broad_sweep_context.unresolved_ideas must be a list")
+    unresolved_ideas: list[dict[str, Any]] = []
+    for index, item in enumerate(unresolved_ideas_raw):
+        field_name = f"broad_sweep_context.unresolved_ideas[{index}]"
+        row = _require_mapping(item, field_name=field_name)
+        summary = _require_nonempty_text(row.get("summary"), field_name=f"{field_name}.summary")
+        target_project_id = ""
+        if row.get("target_project_id") is not None:
+            target_project_id = _require_nonempty_text(row.get("target_project_id"), field_name=f"{field_name}.target_project_id")
+            projects_considered.add(target_project_id)
+        recommendation_ids = _normalize_string_list(
+            row.get("recommendation_ids"),
+            field_name=f"{field_name}.recommendation_ids",
+        )
+        idea_refs = _normalize_string_list(
+            row.get("earth_sweep_evidence_refs"),
+            field_name=f"{field_name}.earth_sweep_evidence_refs",
+        )
+        idea_id = _require_nonempty_text(row.get("idea_id"), field_name=f"{field_name}.idea_id") if row.get("idea_id") else ""
+        if not idea_id:
+            idea_id = f"idea.{_stable_id_fragment(summary, target_project_id, '|'.join(recommendation_ids), '|'.join(idea_refs))}"
+        unresolved_ideas.append(
+            {
+                "idea_id": idea_id,
+                "summary": summary,
+                "target_project_id": target_project_id,
+                "recommendation_ids": recommendation_ids,
+                "earth_sweep_evidence_refs": idea_refs,
+            }
+        )
+    unresolved_ideas.sort(key=lambda row: row["idea_id"])
+
+    return {
+        "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+        "projects_considered": sorted(projects_considered),
+        "cross_project_obligations": cross_project_obligations,
+        "unresolved_ideas": unresolved_ideas,
+    }
+
+
 def _lineage_sort_key(row: Mapping[str, Any]) -> tuple[str, str, str]:
     return (str(row["call_id"]), str(row["requirement_id"]), str(row["trace_id"]))
 
@@ -336,7 +445,23 @@ def _build_final_strategy_synthesis(
     *,
     target_project: Mapping[str, str],
     validated_call_outputs: list[dict[str, Any]],
+    broad_sweep_context: Mapping[str, Any],
 ) -> dict[str, Any]:
+    context_earth_refs = list(broad_sweep_context.get("earth_sweep_evidence_refs") or [])
+    context_earth_ref_set = set(context_earth_refs)
+    obligation_refs_by_recommendation_id: dict[str, set[str]] = {}
+    obligation_projects_by_recommendation_id: dict[str, set[str]] = {}
+    for row in broad_sweep_context.get("cross_project_obligations") or []:
+        if not isinstance(row, Mapping):
+            continue
+        recommendation_ids = [str(item) for item in row.get("recommendation_ids") or [] if str(item).strip()]
+        obligation_refs = [str(item) for item in row.get("earth_sweep_evidence_refs") or [] if str(item).strip()]
+        target_project_id = str(row.get("target_project_id") or "").strip()
+        for recommendation_id in recommendation_ids:
+            obligation_refs_by_recommendation_id.setdefault(recommendation_id, set()).update(obligation_refs)
+            if target_project_id:
+                obligation_projects_by_recommendation_id.setdefault(recommendation_id, set()).add(target_project_id)
+
     grouped: dict[str, list[dict[str, Any]]] = {}
     for call_output in validated_call_outputs:
         for recommendation in call_output["recommendations"]:
@@ -351,13 +476,17 @@ def _build_final_strategy_synthesis(
 
     final_recommendations: list[dict[str, Any]] = []
     deferred_recommendations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
 
     for recommendation_id in sorted(grouped):
         contributions = sorted(grouped[recommendation_id], key=_contribution_sort_key)
         canonical = contributions[0]
         packet_kind_candidates = sorted({str(row["packet_kind"]) for row in contributions})
         peer_project_candidates = sorted({str(row["peer_project_id"]) for row in contributions if row["peer_project_id"]})
-        evidence_refs = _collect_unique_refs(*[list(row["evidence_refs"]) for row in contributions])
+        evidence_refs = _collect_unique_refs(
+            *[list(row["evidence_refs"]) for row in contributions],
+            sorted(obligation_refs_by_recommendation_id.get(recommendation_id, set())),
+        )
         call_trace_lineage = _build_call_trace_lineage(contributions)
         contributing_call_ids = sorted({str(row["call_id"]) for row in contributions})
         contributing_requirement_ids = sorted({str(row["requirement_id"]) for row in contributions})
@@ -383,6 +512,37 @@ def _build_final_strategy_synthesis(
                 }
             )
             continue
+
+        if packet_kind == "cross-project":
+            has_earth_sweep_evidence = any(
+                _is_earth_sweep_ref(ref) or ref in context_earth_ref_set for ref in evidence_refs
+            )
+            if not has_earth_sweep_evidence:
+                required_evidence_refs = sorted(obligation_refs_by_recommendation_id.get(recommendation_id, set()))
+                if not required_evidence_refs:
+                    required_evidence_refs = list(context_earth_refs)
+                if not required_evidence_refs:
+                    required_evidence_refs = ["missing:earth-sweep-evidence-ref"]
+                linked_project_candidates = sorted(obligation_projects_by_recommendation_id.get(recommendation_id, set()))
+                open_risks.append(
+                    {
+                        "open_risk_id": f"open-risk.{_stable_id_fragment(recommendation_id, _OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE)}",
+                        "recommendation_id": recommendation_id,
+                        "summary": canonical["summary"],
+                        "reason_code": _OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE,
+                        "project_id": (
+                            peer_project_candidates[0]
+                            if peer_project_candidates
+                            else (linked_project_candidates[0] if linked_project_candidates else "")
+                        ),
+                        "required_evidence_refs": required_evidence_refs,
+                        "evidence_refs": evidence_refs,
+                        "linked_recommendation_ids": [recommendation_id],
+                        "call_trace_lineage": call_trace_lineage,
+                        "contributing_call_ids": contributing_call_ids,
+                    }
+                )
+                continue
 
         final_recommendations.append(
             {
@@ -413,6 +573,43 @@ def _build_final_strategy_synthesis(
         )
     )
     deferred_recommendations.sort(key=lambda row: row["recommendation_id"])
+
+    for idea in broad_sweep_context.get("unresolved_ideas") or []:
+        if not isinstance(idea, Mapping):
+            continue
+        idea_id = str(idea.get("idea_id") or "").strip()
+        summary = str(idea.get("summary") or "").strip()
+        if not idea_id or not summary:
+            continue
+        required_evidence_refs = _collect_unique_refs(
+            list(idea.get("earth_sweep_evidence_refs") or []),
+            list(context_earth_refs),
+        )
+        if not required_evidence_refs:
+            required_evidence_refs = ["missing:earth-sweep-evidence-ref"]
+        open_risks.append(
+            {
+                "open_risk_id": f"open-risk.{_stable_id_fragment(idea_id, _OPEN_RISK_REASON_UNRESOLVED_IDEA)}",
+                "recommendation_id": idea_id,
+                "summary": summary,
+                "reason_code": _OPEN_RISK_REASON_UNRESOLVED_IDEA,
+                "project_id": str(idea.get("target_project_id") or ""),
+                "required_evidence_refs": required_evidence_refs,
+                "evidence_refs": list(idea.get("earth_sweep_evidence_refs") or []),
+                "linked_recommendation_ids": list(idea.get("recommendation_ids") or []),
+                "call_trace_lineage": [],
+                "contributing_call_ids": [],
+            }
+        )
+
+    open_risks.sort(
+        key=lambda row: (
+            row["reason_code"],
+            row["project_id"],
+            row["recommendation_id"],
+            row["open_risk_id"],
+        )
+    )
 
     packet_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for recommendation in final_recommendations:
@@ -451,10 +648,36 @@ def _build_final_strategy_synthesis(
         for recommendation in recommendations:
             recommendation["strategy_packet_input_id"] = packet_input_id
 
+    usage_projects_considered = _collect_unique_refs(
+        list(broad_sweep_context.get("projects_considered") or []),
+        [str(row["peer_project_id"]) for row in final_recommendations if str(row["packet_kind"]) == "cross-project"],
+        [str(row["project_id"]) for row in open_risks if str(row["project_id"]).strip()],
+    )
+    recommendation_ids_with_context = sorted(obligation_refs_by_recommendation_id)
+
     return {
         "final_recommendations": final_recommendations,
         "deferred_recommendations": deferred_recommendations,
+        "open_risks": open_risks,
         "strategy_packet_inputs": strategy_packet_inputs,
+        "cross_project_context_usage": {
+            "cross_project_context_provided": bool(
+                context_earth_refs
+                or broad_sweep_context.get("projects_considered")
+                or broad_sweep_context.get("cross_project_obligations")
+                or broad_sweep_context.get("unresolved_ideas")
+            ),
+            "cross_project_context_used": bool(
+                recommendation_ids_with_context
+                or any(str(row["packet_kind"]) == "cross-project" for row in final_recommendations)
+                or open_risks
+            ),
+            "projects_considered": usage_projects_considered,
+            "earth_sweep_evidence_refs_considered": context_earth_refs,
+            "cross_project_obligation_count": len(broad_sweep_context.get("cross_project_obligations") or []),
+            "unresolved_idea_count": len(broad_sweep_context.get("unresolved_ideas") or []),
+            "recommendation_ids_with_context": recommendation_ids_with_context,
+        },
     }
 
 
@@ -468,9 +691,11 @@ def build_req_046_final_strategy_synthesis_composer(payload: Mapping[str, Any]) 
 
     target_project = _normalize_target_project(raw.get("target_project"))
     validated_call_outputs = _normalize_validated_call_outputs(raw.get("validated_call_outputs"))
+    broad_sweep_context = _normalize_broad_sweep_context(raw.get("broad_sweep_context"))
     synthesis = _build_final_strategy_synthesis(
         target_project=target_project,
         validated_call_outputs=validated_call_outputs,
+        broad_sweep_context=broad_sweep_context,
     )
 
     output_payload = {
@@ -487,11 +712,14 @@ def build_req_046_final_strategy_synthesis_composer(payload: Mapping[str, Any]) 
             "candidate_recommendations": sum(len(row["recommendations"]) for row in validated_call_outputs),
             "final_recommendations": len(synthesis["final_recommendations"]),
             "deferred_recommendations": len(synthesis["deferred_recommendations"]),
+            "open_risks": len(synthesis["open_risks"]),
             "strategy_packet_inputs": len(synthesis["strategy_packet_inputs"]),
             "call_trace_lineage_rows": sum(
                 len(row["call_trace_lineage"])
                 for row in (
-                    list(synthesis["final_recommendations"]) + list(synthesis["deferred_recommendations"])
+                    list(synthesis["final_recommendations"])
+                    + list(synthesis["deferred_recommendations"])
+                    + list(synthesis["open_risks"])
                 )
             ),
         },
@@ -572,7 +800,9 @@ def validate_req_046_final_strategy_synthesis_composer(payload: Mapping[str, Any
     expected_synthesis_keys = {
         "final_recommendations",
         "deferred_recommendations",
+        "open_risks",
         "strategy_packet_inputs",
+        "cross_project_context_usage",
     }
     synthesis_keys = set(synthesis.keys())
     missing_synthesis = sorted(expected_synthesis_keys - synthesis_keys)
@@ -882,6 +1112,120 @@ def validate_req_046_final_strategy_synthesis_composer(payload: Mapping[str, Any
                 field_name=f"final_strategy_synthesis.deferred_recommendations[{index}].call_trace_lineage",
             )
 
+    open_risks = synthesis.get("open_risks")
+    seen_open_risk_ids: set[str] = set()
+    if not isinstance(open_risks, list):
+        errors.append("final_strategy_synthesis.open_risks must be a list")
+        open_risks = []
+    else:
+        for index, row in enumerate(open_risks):
+            if not isinstance(row, Mapping):
+                errors.append(f"final_strategy_synthesis.open_risks[{index}] must be an object")
+                continue
+            expected_keys = {
+                "open_risk_id",
+                "recommendation_id",
+                "summary",
+                "reason_code",
+                "project_id",
+                "required_evidence_refs",
+                "evidence_refs",
+                "linked_recommendation_ids",
+                "call_trace_lineage",
+                "contributing_call_ids",
+            }
+            row_keys = set(row.keys())
+            missing_keys = sorted(expected_keys - row_keys)
+            if missing_keys:
+                errors.append(f"final_strategy_synthesis.open_risks[{index}] missing keys: {missing_keys}")
+            unexpected_keys = sorted(row_keys - expected_keys)
+            if unexpected_keys:
+                errors.append(f"final_strategy_synthesis.open_risks[{index}] has unexpected keys: {unexpected_keys}")
+
+            open_risk_id = row.get("open_risk_id")
+            if not isinstance(open_risk_id, str) or not open_risk_id.strip():
+                errors.append(f"final_strategy_synthesis.open_risks[{index}].open_risk_id must be a non-empty string")
+            elif open_risk_id in seen_open_risk_ids:
+                errors.append(f"final_strategy_synthesis.open_risks[{index}].open_risk_id must be unique")
+            else:
+                seen_open_risk_ids.add(open_risk_id)
+
+            recommendation_id = row.get("recommendation_id")
+            if not isinstance(recommendation_id, str) or not recommendation_id.strip():
+                errors.append(
+                    f"final_strategy_synthesis.open_risks[{index}].recommendation_id must be a non-empty string"
+                )
+            if not isinstance(row.get("summary"), str) or not str(row.get("summary")).strip():
+                errors.append(f"final_strategy_synthesis.open_risks[{index}].summary must be a non-empty string")
+            reason_code = row.get("reason_code")
+            if reason_code not in (
+                _OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE,
+                _OPEN_RISK_REASON_UNRESOLVED_IDEA,
+            ):
+                errors.append(
+                    "final_strategy_synthesis.open_risks"
+                    f"[{index}].reason_code must be one of: "
+                    f"{[_OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE, _OPEN_RISK_REASON_UNRESOLVED_IDEA]}"
+                )
+            if not isinstance(row.get("project_id"), str):
+                errors.append(f"final_strategy_synthesis.open_risks[{index}].project_id must be a string")
+            for key in ("required_evidence_refs", "evidence_refs", "linked_recommendation_ids", "contributing_call_ids"):
+                if not isinstance(row.get(key), list):
+                    errors.append(f"final_strategy_synthesis.open_risks[{index}].{key} must be a list")
+
+            lineage_rows = row.get("call_trace_lineage")
+            if not isinstance(lineage_rows, list):
+                errors.append(f"final_strategy_synthesis.open_risks[{index}].call_trace_lineage must be a list")
+                lineage_rows = []
+            elif reason_code == _OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE and not lineage_rows:
+                errors.append(
+                    f"final_strategy_synthesis.open_risks[{index}].call_trace_lineage must be non-empty for missing Earth sweep evidence risks"
+                )
+            if lineage_rows:
+                _validate_lineage_rows(
+                    lineage_rows,
+                    field_name=f"final_strategy_synthesis.open_risks[{index}].call_trace_lineage",
+                )
+
+    cross_project_context_usage = synthesis.get("cross_project_context_usage")
+    if not isinstance(cross_project_context_usage, Mapping):
+        errors.append("final_strategy_synthesis.cross_project_context_usage must be an object")
+    else:
+        expected_usage_keys = {
+            "cross_project_context_provided",
+            "cross_project_context_used",
+            "projects_considered",
+            "earth_sweep_evidence_refs_considered",
+            "cross_project_obligation_count",
+            "unresolved_idea_count",
+            "recommendation_ids_with_context",
+        }
+        usage_keys = set(cross_project_context_usage.keys())
+        missing_usage = sorted(expected_usage_keys - usage_keys)
+        if missing_usage:
+            errors.append(f"final_strategy_synthesis.cross_project_context_usage missing keys: {missing_usage}")
+        unexpected_usage = sorted(usage_keys - expected_usage_keys)
+        if unexpected_usage:
+            errors.append(f"final_strategy_synthesis.cross_project_context_usage has unexpected keys: {unexpected_usage}")
+        if not isinstance(cross_project_context_usage.get("cross_project_context_provided"), bool):
+            errors.append("final_strategy_synthesis.cross_project_context_usage.cross_project_context_provided must be a boolean")
+        if not isinstance(cross_project_context_usage.get("cross_project_context_used"), bool):
+            errors.append("final_strategy_synthesis.cross_project_context_usage.cross_project_context_used must be a boolean")
+        for key in (
+            "projects_considered",
+            "earth_sweep_evidence_refs_considered",
+            "recommendation_ids_with_context",
+        ):
+            value = cross_project_context_usage.get(key)
+            if not isinstance(value, list):
+                errors.append(f"final_strategy_synthesis.cross_project_context_usage.{key} must be a list")
+        for key in ("cross_project_obligation_count", "unresolved_idea_count"):
+            value = cross_project_context_usage.get(key)
+            if not isinstance(value, int) or value < 0:
+                errors.append(
+                    f"final_strategy_synthesis.cross_project_context_usage.{key} must be a non-negative integer"
+                )
+
     if packet_input_ids and referenced_packet_input_ids != packet_input_ids:
         errors.append(
             "final_strategy_synthesis.final_recommendations.strategy_packet_input_id values must cover all strategy_packet_inputs"
@@ -896,6 +1240,7 @@ def validate_req_046_final_strategy_synthesis_composer(payload: Mapping[str, Any
             "candidate_recommendations",
             "final_recommendations",
             "deferred_recommendations",
+            "open_risks",
             "strategy_packet_inputs",
             "call_trace_lineage_rows",
         }
@@ -915,12 +1260,14 @@ def validate_req_046_final_strategy_synthesis_composer(payload: Mapping[str, Any
             errors.append("totals.final_recommendations must match synthesized final recommendations count")
         if totals.get("deferred_recommendations") != len(deferred_recommendations):
             errors.append("totals.deferred_recommendations must match synthesized deferred recommendations count")
+        if totals.get("open_risks") != len(open_risks):
+            errors.append("totals.open_risks must match synthesized open risk count")
         if totals.get("strategy_packet_inputs") != len(strategy_packet_inputs):
             errors.append("totals.strategy_packet_inputs must match synthesized packet input count")
 
         expected_lineage_rows = 0
         unique_trace_ids: set[str] = set()
-        for collection in (final_recommendations, deferred_recommendations):
+        for collection in (final_recommendations, deferred_recommendations, open_risks):
             for row in collection:
                 if isinstance(row, Mapping) and isinstance(row.get("call_trace_lineage"), list):
                     expected_lineage_rows += len(row["call_trace_lineage"])
