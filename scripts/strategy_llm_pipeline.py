@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""REQ-027 contract surface for Call-2 ecosystem linkage reasoning.
+"""Contract/data-model surfaces for strategy LLM pipeline calls.
 
-This module intentionally focuses on REQ-027 only. It normalizes, validates, and
-emits a deterministic payload describing:
-- existing links between the target and peer projects,
-- missing links (expected but absent),
-- proposed links (candidate future integrations),
-each annotated with confidence tags and bounded interaction obligations.
+Implemented requirement surfaces:
+- REQ-027 Call-2 ecosystem linkage reasoning.
+- REQ-030 Call-5 sequencing and lane design reasoning.
 """
 
 from __future__ import annotations
@@ -28,9 +25,16 @@ REQ_027_REQUIREMENT_ID = "REQ-027"
 REQ_027_ANALYSIS_TYPE = "call_2_ecosystem_linkage_reasoning"
 REQ_027_CALL_ID = "call-2"
 
+REQ_030_SCHEMA_VERSION = "req-030.call-5-sequencing-and-lane-design-reasoning.v1"
+REQ_030_REQUIREMENT_ID = "REQ-030"
+REQ_030_ANALYSIS_TYPE = "call_5_sequencing_and_lane_design_reasoning"
+REQ_030_CALL_ID = "call-5"
+
 _CONFIDENCE_TAGS = ("high", "medium", "low")
 _DIRECTIONS = ("target_to_peer", "peer_to_target", "bidirectional")
 _OBLIGATED_PARTIES = ("target", "peer", "both")
+_RISK_LEVELS = ("high", "medium", "low")
+_DEPENDS_ON_TYPES = ("recommendation", "external")
 _LOG_CHECK_SENTINEL = ".log_size_check.json"
 _MAX_LOG_BYTES = 3_000_000_000
 _LLM_CALL_TRACE_SCHEMA_VERSION = "optimus-prime.llm-call-trace.v1"
@@ -92,6 +96,15 @@ def _normalize_confidence_tag(raw_value: Any, *, field_name: str) -> str:
     return tag
 
 
+def _normalize_risk_level(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        raise ValueError(f"{field_name} must be set to one of: {list(_RISK_LEVELS)}")
+    level = _require_nonempty_text(raw_value, field_name=field_name).lower()
+    if level not in _RISK_LEVELS:
+        raise ValueError(f"{field_name} must be one of: {list(_RISK_LEVELS)}")
+    return level
+
+
 def _stable_id_fragment(*parts: str) -> str:
     raw = "|".join(parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
@@ -108,6 +121,7 @@ def _format_ts_line(message: str, *, now_utc: str | None = None) -> str:
 
 def _default_log_dir() -> Path:
     return Path.home() / "projects" / "LOGS"
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -392,6 +406,242 @@ def _normalize_peer_projects(raw_value: Any) -> list[dict[str, str]]:
         peers.append(row)
     peers.sort(key=lambda row: row["project_id"])
     return peers
+
+
+def _normalize_req_030_constraints(raw_value: Any) -> dict[str, Any]:
+    if raw_value is None:
+        raise ValueError("constraints must be an object")
+    constraints = _require_mapping(raw_value, field_name="constraints")
+    max_parallel_lanes = constraints.get("max_parallel_lanes")
+    if not isinstance(max_parallel_lanes, int) or max_parallel_lanes <= 0:
+        raise ValueError("constraints.max_parallel_lanes must be a positive integer")
+    max_active_work_items = constraints.get("max_active_work_items")
+    if not isinstance(max_active_work_items, int) or max_active_work_items <= 0:
+        raise ValueError("constraints.max_active_work_items must be a positive integer")
+    notes = _normalize_string_list(constraints.get("notes"), field_name="constraints.notes")
+    normalized = {
+        "max_parallel_lanes": max_parallel_lanes,
+        "max_active_work_items": max_active_work_items,
+        "notes": notes,
+    }
+    extra = sorted(set(constraints.keys()) - set(normalized.keys()))
+    if extra:
+        raise ValueError(f"constraints has unexpected keys: {extra}")
+    return normalized
+
+
+def _normalize_req_030_recommendations(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        raise ValueError("recommendations must be a list")
+    if not isinstance(raw_value, list):
+        raise ValueError("recommendations must be a list")
+    seen: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for idx, item in enumerate(raw_value):
+        rec = _require_mapping(item, field_name=f"recommendations[{idx}]")
+        recommendation_id = _require_nonempty_text(
+            rec.get("recommendation_id"),
+            field_name=f"recommendations[{idx}].recommendation_id",
+        )
+        if recommendation_id in seen:
+            raise ValueError(
+                f"recommendations[{idx}].recommendation_id must be unique (duplicate: {recommendation_id})"
+            )
+        seen.add(recommendation_id)
+        summary = _require_nonempty_text(rec.get("summary"), field_name=f"recommendations[{idx}].summary")
+        rationale = _require_nonempty_text(rec.get("rationale"), field_name=f"recommendations[{idx}].rationale")
+        expected_impact = _require_nonempty_text(
+            rec.get("expected_impact"),
+            field_name=f"recommendations[{idx}].expected_impact",
+        )
+        risk_level = _normalize_risk_level(rec.get("risk_level"), field_name=f"recommendations[{idx}].risk_level")
+        row = {
+            "recommendation_id": recommendation_id,
+            "summary": summary,
+            "rationale": rationale,
+            "expected_impact": expected_impact,
+            "risk_level": risk_level,
+        }
+        extra = sorted(set(rec.keys()) - set(row.keys()))
+        if extra:
+            raise ValueError(f"recommendations[{idx}] has unexpected keys: {extra}")
+        normalized.append(row)
+    normalized.sort(key=lambda r: r["recommendation_id"])
+    return normalized
+
+
+def _normalize_req_030_coordination_dependencies(
+    raw_value: Any,
+    *,
+    field_name: str,
+    target_project_id: str,
+    parent_kind: str,
+    parent_id: str,
+    recommendation_ids: set[str],
+) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError(f"{field_name} must be a list")
+    deps: list[dict[str, Any]] = []
+    for idx, item in enumerate(raw_value):
+        dep = _require_mapping(item, field_name=f"{field_name}[{idx}]")
+        dependency_kind = _require_nonempty_text(
+            dep.get("dependency_kind"),
+            field_name=f"{field_name}[{idx}].dependency_kind",
+        )
+        depends_on = _require_nonempty_text(dep.get("depends_on"), field_name=f"{field_name}[{idx}].depends_on")
+        summary = _require_nonempty_text(dep.get("summary"), field_name=f"{field_name}[{idx}].summary")
+        depends_on_type = "recommendation" if depends_on in recommendation_ids else "external"
+        dependency_id = (
+            f"dep.{_stable_id_fragment(target_project_id, parent_kind, parent_id, depends_on_type, depends_on, dependency_kind, summary)}"
+        )
+        row = {
+            "dependency_id": dependency_id,
+            "dependency_kind": dependency_kind,
+            "depends_on_type": depends_on_type,
+            "depends_on": depends_on,
+            "summary": summary,
+        }
+        extra = sorted(set(dep.keys()) - {"dependency_kind", "depends_on", "summary"})
+        if extra:
+            raise ValueError(f"{field_name}[{idx}] has unexpected keys: {extra}")
+        deps.append(row)
+    deps.sort(key=lambda d: (d["depends_on_type"], d["depends_on"], d["dependency_kind"], d["dependency_id"]))
+    return deps
+
+
+def _normalize_req_030_lanes(
+    raw_value: Any,
+    *,
+    target_project_id: str,
+    recommendation_ids: set[str],
+) -> list[dict[str, Any]]:
+    if raw_value is None:
+        raise ValueError("lanes must be a list")
+    if not isinstance(raw_value, list):
+        raise ValueError("lanes must be a list")
+    lanes: list[dict[str, Any]] = []
+    lane_names_seen: set[str] = set()
+    for idx, item in enumerate(raw_value):
+        lane = _require_mapping(item, field_name=f"lanes[{idx}]")
+        lane_name = _require_nonempty_text(lane.get("lane_name"), field_name=f"lanes[{idx}].lane_name")
+        if lane_name in lane_names_seen:
+            raise ValueError(f"lanes[{idx}].lane_name must be unique (duplicate: {lane_name})")
+        lane_names_seen.add(lane_name)
+        lane_kind = _require_nonempty_text(lane.get("lane_kind"), field_name=f"lanes[{idx}].lane_kind")
+        lane_goal = _require_nonempty_text(lane.get("lane_goal"), field_name=f"lanes[{idx}].lane_goal")
+        why_now = _require_nonempty_text(lane.get("why_now"), field_name=f"lanes[{idx}].why_now")
+        raw_recommendation_ids = lane.get("recommendation_ids")
+        if not isinstance(raw_recommendation_ids, list) or not raw_recommendation_ids:
+            raise ValueError(f"lanes[{idx}].recommendation_ids must be a non-empty list of recommendation ids")
+        normalized_rec_ids: list[str] = []
+        for ridx, rec_id in enumerate(raw_recommendation_ids):
+            rec_text = _require_nonempty_text(rec_id, field_name=f"lanes[{idx}].recommendation_ids[{ridx}]")
+            if rec_text not in recommendation_ids:
+                raise ValueError(f"lanes[{idx}].recommendation_ids[{ridx}] must be declared in recommendations")
+            normalized_rec_ids.append(rec_text)
+        normalized_rec_ids = sorted(set(normalized_rec_ids))
+        lane_id = f"lane.{_stable_id_fragment(target_project_id, lane_name)}"
+        coordination_dependencies = _normalize_req_030_coordination_dependencies(
+            lane.get("coordination_dependencies"),
+            field_name=f"lanes[{idx}].coordination_dependencies",
+            target_project_id=target_project_id,
+            parent_kind="lane",
+            parent_id=lane_id,
+            recommendation_ids=recommendation_ids,
+        )
+        row = {
+            "lane_id": lane_id,
+            "lane_name": lane_name,
+            "lane_kind": lane_kind,
+            "lane_goal": lane_goal,
+            "why_now": why_now,
+            "recommendation_ids": normalized_rec_ids,
+            "coordination_dependencies": coordination_dependencies,
+        }
+        extra = sorted(
+            set(lane.keys())
+            - {
+                "lane_name",
+                "lane_kind",
+                "lane_goal",
+                "why_now",
+                "recommendation_ids",
+                "coordination_dependencies",
+            }
+        )
+        if extra:
+            raise ValueError(f"lanes[{idx}] has unexpected keys: {extra}")
+        lanes.append(row)
+    lanes.sort(key=lambda l: (l["lane_name"], l["lane_id"]))
+    return lanes
+
+
+def _normalize_req_030_sequence(
+    raw_value: Any,
+    *,
+    target_project_id: str,
+    lanes_by_name: Mapping[str, Mapping[str, Any]],
+    recommendation_ids: set[str],
+) -> list[dict[str, Any]]:
+    if raw_value is None:
+        raise ValueError("sequence must be a list")
+    if not isinstance(raw_value, list):
+        raise ValueError("sequence must be a list")
+    sequence_rows: list[dict[str, Any]] = []
+    orders_seen: set[int] = set()
+    recommendation_seen: set[str] = set()
+    for idx, item in enumerate(raw_value):
+        row = _require_mapping(item, field_name=f"sequence[{idx}]")
+        order = row.get("order")
+        if not isinstance(order, int) or order <= 0:
+            raise ValueError(f"sequence[{idx}].order must be a positive integer")
+        if order in orders_seen:
+            raise ValueError(f"sequence[{idx}].order must be unique (duplicate: {order})")
+        orders_seen.add(order)
+        recommendation_id = _require_nonempty_text(
+            row.get("recommendation_id"),
+            field_name=f"sequence[{idx}].recommendation_id",
+        )
+        if recommendation_id not in recommendation_ids:
+            raise ValueError(f"sequence[{idx}].recommendation_id must be declared in recommendations")
+        if recommendation_id in recommendation_seen:
+            raise ValueError(f"sequence[{idx}].recommendation_id must be unique (duplicate: {recommendation_id})")
+        recommendation_seen.add(recommendation_id)
+        lane_name = _require_nonempty_text(row.get("lane_name"), field_name=f"sequence[{idx}].lane_name")
+        if lane_name not in lanes_by_name:
+            raise ValueError(f"sequence[{idx}].lane_name must match a declared lane")
+        why_now = _require_nonempty_text(row.get("why_now"), field_name=f"sequence[{idx}].why_now")
+        lane_id = str(lanes_by_name[lane_name].get("lane_id") or "").strip()
+        if not lane_id:
+            raise ValueError("internal error: lane_id missing while normalizing sequence")
+        sequence_id = f"seq.{_stable_id_fragment(target_project_id, recommendation_id, lane_id, str(order))}"
+        coordination_dependencies = _normalize_req_030_coordination_dependencies(
+            row.get("coordination_dependencies"),
+            field_name=f"sequence[{idx}].coordination_dependencies",
+            target_project_id=target_project_id,
+            parent_kind="sequence_item",
+            parent_id=sequence_id,
+            recommendation_ids=recommendation_ids,
+        )
+        normalized = {
+            "sequence_id": sequence_id,
+            "order": order,
+            "recommendation_id": recommendation_id,
+            "lane_id": lane_id,
+            "lane_name": lane_name,
+            "why_now": why_now,
+            "coordination_dependencies": coordination_dependencies,
+        }
+        extra = sorted(
+            set(row.keys()) - {"order", "recommendation_id", "lane_name", "why_now", "coordination_dependencies"}
+        )
+        if extra:
+            raise ValueError(f"sequence[{idx}] has unexpected keys: {extra}")
+        sequence_rows.append(normalized)
+    sequence_rows.sort(key=lambda r: r["order"])
+    return sequence_rows
 
 
 def _normalize_interaction_obligations(
@@ -1280,15 +1530,423 @@ def validate_req_027_call_2_ecosystem_linkage_reasoning(payload: Mapping[str, An
     return errors
 
 
+def build_req_030_call_5_sequencing_and_lane_design_reasoning(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build normalized REQ-030 payload for Call-5 sequencing and lane design reasoning."""
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_030_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_030_ANALYSIS_TYPE}")
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+
+    target_project = _normalize_target_project(raw.get("target_project"))
+    constraints = _normalize_req_030_constraints(raw.get("constraints"))
+    recommendations = _normalize_req_030_recommendations(raw.get("recommendations"))
+    recommendation_ids = {row["recommendation_id"] for row in recommendations}
+
+    reasoning = _require_mapping(
+        raw.get("sequencing_and_lane_design_reasoning"),
+        field_name="sequencing_and_lane_design_reasoning",
+    )
+    lanes = _normalize_req_030_lanes(
+        reasoning.get("lanes"),
+        target_project_id=target_project["project_id"],
+        recommendation_ids=recommendation_ids,
+    )
+    lanes_by_name = {lane["lane_name"]: lane for lane in lanes}
+    sequence = _normalize_req_030_sequence(
+        reasoning.get("sequence"),
+        target_project_id=target_project["project_id"],
+        lanes_by_name=lanes_by_name,
+        recommendation_ids=recommendation_ids,
+    )
+    extra_reasoning = sorted(set(reasoning.keys()) - {"lanes", "sequence"})
+    if extra_reasoning:
+        raise ValueError(f"sequencing_and_lane_design_reasoning has unexpected keys: {extra_reasoning}")
+
+    lane_deps = sum(len(lane["coordination_dependencies"]) for lane in lanes)
+    seq_deps = sum(len(item["coordination_dependencies"]) for item in sequence)
+    totals = {
+        "recommendations": len(recommendations),
+        "lanes": len(lanes),
+        "sequence_items": len(sequence),
+        "lane_dependencies": lane_deps,
+        "sequence_dependencies": seq_deps,
+        "total_dependencies": lane_deps + seq_deps,
+    }
+
+    output_payload = {
+        "ok": True,
+        "schema_version": REQ_030_SCHEMA_VERSION,
+        "requirement_id": REQ_030_REQUIREMENT_ID,
+        "analysis_type": REQ_030_ANALYSIS_TYPE,
+        "call_id": REQ_030_CALL_ID,
+        "checked_at_utc": checked_at_utc,
+        "target_project": target_project,
+        "constraints": constraints,
+        "recommendations": recommendations,
+        "sequencing_and_lane_design_reasoning": {
+            "lanes": lanes,
+            "sequence": sequence,
+        },
+        "totals": totals,
+    }
+
+    errors = validate_req_030_call_5_sequencing_and_lane_design_reasoning(output_payload)
+    if errors:
+        raise ValueError(f"built REQ-030 payload failed validation: {errors}")
+    return output_payload
+
+
+def validate_req_030_call_5_sequencing_and_lane_design_reasoning(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-030 Call-5 sequencing and lane design reasoning payload shape."""
+    errors: list[str] = []
+
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "ok",
+        "schema_version",
+        "requirement_id",
+        "analysis_type",
+        "call_id",
+        "checked_at_utc",
+        "target_project",
+        "constraints",
+        "recommendations",
+        "sequencing_and_lane_design_reasoning",
+        "totals",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("ok") is not True:
+        errors.append("ok must be true")
+    if payload.get("schema_version") != REQ_030_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_030_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_030_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_030_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_030_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_030_ANALYSIS_TYPE}")
+    if payload.get("call_id") != REQ_030_CALL_ID:
+        errors.append(f"call_id must be {REQ_030_CALL_ID}")
+    if not isinstance(payload.get("checked_at_utc"), str) or not str(payload.get("checked_at_utc")).strip():
+        errors.append("checked_at_utc must be a non-empty string")
+
+    target_project = payload.get("target_project")
+    target_project_id = ""
+    if not isinstance(target_project, Mapping):
+        errors.append("target_project must be an object")
+    else:
+        expected_target_keys = {"project_id", "project_root"}
+        target_keys = set(target_project.keys())
+        missing_target = sorted(expected_target_keys - target_keys)
+        if missing_target:
+            errors.append(f"target_project missing keys: {missing_target}")
+        unexpected_target = sorted(target_keys - expected_target_keys)
+        if unexpected_target:
+            errors.append(f"target_project has unexpected keys: {unexpected_target}")
+        project_id = target_project.get("project_id")
+        if not isinstance(project_id, str) or not project_id.strip():
+            errors.append("target_project.project_id must be a non-empty string")
+        else:
+            target_project_id = project_id
+        root = target_project.get("project_root")
+        if not isinstance(root, str) or not root.strip():
+            errors.append("target_project.project_root must be a non-empty string")
+        elif not root.startswith("/"):
+            errors.append("target_project.project_root must be an absolute path")
+
+    constraints = payload.get("constraints")
+    if not isinstance(constraints, Mapping):
+        errors.append("constraints must be an object")
+    else:
+        expected_constraint_keys = {"max_parallel_lanes", "max_active_work_items", "notes"}
+        constraint_keys = set(constraints.keys())
+        missing_constraints = sorted(expected_constraint_keys - constraint_keys)
+        if missing_constraints:
+            errors.append(f"constraints missing keys: {missing_constraints}")
+        unexpected_constraints = sorted(constraint_keys - expected_constraint_keys)
+        if unexpected_constraints:
+            errors.append(f"constraints has unexpected keys: {unexpected_constraints}")
+        for key in ("max_parallel_lanes", "max_active_work_items"):
+            value = constraints.get(key)
+            if not isinstance(value, int) or value <= 0:
+                errors.append(f"constraints.{key} must be a positive integer")
+        notes = constraints.get("notes")
+        if not isinstance(notes, list):
+            errors.append("constraints.notes must be a list of strings")
+        else:
+            for idx, note in enumerate(notes):
+                if not isinstance(note, str) or not note.strip():
+                    errors.append(f"constraints.notes[{idx}] must be a non-empty string")
+
+    recommendations = payload.get("recommendations")
+    recommendation_ids: set[str] = set()
+    if not isinstance(recommendations, list) or not recommendations:
+        errors.append("recommendations must be a non-empty list")
+    else:
+        for idx, rec in enumerate(recommendations):
+            if not isinstance(rec, Mapping):
+                errors.append(f"recommendations[{idx}] must be an object")
+                continue
+            expected_rec_keys = {"recommendation_id", "summary", "rationale", "expected_impact", "risk_level"}
+            rec_keys = set(rec.keys())
+            missing_rec = sorted(expected_rec_keys - rec_keys)
+            if missing_rec:
+                errors.append(f"recommendations[{idx}] missing keys: {missing_rec}")
+            unexpected_rec = sorted(rec_keys - expected_rec_keys)
+            if unexpected_rec:
+                errors.append(f"recommendations[{idx}] has unexpected keys: {unexpected_rec}")
+            rec_id = rec.get("recommendation_id")
+            if not isinstance(rec_id, str) or not rec_id.strip():
+                errors.append(f"recommendations[{idx}].recommendation_id must be a non-empty string")
+            elif rec_id in recommendation_ids:
+                errors.append(f"recommendations[{idx}].recommendation_id must be unique (duplicate: {rec_id})")
+            else:
+                recommendation_ids.add(rec_id)
+            for key in ("summary", "rationale", "expected_impact"):
+                value = rec.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"recommendations[{idx}].{key} must be a non-empty string")
+            risk_level = rec.get("risk_level")
+            if risk_level not in _RISK_LEVELS:
+                errors.append(f"recommendations[{idx}].risk_level must be one of: {list(_RISK_LEVELS)}")
+
+    reasoning = payload.get("sequencing_and_lane_design_reasoning")
+    if not isinstance(reasoning, Mapping):
+        errors.append("sequencing_and_lane_design_reasoning must be an object")
+        return errors
+
+    expected_reasoning_keys = {"lanes", "sequence"}
+    reasoning_keys = set(reasoning.keys())
+    missing_reasoning = sorted(expected_reasoning_keys - reasoning_keys)
+    if missing_reasoning:
+        errors.append(f"sequencing_and_lane_design_reasoning missing keys: {missing_reasoning}")
+    unexpected_reasoning = sorted(reasoning_keys - expected_reasoning_keys)
+    if unexpected_reasoning:
+        errors.append(f"sequencing_and_lane_design_reasoning has unexpected keys: {unexpected_reasoning}")
+
+    lanes = reasoning.get("lanes")
+    lanes_by_name: dict[str, Mapping[str, Any]] = {}
+    if not isinstance(lanes, list) or not lanes:
+        errors.append("sequencing_and_lane_design_reasoning.lanes must be a non-empty list")
+        lanes = []
+    else:
+        for idx, lane in enumerate(lanes):
+            if not isinstance(lane, Mapping):
+                errors.append(f"sequencing_and_lane_design_reasoning.lanes[{idx}] must be an object")
+                continue
+            expected_lane_keys = {
+                "lane_id",
+                "lane_name",
+                "lane_kind",
+                "lane_goal",
+                "why_now",
+                "recommendation_ids",
+                "coordination_dependencies",
+            }
+            lane_keys = set(lane.keys())
+            missing_lane = sorted(expected_lane_keys - lane_keys)
+            if missing_lane:
+                errors.append(f"sequencing_and_lane_design_reasoning.lanes[{idx}] missing keys: {missing_lane}")
+            unexpected_lane = sorted(lane_keys - expected_lane_keys)
+            if unexpected_lane:
+                errors.append(f"sequencing_and_lane_design_reasoning.lanes[{idx}] has unexpected keys: {unexpected_lane}")
+            lane_id = lane.get("lane_id")
+            if not isinstance(lane_id, str) or not lane_id.startswith("lane.") or len(lane_id) < 7:
+                errors.append(f"sequencing_and_lane_design_reasoning.lanes[{idx}].lane_id must be like lane.<id>")
+            lane_name = lane.get("lane_name")
+            if not isinstance(lane_name, str) or not lane_name.strip():
+                errors.append(f"sequencing_and_lane_design_reasoning.lanes[{idx}].lane_name must be a non-empty string")
+            else:
+                if lane_name in lanes_by_name:
+                    errors.append(
+                        f"sequencing_and_lane_design_reasoning.lanes[{idx}].lane_name must be unique (duplicate: {lane_name})"
+                    )
+                else:
+                    lanes_by_name[lane_name] = lane
+            for key in ("lane_kind", "lane_goal", "why_now"):
+                value = lane.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"sequencing_and_lane_design_reasoning.lanes[{idx}].{key} must be a non-empty string")
+            rec_ids = lane.get("recommendation_ids")
+            if not isinstance(rec_ids, list) or not rec_ids:
+                errors.append(f"sequencing_and_lane_design_reasoning.lanes[{idx}].recommendation_ids must be a non-empty list")
+            else:
+                for ridx, rec_id in enumerate(rec_ids):
+                    if not isinstance(rec_id, str) or not rec_id.strip():
+                        errors.append(
+                            f"sequencing_and_lane_design_reasoning.lanes[{idx}].recommendation_ids[{ridx}] must be a non-empty string"
+                        )
+                    elif recommendation_ids and rec_id not in recommendation_ids:
+                        errors.append(
+                            f"sequencing_and_lane_design_reasoning.lanes[{idx}].recommendation_ids[{ridx}] must be declared in recommendations"
+                        )
+            deps = lane.get("coordination_dependencies")
+            if not isinstance(deps, list):
+                errors.append(f"sequencing_and_lane_design_reasoning.lanes[{idx}].coordination_dependencies must be a list")
+            else:
+                for didx, dep in enumerate(deps):
+                    _validate_req_030_dependency(
+                        dep,
+                        errors=errors,
+                        field_prefix=f"sequencing_and_lane_design_reasoning.lanes[{idx}].coordination_dependencies[{didx}]",
+                    )
+
+    sequence = reasoning.get("sequence")
+    orders_seen: set[int] = set()
+    recommendation_seen: set[str] = set()
+    if not isinstance(sequence, list) or not sequence:
+        errors.append("sequencing_and_lane_design_reasoning.sequence must be a non-empty list")
+    else:
+        for idx, item in enumerate(sequence):
+            if not isinstance(item, Mapping):
+                errors.append(f"sequencing_and_lane_design_reasoning.sequence[{idx}] must be an object")
+                continue
+            expected_seq_keys = {
+                "sequence_id",
+                "order",
+                "recommendation_id",
+                "lane_id",
+                "lane_name",
+                "why_now",
+                "coordination_dependencies",
+            }
+            seq_keys = set(item.keys())
+            missing_seq = sorted(expected_seq_keys - seq_keys)
+            if missing_seq:
+                errors.append(f"sequencing_and_lane_design_reasoning.sequence[{idx}] missing keys: {missing_seq}")
+            unexpected_seq = sorted(seq_keys - expected_seq_keys)
+            if unexpected_seq:
+                errors.append(f"sequencing_and_lane_design_reasoning.sequence[{idx}] has unexpected keys: {unexpected_seq}")
+            seq_id = item.get("sequence_id")
+            if not isinstance(seq_id, str) or not seq_id.startswith("seq.") or len(seq_id) < 6:
+                errors.append(f"sequencing_and_lane_design_reasoning.sequence[{idx}].sequence_id must be like seq.<id>")
+            order = item.get("order")
+            if not isinstance(order, int) or order <= 0:
+                errors.append(f"sequencing_and_lane_design_reasoning.sequence[{idx}].order must be a positive integer")
+            elif order in orders_seen:
+                errors.append(
+                    f"sequencing_and_lane_design_reasoning.sequence[{idx}].order must be unique (duplicate: {order})"
+                )
+            else:
+                orders_seen.add(order)
+            rec_id = item.get("recommendation_id")
+            if not isinstance(rec_id, str) or not rec_id.strip():
+                errors.append(
+                    f"sequencing_and_lane_design_reasoning.sequence[{idx}].recommendation_id must be a non-empty string"
+                )
+            else:
+                if recommendation_ids and rec_id not in recommendation_ids:
+                    errors.append(
+                        f"sequencing_and_lane_design_reasoning.sequence[{idx}].recommendation_id must be declared in recommendations"
+                    )
+                if rec_id in recommendation_seen:
+                    errors.append(
+                        f"sequencing_and_lane_design_reasoning.sequence[{idx}].recommendation_id must be unique (duplicate: {rec_id})"
+                    )
+                else:
+                    recommendation_seen.add(rec_id)
+            lane_id = item.get("lane_id")
+            if not isinstance(lane_id, str) or not lane_id.startswith("lane.") or len(lane_id) < 7:
+                errors.append(f"sequencing_and_lane_design_reasoning.sequence[{idx}].lane_id must be like lane.<id>")
+            lane_name = item.get("lane_name")
+            if not isinstance(lane_name, str) or not lane_name.strip():
+                errors.append(f"sequencing_and_lane_design_reasoning.sequence[{idx}].lane_name must be a non-empty string")
+            elif lanes_by_name and lane_name not in lanes_by_name:
+                errors.append(f"sequencing_and_lane_design_reasoning.sequence[{idx}].lane_name must match a declared lane")
+            why_now = item.get("why_now")
+            if not isinstance(why_now, str) or not why_now.strip():
+                errors.append(f"sequencing_and_lane_design_reasoning.sequence[{idx}].why_now must be a non-empty string")
+            deps = item.get("coordination_dependencies")
+            if not isinstance(deps, list):
+                errors.append(f"sequencing_and_lane_design_reasoning.sequence[{idx}].coordination_dependencies must be a list")
+            else:
+                for didx, dep in enumerate(deps):
+                    _validate_req_030_dependency(
+                        dep,
+                        errors=errors,
+                        field_prefix=f"sequencing_and_lane_design_reasoning.sequence[{idx}].coordination_dependencies[{didx}]",
+                    )
+
+    totals = payload.get("totals")
+    if not isinstance(totals, Mapping):
+        errors.append("totals must be an object")
+    else:
+        expected_total_keys = {
+            "recommendations",
+            "lanes",
+            "sequence_items",
+            "lane_dependencies",
+            "sequence_dependencies",
+            "total_dependencies",
+        }
+        total_keys = set(totals.keys())
+        missing_totals = sorted(expected_total_keys - total_keys)
+        if missing_totals:
+            errors.append(f"totals missing keys: {missing_totals}")
+        unexpected_totals = sorted(total_keys - expected_total_keys)
+        if unexpected_totals:
+            errors.append(f"totals has unexpected keys: {unexpected_totals}")
+        for key in expected_total_keys:
+            value = totals.get(key)
+            if not isinstance(value, int) or value < 0:
+                errors.append(f"totals.{key} must be a non-negative integer")
+
+    if target_project_id and not recommendation_ids:
+        errors.append("recommendations must be a non-empty list")
+
+    return errors
+
+
+def _validate_req_030_dependency(raw_value: Any, *, errors: list[str], field_prefix: str) -> None:
+    if not isinstance(raw_value, Mapping):
+        errors.append(f"{field_prefix} must be an object")
+        return
+    expected_keys = {"dependency_id", "dependency_kind", "depends_on_type", "depends_on", "summary"}
+    keys = set(raw_value.keys())
+    missing = sorted(expected_keys - keys)
+    if missing:
+        errors.append(f"{field_prefix} missing keys: {missing}")
+    extra = sorted(keys - expected_keys)
+    if extra:
+        errors.append(f"{field_prefix} has unexpected keys: {extra}")
+    dep_id = raw_value.get("dependency_id")
+    if not isinstance(dep_id, str) or not dep_id.startswith("dep.") or len(dep_id) < 6:
+        errors.append(f"{field_prefix}.dependency_id must be like dep.<id>")
+    dep_kind = raw_value.get("dependency_kind")
+    if not isinstance(dep_kind, str) or not dep_kind.strip():
+        errors.append(f"{field_prefix}.dependency_kind must be a non-empty string")
+    dep_on = raw_value.get("depends_on")
+    if not isinstance(dep_on, str) or not dep_on.strip():
+        errors.append(f"{field_prefix}.depends_on must be a non-empty string")
+    dep_type = raw_value.get("depends_on_type")
+    if dep_type not in _DEPENDS_ON_TYPES:
+        errors.append(f"{field_prefix}.depends_on_type must be one of: {list(_DEPENDS_ON_TYPES)}")
+    summary = raw_value.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        errors.append(f"{field_prefix}.summary must be a non-empty string")
+
+
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     analysis_type = str(payload.get("analysis_type") or "").strip()
+    if analysis_type == REQ_030_ANALYSIS_TYPE:
+        return build_req_030_call_5_sequencing_and_lane_design_reasoning(payload)
     if analysis_type and analysis_type != REQ_027_ANALYSIS_TYPE:
-        raise ValueError(f"analysis_type must be {REQ_027_ANALYSIS_TYPE}")
+        raise ValueError(f"analysis_type must be {REQ_027_ANALYSIS_TYPE} or {REQ_030_ANALYSIS_TYPE}")
     return build_req_027_call_2_ecosystem_linkage_reasoning(payload)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="REQ-027 Call-2 ecosystem linkage reasoning contract surface.")
+    parser = argparse.ArgumentParser(
+        description="Strategy LLM pipeline contract surface (REQ-027 Call-2, REQ-030 Call-5)."
+    )
     parser.add_argument("--input-json", required=True, help='Input payload path or "-" for stdin.')
     parser.add_argument("--output-json", default="-", help='Output path or "-" for stdout.')
     parser.add_argument("--json-pretty", action="store_true", help="Pretty-print JSON output.")
