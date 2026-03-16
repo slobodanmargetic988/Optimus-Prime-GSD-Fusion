@@ -176,6 +176,8 @@ def test_req_026_recommendation_is_complete_and_uses_cross_project_context() -> 
     recommendation = processing["recommendation"]
     usage = processing["context_usage"]
     evidence_refs = recommendation["evidence_refs"]
+    metadata = payload["call_metadata"]
+    trace_rows = metadata["llm_call_trace_rows"]
 
     assert set(recommendation.keys()) == {
         "decision",
@@ -190,6 +192,30 @@ def test_req_026_recommendation_is_complete_and_uses_cross_project_context() -> 
     assert recommendation["decision"] == "proceed-with-open-risks"
     assert recommendation["confidence"] == "low"
     assert recommendation["rationale"] == "assessment=needs-follow-up unknowns=3 local=1 obligations=1 open_risks=1"
+    assert metadata["llm_call_trace_path"] == module.LLM_CALL_TRACE_RELATIVE_PATH
+    assert len(trace_rows) == 1
+    assert trace_rows[0]["call_id"] == "call-1"
+    assert trace_rows[0]["call_objective"] == (
+        "Assess target project state from mission, scope, planning evidence, runtime evidence, "
+        "and explicit unknowns for later calls."
+    )
+    assert trace_rows[0]["input_refs"] == [
+        "mission.md",
+        "scope.md",
+        "reports/optimus-prime/planning/PLAN_PACKETS.json",
+        "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "reports/optimus-prime/planning/STATE.json",
+        "reports/earth/sweeps/2026-03-16/portfolio.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/planner-core.json",
+        "reports/earth/sweeps/2026-03-16/analytics-hub.json",
+    ]
+    assert trace_rows[0]["output_refs"] == ["REQ-026::call::call-1::output::situational_analysis"]
+    assert trace_rows[0]["handoff_summary"] == (
+        "Call 1 hands off situational_analysis via REQ-026::call::call-1::output::situational_analysis "
+        "with 3 explicit unknown(s) for later calls."
+    )
     assert evidence_refs == [
         "reports/optimus-prime/planning/PLAN_PACKETS.json",
         "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
