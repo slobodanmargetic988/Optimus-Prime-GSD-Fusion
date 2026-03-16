@@ -46,7 +46,7 @@
     "dev_ready": true,
     "blockers": [],
     "artifacts": [
-      "reports/optimus-prime/planning/PLAN_PACKETS.json",
+      "op-tools/strategy/reports/optimus-prime/planning/PLAN_PACKETS.json",
       "reports/optimus-prime/planning/evidence/TASK-271/MERGE_READINESS.json",
       "reports/optimus-prime/planning/evidence/TASK-271/TASK_EVIDENCE.json",
       "reports/handoffs/TASK-271.handoff.json"
