@@ -121,6 +121,12 @@ _REQ_067_ALLOWED_READINESS_DECISIONS = {
 }
 _REQ_067_REASON_CODE_MISSING_CONTEXT = "pre_plan_strategy_context_missing"
 _REQ_067_REASON_CODE_MISSING_CONTEXT_SOFT = "pre_plan_strategy_context_missing_soft"
+_REQ_067_PROCESSING_ALLOWED_DECISIONS = {
+    "allow-op-plan",
+    "allow-op-plan-with-open-risks",
+    "block-op-plan",
+}
+_REQ_067_PROCESSING_ALLOWED_CONFIDENCE = {"high", "medium", "low"}
 
 
 def _utc_timestamp() -> str:
@@ -2488,6 +2494,295 @@ def _build_req_067_pre_plan_strategy_hook(
     }
 
 
+def _req_067_constraint_profile(constraint_id: str) -> tuple[str, str, str]:
+    if constraint_id.startswith("guardrail-"):
+        return "hard", "mandatory_guardrail", "mandatory-guardrail"
+    return "soft", "optional_guidance", "optional-guidance"
+
+
+def _build_req_067_processing_behavior(
+    *,
+    strategy_context: Mapping[str, Any],
+    pre_plan_strategy_hook: Mapping[str, Any],
+    broad_sweep_context: dict[str, Any],
+) -> dict[str, Any]:
+    strategy_artifact_refs = list(strategy_context["strategy_artifact_refs"])
+    constraint_ids = list(strategy_context["constraint_ids"])
+    earth_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
+    obligations_input = list(broad_sweep_context["cross_project_obligations"])
+    unresolved_ideas = list(broad_sweep_context["unresolved_ideas"])
+    projects_considered = sorted(
+        {
+            *broad_sweep_context["projects_considered"],
+            *[str(row["project_id"]) for row in obligations_input],
+        }
+    )
+    strictness = str(pre_plan_strategy_hook["strictness"])
+    planner_decision = str(pre_plan_strategy_hook["planner_readiness"]["decision"])
+
+    recommended_actions: list[dict[str, Any]] = []
+    recommendation_mapping: list[dict[str, str]] = []
+    for constraint_id in constraint_ids:
+        classification, policy_role, action_scope = _req_067_constraint_profile(constraint_id)
+        action_id = f"constraint-{constraint_id}"
+        recommended_actions.append(
+            {
+                "action_id": action_id,
+                "summary": f"Apply strategy constraint {constraint_id} before /op-plan.",
+                "rationale": (
+                    f"Pre-plan hook strictness is {strictness} with planner readiness {planner_decision}; "
+                    f"constraint {constraint_id} must remain explicit during planning handoff."
+                ),
+                "action_scope": action_scope,
+                "next_step": "Run /op-plan with strategy pre-plan hook context.",
+                "evidence_refs": sorted({*strategy_artifact_refs, *earth_refs}),
+            }
+        )
+        recommendation_mapping.append(
+            {
+                "constraint_id": constraint_id,
+                "action_id": action_id,
+                "classification": classification,
+                "policy_role": policy_role,
+            }
+        )
+
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    for row in obligations_input:
+        obligation_refs = sorted({*earth_refs, *row["evidence_refs"]})
+        if earth_refs:
+            cross_project_obligations.append(
+                {
+                    "obligation_id": row["obligation_id"],
+                    "project_id": row["project_id"],
+                    "summary": row["summary"],
+                    "evidence_refs": obligation_refs,
+                }
+            )
+            continue
+
+        required_refs = list(row["evidence_refs"]) or ["missing:earth-sweep-evidence-ref"]
+        open_risks.append(
+            {
+                "risk_id": f"risk-{row['obligation_id']}",
+                "summary": row["summary"],
+                "reason_code": "missing_earth_sweep_evidence_refs",
+                "evidence_refs": required_refs,
+                "required_evidence_refs": required_refs,
+            }
+        )
+
+    for row in unresolved_ideas:
+        required_refs = list(row["evidence_refs"]) or ["missing:earth-sweep-evidence-ref"]
+        open_risks.append(
+            {
+                "risk_id": f"risk-{row['idea_id']}",
+                "summary": row["summary"],
+                "reason_code": "unresolved_idea_open_risk",
+                "evidence_refs": required_refs,
+                "required_evidence_refs": required_refs,
+            }
+        )
+
+    missing_earth_evidence = any(
+        str(row["reason_code"]) == "missing_earth_sweep_evidence_refs" for row in open_risks
+    )
+    if planner_decision == "block_planning":
+        decision = "block-op-plan"
+        confidence = "low"
+    elif open_risks:
+        decision = "allow-op-plan-with-open-risks"
+        confidence = "low" if missing_earth_evidence else "medium"
+    else:
+        decision = "allow-op-plan"
+        confidence = "high"
+
+    recommendation_evidence_refs = sorted(
+        {
+            *strategy_artifact_refs,
+            *earth_refs,
+            *[ref for row in cross_project_obligations for ref in row["evidence_refs"]],
+            *[ref for row in unresolved_ideas for ref in row["evidence_refs"]],
+            *[ref for row in open_risks for ref in row["required_evidence_refs"]],
+        }
+    )
+    recommendation = {
+        "decision": decision,
+        "rationale": (
+            "Pre-plan strategy hook readiness is "
+            f"{planner_decision} with {len(cross_project_obligations)} evidence-backed cross-project obligation(s) "
+            f"and {len(open_risks)} open risk(s)."
+        ),
+        "confidence": confidence,
+        "evidence_refs": recommendation_evidence_refs,
+        "recommended_actions": recommended_actions,
+        "cross_project_obligations": cross_project_obligations,
+        "open_risks": open_risks,
+    }
+
+    required_recommendation_fields = list(_RECOMMENDATION_REQUIRED_FIELDS)
+    recommendation_fields_complete = set(recommendation.keys()) == set(required_recommendation_fields)
+    context_usage = {
+        "cross_project_context_provided": bool(
+            broad_sweep_context["projects_considered"] or obligations_input or unresolved_ideas or earth_refs
+        ),
+        "cross_project_context_used": bool(projects_considered or obligations_input or unresolved_ideas),
+        "earth_sweep_context_used": bool(earth_refs),
+        "projects_considered": projects_considered,
+        "earth_sweep_evidence_refs_considered": earth_refs,
+        "constraint_ids_used": constraint_ids,
+        "recommendation_mapping": recommendation_mapping,
+        "recommendation_fields_complete": recommendation_fields_complete,
+        "required_recommendation_fields": required_recommendation_fields,
+    }
+    return {
+        "recommendation": recommendation,
+        "context_usage": context_usage,
+    }
+
+
+def _validate_req_067_processing_behavior(
+    processing_behavior: Any,
+    *,
+    constraint_ids: list[str],
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(processing_behavior, Mapping):
+        return ["processing_behavior must be an object"]
+
+    expected_keys = {"recommendation", "context_usage"}
+    keys = set(processing_behavior.keys())
+    missing = sorted(expected_keys - keys)
+    if missing:
+        errors.append(f"processing_behavior missing keys: {missing}")
+    unexpected = sorted(keys - expected_keys)
+    if unexpected:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected}")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        recommendation_keys = set(recommendation.keys())
+        required_recommendation_keys = set(_RECOMMENDATION_REQUIRED_FIELDS)
+        missing_recommendation = sorted(required_recommendation_keys - recommendation_keys)
+        if missing_recommendation:
+            errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+        unexpected_recommendation = sorted(recommendation_keys - required_recommendation_keys)
+        if unexpected_recommendation:
+            errors.append(
+                f"processing_behavior.recommendation has unexpected keys: {unexpected_recommendation}"
+            )
+
+        decision = recommendation.get("decision")
+        if not isinstance(decision, str) or not decision.strip():
+            errors.append("processing_behavior.recommendation.decision must be a non-empty string")
+        elif decision not in _REQ_067_PROCESSING_ALLOWED_DECISIONS:
+            errors.append(
+                "processing_behavior.recommendation.decision must be one of: "
+                f"{sorted(_REQ_067_PROCESSING_ALLOWED_DECISIONS)}"
+            )
+
+        rationale = recommendation.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            errors.append("processing_behavior.recommendation.rationale must be a non-empty string")
+
+        confidence = recommendation.get("confidence")
+        if not isinstance(confidence, str) or not confidence.strip():
+            errors.append("processing_behavior.recommendation.confidence must be a non-empty string")
+        elif confidence not in _REQ_067_PROCESSING_ALLOWED_CONFIDENCE:
+            errors.append(
+                "processing_behavior.recommendation.confidence must be one of: "
+                f"{sorted(_REQ_067_PROCESSING_ALLOWED_CONFIDENCE)}"
+            )
+
+        evidence_refs = recommendation.get("evidence_refs")
+        if not isinstance(evidence_refs, list):
+            errors.append("processing_behavior.recommendation.evidence_refs must be a list")
+        else:
+            for index, item in enumerate(evidence_refs):
+                if not isinstance(item, str) or not item.strip():
+                    errors.append(
+                        f"processing_behavior.recommendation.evidence_refs[{index}] must be a non-empty string"
+                    )
+
+        for key in ("recommended_actions", "cross_project_obligations", "open_risks"):
+            value = recommendation.get(key)
+            if not isinstance(value, list):
+                errors.append(f"processing_behavior.recommendation.{key} must be a list")
+                continue
+            for index, row in enumerate(value):
+                errors.extend(_validate_req_055_recommendation_row(row, index=index, kind=key))
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        context_keys = set(context_usage.keys())
+        required_context_keys = set(_CONTEXT_USAGE_REQUIRED_FIELDS)
+        missing_context = sorted(required_context_keys - context_keys)
+        if missing_context:
+            errors.append(f"processing_behavior.context_usage missing keys: {missing_context}")
+        unexpected_context = sorted(context_keys - required_context_keys)
+        if unexpected_context:
+            errors.append(f"processing_behavior.context_usage has unexpected keys: {unexpected_context}")
+
+        for key in (
+            "cross_project_context_provided",
+            "cross_project_context_used",
+            "earth_sweep_context_used",
+            "recommendation_fields_complete",
+        ):
+            if not isinstance(context_usage.get(key), bool):
+                errors.append(f"processing_behavior.context_usage.{key} must be a boolean")
+
+        for key in ("projects_considered", "earth_sweep_evidence_refs_considered", "constraint_ids_used"):
+            value = context_usage.get(key)
+            if not isinstance(value, list):
+                errors.append(f"processing_behavior.context_usage.{key} must be a list")
+                continue
+            for index, item in enumerate(value):
+                if not isinstance(item, str) or not item.strip():
+                    errors.append(
+                        f"processing_behavior.context_usage.{key}[{index}] must be a non-empty string"
+                    )
+
+        if context_usage.get("constraint_ids_used") != constraint_ids:
+            errors.append("processing_behavior.context_usage.constraint_ids_used must match strategy constraint IDs")
+
+        recommendation_mapping = context_usage.get("recommendation_mapping")
+        if not isinstance(recommendation_mapping, list):
+            errors.append("processing_behavior.context_usage.recommendation_mapping must be a list")
+        else:
+            mapped_constraint_ids: list[str] = []
+            seen_mapped_constraint_ids: set[str] = set()
+            for index, row in enumerate(recommendation_mapping):
+                row_errors, constraint_id = _validate_req_055_recommendation_mapping_row(row, index=index)
+                errors.extend(row_errors)
+                if constraint_id:
+                    if constraint_id in seen_mapped_constraint_ids:
+                        errors.append(
+                            "processing_behavior.context_usage.recommendation_mapping constraint_ids must be unique"
+                        )
+                    else:
+                        seen_mapped_constraint_ids.add(constraint_id)
+                        mapped_constraint_ids.append(constraint_id)
+            if mapped_constraint_ids != constraint_ids:
+                errors.append(
+                    "processing_behavior.context_usage.recommendation_mapping must cover strategy constraint IDs in order"
+                )
+
+        if context_usage.get("required_recommendation_fields") != list(_RECOMMENDATION_REQUIRED_FIELDS):
+            errors.append(
+                "processing_behavior.context_usage.required_recommendation_fields must match required recommendation keys"
+            )
+        if context_usage.get("recommendation_fields_complete") is not True:
+            errors.append("processing_behavior.context_usage.recommendation_fields_complete must be true")
+
+    return errors
+
+
 def build_req_067_op_initialize_pre_plan_strategy_hook(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Build normalized REQ-067 payload for op-initialize pre-plan strategy hook."""
     raw = _require_mapping(payload, field_name="payload")
@@ -2497,6 +2792,9 @@ def build_req_067_op_initialize_pre_plan_strategy_hook(payload: Mapping[str, Any
     checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
     target_project = _normalize_target_project(raw.get("target_project"))
     strategy_context = _normalize_req_067_strategy_context(raw.get("strategy_context"))
+    broad_sweep_context: dict[str, Any] | None = None
+    if raw.get("broad_sweep_context") is not None:
+        broad_sweep_context = _normalize_broad_sweep_context(raw.get("broad_sweep_context"))
     hook_config = _normalize_req_067_hook_config(raw.get("hook_config"))
     pre_plan_strategy_hook = _build_req_067_pre_plan_strategy_hook(
         strategy_context=strategy_context,
@@ -2520,6 +2818,12 @@ def build_req_067_op_initialize_pre_plan_strategy_hook(payload: Mapping[str, Any
             "missing_context_fields": len(missing_context_fields),
         },
     }
+    if broad_sweep_context is not None:
+        built["processing_behavior"] = _build_req_067_processing_behavior(
+            strategy_context=strategy_context,
+            pre_plan_strategy_hook=pre_plan_strategy_hook,
+            broad_sweep_context=broad_sweep_context,
+        )
     errors = validate_req_067_op_initialize_pre_plan_strategy_hook(built)
     if errors:
         raise ValueError(f"built REQ-067 payload failed validation: {errors}")
@@ -2543,11 +2847,13 @@ def validate_req_067_op_initialize_pre_plan_strategy_hook(payload: Mapping[str, 
         "pre_plan_strategy_hook",
         "totals",
     }
+    optional_top = {"processing_behavior"}
+    expected_top = required_top | optional_top
     top_keys = set(payload.keys())
     missing_top = sorted(required_top - top_keys)
     if missing_top:
         errors.append(f"missing top-level keys: {missing_top}")
-    unexpected_top = sorted(top_keys - required_top)
+    unexpected_top = sorted(top_keys - expected_top)
     if unexpected_top:
         errors.append(f"unexpected top-level keys: {unexpected_top}")
 
@@ -2858,6 +3164,20 @@ def validate_req_067_op_initialize_pre_plan_strategy_hook(payload: Mapping[str, 
         if isinstance(planner_readiness, Mapping) and isinstance(planner_readiness.get("missing_context_fields"), list):
             if totals.get("missing_context_fields") != len(planner_readiness.get("missing_context_fields", [])):
                 errors.append("totals.missing_context_fields must match planner readiness missing_context_fields")
+
+    processing_behavior = payload.get("processing_behavior")
+    if processing_behavior is not None:
+        expected_constraint_ids: list[str] = []
+        if isinstance(strategy_context, Mapping):
+            context_constraint_ids = strategy_context.get("constraint_ids")
+            if isinstance(context_constraint_ids, list):
+                expected_constraint_ids = [str(item) for item in context_constraint_ids]
+        errors.extend(
+            _validate_req_067_processing_behavior(
+                processing_behavior,
+                constraint_ids=expected_constraint_ids,
+            )
+        )
 
     return errors
 
