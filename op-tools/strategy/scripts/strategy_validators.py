@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,26 @@ REASON_CODE_INPUT_NOT_OBJECT = "input_not_object"
 REASON_CODE_SCHEMA_NOT_OBJECT = "schema_not_object"
 REASON_CODE_INPUT_LOAD_FAILED = "input_load_failed"
 REASON_CODE_SCHEMA_LOAD_FAILED = "schema_load_failed"
+REASON_CODE_RECOMMENDATION_COMPLETENESS_FAILED = "recommendation_completeness_failed"
+REASON_CODE_RECOMMENDATION_LOW_SUBSTANCE_RATIONALE = "recommendation_low_substance_rationale"
+REASON_CODE_RECOMMENDATION_EVIDENCE_CITATIONS_BELOW_MINIMUM = "recommendation_evidence_citations_below_minimum"
+REASON_CODE_RECOMMENDATION_ID_DUPLICATE = "recommendation_id_duplicate"
+
+REQ_061_MIN_RATIONALE_WORD_COUNT = 12
+REQ_061_MIN_EVIDENCE_CITATIONS = 2
+
+_REQ_061_REQUIRED_RECOMMENDATION_FIELDS: tuple[str, ...] = (
+    "recommendation_id",
+    "priority",
+    "summary",
+    "rationale",
+    "expected_impact",
+    "risk_level",
+)
+_WORD_PATTERN = re.compile(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?")
+_EVIDENCE_CITATION_PATTERN = re.compile(
+    r"(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.(?:json|md|yaml|yml|txt)(?:#[A-Za-z0-9._/-]+)?"
+)
 
 _CONSTRAINT_BUCKETS: tuple[tuple[str, str, str], ...] = (
     ("hard_constraints", "hard", "mandatory_guardrail"),
@@ -80,6 +101,22 @@ def _unique_sorted_reason_codes(diagnostics: Sequence[Mapping[str, Any]]) -> lis
     )
 
 
+def _count_words(value: str) -> int:
+    return len(_WORD_PATTERN.findall(value))
+
+
+def _extract_evidence_citations(*values: str) -> list[str]:
+    citations: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for match in _EVIDENCE_CITATION_PATTERN.findall(value):
+            citation = match.strip()
+            if citation and citation not in seen:
+                seen.add(citation)
+                citations.append(citation)
+    return citations
+
+
 def load_json_file(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -92,7 +129,7 @@ def _result(
 ) -> dict[str, Any]:
     passed = not diagnostics
     reason_codes = _unique_sorted_reason_codes(diagnostics)
-    hard_failure_reason_codes = {
+    constraint_failure_reason_codes = {
         REASON_CODE_SCHEMA_VALIDATION_FAILED,
         REASON_CODE_CONSTRAINT_ARTIFACT_EMPTY,
         REASON_CODE_CONSTRAINT_BUCKET_CLASSIFICATION_MISMATCH,
@@ -105,6 +142,15 @@ def _result(
         REASON_CODE_INPUT_LOAD_FAILED,
         REASON_CODE_SCHEMA_LOAD_FAILED,
     }
+    recommendation_failure_reason_codes = {
+        REASON_CODE_RECOMMENDATION_COMPLETENESS_FAILED,
+        REASON_CODE_RECOMMENDATION_LOW_SUBSTANCE_RATIONALE,
+        REASON_CODE_RECOMMENDATION_EVIDENCE_CITATIONS_BELOW_MINIMUM,
+        REASON_CODE_RECOMMENDATION_ID_DUPLICATE,
+    }
+    planner_failure_reason_codes = (
+        constraint_failure_reason_codes | recommendation_failure_reason_codes
+    )
     schema_failure_reason_codes = {
         REASON_CODE_SCHEMA_VALIDATION_FAILED,
         REASON_CODE_INPUT_NOT_OBJECT,
@@ -130,10 +176,10 @@ def _result(
                 row["reason_code"] in schema_failure_reason_codes for row in diagnostics
             ),
             "constraint_classification_consumable": not any(
-                row["reason_code"] in hard_failure_reason_codes for row in diagnostics
+                row["reason_code"] in constraint_failure_reason_codes for row in diagnostics
             ),
             "planner_policy_consumable": not any(
-                row["reason_code"] in hard_failure_reason_codes
+                row["reason_code"] in planner_failure_reason_codes
                 for row in diagnostics
             ),
         },
@@ -276,6 +322,89 @@ def _validate_constraint_artifact(packet: Mapping[str, Any]) -> list[dict[str, s
     return diagnostics
 
 
+def _validate_recommendation_quality(packet: Mapping[str, Any]) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+    recommendations = packet.get("recommendations")
+    if not isinstance(recommendations, list):
+        return diagnostics
+
+    seen_recommendation_ids: dict[str, str] = {}
+    for index, row in enumerate(recommendations):
+        row_path = f"$.recommendations[{index}]"
+        if not isinstance(row, Mapping):
+            continue
+
+        recommendation_id = row.get("recommendation_id")
+        if isinstance(recommendation_id, str) and recommendation_id:
+            id_path = f"{row_path}.recommendation_id"
+            existing_path = seen_recommendation_ids.get(recommendation_id)
+            if existing_path is not None:
+                diagnostics.append(
+                    _diagnostic(
+                        id_path,
+                        REASON_CODE_RECOMMENDATION_ID_DUPLICATE,
+                        (
+                            f"Recommendation ID '{recommendation_id}' is duplicated; "
+                            f"first seen at {existing_path}."
+                        ),
+                    )
+                )
+            else:
+                seen_recommendation_ids[recommendation_id] = id_path
+
+        for field_name in _REQ_061_REQUIRED_RECOMMENDATION_FIELDS:
+            field_path = f"{row_path}.{field_name}"
+            value = row.get(field_name)
+            if not isinstance(value, str) or not value.strip():
+                diagnostics.append(
+                    _diagnostic(
+                        field_path,
+                        REASON_CODE_RECOMMENDATION_COMPLETENESS_FAILED,
+                        (
+                            "Recommendation field must be a non-empty string for REQ-061 "
+                            "quality gate completeness."
+                        ),
+                    )
+                )
+
+        rationale = row.get("rationale")
+        if isinstance(rationale, str):
+            word_count = _count_words(rationale)
+            if word_count < REQ_061_MIN_RATIONALE_WORD_COUNT:
+                diagnostics.append(
+                    _diagnostic(
+                        f"{row_path}.rationale",
+                        REASON_CODE_RECOMMENDATION_LOW_SUBSTANCE_RATIONALE,
+                        (
+                            "Recommendation rationale is below REQ-061 minimum word count: "
+                            f"{word_count} < {REQ_061_MIN_RATIONALE_WORD_COUNT}."
+                        ),
+                    )
+                )
+
+        summary = row.get("summary")
+        expected_impact = row.get("expected_impact")
+        citations = _extract_evidence_citations(
+            summary if isinstance(summary, str) else "",
+            rationale if isinstance(rationale, str) else "",
+            expected_impact if isinstance(expected_impact, str) else "",
+        )
+        if len(citations) < REQ_061_MIN_EVIDENCE_CITATIONS:
+            diagnostics.append(
+                _diagnostic(
+                    f"{row_path}.expected_impact",
+                    REASON_CODE_RECOMMENDATION_EVIDENCE_CITATIONS_BELOW_MINIMUM,
+                    (
+                        "Recommendation evidence citations are below REQ-061 minimum count "
+                        f"across summary/rationale/expected_impact: {len(citations)} < "
+                        f"{REQ_061_MIN_EVIDENCE_CITATIONS}; detected={json.dumps(citations)}."
+                    ),
+                )
+            )
+
+    return diagnostics
+
+
 def validate_strategy_packet(packet: Any, schema: Any, *, input_path: str | None = None, schema_path: str | None = None) -> dict[str, Any]:
     diagnostics: list[dict[str, str]] = []
     if not isinstance(packet, Mapping):
@@ -299,6 +428,7 @@ def validate_strategy_packet(packet: Any, schema: Any, *, input_path: str | None
         )
 
     diagnostics.extend(_validate_constraint_artifact(packet))
+    diagnostics.extend(_validate_recommendation_quality(packet))
     diagnostics.sort(key=lambda row: (row["path"], row["reason_code"], row["message"]))
     return _result(diagnostics=diagnostics, input_path=input_path, schema_path=schema_path)
 
