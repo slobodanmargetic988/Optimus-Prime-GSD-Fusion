@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,11 @@ REQUIRED_RECOMMENDATION_FIELDS = (
 REQUIRED_PLANNER_MAPPING_FIELDS = ("op_plan_ref", "op_initialize_ref")
 PASS_STATUSES = {"resolved", "closed", "cleared", "none"}
 CONFIDENCE_LEVELS = ("high", "medium", "low", "unknown")
+REQ065_REASON_CODES = {
+    "duplicate_recommendation_id_collision": "req065.duplicate_recommendation_id_collision",
+    "traceability_invalid_evidence_ref": "req065.traceability.invalid_evidence_ref",
+}
+EVIDENCE_REF_PATTERN = re.compile(r"^[^\s#][^\s#]*#[^\s#]+$")
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -541,6 +547,115 @@ def _extract_recommendation_ids(payload: dict[str, Any]) -> tuple[list[str], lis
     return sorted(recommendation_ids), missing_ids
 
 
+def _detect_recommendation_id_collisions(
+    recommendation_items: list[Any],
+) -> list[dict[str, Any]]:
+    recommendation_index: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for index, raw_recommendation in enumerate(recommendation_items):
+        recommendation = _as_dict(raw_recommendation)
+        recommendation_id = _coalesce_string(
+            recommendation.get("recommendation_id"),
+            recommendation.get("id"),
+        )
+        if not recommendation_id:
+            continue
+        recommendation_index.setdefault(recommendation_id, []).append((index, recommendation))
+
+    collisions: list[dict[str, Any]] = []
+    for recommendation_id in sorted(recommendation_index):
+        records = recommendation_index[recommendation_id]
+        if len(records) < 2:
+            continue
+
+        baseline_index, baseline = records[0]
+        diff_details: list[dict[str, Any]] = []
+        collision_evidence_refs: list[str] = []
+        for row_index, row_payload in records:
+            collision_evidence_refs.extend(
+                _unique_sorted_strings(
+                    _as_list(row_payload.get("evidence_refs"))
+                    + _as_list(row_payload.get("evidence"))
+                    + _as_list(row_payload.get("source_refs"))
+                )
+            )
+
+            if row_index == baseline_index:
+                continue
+            differing_fields = []
+            for field_name in sorted(set(baseline) | set(row_payload)):
+                if field_name in {"recommendation_id", "id"}:
+                    continue
+                left_value = _json_copy(baseline.get(field_name))
+                right_value = _json_copy(row_payload.get(field_name))
+                if left_value == right_value:
+                    continue
+                differing_fields.append(
+                    {
+                        "field": field_name,
+                        "left_value": left_value,
+                        "right_value": right_value,
+                    }
+                )
+            diff_details.append(
+                {
+                    "left_ref": f"recommendations[{baseline_index}]",
+                    "right_ref": f"recommendations[{row_index}]",
+                    "field_diffs": differing_fields,
+                }
+            )
+
+        collisions.append(
+            {
+                "recommendation_id": recommendation_id,
+                "reason_code": REQ065_REASON_CODES["duplicate_recommendation_id_collision"],
+                "duplicate_count": len(records),
+                "occurrence_refs": [f"recommendations[{row_index}]" for row_index, _ in records],
+                "evidence_refs": _unique_sorted_strings(collision_evidence_refs),
+                "diff_details": diff_details,
+            }
+        )
+    return collisions
+
+
+def _is_traceable_evidence_ref(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    candidate = value.strip()
+    if not candidate:
+        return False
+    if not EVIDENCE_REF_PATTERN.fullmatch(candidate):
+        return False
+    path_part, _, anchor = candidate.partition("#")
+    return bool(path_part.strip()) and bool(anchor.strip()) and "/" in path_part
+
+
+def _find_invalid_evidence_refs(recommendation_rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    invalid_refs: list[dict[str, str]] = []
+    for row in recommendation_rows:
+        recommendation_ref = _coalesce_string(row.get("recommendation_ref"))
+        recommendation_id = _coalesce_string(row.get("recommendation_id"))
+        for evidence_ref in _as_list(row.get("evidence_refs")):
+            if _is_traceable_evidence_ref(evidence_ref):
+                continue
+            invalid_refs.append(
+                {
+                    "recommendation_ref": recommendation_ref,
+                    "recommendation_id": recommendation_id,
+                    "evidence_ref": str(evidence_ref),
+                    "reason_code": REQ065_REASON_CODES["traceability_invalid_evidence_ref"],
+                }
+            )
+    invalid_refs.sort(
+        key=lambda row: (
+            row["recommendation_ref"],
+            row["recommendation_id"],
+            row["evidence_ref"],
+            row["reason_code"],
+        )
+    )
+    return invalid_refs
+
+
 def _normalize_recommendation_mapping(payload: dict[str, Any]) -> dict[str, dict[str, str]]:
     raw_mapping = _coalesce(
         payload.get("recommendation_mapping"),
@@ -706,6 +821,10 @@ def build_planner_consumability_validator(payload: dict[str, Any]) -> dict[str, 
     )
     citation_coverage_pass = recommendations_total > 0 and not missing_evidence_ids
     recommendation_fields_pass = not missing_fields
+    recommendation_id_collisions = _detect_recommendation_id_collisions(recommendation_items)
+    recommendation_id_collision_pass = not recommendation_id_collisions
+    invalid_evidence_refs = _find_invalid_evidence_refs(recommendation_rows)
+    traceability_pass = not invalid_evidence_refs
 
     target_project_id = _coalesce(
         _as_dict(payload.get("identity")).get("project_id"),
@@ -728,6 +847,10 @@ def build_planner_consumability_validator(payload: dict[str, Any]) -> dict[str, 
         blocking_reasons.append("required_keys_check_failed")
     if not recommendation_mapping_pass:
         blocking_reasons.append("recommendation_mapping_check_failed")
+    if not recommendation_id_collision_pass:
+        blocking_reasons.append("recommendation_id_collision_check_failed")
+    if not traceability_pass:
+        blocking_reasons.append("traceability_check_failed")
 
     verdict = "pass" if not blocking_reasons else "fail"
     return {
@@ -782,6 +905,17 @@ def build_planner_consumability_validator(payload: dict[str, Any]) -> dict[str, 
                 "incomplete_mappings": incomplete_mappings,
                 "required_mapping_fields": list(REQUIRED_PLANNER_MAPPING_FIELDS),
                 "pass": recommendation_mapping_pass,
+            },
+            "recommendation_id_collisions": {
+                "reason_code": REQ065_REASON_CODES["duplicate_recommendation_id_collision"],
+                "collisions": recommendation_id_collisions,
+                "pass": recommendation_id_collision_pass,
+            },
+            "traceability": {
+                "reason_code": REQ065_REASON_CODES["traceability_invalid_evidence_ref"],
+                "checked_evidence_refs": sorted(all_evidence_refs),
+                "invalid_evidence_refs": invalid_evidence_refs,
+                "pass": traceability_pass,
             },
         },
         "gate_verdict": {
