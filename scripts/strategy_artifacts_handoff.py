@@ -72,6 +72,9 @@ _REQ_061_FAILURE_REASON_ORDER = (
     "low_substance_rationale",
     "insufficient_evidence_citations",
 )
+_REQ_061_REASON_CODE_STRATEGY_PACKET_SCHEMA_ROW_INVALID = "strategy_packet_schema_row_invalid"
+_REQ_061_REASON_CODE_DUPLICATE_RECOMMENDATION_ID_COLLISION = "duplicate_recommendation_id_collision"
+_REQ_061_REASON_CODE_TRACEABILITY_GATE_FAILED = "traceability_gate_failed"
 _REQ_061_PROCESSING_RECOMMENDATION_FIELDS = (
     "decision",
     "rationale",
@@ -1485,11 +1488,73 @@ def build_req_061_recommendation_quality_validator(payload: Mapping[str, Any]) -
     return built
 
 
+def _req_061_append_diagnostic(
+    errors: list[str],
+    *,
+    path: str,
+    reason_code: str,
+    message: str,
+    evidence_refs: list[str],
+    diff_details: Mapping[str, str] | None = None,
+) -> None:
+    diagnostic: dict[str, Any] = {
+        "reason_code": reason_code,
+        "message": message,
+        "evidence_refs": evidence_refs,
+    }
+    if diff_details:
+        diagnostic["diff_details"] = dict(sorted(diff_details.items()))
+    errors.append(f"{path} diagnostic {json.dumps(diagnostic, sort_keys=True)}")
+
+
+def _validate_req_061_traceability_evidence_refs(
+    refs: Any,
+    *,
+    path: str,
+    parent_ref_set: set[str],
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(refs, list):
+        return errors
+    for index, item in enumerate(refs):
+        if not isinstance(item, str) or not item.strip():
+            continue
+        evidence_ref = item.strip()
+        if evidence_ref in parent_ref_set:
+            continue
+        ref_path = f"{path}[{index}]"
+        errors.append(
+            f"{ref_path} must exist in processing_behavior.recommendation.evidence_refs for traceability gate"
+        )
+        _req_061_append_diagnostic(
+            errors,
+            path=ref_path,
+            reason_code=_REQ_061_REASON_CODE_TRACEABILITY_GATE_FAILED,
+            message="broken evidence reference failed traceability gate",
+            evidence_refs=[evidence_ref],
+            diff_details={
+                "expected_ref_set": "processing_behavior.recommendation.evidence_refs",
+                "observed_ref": evidence_ref,
+            },
+        )
+    return errors
+
+
 def _validate_req_061_processing_recommended_action_row(row: Any, *, index: int) -> list[str]:
     errors: list[str] = []
     path = f"processing_behavior.recommendation.recommended_actions[{index}]"
+    issue_tokens: set[str] = set()
     if not isinstance(row, Mapping):
-        return [f"{path} must be an object"]
+        errors.append(f"{path} must be an object")
+        _req_061_append_diagnostic(
+            errors,
+            path=path,
+            reason_code=_REQ_061_REASON_CODE_STRATEGY_PACKET_SCHEMA_ROW_INVALID,
+            message="strategy packet schema row rejected because row is not an object",
+            evidence_refs=[path],
+            diff_details={"issue_types": "row_not_object"},
+        )
+        return errors
 
     expected_keys = {
         "action_id",
@@ -1506,39 +1571,58 @@ def _validate_req_061_processing_recommended_action_row(row: Any, *, index: int)
     missing = sorted(expected_keys - row_keys)
     if missing:
         errors.append(f"{path} missing keys: {missing}")
+        issue_tokens.add("missing_keys")
     unexpected = sorted(row_keys - expected_keys)
     if unexpected:
         errors.append(f"{path} has unexpected keys: {unexpected}")
+        issue_tokens.add("unexpected_keys")
 
     for key in ("action_id", "recommendation_id", "summary", "rationale", "packet_kind", "lane", "priority"):
         value = row.get(key)
         if not isinstance(value, str) or not value.strip():
             errors.append(f"{path}.{key} must be a non-empty string")
+            issue_tokens.add(f"invalid_text:{key}")
 
     packet_kind = row.get("packet_kind")
     if isinstance(packet_kind, str) and packet_kind not in _REQ_061_ALLOWED_PACKET_KINDS:
         errors.append(f"{path}.packet_kind must be one of: {sorted(_REQ_061_ALLOWED_PACKET_KINDS)}")
+        issue_tokens.add("invalid_packet_kind")
 
     priority = row.get("priority")
     if isinstance(priority, str) and priority not in _REQ_061_ALLOWED_PRIORITIES:
         errors.append(f"{path}.priority must be one of: {sorted(_REQ_061_ALLOWED_PRIORITIES)}")
+        issue_tokens.add("invalid_priority")
 
     sequence_hint = row.get("sequence_hint")
     if not isinstance(sequence_hint, int) or isinstance(sequence_hint, bool) or sequence_hint <= 0:
         errors.append(f"{path}.sequence_hint must be a positive integer")
+        issue_tokens.add("invalid_sequence_hint")
 
     evidence_refs = row.get("evidence_refs")
     if not isinstance(evidence_refs, list):
         errors.append(f"{path}.evidence_refs must be a list")
+        issue_tokens.add("invalid_evidence_refs_list")
     else:
         for evidence_index, item in enumerate(evidence_refs):
             if not isinstance(item, str) or not item.strip():
                 errors.append(f"{path}.evidence_refs[{evidence_index}] must be a non-empty string")
+                issue_tokens.add("invalid_evidence_ref_item")
 
     recommendation_id = row.get("recommendation_id")
     action_id = row.get("action_id")
     if isinstance(recommendation_id, str) and recommendation_id.strip() and action_id != f"recommendation-{recommendation_id}":
         errors.append(f"{path}.action_id must equal recommendation-<recommendation_id>")
+        issue_tokens.add("action_id_mismatch")
+
+    if errors:
+        _req_061_append_diagnostic(
+            errors,
+            path=path,
+            reason_code=_REQ_061_REASON_CODE_STRATEGY_PACKET_SCHEMA_ROW_INVALID,
+            message="strategy packet schema row rejected by deterministic validation gate",
+            evidence_refs=[path],
+            diff_details={"issue_types": ",".join(sorted(issue_tokens))},
+        )
 
     return errors
 
@@ -1630,6 +1714,7 @@ def _validate_req_061_processing_behavior(
             )
 
         evidence_refs = recommendation.get("evidence_refs")
+        traceability_evidence_ref_set: set[str] = set()
         if not isinstance(evidence_refs, list):
             errors.append("processing_behavior.recommendation.evidence_refs must be a list")
         else:
@@ -1638,6 +1723,8 @@ def _validate_req_061_processing_behavior(
                     errors.append(
                         f"processing_behavior.recommendation.evidence_refs[{evidence_index}] must be a non-empty string"
                     )
+                    continue
+                traceability_evidence_ref_set.add(item.strip())
 
         recommended_actions = recommendation.get("recommended_actions")
         if not isinstance(recommended_actions, list):
@@ -1645,6 +1732,17 @@ def _validate_req_061_processing_behavior(
         else:
             for index, row in enumerate(recommended_actions):
                 errors.extend(_validate_req_061_processing_recommended_action_row(row, index=index))
+                if isinstance(row, Mapping):
+                    errors.extend(
+                        _validate_req_061_traceability_evidence_refs(
+                            row.get("evidence_refs"),
+                            path=(
+                                "processing_behavior.recommendation."
+                                f"recommended_actions[{index}].evidence_refs"
+                            ),
+                            parent_ref_set=traceability_evidence_ref_set,
+                        )
+                    )
 
         for key in ("cross_project_obligations", "open_risks"):
             value = recommendation.get(key)
@@ -1653,6 +1751,14 @@ def _validate_req_061_processing_behavior(
                 continue
             for index, row in enumerate(value):
                 errors.extend(_validate_req_055_recommendation_row(row, index=index, kind=key))
+                if isinstance(row, Mapping):
+                    errors.extend(
+                        _validate_req_061_traceability_evidence_refs(
+                            row.get("evidence_refs"),
+                            path=f"processing_behavior.recommendation.{key}[{index}].evidence_refs",
+                            parent_ref_set=traceability_evidence_ref_set,
+                        )
+                    )
 
     context_usage = processing_behavior.get("context_usage")
     if not isinstance(context_usage, Mapping):
@@ -2036,6 +2142,7 @@ def validate_req_061_recommendation_quality_validator(payload: Mapping[str, Any]
             errors.append(f"quality_validation has unexpected keys: {unexpected_quality_validation}")
 
         seen_ids: set[str] = set()
+        recommendation_id_locations: dict[str, str] = {}
         for bucket_name, expected_decision in (
             ("accepted_recommendations", "accepted"),
             ("blocked_recommendations", "blocked"),
@@ -2055,12 +2162,29 @@ def validate_req_061_recommendation_quality_validator(payload: Mapping[str, Any]
                 )
                 errors.extend(row_errors)
                 if recommendation_id:
+                    row_location = f"quality_validation.{bucket_name}[{index}]"
                     if recommendation_id in seen_ids:
                         errors.append(
                             "quality_validation recommendation_id values must be unique across accepted and blocked rows"
                         )
+                        _req_061_append_diagnostic(
+                            errors,
+                            path=row_location,
+                            reason_code=_REQ_061_REASON_CODE_DUPLICATE_RECOMMENDATION_ID_COLLISION,
+                            message="duplicate recommendation_id collision detected across quality buckets",
+                            evidence_refs=[
+                                recommendation_id_locations[recommendation_id],
+                                row_location,
+                            ],
+                            diff_details={
+                                "first_seen": recommendation_id_locations[recommendation_id],
+                                "duplicate_seen": row_location,
+                                "recommendation_id": recommendation_id,
+                            },
+                        )
                     else:
                         seen_ids.add(recommendation_id)
+                        recommendation_id_locations[recommendation_id] = row_location
                         if bucket_name == "accepted_recommendations":
                             accepted_ids.append(recommendation_id)
                         else:
