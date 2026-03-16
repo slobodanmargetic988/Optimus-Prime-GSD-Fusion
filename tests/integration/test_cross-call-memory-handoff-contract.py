@@ -328,6 +328,10 @@ def test_req_034_emits_bounded_memory_handoff_with_complete_recommendation() -> 
             "reason_code": "cross_call_contradiction",
             "summary": "Promote the runtime-orchestrator follow-up immediately.",
             "required_evidence_refs": [
+                "REQ-034::call::call-1::output::situational_analysis",
+                "REQ-034::call::call-2::output::execution_plan",
+                "REQ-034::call::call-3::output::dependency_validation",
+                "REQ-034::call::call-memory-handoff::output::memory_handoff_contract",
                 "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
             ],
         },

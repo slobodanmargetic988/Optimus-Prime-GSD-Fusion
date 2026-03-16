@@ -2623,6 +2623,7 @@ def build_req_034_cross_call_memory_handoff_contract(
         )
     )
     context_by_project = {str(row["project_id"]): row for row in normalized_cross_project_context}
+    contract_output_ref = _req_034_contract_output_ref(call_id=normalized_call_id)
 
     open_risks: list[dict[str, Any]] = []
     memory_handoffs: list[dict[str, Any]] = []
@@ -2752,27 +2753,34 @@ def build_req_034_cross_call_memory_handoff_contract(
         blocked_reason_code = ""
         missing_anchor_ids = [memory_id for memory_id in row["memory_anchor_ids"] if memory_id not in active_memory_by_id]
         contradicted_anchor_ids = [memory_id for memory_id in row["memory_anchor_ids"] if memory_id in suppressed_memory_ids]
-        anchor_evidence_refs = _collect_unique_refs(
+        active_anchor_rows = [
+            active_memory_by_id[memory_id]
+            for memory_id in row["memory_anchor_ids"]
+            if memory_id in active_memory_by_id
+        ]
+        all_anchor_rows = [
+            anchor_row
+            for memory_id in row["memory_anchor_ids"]
+            for anchor_row in memory_rows_by_id.get(memory_id, [])
+        ]
+        blocked_anchor_evidence_refs = _collect_unique_refs(
             *[
-                active_memory_by_id[memory_id]["citation_refs"]
-                for memory_id in row["memory_anchor_ids"]
-                if memory_id in active_memory_by_id
+                anchor_row["citation_refs"]
+                for anchor_row in all_anchor_rows
             ]
         )
-        anchor_output_refs = _collect_unique_refs(
-            [
-                active_memory_by_id[memory_id]["source_output_ref"]
-                for memory_id in row["memory_anchor_ids"]
-                if memory_id in active_memory_by_id
-            ]
+        blocked_anchor_output_refs = _collect_unique_refs(
+            [anchor_row["source_output_ref"] for anchor_row in all_anchor_rows]
         )
+        anchor_evidence_refs = _collect_unique_refs(*[anchor_row["citation_refs"] for anchor_row in active_anchor_rows])
+        anchor_output_refs = _collect_unique_refs([anchor_row["source_output_ref"] for anchor_row in active_anchor_rows])
         uncited_refs = sorted(set(row["evidence_refs"]) - available_recommendation_refs)
         if contradicted_anchor_ids:
             blocked_reason_code = "cross_call_contradiction"
         elif missing_anchor_ids:
             blocked_reason_code = "missing_memory_handoff"
         elif uncited_refs:
-            blocked_reason_code = "uncited_memory_claim"
+            blocked_reason_code = "uncited_strategic_claim"
         elif row["recommendation_scope"] == "cross-project" and row["requires_earth_evidence"] and not normalized_earth_refs:
             blocked_reason_code = "missing_earth_sweep_evidence_refs"
         elif row["recommendation_scope"] == "cross-project" and row["project_id"] not in context_by_project:
@@ -2780,9 +2788,14 @@ def build_req_034_cross_call_memory_handoff_contract(
 
         if blocked_reason_code:
             blocked_recommendation_ids.add(recommendation_id)
-            required_refs = _collect_unique_refs(anchor_output_refs, row["evidence_refs"], anchor_evidence_refs)
+            required_refs = _collect_unique_refs(
+                [contract_output_ref],
+                blocked_anchor_output_refs,
+                row["evidence_refs"],
+                blocked_anchor_evidence_refs,
+            )
             if uncited_refs:
-                required_refs = _collect_unique_refs(anchor_output_refs, uncited_refs)
+                required_refs = _collect_unique_refs([contract_output_ref], blocked_anchor_output_refs, uncited_refs)
             open_risks.append(
                 {
                     "risk_id": f"risk-{recommendation_id}",
@@ -2923,7 +2936,7 @@ def build_req_034_cross_call_memory_handoff_contract(
             },
             "handoff_contract": {
                 "memory_window_per_call": REQ_034_MAX_MEMORY_ITEMS_PER_CALL,
-                "contract_output_ref": _req_034_contract_output_ref(call_id=normalized_call_id),
+                "contract_output_ref": contract_output_ref,
                 "active_memory_ids": active_memory_ids,
                 "suppressed_memory_ids": sorted(suppressed_memory_ids),
                 "handoff_count": len(memory_handoffs),
