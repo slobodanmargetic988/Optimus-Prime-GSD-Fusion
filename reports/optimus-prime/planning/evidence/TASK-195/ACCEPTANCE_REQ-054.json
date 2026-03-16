@@ -1,0 +1,70 @@
+{
+  "req_id": "REQ-054",
+  "summary": "Recommendation-to-planner mapping artifact remains replay-stable, preserves the full mapping set for planner consumption, and keeps open-risk evidence refs consumable in the acceptance packet.",
+  "evidence_refs": [
+    "contracts/req/REQ-016_reuse-opportunity-detection.md",
+    "missing:earth-sweep-evidence-ref",
+    "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+    "reports/earth/sweeps/earth-ops-pipeline/planner-packet-gaps-2026-03-15.json",
+    "reports/earth/sweeps/shared-observability/signals-2026-03-14.json",
+    "reports/optimus-prime/planning/PLAN_PACKETS.json#analysis.reuse-contract-review",
+    "reports/optimus-prime/planning/PLAN_PACKETS.json#coordination.reuse-ownership",
+    "reports/optimus-prime/planning/PLAN_PACKETS.json#coordination.runtime-canary",
+    "reports/optimus-prime/planning/PLAN_PACKETS.json#execution.telemetry-freshness",
+    "reports/optimus-prime/planning/evidence/TASK-195/dev-check-bundle.json",
+    "reports/quality/req-039-rationale-quality-score.json",
+    "reports/runtime/telemetry/freshness-gap-2026-03-15.json",
+    "strategy/current/llm_call_trace.jsonl#call-2-001",
+    "strategy/current/llm_call_trace.jsonl#call-5-001",
+    "strategy/current/llm_call_trace.jsonl#rationale-quality-001"
+  ],
+  "consumability_verdict": "planning_with_open_risks",
+  "open_risks": [
+    {
+      "source_id": "obligation-missing-earth-evidence",
+      "reason_code": "missing_earth_sweep_evidence_refs",
+      "required_evidence_refs": [
+        "missing:earth-sweep-evidence-ref"
+      ],
+      "linked_recommendation_ids": [
+        "rec.review-reuse-contracts"
+      ],
+      "linked_planner_task_intent_handles": [
+        "intent.cross-project-reuse-ownership-clarification",
+        "intent.reuse-contract-review"
+      ]
+    },
+    {
+      "source_id": "obligation-unknown-recommendation",
+      "reason_code": "unknown_recommendation_ids",
+      "required_evidence_refs": [
+        "reports/earth/sweeps/earth-ops-pipeline/planner-packet-gaps-2026-03-15.json"
+      ],
+      "linked_recommendation_ids": [],
+      "linked_planner_task_intent_handles": []
+    },
+    {
+      "source_id": "idea.reuse-ownership-followup",
+      "reason_code": "unresolved_idea_open_risk",
+      "required_evidence_refs": [
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ],
+      "linked_recommendation_ids": [
+        "rec.review-reuse-contracts"
+      ],
+      "linked_planner_task_intent_handles": [
+        "intent.cross-project-reuse-ownership-clarification",
+        "intent.reuse-contract-review"
+      ]
+    },
+    {
+      "source_id": "idea.unscoped-evidence-gap",
+      "reason_code": "unresolved_idea_open_risk",
+      "required_evidence_refs": [
+        "missing:earth-sweep-evidence-ref"
+      ],
+      "linked_recommendation_ids": [],
+      "linked_planner_task_intent_handles": []
+    }
+  ]
+}
