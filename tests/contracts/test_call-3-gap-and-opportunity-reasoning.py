@@ -51,6 +51,9 @@ def test_req_028_sample_payload_is_valid_contract_shape() -> None:
     assert recommendation["recommended_opportunities"]
     assert recommendation["cross_project_obligations"]
     assert recommendation["open_risks"]
+    assert sample["call_metadata"]["llm_call_trace_path"] == module.LLM_CALL_TRACE_RELATIVE_PATH
+    assert sample["call_metadata"]["llm_call_trace_rows"][0]["call_objective"] == module.REQ_028_TRACE_CALL_OBJECTIVE
+    assert sample["call_metadata"]["llm_call_trace_rows"][0]["output_refs"]
 
 
 def test_req_028_contract_doc_includes_sample_structure_reference() -> None:
@@ -75,6 +78,12 @@ def test_req_028_contract_doc_includes_sample_structure_reference() -> None:
         "call_metadata",
         "canonical_input_sha256",
         "processing_input_sha256",
+        "llm_call_trace_path",
+        "llm_call_trace_rows",
+        "call_objective",
+        "input_refs",
+        "output_refs",
+        "handoff_summary",
     ]:
         assert f"`{key}`" in content
 

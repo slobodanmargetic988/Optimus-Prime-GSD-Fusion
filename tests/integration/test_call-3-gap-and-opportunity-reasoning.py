@@ -85,3 +85,13 @@ def test_req_028_integration_emits_evidence_backed_recommendations_and_cross_pro
         }
     ]
     assert "release-coordination" not in [row["project_id"] for row in obligations]
+
+    trace_rows = payload["call_metadata"]["llm_call_trace_rows"]
+    assert payload["call_metadata"]["llm_call_trace_path"] == module.LLM_CALL_TRACE_RELATIVE_PATH
+    assert len(trace_rows) == 1
+    assert trace_rows[0]["requirement_id"] == module.REQ_028_REQUIREMENT_ID
+    assert trace_rows[0]["sequence"] == module.REQ_028_CALL_SEQUENCE
+    assert trace_rows[0]["call_objective"] == module.REQ_028_TRACE_CALL_OBJECTIVE
+    assert trace_rows[0]["output_refs"]
+    assert "ecosystem-visible gaps" in trace_rows[0]["handoff_summary"]
+    assert "linked opportunities beyond the local mission" in trace_rows[0]["handoff_summary"]

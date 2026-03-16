@@ -26,6 +26,8 @@ PIPELINE_STRATEGY = "multi-call-strategy-pipeline-planner"
 REQ_028_STRATEGY = "call-3-gap-and-opportunity-reasoning"
 REQ_028_REASONING_FOCUS = "strategic-gaps-and-opportunities-beyond-local-mission"
 REQ_028_CALL_SEQUENCE = 3
+REQ_028_TRACE_CALL_OBJECTIVE = "Reason about strategic gaps and opportunities not visible from the local mission alone."
+REQ_028_TRACE_EXPECTED_OUTPUT = "call_3_gap_and_opportunity_reasoning"
 MIN_CALL_DEPTH = 1
 MAX_CALL_DEPTH = 8
 DEFAULT_CALL_DEPTH = 4
@@ -532,6 +534,75 @@ def _build_llm_call_trace_rows(
             }
         )
     return trace_rows
+
+
+def _collect_req_028_trace_input_refs(canonical_processing_input: Mapping[str, Any]) -> list[str]:
+    cross_project_context = canonical_processing_input.get("cross_project_context")
+    unresolved_ideas = canonical_processing_input.get("unresolved_ideas")
+    gap_candidates = canonical_processing_input.get("gap_candidates")
+    opportunity_candidates = canonical_processing_input.get("opportunity_candidates")
+
+    def _rows_to_refs(rows: Any) -> list[list[str]]:
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
+            return []
+        refs: list[list[str]] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            row_refs = row.get("evidence_refs")
+            if isinstance(row_refs, Sequence) and not isinstance(row_refs, (str, bytes, bytearray)):
+                refs.append([_as_text(ref) for ref in row_refs if _as_text(ref)])
+        return refs
+
+    required_evidence_refs = canonical_processing_input.get("required_evidence_refs")
+    if not isinstance(required_evidence_refs, Sequence) or isinstance(required_evidence_refs, (str, bytes, bytearray)):
+        required_evidence_refs = []
+
+    return _collect_unique_refs(
+        [_as_text(ref) for ref in required_evidence_refs if _as_text(ref)],
+        *(_rows_to_refs(cross_project_context)),
+        *(_rows_to_refs(unresolved_ideas)),
+        *(_rows_to_refs(gap_candidates)),
+        *(_rows_to_refs(opportunity_candidates)),
+    )
+
+
+def _build_req_028_llm_call_trace_rows(
+    *,
+    canonical_input_sha: str,
+    processing_input_sha: str,
+    processing_call_id: str,
+    canonical_processing_input: Mapping[str, Any],
+    gap_count: int,
+    opportunity_count: int,
+) -> list[dict[str, Any]]:
+    plan_id = f"req028-plan-{processing_input_sha[:16]}"
+    call_id = f"req028-call-{REQ_028_CALL_SEQUENCE:02d}-{canonical_input_sha[:10]}"
+    output_ref = _build_call_output_ref(
+        plan_id=plan_id,
+        call_id=call_id,
+        expected_output=REQ_028_TRACE_EXPECTED_OUTPUT,
+    )
+    return [
+        {
+            "schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "requirement_id": REQ_028_REQUIREMENT_ID,
+            "plan_id": plan_id,
+            "processing_call_id": processing_call_id,
+            "call_id": call_id,
+            "sequence": REQ_028_CALL_SEQUENCE,
+            "call_objective": REQ_028_TRACE_CALL_OBJECTIVE,
+            "depends_on": [],
+            "expected_output": REQ_028_TRACE_EXPECTED_OUTPUT,
+            "input_refs": _collect_req_028_trace_input_refs(canonical_processing_input),
+            "output_refs": [output_ref],
+            "handoff_summary": (
+                f"Call {REQ_028_CALL_SEQUENCE} hands off {REQ_028_TRACE_EXPECTED_OUTPUT} via {output_ref} "
+                f"after reasoning over {gap_count} ecosystem-visible gaps and "
+                f"{opportunity_count} linked opportunities beyond the local mission."
+            ),
+        }
+    ]
 
 
 def _build_req_025_processing_behavior(
@@ -2179,6 +2250,16 @@ def build_req_028_call_3_gap_and_opportunity_reasoning(
         gap_candidates=normalized_gap_candidates,
         opportunity_candidates=normalized_opportunity_candidates,
     )
+    processing_call_id = f"req028-processing-{processing_sha[:16]}"
+    llm_call_trace_rows = _build_req_028_llm_call_trace_rows(
+        canonical_input_sha=canonical_input_sha,
+        processing_input_sha=processing_sha,
+        processing_call_id=processing_call_id,
+        canonical_processing_input=canonical_processing_input,
+        gap_count=len(normalized_gap_candidates),
+        opportunity_count=len(normalized_opportunity_candidates),
+    )
+    llm_call_trace_sha = _canonical_digest(llm_call_trace_rows)
 
     return {
         "schema_version": REQ_028_SCHEMA_VERSION,
@@ -2200,8 +2281,12 @@ def build_req_028_call_3_gap_and_opportunity_reasoning(
             "reproducible_call_id": f"req028-{canonical_input_sha[:16]}",
             "canonical_input": canonical_input,
             "processing_input_sha256": processing_sha,
-            "processing_call_id": f"req028-processing-{processing_sha[:16]}",
+            "processing_call_id": processing_call_id,
             "canonical_processing_input": canonical_processing_input,
+            "llm_call_trace_schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": llm_call_trace_sha,
+            "llm_call_trace_rows": llm_call_trace_rows,
         },
     }
 
@@ -2503,6 +2588,10 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
         "processing_input_sha256",
         "processing_call_id",
         "canonical_processing_input",
+        "llm_call_trace_schema_version",
+        "llm_call_trace_path",
+        "llm_call_trace_sha256",
+        "llm_call_trace_rows",
     }
     metadata_keys = set(metadata.keys())
     missing_metadata = sorted(required_metadata - metadata_keys)
@@ -2540,6 +2629,13 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
         errors.append("call_metadata.canonical_processing_input must be an object")
         return errors
 
+    if metadata.get("llm_call_trace_schema_version") != REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION:
+        errors.append(
+            f"call_metadata.llm_call_trace_schema_version must be {REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION}"
+        )
+    if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+        errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+
     if (
         normalized_local_mission_summary
         and normalized_gap_candidates
@@ -2574,6 +2670,19 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
             errors.append("call_metadata.processing_input_sha256 does not match processing input")
         if metadata.get("processing_call_id") != f"req028-processing-{expected_processing_sha[:16]}":
             errors.append("call_metadata.processing_call_id does not match processing digest")
+
+        expected_trace_rows = _build_req_028_llm_call_trace_rows(
+            canonical_input_sha=expected_input_sha,
+            processing_input_sha=expected_processing_sha,
+            processing_call_id=f"req028-processing-{expected_processing_sha[:16]}",
+            canonical_processing_input=expected_processing_input,
+            gap_count=len(normalized_gap_candidates),
+            opportunity_count=len(normalized_opportunity_candidates),
+        )
+        if metadata.get("llm_call_trace_rows") != expected_trace_rows:
+            errors.append("call_metadata.llm_call_trace_rows must mirror deterministic Call-3 trace rows")
+        if metadata.get("llm_call_trace_sha256") != _canonical_digest(expected_trace_rows):
+            errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
 
     return errors
 

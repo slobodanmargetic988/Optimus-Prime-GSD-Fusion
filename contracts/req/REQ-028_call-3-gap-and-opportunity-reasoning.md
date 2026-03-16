@@ -189,6 +189,17 @@ Unresolved ecosystem ideas must be emitted under `recommendation.open_risks[]`; 
 - `processing_input_sha256`
 - `processing_call_id`
 - `canonical_processing_input`
+- `llm_call_trace_schema_version` (must equal `req-025.llm-call-trace-row.v1`)
+- `llm_call_trace_path` (must equal `strategy/current/llm_call_trace.jsonl`)
+- `llm_call_trace_sha256`
+- `llm_call_trace_rows`
+
+Each `llm_call_trace_rows[]` row must include:
+
+- `call_objective`
+- `input_refs`
+- `output_refs`
+- `handoff_summary`
 
 ## Samples and fixtures
 
@@ -248,7 +259,16 @@ Its top-level shape is:
   },
   "call_metadata": {
     "canonical_input_sha256": "",
-    "processing_input_sha256": ""
+    "processing_input_sha256": "",
+    "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
+    "llm_call_trace_rows": [
+      {
+        "call_objective": "",
+        "input_refs": [],
+        "output_refs": [],
+        "handoff_summary": ""
+      }
+    ]
   }
 }
 ```
