@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract/data-model surface for REQ-054 recommendation-to-planner mapping artifact."""
+"""Contract/data-model surfaces for strategy artifact handoff requirements."""
 
 from __future__ import annotations
 
@@ -13,14 +13,25 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPTS_ROOT = SCRIPT_DIR.parent
+for candidate in (SCRIPTS_ROOT,):
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
+
+
 REQ_054_SCHEMA_VERSION = "req-054.recommendation-to-planner-mapping-artifact.v1"
 REQ_054_REQUIREMENT_ID = "REQ-054"
 REQ_054_ANALYSIS_TYPE = "recommendation_to_planner_mapping_artifact"
 REQ_054_CALL_ID = "recommendation-to-planner-mapping"
+REQ_060_REQUIREMENT_ID = "REQ-060"
+REQ_060_ANALYSIS_TYPE = "strategy_packet_v1_schema_validator"
+REQ_060_DEFAULT_SCHEMA_PATH = "contracts/strategy_packet.v1.schema.json"
 _REQ_054_REASON_MISSING_EARTH_SWEEP_EVIDENCE = "missing_earth_sweep_evidence_refs"
 _REQ_054_REASON_UNKNOWN_RECOMMENDATIONS = "unknown_recommendation_ids"
 _REQ_054_REASON_EARTH_EVIDENCE_OUTSIDE_CONTEXT = "earth_sweep_evidence_not_in_context"
 _REQ_054_REASON_UNRESOLVED_IDEA = "unresolved_idea_open_risk"
+_REQ_060_REASON_PACKET_PAYLOAD_NOT_OBJECT = "packet_payload_not_object"
 _LOG_BUDGET_MAX_BYTES = 3 * 1024 * 1024 * 1024
 _LOG_BUDGET_CHECK_INTERVAL_SECONDS = 15 * 60
 
@@ -74,6 +85,26 @@ def _emit_debug(message: str, *, now_utc: str | None = None) -> None:
             handle.write(line + "\n")
     except OSError:
         return
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _read_json_file(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _resolve_repo_json_path(raw_path: Any, *, field_name: str) -> Path:
+    path_text = _require_nonempty_text(raw_path, field_name=field_name)
+    candidate = Path(path_text).expanduser()
+    if not candidate.is_absolute():
+        candidate = _repo_root() / candidate
+    return candidate.resolve()
+
+
+def _load_json_from_field(raw_path: Any, *, field_name: str) -> Any:
+    return _read_json_file(_resolve_repo_json_path(raw_path, field_name=field_name))
 
 
 def _require_mapping(value: Any, *, field_name: str) -> Mapping[str, Any]:
@@ -1057,15 +1088,188 @@ def validate_req_054_recommendation_to_planner_mapping_artifact(payload: Mapping
     return errors
 
 
+def _req_060_packet_payload_not_object_result(*, checked_at_utc: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "checked_at_utc": checked_at_utc,
+        "verdict": "fail",
+        "planner_consumability": "planner_blocked",
+        "reason_codes": [_REQ_060_REASON_PACKET_PAYLOAD_NOT_OBJECT],
+        "diagnostic_count": 1,
+        "summary": "Strategy packet is not planner-consumable; packet JSON root must be an object.",
+        "diagnostics": [
+            {
+                "severity": "error",
+                "reason_code": _REQ_060_REASON_PACKET_PAYLOAD_NOT_OBJECT,
+                "field_path": "$",
+                "message": "strategy packet JSON root must be an object",
+            }
+        ],
+    }
+
+
+def build_req_060_strategy_packet_v1_schema_validator(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build deterministic strategy_packet.v1 validation results for REQ-060."""
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_060_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_060_ANALYSIS_TYPE}")
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+
+    has_inline_packet = "strategy_packet" in raw
+    has_packet_path = "strategy_packet_path" in raw
+    if has_inline_packet == has_packet_path:
+        raise ValueError("provide exactly one of strategy_packet or strategy_packet_path")
+    has_inline_schema = "schema" in raw
+    has_schema_path = "schema_path" in raw
+    if has_inline_schema and has_schema_path:
+        raise ValueError("provide only one of schema or schema_path")
+
+    strategy_packet = raw.get("strategy_packet") if has_inline_packet else _load_json_from_field(
+        raw.get("strategy_packet_path"),
+        field_name="strategy_packet_path",
+    )
+    schema = (
+        raw.get("schema")
+        if has_inline_schema
+        else _load_json_from_field(
+            raw.get("schema_path", REQ_060_DEFAULT_SCHEMA_PATH),
+            field_name="schema_path",
+        )
+    )
+    if not isinstance(schema, Mapping):
+        raise ValueError("schema must be a JSON object")
+    if not isinstance(strategy_packet, Mapping):
+        return _req_060_packet_payload_not_object_result(checked_at_utc=checked_at_utc)
+
+    from scripts.strategy_validators import validate_strategy_packet_payload
+
+    output_payload = validate_strategy_packet_payload(strategy_packet, schema)
+    output_payload["checked_at_utc"] = checked_at_utc
+    return output_payload
+
+
+def validate_req_060_strategy_packet_v1_schema_validator(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-060 strategy_packet.v1 schema validator output shape."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "ok",
+        "checked_at_utc",
+        "verdict",
+        "planner_consumability",
+        "reason_codes",
+        "diagnostic_count",
+        "summary",
+        "diagnostics",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    ok = payload.get("ok")
+    if not isinstance(ok, bool):
+        errors.append("ok must be a boolean")
+    checked_at_utc = payload.get("checked_at_utc")
+    if not isinstance(checked_at_utc, str) or not checked_at_utc.strip():
+        errors.append("checked_at_utc must be a non-empty string")
+
+    verdict = payload.get("verdict")
+    if verdict not in {"pass", "fail"}:
+        errors.append("verdict must be pass or fail")
+    planner_consumability = payload.get("planner_consumability")
+    if planner_consumability not in {"planner_ready", "planner_blocked"}:
+        errors.append("planner_consumability must be planner_ready or planner_blocked")
+
+    reason_codes = payload.get("reason_codes")
+    if not isinstance(reason_codes, list):
+        errors.append("reason_codes must be a list")
+        normalized_reason_codes: list[str] = []
+    else:
+        normalized_reason_codes = []
+        for index, item in enumerate(reason_codes):
+            if not isinstance(item, str) or not item.strip():
+                errors.append(f"reason_codes[{index}] must be a non-empty string")
+                continue
+            normalized_reason_codes.append(item)
+
+    diagnostic_count = payload.get("diagnostic_count")
+    if not isinstance(diagnostic_count, int) or diagnostic_count < 0:
+        errors.append("diagnostic_count must be a non-negative integer")
+    summary = payload.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        errors.append("summary must be a non-empty string")
+
+    diagnostics = payload.get("diagnostics")
+    normalized_diagnostic_codes: list[str] = []
+    if not isinstance(diagnostics, list):
+        errors.append("diagnostics must be a list")
+    else:
+        for index, row in enumerate(diagnostics):
+            if not isinstance(row, Mapping):
+                errors.append(f"diagnostics[{index}] must be an object")
+                continue
+            expected_keys = {"severity", "reason_code", "field_path", "message"}
+            row_keys = set(row.keys())
+            missing_row = sorted(expected_keys - row_keys)
+            if missing_row:
+                errors.append(f"diagnostics[{index}] missing keys: {missing_row}")
+            unexpected_row = sorted(row_keys - expected_keys)
+            if unexpected_row:
+                errors.append(f"diagnostics[{index}] has unexpected keys: {unexpected_row}")
+            for key in ("severity", "reason_code", "field_path", "message"):
+                value = row.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"diagnostics[{index}].{key} must be a non-empty string")
+            reason_code = row.get("reason_code")
+            if isinstance(reason_code, str) and reason_code.strip():
+                normalized_diagnostic_codes.append(reason_code)
+
+    if isinstance(diagnostic_count, int) and isinstance(diagnostics, list) and diagnostic_count != len(diagnostics):
+        errors.append("diagnostic_count must match diagnostics length")
+    if normalized_reason_codes and normalized_reason_codes != sorted(set(normalized_diagnostic_codes)):
+        errors.append("reason_codes must match sorted unique diagnostic reason_code values")
+
+    if ok is True:
+        if verdict != "pass":
+            errors.append("verdict must be pass when ok is true")
+        if planner_consumability != "planner_ready":
+            errors.append("planner_consumability must be planner_ready when ok is true")
+        if isinstance(diagnostics, list) and diagnostics:
+            errors.append("diagnostics must be empty when ok is true")
+        if isinstance(reason_codes, list) and reason_codes:
+            errors.append("reason_codes must be empty when ok is true")
+    if ok is False:
+        if verdict != "fail":
+            errors.append("verdict must be fail when ok is false")
+        if planner_consumability != "planner_blocked":
+            errors.append("planner_consumability must be planner_blocked when ok is false")
+        if isinstance(diagnostics, list) and not diagnostics:
+            errors.append("diagnostics must be non-empty when ok is false")
+
+    return errors
+
+
 def run(payload: Mapping[str, Any]) -> dict[str, Any]:
     analysis_type = str(payload.get("analysis_type") or "").strip()
-    if analysis_type != REQ_054_ANALYSIS_TYPE:
-        raise ValueError(f"analysis_type must be {REQ_054_ANALYSIS_TYPE}")
-    return build_req_054_recommendation_to_planner_mapping_artifact(payload)
+    if analysis_type == REQ_054_ANALYSIS_TYPE:
+        return build_req_054_recommendation_to_planner_mapping_artifact(payload)
+    if analysis_type == REQ_060_ANALYSIS_TYPE:
+        return build_req_060_strategy_packet_v1_schema_validator(payload)
+    raise ValueError(
+        "analysis_type must be one of: "
+        f"{REQ_054_ANALYSIS_TYPE}, {REQ_060_ANALYSIS_TYPE}"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Emit REQ-054 recommendation-to-planner mapping artifact payload.")
+    parser = argparse.ArgumentParser(description="Emit strategy artifact handoff payloads.")
     parser.add_argument("--input-json", required=True, help='Input payload path or "-" for stdin.')
     parser.add_argument("--output-json", default="-", help='Output path or "-" for stdout.')
     parser.add_argument("--json-pretty", action="store_true", help="Pretty-print JSON output.")
@@ -1089,7 +1293,7 @@ def main(argv: list[str] | None = None) -> int:
             output_path.write_text(rendered + "\n", encoding="utf-8")
         return 0
     except Exception as exc:  # pragma: no cover - CLI error path exercised indirectly.
-        _emit_debug(f"REQ-054 CLI failed: {exc}")
+        _emit_debug(f"strategy_artifacts_handoff CLI failed: {exc}")
         return 1
 
 
