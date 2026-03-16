@@ -1,0 +1,15 @@
+{
+  "strategy_revision_id": "strat.20260312-r1",
+  "recommendation_readiness": [
+    {
+      "recommendation_id": "rec.dispatch-quality-first",
+      "recommendation_key": "dispatch-quality-first",
+      "status": "ready"
+    },
+    {
+      "recommendation_id": "rec.runtime-canary-coverage",
+      "recommendation_key": "runtime-canary-coverage",
+      "status": "ready"
+    }
+  ]
+}

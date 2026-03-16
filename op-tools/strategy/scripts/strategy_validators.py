@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -13,6 +14,7 @@ from jsonschema.exceptions import SchemaError
 
 REQ_056_REQUIREMENT_ID = "REQ-056"
 REQ_056_VALIDATOR_ID = "kpi_target_artifact_consumability_gate"
+REQ_062_REQUIREMENT_ID = "REQ-062"
 STRATEGY_PACKET_SCHEMA_VERSION = "strategy-packet.v1"
 
 SEVERITY_RANK = {
@@ -23,6 +25,13 @@ SEVERITY_RANK = {
 
 EXPECTED_DIRECTIONS = {"increase", "decrease", "maintain"}
 CONFIDENCE_LEVELS = {"high", "medium", "low"}
+RECOMMENDATION_BASIS_FIELDS = (
+    "priority",
+    "summary",
+    "rationale",
+    "expected_impact",
+    "risk_level",
+)
 
 
 def _utc_timestamp() -> str:
@@ -462,6 +471,393 @@ def _validate_req_056_kpi_target_artifact(packet: Any, diagnostics: list[dict[st
             )
 
 
+def _normalize_recommendation_basis(
+    row: Mapping[str, Any],
+    *,
+    row_path: str,
+    diagnostics: list[dict[str, Any]],
+    reason_code: str,
+) -> dict[str, str]:
+    basis: dict[str, str] = {}
+    for field_name in RECOMMENDATION_BASIS_FIELDS:
+        value = _validate_string_field(
+            row.get(field_name),
+            field_path=f"{row_path}.{field_name}",
+            diagnostics=diagnostics,
+            reason_code=reason_code,
+        )
+        if value is not None:
+            basis[field_name] = value
+    return basis
+
+
+def _basis_signature(basis: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
+    return tuple((field_name, basis[field_name]) for field_name in RECOMMENDATION_BASIS_FIELDS)
+
+
+def _build_packet_recommendation_rows(
+    packet: Mapping[str, Any],
+    diagnostics: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    recommendations = packet.get("recommendations")
+    if not isinstance(recommendations, list):
+        return []
+
+    revision_id = ""
+    strategy = packet.get("strategy")
+    if isinstance(strategy, Mapping) and _is_non_empty_string(strategy.get("revision_id")):
+        revision_id = str(strategy.get("revision_id")).strip()
+
+    rows: list[dict[str, Any]] = []
+    indexes_by_id: dict[str, list[int]] = defaultdict(list)
+    for index, row in enumerate(recommendations):
+        if not isinstance(row, Mapping):
+            continue
+        recommendation_id = row.get("recommendation_id")
+        if not _is_non_empty_string(recommendation_id):
+            continue
+        normalized_id = str(recommendation_id).strip()
+        indexes_by_id[normalized_id].append(index)
+        rows.append(
+            {
+                "index": index,
+                "path": f"recommendations[{index}]",
+                "recommendation_id": normalized_id,
+                "basis": _normalize_recommendation_basis(
+                    row,
+                    row_path=f"recommendations[{index}]",
+                    diagnostics=diagnostics,
+                    reason_code="recommendation_id_stability_basis_invalid",
+                ),
+            }
+        )
+
+    for recommendation_id, indexes in sorted(indexes_by_id.items()):
+        if len(indexes) < 2:
+            continue
+        for index in indexes:
+            diagnostics.append(
+                _diagnostic(
+                    "recommendation_id_collision",
+                    f"recommendations[{index}].recommendation_id",
+                    f"recommendation_id {recommendation_id} must be unique within revision {revision_id or 'unknown'}",
+                    details={
+                        "recommendation_id": recommendation_id,
+                        "revision_id": revision_id,
+                        "conflicting_indexes": indexes,
+                    },
+                )
+            )
+
+    return rows
+
+
+def _parse_recommendation_id_stability_revision(
+    revision: Any,
+    *,
+    field_path: str,
+    diagnostics: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not isinstance(revision, Mapping):
+        diagnostics.append(
+            _diagnostic(
+                "recommendation_id_stability_contract_invalid",
+                field_path,
+                f"{field_path} must be an object",
+            )
+        )
+        return None
+
+    revision_id = _validate_string_field(
+        revision.get("revision_id"),
+        field_path=f"{field_path}.revision_id",
+        diagnostics=diagnostics,
+        reason_code="recommendation_id_stability_contract_invalid",
+    )
+
+    recommendations = revision.get("recommendations")
+    if not isinstance(recommendations, list):
+        diagnostics.append(
+            _diagnostic(
+                "recommendation_id_stability_contract_invalid",
+                f"{field_path}.recommendations",
+                f"{field_path}.recommendations must be a list",
+            )
+        )
+        return None
+
+    rows: list[dict[str, Any]] = []
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    rows_by_key: dict[str, dict[str, Any]] = {}
+    rows_by_signature: dict[tuple[tuple[str, str], ...], dict[str, Any]] = {}
+
+    for index, row in enumerate(recommendations):
+        row_path = f"{field_path}.recommendations[{index}]"
+        if not isinstance(row, Mapping):
+            diagnostics.append(
+                _diagnostic(
+                    "recommendation_id_stability_contract_invalid",
+                    row_path,
+                    f"{row_path} must be an object",
+                )
+            )
+            continue
+
+        recommendation_key = _validate_string_field(
+            row.get("recommendation_key"),
+            field_path=f"{row_path}.recommendation_key",
+            diagnostics=diagnostics,
+            reason_code="recommendation_id_stability_contract_invalid",
+        )
+        recommendation_id = _validate_string_field(
+            row.get("recommendation_id"),
+            field_path=f"{row_path}.recommendation_id",
+            diagnostics=diagnostics,
+            reason_code="recommendation_id_stability_contract_invalid",
+        )
+
+        basis_payload = row.get("basis")
+        if not isinstance(basis_payload, Mapping):
+            diagnostics.append(
+                _diagnostic(
+                    "recommendation_id_stability_contract_invalid",
+                    f"{row_path}.basis",
+                    f"{row_path}.basis must be an object",
+                )
+            )
+            continue
+        basis = _normalize_recommendation_basis(
+            basis_payload,
+            row_path=f"{row_path}.basis",
+            diagnostics=diagnostics,
+            reason_code="recommendation_id_stability_contract_invalid",
+        )
+
+        if recommendation_id is None or recommendation_key is None or len(basis) != len(RECOMMENDATION_BASIS_FIELDS):
+            continue
+
+        row_info = {
+            "index": index,
+            "path": row_path,
+            "recommendation_key": recommendation_key,
+            "recommendation_id": recommendation_id,
+            "basis": basis,
+        }
+        rows.append(row_info)
+
+        previous_id_row = rows_by_id.get(recommendation_id)
+        if previous_id_row is not None:
+            diagnostics.append(
+                _diagnostic(
+                    "recommendation_id_stability_contract_collision",
+                    f"{row_path}.recommendation_id",
+                    f"recommendation_id {recommendation_id} must be unique within {field_path}",
+                    details={
+                        "recommendation_id": recommendation_id,
+                        "conflicting_field_paths": [
+                            f"{previous_id_row['path']}.recommendation_id",
+                            f"{row_path}.recommendation_id",
+                        ],
+                    },
+                )
+            )
+        else:
+            rows_by_id[recommendation_id] = row_info
+
+        previous_key_row = rows_by_key.get(recommendation_key)
+        if previous_key_row is not None:
+            diagnostics.append(
+                _diagnostic(
+                    "recommendation_id_stability_contract_duplicate_key",
+                    f"{row_path}.recommendation_key",
+                    f"recommendation_key {recommendation_key} must be unique within {field_path}",
+                    details={
+                        "recommendation_key": recommendation_key,
+                        "conflicting_field_paths": [
+                            f"{previous_key_row['path']}.recommendation_key",
+                            f"{row_path}.recommendation_key",
+                        ],
+                    },
+                )
+            )
+        else:
+            rows_by_key[recommendation_key] = row_info
+
+        rows_by_signature.setdefault(_basis_signature(basis), row_info)
+
+    return {
+        "revision_id": revision_id or "",
+        "rows": rows,
+        "rows_by_id": rows_by_id,
+        "rows_by_key": rows_by_key,
+        "rows_by_signature": rows_by_signature,
+    }
+
+
+def _parse_recommendation_id_stability_contract(
+    contract: Any,
+    diagnostics: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not isinstance(contract, Mapping):
+        diagnostics.append(
+            _diagnostic(
+                "recommendation_id_stability_contract_invalid",
+                "stability_contract",
+                "recommendation id stability contract must be a JSON object",
+            )
+        )
+        return None
+
+    previous_revision = _parse_recommendation_id_stability_revision(
+        contract.get("previous_revision"),
+        field_path="stability_contract.previous_revision",
+        diagnostics=diagnostics,
+    )
+    current_revision = _parse_recommendation_id_stability_revision(
+        contract.get("current_revision"),
+        field_path="stability_contract.current_revision",
+        diagnostics=diagnostics,
+    )
+    if previous_revision is None or current_revision is None:
+        return None
+    return {
+        "previous_revision": previous_revision,
+        "current_revision": current_revision,
+    }
+
+
+def _validate_req_062_recommendation_id_uniqueness(
+    packet: Any,
+    *,
+    context: Any | None,
+    stability_contract: Any | None,
+    diagnostics: list[dict[str, Any]],
+) -> None:
+    if not isinstance(packet, Mapping):
+        return
+    if context is not None and not isinstance(context, Mapping):
+        diagnostics.append(
+            _diagnostic(
+                "strategy_packet_context_invalid",
+                "context",
+                "strategy packet context must be a JSON object",
+            )
+        )
+
+    packet_rows = _build_packet_recommendation_rows(packet, diagnostics)
+    if stability_contract is None:
+        return
+
+    contract = _parse_recommendation_id_stability_contract(stability_contract, diagnostics)
+    if contract is None:
+        return
+
+    packet_row_indexes_by_id: dict[str, list[int]] = defaultdict(list)
+    for row in packet_rows:
+        packet_row_indexes_by_id[row["recommendation_id"]].append(int(row["index"]))
+
+    strategy = packet.get("strategy")
+    packet_revision_id = ""
+    if isinstance(strategy, Mapping) and _is_non_empty_string(strategy.get("revision_id")):
+        packet_revision_id = str(strategy.get("revision_id")).strip()
+    contract_revision_id = contract["current_revision"]["revision_id"]
+    if packet_revision_id and contract_revision_id and packet_revision_id != contract_revision_id:
+        diagnostics.append(
+            _diagnostic(
+                "recommendation_id_stability_revision_mismatch",
+                "strategy.revision_id",
+                "strategy.revision_id does not match stability_contract.current_revision.revision_id",
+                details={
+                    "actual": packet_revision_id,
+                    "expected": contract_revision_id,
+                },
+            )
+        )
+
+    contract_rows_by_id = contract["current_revision"]["rows_by_id"]
+    contract_rows_by_signature = contract["current_revision"]["rows_by_signature"]
+
+    for row in packet_rows:
+        row_path = str(row["path"])
+        recommendation_id = str(row["recommendation_id"])
+        contract_row = contract_rows_by_id.get(recommendation_id)
+        if contract_row is None:
+            diagnostics.append(
+                _diagnostic(
+                    "recommendation_id_missing_from_contract",
+                    f"{row_path}.recommendation_id",
+                    f"recommendation_id {recommendation_id} is not traceable to the REQ-062 contract",
+                    details={"recommendation_id": recommendation_id},
+                )
+            )
+            if len(row["basis"]) == len(RECOMMENDATION_BASIS_FIELDS):
+                matching_basis_row = contract_rows_by_signature.get(_basis_signature(row["basis"]))
+                if matching_basis_row is not None:
+                    diagnostics.append(
+                        _diagnostic(
+                            "recommendation_id_stability_collision",
+                            f"{row_path}.recommendation_id",
+                            "recommendation basis is already assigned to another recommendation_id",
+                            details={
+                                "recommendation_id": recommendation_id,
+                                "expected_recommendation_id": matching_basis_row["recommendation_id"],
+                                "recommendation_key": matching_basis_row["recommendation_key"],
+                            },
+                        )
+                    )
+            continue
+
+        for field_name in RECOMMENDATION_BASIS_FIELDS:
+            expected_value = contract_row["basis"][field_name]
+            actual_value = row["basis"].get(field_name)
+            if actual_value == expected_value:
+                continue
+            diagnostics.append(
+                _diagnostic(
+                    "recommendation_id_stability_basis_mismatch",
+                    f"{row_path}.{field_name}",
+                    f"recommendation_id {recommendation_id} does not match the REQ-062 stability contract for {field_name}",
+                    details={
+                        "recommendation_id": recommendation_id,
+                        "basis_field": field_name,
+                        "expected": expected_value,
+                        "actual": actual_value,
+                    },
+                )
+            )
+
+    previous_rows_by_key = contract["previous_revision"]["rows_by_key"]
+    current_rows_by_key = contract["current_revision"]["rows_by_key"]
+    shared_keys = sorted(set(previous_rows_by_key) & set(current_rows_by_key))
+    for recommendation_key in shared_keys:
+        previous_row = previous_rows_by_key[recommendation_key]
+        current_row = current_rows_by_key[recommendation_key]
+        previous_recommendation_id = previous_row["recommendation_id"]
+        current_recommendation_id = current_row["recommendation_id"]
+        if previous_recommendation_id == current_recommendation_id:
+            continue
+        packet_indexes = packet_row_indexes_by_id.get(current_recommendation_id, [])
+        field_path = (
+            f"recommendations[{packet_indexes[0]}].recommendation_id"
+            if packet_indexes
+            else f"{current_row['path']}.recommendation_id"
+        )
+        diagnostics.append(
+            _diagnostic(
+                "recommendation_id_drift",
+                field_path,
+                f"recommendation_key {recommendation_key} drifted across revisions",
+                details={
+                    "recommendation_key": recommendation_key,
+                    "previous_revision_id": contract["previous_revision"]["revision_id"],
+                    "current_revision_id": contract["current_revision"]["revision_id"],
+                    "previous_recommendation_id": previous_recommendation_id,
+                    "current_recommendation_id": current_recommendation_id,
+                },
+            )
+        )
+
+
 def validate_strategy_packet(
     packet_path: str | Path,
     schema_path: str | Path,
@@ -491,10 +887,40 @@ def validate_strategy_packet(
         label="strategy packet",
         diagnostics=diagnostics,
     )
+    context = (
+        _load_json_artifact(
+            context_file,
+            missing_reason_code="strategy_packet_context_missing",
+            invalid_reason_code="strategy_packet_context_invalid_json",
+            field_path="context",
+            label="strategy packet context",
+            diagnostics=diagnostics,
+        )
+        if context_file is not None
+        else None
+    )
+    stability_contract = (
+        _load_json_artifact(
+            stability_contract_file,
+            missing_reason_code="recommendation_id_stability_contract_missing",
+            invalid_reason_code="recommendation_id_stability_contract_invalid_json",
+            field_path="stability_contract",
+            label="recommendation id stability contract",
+            diagnostics=diagnostics,
+        )
+        if stability_contract_file is not None
+        else None
+    )
 
     if schema is not None and packet is not None:
         _validate_schema_contract(packet, schema, diagnostics)
         _validate_req_056_kpi_target_artifact(packet, diagnostics)
+        _validate_req_062_recommendation_id_uniqueness(
+            packet,
+            context=context,
+            stability_contract=stability_contract,
+            diagnostics=diagnostics,
+        )
 
     ordered = _sort_diagnostics(diagnostics)
     reason_codes = sorted({str(row["reason_code"]) for row in ordered})
@@ -504,6 +930,7 @@ def validate_strategy_packet(
 
     return {
         "requirement_id": REQ_056_REQUIREMENT_ID,
+        "validated_requirements": [REQ_056_REQUIREMENT_ID, REQ_062_REQUIREMENT_ID],
         "validator_id": REQ_056_VALIDATOR_ID,
         "validator_name": REQ_056_VALIDATOR_ID,
         "checked_at_utc": _utc_timestamp(),
@@ -526,9 +953,11 @@ def validate_strategy_packet(
             "status": "pass" if ok else "fail",
             "decision": "allow_consume" if ok else "block_consume",
             "blocking_reason_codes": reason_codes if not ok else [],
+            "failing_field_paths": sorted(
+                {str(row["field_path"]) for row in ordered if row.get("severity") == "error"}
+            ),
         },
     }
 
 
 __all__ = ["validate_strategy_packet"]
-
