@@ -26,6 +26,7 @@ REQ_027_ANALYSIS_TYPE = "call_2_ecosystem_linkage_reasoning"
 REQ_027_CALL_ID = "call-2"
 
 REQ_030_SCHEMA_VERSION = "req-030.call-5-sequencing-and-lane-design-reasoning.v1"
+REQ_030_PROCESSING_SCHEMA_VERSION = "req-030.call-5-sequencing-and-lane-design-processing.v1"
 REQ_030_REQUIREMENT_ID = "REQ-030"
 REQ_030_ANALYSIS_TYPE = "call_5_sequencing_and_lane_design_reasoning"
 REQ_030_CALL_ID = "call-5"
@@ -42,6 +43,11 @@ _REQ_027_CALL_2_OBJECTIVE = (
     "Reason about ecosystem links and interaction obligations between the target project and peer projects; "
     "distinguish existing links, missing links, and proposed links with confidence tags; "
     "surface evidence-backed cross-project obligations plus context gaps that block promotion."
+)
+_REQ_030_CALL_5_OBJECTIVE = (
+    "Design execution lanes and sequencing order for recommendations under current constraints; "
+    "include why-now rationale and expected coordination dependencies; "
+    "gate cross-project obligations on Earth-sweep evidence refs and record unresolved ideas as open risks."
 )
 
 
@@ -289,6 +295,103 @@ def _record_req_027_call_2_llm_call_trace(
             {"kind": "output_snapshot", "path": str(output_path), "sha256": output_digest},
         ],
         "handoff_summary": _handoff_summary_for_req_027_call_2(result),
+        "totals": dict(result.get("totals") or {}) if isinstance(result.get("totals"), Mapping) else {},
+    }
+    _append_jsonl_row(trace_file, row)
+    return row
+
+
+def _handoff_summary_for_req_030_call_5(result: Mapping[str, Any]) -> str:
+    behavior = result.get("processing_behavior") if isinstance(result.get("processing_behavior"), Mapping) else {}
+    recommendation = behavior.get("recommendation") if isinstance(behavior.get("recommendation"), Mapping) else {}
+    decision = str(recommendation.get("decision") or "").strip() or "unknown"
+    confidence = str(recommendation.get("confidence") or "").strip() or "unknown"
+    obligations = recommendation.get("cross_project_obligations") if isinstance(recommendation.get("cross_project_obligations"), list) else []
+    risks = recommendation.get("open_risks") if isinstance(recommendation.get("open_risks"), list) else []
+    totals = result.get("totals") if isinstance(result.get("totals"), Mapping) else {}
+    lanes = int(totals.get("lanes") or 0)
+    sequence_items = int(totals.get("sequence_items") or 0)
+    return (
+        f"{REQ_030_REQUIREMENT_ID} {REQ_030_CALL_ID} handoff: "
+        f"decision={decision} confidence={confidence} "
+        f"lanes={lanes} sequence_items={sequence_items} "
+        f"obligations={len(obligations)} open_risks={len(risks)}"
+    )
+
+
+def _record_req_030_call_5_llm_call_trace(
+    *,
+    checked_at_utc: str,
+    target_project: Mapping[str, Any],
+    constraints: Mapping[str, Any],
+    recommendations: list[dict[str, Any]],
+    earth_sweep_evidence_refs: list[str],
+    earth_sweep_projects: list[dict[str, Any]],
+    cross_project_context: list[dict[str, Any]],
+    result: Mapping[str, Any],
+    trace_path: Path | None = None,
+    artifacts_dir: Path | None = None,
+) -> dict[str, Any]:
+    trace_file = trace_path or _default_llm_call_trace_path()
+    artifacts_root = artifacts_dir or _default_llm_call_trace_artifacts_dir()
+
+    input_snapshot = {
+        "schema_version": "optimus-prime.req-030.call-5-input-snapshot.v1",
+        "checked_at_utc": checked_at_utc,
+        "requirement_id": REQ_030_REQUIREMENT_ID,
+        "analysis_type": REQ_030_ANALYSIS_TYPE,
+        "call_id": REQ_030_CALL_ID,
+        "target_project": dict(target_project),
+        "constraints": dict(constraints),
+        "recommendations": [dict(row) for row in recommendations],
+        "broad_sweep_context": {
+            "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+            "earth_sweep_projects": earth_sweep_projects,
+            "cross_project_context": cross_project_context,
+        },
+    }
+    output_snapshot = {
+        "schema_version": "optimus-prime.req-030.call-5-output-snapshot.v1",
+        "checked_at_utc": checked_at_utc,
+        "requirement_id": REQ_030_REQUIREMENT_ID,
+        "analysis_type": REQ_030_ANALYSIS_TYPE,
+        "call_id": REQ_030_CALL_ID,
+        "result": dict(result),
+    }
+
+    input_digest = _sha256_hex(input_snapshot)
+    output_digest = _sha256_hex(output_snapshot)
+    bundle_dir = artifacts_root / "req-030" / "call-5" / input_digest[:16]
+    input_path = bundle_dir / "input.normalized.json"
+    output_path = bundle_dir / "output.normalized.json"
+    _write_json_artifact(input_path, input_snapshot)
+    _write_json_artifact(output_path, output_snapshot)
+
+    input_refs = _trace_input_refs(
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+        earth_sweep_projects=earth_sweep_projects,
+    )
+    behavior = result.get("processing_behavior") if isinstance(result.get("processing_behavior"), Mapping) else {}
+    usage = behavior.get("context_usage") if isinstance(behavior.get("context_usage"), Mapping) else {}
+    output_refs = sorted({str(ref) for ref in (usage.get("evidence_refs_used") or []) if str(ref).strip()})
+
+    row = {
+        "schema_version": _LLM_CALL_TRACE_SCHEMA_VERSION,
+        "checked_at_utc": checked_at_utc,
+        "requirement_id": REQ_030_REQUIREMENT_ID,
+        "analysis_type": REQ_030_ANALYSIS_TYPE,
+        "call_id": REQ_030_CALL_ID,
+        "call_objective": _REQ_030_CALL_5_OBJECTIVE,
+        "target_project_id": str(target_project.get("project_id") or "").strip(),
+        "peer_project_ids": sorted({str(row.get("project_id") or "").strip() for row in cross_project_context if row.get("project_id")}),
+        "input_refs": input_refs,
+        "output_refs": output_refs,
+        "artifacts": [
+            {"kind": "input_snapshot", "path": str(input_path), "sha256": input_digest},
+            {"kind": "output_snapshot", "path": str(output_path), "sha256": output_digest},
+        ],
+        "handoff_summary": _handoff_summary_for_req_030_call_5(result),
         "totals": dict(result.get("totals") or {}) if isinstance(result.get("totals"), Mapping) else {},
     }
     _append_jsonl_row(trace_file, row)
@@ -1213,6 +1316,374 @@ def process_req_027_call_2_ecosystem_linkage_reasoning(
         peer_projects=peer_projects,
         earth_sweep_evidence_refs=earth_sweep_evidence_refs,
         earth_sweep_projects=[row for row in earth_sweep_projects if row.get("project_id") in peer_project_ids],
+        cross_project_context=cross_project_context,
+        result=result,
+        trace_path=Path(trace_path) if trace_path is not None else None,
+        artifacts_dir=Path(trace_artifacts_dir) if trace_artifacts_dir is not None else None,
+    )
+    return result
+
+
+def _req_030_infer_cross_project_targets(
+    *,
+    recommendation: Mapping[str, Any],
+    peer_project_ids: set[str],
+) -> list[str]:
+    summary = str(recommendation.get("summary") or "")
+    rationale = str(recommendation.get("rationale") or "")
+    expected_impact = str(recommendation.get("expected_impact") or "")
+    text = f"{summary}\n{rationale}\n{expected_impact}".lower()
+
+    matched = [pid for pid in sorted(peer_project_ids) if pid.lower() in text]
+    if matched:
+        return matched
+    cross_tokens = ("cross-project", "cross project", "coordinate", "coordination", "sync", "align")
+    if any(token in text for token in cross_tokens):
+        return ["<unspecified>"]
+    return []
+
+
+def _req_030_recommendation_decision(*, sequenced_recommendations: list[str], open_risks: list[dict[str, Any]]) -> str:
+    if sequenced_recommendations and open_risks:
+        return "proceed-with-open-risks"
+    if sequenced_recommendations:
+        return "proceed"
+    if open_risks:
+        if all(str(row.get("reason_code")) == "missing_earth_sweep_evidence_refs" for row in open_risks):
+            return "collect-earth-evidence"
+        return "resolve-context-gaps"
+    return "insufficient-context"
+
+
+def process_req_030_call_5_sequencing_and_lane_design_reasoning(
+    payload: Mapping[str, Any],
+    *,
+    emit: Callable[[str], None] | None = None,
+    trace_path: str | Path | None = None,
+    trace_artifacts_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Implement REQ-030 reasoning/processing behavior using broad-sweep context inputs.
+
+    Call-5 is responsible for designing execution lanes and a sequencing order for
+    recommendations under the current constraints. Cross-project coordination is
+    gated on Earth-sweep evidence refs; unresolved cross-project ideas become open risks.
+    """
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_030_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_030_ANALYSIS_TYPE}")
+
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+    target_project = _normalize_target_project(raw.get("target_project"))
+    constraints = _normalize_req_030_constraints(raw.get("constraints"))
+    recommendations = _normalize_req_030_recommendations(raw.get("recommendations"))
+    recommendation_ids = {row["recommendation_id"] for row in recommendations}
+
+    earth_sweep_evidence_refs, earth_sweep_projects = _extract_earth_sweep_inputs(raw.get("broad_sweep_context"))
+    broad = raw.get("broad_sweep_context")
+    cross_project_context = []
+    if broad is not None:
+        broad_map = _require_mapping(broad, field_name="broad_sweep_context")
+        cross_project_context = _normalize_cross_project_context(broad_map.get("cross_project_context"))
+    context_by_project = {row["project_id"]: row for row in cross_project_context if row.get("project_id")}
+    peer_project_ids = set(context_by_project.keys())
+
+    recommendation_by_id = {row["recommendation_id"]: row for row in recommendations}
+
+    lane_impl: list[str] = []
+    lane_verify: list[str] = []
+    lane_cross_exec: list[str] = []
+    lane_blocked: list[str] = []
+    open_risks: list[dict[str, Any]] = []
+    cross_project_obligations: list[dict[str, Any]] = []
+    cross_project_deps_by_rec: dict[str, list[dict[str, Any]]] = {}
+
+    for rec in recommendations:
+        rec_id = rec["recommendation_id"]
+        targets = _req_030_infer_cross_project_targets(recommendation=rec, peer_project_ids=peer_project_ids)
+        is_cross_project = bool(targets)
+
+        if not is_cross_project:
+            if rec.get("risk_level") == "high":
+                lane_verify.append(rec_id)
+            else:
+                lane_impl.append(rec_id)
+            continue
+
+        if not earth_sweep_evidence_refs:
+            lane_blocked.append(rec_id)
+            open_risks.append(
+                {
+                    "risk_id": f"risk.{_stable_id_fragment(target_project['project_id'], 'req-030', rec_id, 'missing-earth')}",
+                    "summary": rec["summary"],
+                    "reason_code": "missing_earth_sweep_evidence_refs",
+                    "required_evidence_refs": [],
+                }
+            )
+            continue
+
+        missing_reason_codes: list[str] = []
+        required_refs: list[str] = list(earth_sweep_evidence_refs)
+        dependency_projects: list[str] = []
+
+        if targets == ["<unspecified>"]:
+            missing_reason_codes.append("missing_cross_project_context")
+        else:
+            for project_id in targets:
+                context = context_by_project.get(project_id)
+                if context is None:
+                    missing_reason_codes.append("missing_cross_project_context")
+                    continue
+                context_refs = list(context.get("evidence_refs") or [])
+                if not context_refs:
+                    missing_reason_codes.append("missing_cross_project_context_evidence_refs")
+                else:
+                    required_refs.extend(context_refs)
+                dependency_projects.append(project_id)
+
+        if missing_reason_codes:
+            lane_blocked.append(rec_id)
+            open_risks.append(
+                {
+                    "risk_id": f"risk.{_stable_id_fragment(target_project['project_id'], 'req-030', rec_id, ','.join(sorted(set(missing_reason_codes))))}",
+                    "summary": rec["summary"],
+                    "reason_code": ",".join(sorted(set(missing_reason_codes))),
+                    "required_evidence_refs": _collect_unique_refs(required_refs),
+                }
+            )
+            continue
+
+        lane_cross_exec.append(rec_id)
+        deps = [
+            {
+                "dependency_kind": "cross-project-coordination",
+                "depends_on": project_id,
+                "summary": f"Coordinate sequencing assumptions with peer project '{project_id}' before execution.",
+            }
+            for project_id in sorted(set(dependency_projects))
+        ]
+        cross_project_deps_by_rec[rec_id] = deps
+        for project_id in sorted(set(dependency_projects)):
+            obligation_id = f"obl.{_stable_id_fragment(target_project['project_id'], 'req-030', rec_id, project_id)}"
+            cross_project_obligations.append(
+                {
+                    "obligation_id": obligation_id,
+                    "project_id": project_id,
+                    "summary": rec["summary"],
+                    "evidence_refs": _collect_unique_refs(
+                        earth_sweep_evidence_refs,
+                        list(context_by_project.get(project_id, {}).get("evidence_refs") or []),
+                    ),
+                }
+            )
+
+    lane_impl.sort()
+    lane_verify.sort()
+    lane_cross_exec.sort()
+    lane_blocked.sort()
+    cross_project_obligations.sort(key=lambda row: (row["project_id"], row["obligation_id"]))
+    open_risks.sort(key=lambda row: (row.get("reason_code", ""), row.get("risk_id", "")))
+
+    lane_specs: list[dict[str, Any]] = []
+    if lane_impl:
+        lane_specs.append(
+            {
+                "lane_name": "Local implementation",
+                "lane_kind": "local-implementation",
+                "lane_goal": "Execute low/medium-risk local recommendations within current work-in-progress limits.",
+                "why_now": (
+                    f"Constraints allow execution now (max_parallel_lanes={constraints['max_parallel_lanes']} "
+                    f"max_active_work_items={constraints['max_active_work_items']})."
+                ),
+                "recommendation_ids": lane_impl,
+                "coordination_dependencies": [],
+            }
+        )
+    if lane_verify:
+        lane_specs.append(
+            {
+                "lane_name": "Local verification",
+                "lane_kind": "local-verification",
+                "lane_goal": "Validate higher-risk recommendations with explicit sequencing to avoid churn.",
+                "why_now": "High-risk items benefit from an explicit verification lane to preserve deterministic recovery.",
+                "recommendation_ids": lane_verify,
+                "coordination_dependencies": [],
+            }
+        )
+    if lane_cross_exec:
+        lane_specs.append(
+            {
+                "lane_name": "Cross-project coordination",
+                "lane_kind": "cross-project-coordination",
+                "lane_goal": "Coordinate externally required recommendations before execution proceeds.",
+                "why_now": "Earth-sweep evidence refs and cross-project context support starting coordination immediately.",
+                "recommendation_ids": lane_cross_exec,
+                "coordination_dependencies": [
+                    dep
+                    for rec_id in lane_cross_exec
+                    for dep in (cross_project_deps_by_rec.get(rec_id) or [])
+                ],
+            }
+        )
+    if lane_blocked:
+        lane_specs.append(
+            {
+                "lane_name": "Evidence collection",
+                "lane_kind": "evidence-collection",
+                "lane_goal": "Collect Earth-sweep and cross-project evidence to unblock coordination recommendations.",
+                "why_now": "Blocked cross-project ideas must be captured as open risks and routed to evidence collection.",
+                "recommendation_ids": lane_blocked,
+                "coordination_dependencies": [],
+            }
+        )
+
+    lanes_needed = len(lane_specs)
+    if lanes_needed > constraints["max_parallel_lanes"]:
+        if emit is not None:
+            emit(
+                _format_ts_line(
+                    f"REQ-030 lane design exceeds max_parallel_lanes={constraints['max_parallel_lanes']} (lanes={lanes_needed}); lanes are still emitted deterministically.",
+                    now_utc=checked_at_utc,
+                )
+            )
+
+    sequence_specs: list[dict[str, Any]] = []
+    order = 1
+    for group, lane_name in (
+        (lane_cross_exec, "Cross-project coordination"),
+        (lane_impl, "Local implementation"),
+        (lane_verify, "Local verification"),
+    ):
+        for rec_id in group:
+            seq_row: dict[str, Any] = {
+                "order": order,
+                "recommendation_id": rec_id,
+                "lane_name": lane_name,
+                "why_now": "",
+                "coordination_dependencies": [],
+            }
+            rec = recommendation_by_id[rec_id]
+            if lane_name == "Cross-project coordination":
+                seq_row["why_now"] = (
+                    "Start coordination early to avoid downstream blocking; Earth-sweep evidence refs are present."
+                )
+                seq_row["coordination_dependencies"] = list(cross_project_deps_by_rec.get(rec_id) or [])
+            elif lane_name == "Local verification":
+                seq_row["why_now"] = "Sequence explicitly to validate high-risk work without expanding active work items."
+            else:
+                seq_row["why_now"] = "Local scope work is unblocked and can proceed under current constraints."
+            sequence_specs.append(seq_row)
+            order += 1
+
+    contract_payload = build_req_030_call_5_sequencing_and_lane_design_reasoning(
+        {
+            "analysis_type": REQ_030_ANALYSIS_TYPE,
+            "now_utc": checked_at_utc,
+            "target_project": target_project,
+            "constraints": constraints,
+            "recommendations": recommendations,
+            "sequencing_and_lane_design_reasoning": {"lanes": lane_specs, "sequence": sequence_specs},
+        }
+    )
+
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    evidence_refs_used = _collect_unique_refs(
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        *[row.get("required_evidence_refs") or [] for row in open_risks],
+        *[row.get("evidence_refs") or [] for row in cross_project_obligations],
+    )
+
+    sequenced_recommendations = [row["recommendation_id"] for row in contract_payload["sequencing_and_lane_design_reasoning"]["sequence"]]
+    decision = _req_030_recommendation_decision(
+        sequenced_recommendations=sequenced_recommendations,
+        open_risks=open_risks,
+    )
+    confidence = _recommendation_confidence(evidence_refs=evidence_refs_used, open_risks=open_risks)
+
+    recommended_actions: list[dict[str, Any]] = []
+    for row in contract_payload["sequencing_and_lane_design_reasoning"]["sequence"]:
+        rec_id = row["recommendation_id"]
+        rec = recommendation_by_id.get(rec_id, {})
+        action_id = f"action.{_stable_id_fragment(target_project['project_id'], 'req-030', rec_id, str(row['lane_id']))}"
+        recommended_actions.append(
+            {
+                "action_id": action_id,
+                "recommendation_id": rec_id,
+                "summary": str(rec.get("summary") or ""),
+                "rationale": str(rec.get("rationale") or ""),
+                "lane_id": row["lane_id"],
+                "lane_name": row["lane_name"],
+                "why_now": row["why_now"],
+                "coordination_dependencies": list(row.get("coordination_dependencies") or []),
+            }
+        )
+    recommended_actions.sort(key=lambda r: (r["lane_name"], r["recommendation_id"], r["action_id"]))
+
+    processing_behavior = {
+        "strategy": "llm-first-broad-sweep",
+        "reasoning_mode": "long-thinking",
+        "heuristic_summarization_only": False,
+        "strict_evidence_discipline": True,
+        "context_inputs": {
+            "target_project": {
+                "project_id": target_project["project_id"],
+                "project_root": target_project["project_root"],
+            },
+            "constraints": dict(constraints),
+            "broad_sweep_context": {
+                "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+                "cross_project_context": cross_project_context,
+            },
+        },
+        "context_usage": {
+            "earth_sweep_context_used": bool(earth_sweep_evidence_refs or earth_sweep_projects),
+            "cross_project_context_used": bool(cross_project_context),
+            "cross_project_projects_considered": sorted({row["project_id"] for row in cross_project_context}),
+            "earth_sweep_refs_used": earth_sweep_evidence_refs,
+            "cross_project_refs_used": cross_project_refs,
+            "evidence_refs_used": evidence_refs_used,
+        },
+        "recommendation": {
+            "decision": decision,
+            "rationale": (
+                f"lanes={contract_payload['totals']['lanes']} "
+                f"sequence_items={contract_payload['totals']['sequence_items']} "
+                f"blocked={len(lane_blocked)} open_risks={len(open_risks)}"
+            ),
+            "confidence": confidence,
+            "evidence_refs": evidence_refs_used,
+            "recommended_actions": recommended_actions,
+            "cross_project_obligations": cross_project_obligations,
+            "open_risks": open_risks,
+        },
+    }
+
+    if emit is not None:
+        emit(_format_ts_line(f"REQ-030 processing decision={decision}", now_utc=checked_at_utc))
+
+    result = {
+        "ok": True,
+        "schema_version": REQ_030_PROCESSING_SCHEMA_VERSION,
+        "requirement_id": REQ_030_REQUIREMENT_ID,
+        "analysis_type": REQ_030_ANALYSIS_TYPE,
+        "call_id": REQ_030_CALL_ID,
+        "checked_at_utc": contract_payload["checked_at_utc"],
+        "target_project": contract_payload["target_project"],
+        "constraints": contract_payload["constraints"],
+        "recommendations": contract_payload["recommendations"],
+        "sequencing_and_lane_design_reasoning": contract_payload["sequencing_and_lane_design_reasoning"],
+        "totals": contract_payload["totals"],
+        "processing_behavior": processing_behavior,
+    }
+
+    _record_req_030_call_5_llm_call_trace(
+        checked_at_utc=checked_at_utc,
+        target_project=target_project,
+        constraints=constraints,
+        recommendations=recommendations,
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        earth_sweep_projects=earth_sweep_projects,
         cross_project_context=cross_project_context,
         result=result,
         trace_path=Path(trace_path) if trace_path is not None else None,
