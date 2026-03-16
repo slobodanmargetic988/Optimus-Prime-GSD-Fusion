@@ -14,12 +14,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 REQ_027_SCHEMA_VERSION = "req-027.call-2-ecosystem-linkage-reasoning.v1"
+REQ_027_PROCESSING_SCHEMA_VERSION = "req-027.call-2-ecosystem-linkage-processing.v1"
 REQ_027_REQUIREMENT_ID = "REQ-027"
 REQ_027_ANALYSIS_TYPE = "call_2_ecosystem_linkage_reasoning"
 REQ_027_CALL_ID = "call-2"
@@ -27,6 +31,8 @@ REQ_027_CALL_ID = "call-2"
 _CONFIDENCE_TAGS = ("high", "medium", "low")
 _DIRECTIONS = ("target_to_peer", "peer_to_target", "bidirectional")
 _OBLIGATED_PARTIES = ("target", "peer", "both")
+_LOG_CHECK_SENTINEL = ".log_size_check.json"
+_MAX_LOG_BYTES = 3_000_000_000
 
 
 def _require_mapping(value: Any, *, field_name: str) -> Mapping[str, Any]:
@@ -83,6 +89,104 @@ def _normalize_confidence_tag(raw_value: Any, *, field_name: str) -> str:
 def _stable_id_fragment(*parts: str) -> str:
     raw = "|".join(parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _format_ts_line(message: str, *, now_utc: str | None = None) -> str:
+    stamp = now_utc.strip() if isinstance(now_utc, str) and now_utc.strip() else _utc_timestamp()
+    return f"[{stamp}] {message}"
+
+
+def _default_log_dir() -> Path:
+    return Path.home() / "projects" / "LOGS"
+
+
+def _tail_file(path: Path, *, keep_bytes: int) -> bytes:
+    if keep_bytes <= 0:
+        return b""
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - keep_bytes), os.SEEK_SET)
+        return handle.read()
+
+
+def _maybe_truncate_large_logs(log_dir: Path, *, now_utc: str | None = None) -> None:
+    """Best-effort log truncation guardrail.
+
+    Only checks periodically (sentinel file) and truncates any single log file
+    exceeding ~3GB by keeping the tail so debugging remains possible.
+    """
+    log_dir.mkdir(parents=True, exist_ok=True)
+    sentinel = log_dir / _LOG_CHECK_SENTINEL
+    now_epoch = int(time.time())
+    check_interval_seconds = 6 * 60 * 60  # 6 hours
+    last_checked = 0
+    if sentinel.exists():
+        try:
+            payload = json.loads(sentinel.read_text(encoding="utf-8"))
+            last_checked = int(payload.get("last_checked_epoch") or 0)
+        except (OSError, ValueError, TypeError):
+            last_checked = 0
+
+    if last_checked and now_epoch - last_checked < check_interval_seconds:
+        return
+
+    checked_files: list[dict[str, Any]] = []
+    for path in sorted(log_dir.glob("*.log")):
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        truncated = False
+        if size > _MAX_LOG_BYTES:
+            keep_bytes = 25_000_000  # keep last ~25MB
+            try:
+                tail = _tail_file(path, keep_bytes=keep_bytes)
+                path.write_bytes(tail)
+                truncated = True
+                size = len(tail)
+            except OSError:
+                continue
+        checked_files.append({"path": str(path), "size_bytes": size, "truncated": truncated})
+
+    sentinel.write_text(
+        json.dumps(
+            {
+                "checked_at_utc": (now_utc or _utc_timestamp()),
+                "last_checked_epoch": now_epoch,
+                "max_log_bytes": _MAX_LOG_BYTES,
+                "files_checked": checked_files,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def make_log_emitter(
+    *,
+    log_name: str,
+    log_dir: Path | None = None,
+    now_utc: str | None = None,
+) -> Callable[[str], None]:
+    """Return an emitter that appends timestamped lines under `~/projects/LOGS/`."""
+    directory = log_dir or _default_log_dir()
+    _maybe_truncate_large_logs(directory, now_utc=now_utc)
+    target = directory / f"{log_name}.log"
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    def emit(message: str) -> None:
+        line = _format_ts_line(str(message), now_utc=now_utc)
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+    return emit
 
 
 def _normalize_target_project(raw_value: Any) -> dict[str, str]:
@@ -228,6 +332,408 @@ def _normalize_link_rows(
         normalized.append(row)
     normalized.sort(key=lambda row: (row["peer_project_id"], row["link_kind"], row["direction"], row["link_id"]))
     return normalized
+
+
+def _normalize_cross_project_context(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("cross_project_context must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        row = _require_mapping(item, field_name=f"cross_project_context[{index}]")
+        project_id = _require_nonempty_text(
+            row.get("project_id"),
+            field_name=f"cross_project_context[{index}].project_id",
+        )
+        evidence_refs = _normalize_string_list(
+            row.get("evidence_refs"),
+            field_name=f"cross_project_context[{index}].evidence_refs",
+        )
+        context_note = ""
+        if row.get("context_note") is not None:
+            context_note = str(row.get("context_note") or "").strip()
+        project_root = ""
+        if row.get("project_root") is not None:
+            project_root = _normalize_root(
+                row.get("project_root"),
+                field_name=f"cross_project_context[{index}].project_root",
+            )
+        normalized.append(
+            {
+                "project_id": project_id,
+                "project_root": project_root,
+                "evidence_refs": evidence_refs,
+                "context_note": context_note,
+            }
+        )
+    normalized.sort(key=lambda r: (r["project_id"], r["project_root"]))
+    return normalized
+
+
+def _extract_earth_sweep_inputs(raw_value: Any) -> tuple[list[str], list[dict[str, Any]]]:
+    """Return (earth_sweep_evidence_refs, earth_sweep_projects)."""
+    if raw_value is None:
+        return ([], [])
+    broad = _require_mapping(raw_value, field_name="broad_sweep_context")
+
+    evidence_refs: list[str] = []
+    earth_sweep_projects: list[dict[str, Any]] = []
+
+    if broad.get("earth_sweep_evidence_refs") is not None:
+        evidence_refs = _normalize_string_list(
+            broad.get("earth_sweep_evidence_refs"),
+            field_name="broad_sweep_context.earth_sweep_evidence_refs",
+        )
+
+    earth_sweep = broad.get("earth_sweep")
+    if earth_sweep is None:
+        return (evidence_refs, earth_sweep_projects)
+
+    sweep = _require_mapping(earth_sweep, field_name="broad_sweep_context.earth_sweep")
+    if sweep.get("evidence_refs") is not None and not evidence_refs:
+        evidence_refs = _normalize_string_list(
+            sweep.get("evidence_refs"),
+            field_name="broad_sweep_context.earth_sweep.evidence_refs",
+        )
+
+    raw_projects = sweep.get("projects")
+    if raw_projects is None:
+        return (evidence_refs, earth_sweep_projects)
+    if not isinstance(raw_projects, list):
+        raise ValueError("broad_sweep_context.earth_sweep.projects must be a list")
+
+    for index, item in enumerate(raw_projects):
+        project = _require_mapping(item, field_name=f"broad_sweep_context.earth_sweep.projects[{index}]")
+        project_id = _require_nonempty_text(
+            project.get("project_id"),
+            field_name=f"broad_sweep_context.earth_sweep.projects[{index}].project_id",
+        )
+        obligations = project.get("obligations") or []
+        unresolved = project.get("unresolved_ideas") or []
+        if not isinstance(obligations, list):
+            raise ValueError(f"broad_sweep_context.earth_sweep.projects[{index}].obligations must be a list")
+        if not isinstance(unresolved, list):
+            raise ValueError(f"broad_sweep_context.earth_sweep.projects[{index}].unresolved_ideas must be a list")
+        earth_sweep_projects.append(
+            {
+                "project_id": project_id,
+                "obligations": obligations,
+                "unresolved_ideas": unresolved,
+            }
+        )
+
+    earth_sweep_projects.sort(key=lambda r: r["project_id"])
+    return (evidence_refs, earth_sweep_projects)
+
+
+def _collect_unique_refs(*lists: list[str]) -> list[str]:
+    out: set[str] = set()
+    for items in lists:
+        out.update([str(item) for item in items if str(item).strip()])
+    return sorted(out)
+
+
+def _recommendation_decision(*, recommended_actions: list[dict[str, Any]], open_risks: list[dict[str, Any]]) -> str:
+    if recommended_actions and not open_risks:
+        return "proceed"
+    if recommended_actions and open_risks:
+        return "proceed-with-open-risks"
+    if open_risks:
+        if any(str(row.get("reason_code")) != "missing_earth_sweep_evidence_refs" for row in open_risks):
+            return "resolve-context-gaps"
+        return "collect-earth-evidence"
+    return "insufficient-context"
+
+
+def _recommendation_rationale(*, decision: str, totals: Mapping[str, Any], open_risks: list[dict[str, Any]]) -> str:
+    peer_count = int(totals.get("peer_projects") or 0)
+    existing = int(totals.get("existing_links") or 0)
+    missing = int(totals.get("missing_links") or 0)
+    proposed = int(totals.get("proposed_links") or 0)
+    risks = len(open_risks)
+    if decision == "proceed":
+        return f"links validated (peers={peer_count} existing={existing} proposed={proposed}) with evidence-backed obligations."
+    if decision == "proceed-with-open-risks":
+        return f"some ecosystem links are evidence-backed, but open risks remain (risks={risks})."
+    if decision == "collect-earth-evidence":
+        return "ecosystem obligations require Earth-sweep evidence refs before promotion."
+    if decision == "resolve-context-gaps":
+        return f"context gaps detected while reasoning about ecosystem links (risks={risks})."
+    return f"insufficient evidence-backed linkage data (peers={peer_count} existing={existing} missing={missing} proposed={proposed})."
+
+
+def _recommendation_confidence(*, evidence_refs: list[str], open_risks: list[dict[str, Any]]) -> str:
+    if not evidence_refs:
+        return "low"
+    if open_risks:
+        return "medium"
+    return "high"
+
+
+def process_req_027_call_2_ecosystem_linkage_reasoning(
+    payload: Mapping[str, Any],
+    *,
+    emit: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Implement REQ-027 reasoning/processing behavior using broad-sweep context inputs.
+
+    The strict REQ-027 contract builder remains the source of truth for deterministic
+    link/obligation ids. This processor derives input link buckets from Earth-sweep
+    context and records unresolved ideas/insufficient evidence as open risks.
+    """
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_027_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_027_ANALYSIS_TYPE}")
+
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+    target_project = _normalize_target_project(raw.get("target_project"))
+    peer_projects = _normalize_peer_projects(raw.get("peer_projects"))
+    peer_project_ids = {row["project_id"] for row in peer_projects}
+
+    broad_sweep_context = raw.get("broad_sweep_context")
+    earth_sweep_evidence_refs, earth_sweep_projects = _extract_earth_sweep_inputs(broad_sweep_context)
+    broad_mapping: Mapping[str, Any] = _require_mapping(broad_sweep_context, field_name="broad_sweep_context") if broad_sweep_context is not None else {}
+    cross_project_context = _normalize_cross_project_context(broad_mapping.get("cross_project_context"))
+    cross_context_by_project: dict[str, list[dict[str, Any]]] = {}
+    for row in cross_project_context:
+        cross_context_by_project.setdefault(row["project_id"], []).append(row)
+    earth_projects_by_id: dict[str, dict[str, Any]] = {row["project_id"]: row for row in earth_sweep_projects}
+
+    if emit is not None:
+        emit(_format_ts_line(f"REQ-027 processing start peers={len(peer_projects)}", now_utc=checked_at_utc))
+
+    existing_links_raw: list[dict[str, Any]] = []
+    missing_links_raw: list[dict[str, Any]] = []
+    proposed_links_raw: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+
+    for peer in peer_projects:
+        peer_id = peer["project_id"]
+        cross_rows = cross_context_by_project.get(peer_id, [])
+        earth_row = earth_projects_by_id.get(peer_id)
+
+        if cross_rows:
+            context_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_rows])
+            note = next((row["context_note"] for row in cross_rows if row.get("context_note")), "")
+            summary = note or f"Broad-sweep cross-project context references peer project '{peer_id}'."
+            existing_links_raw.append(
+                {
+                    "peer_project_id": peer_id,
+                    "link_kind": "cross-project-context",
+                    "direction": "bidirectional",
+                    "summary": summary,
+                    "evidence_refs": _collect_unique_refs(context_refs, earth_sweep_evidence_refs),
+                    "confidence_tag": "high" if context_refs else "medium",
+                    "interaction_obligations": [],
+                }
+            )
+
+        if earth_row is not None:
+            for obligation_index, obligation in enumerate(earth_row.get("obligations") or []):
+                if not isinstance(obligation, Mapping):
+                    open_risks.append(
+                        {
+                            "risk_id": f"risk.{_stable_id_fragment(peer_id, 'obligation', str(obligation_index))}",
+                            "summary": f"Malformed Earth-sweep obligation entry for '{peer_id}'.",
+                            "reason_code": "invalid_earth_sweep_obligation_shape",
+                            "required_evidence_refs": earth_sweep_evidence_refs,
+                        }
+                    )
+                    continue
+
+                obligation_summary = str(obligation.get("summary") or "").strip() or (
+                    f"Earth-sweep obligation entry #{obligation_index} for '{peer_id}'."
+                )
+                obligation_refs = _normalize_string_list(
+                    obligation.get("earth_sweep_evidence_refs") or obligation.get("evidence_refs"),
+                    field_name=f"broad_sweep_context.earth_sweep.projects[project_id={peer_id}].obligations[{obligation_index}].evidence_refs",
+                )
+                if not obligation_refs:
+                    open_risks.append(
+                        {
+                            "risk_id": f"risk.{_stable_id_fragment(peer_id, 'obligation-missing-evidence', obligation_summary)}",
+                            "summary": obligation_summary,
+                            "reason_code": "missing_obligation_evidence_refs",
+                            "required_evidence_refs": [],
+                        }
+                    )
+                    continue
+
+                if not earth_sweep_evidence_refs:
+                    open_risks.append(
+                        {
+                            "risk_id": f"risk.{_stable_id_fragment(peer_id, 'missing-earth-sweep-evidence', obligation_summary)}",
+                            "summary": obligation_summary,
+                            "reason_code": "missing_earth_sweep_evidence_refs",
+                            "required_evidence_refs": obligation_refs,
+                        }
+                    )
+                    continue
+
+                combined_refs = _collect_unique_refs(obligation_refs, earth_sweep_evidence_refs)
+                proposed_links_raw.append(
+                    {
+                        "peer_project_id": peer_id,
+                        "link_kind": "earth-sweep-obligation",
+                        "direction": "bidirectional",
+                        "summary": obligation_summary,
+                        "evidence_refs": combined_refs,
+                        "confidence_tag": "medium",
+                        "interaction_obligations": [
+                            {
+                                "obligated_party": "both",
+                                "obligation_kind": "coordination",
+                                "summary": obligation_summary,
+                                "evidence_refs": combined_refs,
+                            }
+                        ],
+                    }
+                )
+
+            for idea_index, idea_row in enumerate(earth_row.get("unresolved_ideas") or []):
+                if not isinstance(idea_row, Mapping):
+                    continue
+                idea = str(idea_row.get("idea") or idea_row.get("summary") or "").strip()
+                if not idea:
+                    continue
+                idea_refs = _normalize_string_list(
+                    idea_row.get("earth_sweep_evidence_refs") or idea_row.get("evidence_refs"),
+                    field_name=f"broad_sweep_context.earth_sweep.projects[project_id={peer_id}].unresolved_ideas[{idea_index}].evidence_refs",
+                )
+                open_risks.append(
+                    {
+                        "risk_id": f"risk.{_stable_id_fragment(peer_id, 'unresolved-idea', idea)}",
+                        "summary": idea,
+                        "reason_code": "unresolved_cross_project_idea",
+                        "required_evidence_refs": idea_refs,
+                    }
+                )
+
+        if not cross_rows and earth_row is None:
+            missing_links_raw.append(
+                {
+                    "peer_project_id": peer_id,
+                    "link_kind": "context-missing",
+                    "direction": "bidirectional",
+                    "summary": f"No Earth-sweep context was supplied for peer project '{peer_id}'.",
+                    "evidence_refs": earth_sweep_evidence_refs,
+                    "confidence_tag": "low",
+                    "interaction_obligations": [],
+                }
+            )
+
+    contract_payload = build_req_027_call_2_ecosystem_linkage_reasoning(
+        {
+            "analysis_type": REQ_027_ANALYSIS_TYPE,
+            "now_utc": checked_at_utc,
+            "target_project": target_project,
+            "peer_projects": peer_projects,
+            "existing_links": existing_links_raw,
+            "missing_links": missing_links_raw,
+            "proposed_links": proposed_links_raw,
+        }
+    )
+
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    obligations: list[dict[str, Any]] = []
+    link_refs: list[str] = []
+    for bucket in ("existing_links", "missing_links", "proposed_links"):
+        for link in contract_payload["linkage_reasoning"][bucket]:
+            link_refs.extend(link.get("evidence_refs") or [])
+            for obligation in link.get("interaction_obligations") or []:
+                obligations.append(
+                    {
+                        "obligation_id": obligation["obligation_id"],
+                        "project_id": link["peer_project_id"],
+                        "summary": obligation["summary"],
+                        "evidence_refs": obligation["evidence_refs"],
+                    }
+                )
+    link_refs = _collect_unique_refs(link_refs)
+
+    recommended_actions: list[dict[str, Any]] = []
+    for link in contract_payload["linkage_reasoning"]["missing_links"]:
+        action_id = f"action.{_stable_id_fragment('collect-context', link['peer_project_id'], link['link_kind'])}"
+        recommended_actions.append(
+            {
+                "action_id": action_id,
+                "summary": f"Collect missing ecosystem linkage context for peer '{link['peer_project_id']}'.",
+                "rationale": link["summary"],
+                "action_scope": "cross-project",
+                "next_step": "Attach Earth-sweep evidence refs and re-run linkage reasoning.",
+                "evidence_refs": link.get("evidence_refs") or [],
+            }
+        )
+
+    evidence_refs_used = _collect_unique_refs(
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        link_refs,
+        *[row.get("required_evidence_refs") or [] for row in open_risks],
+        *[row.get("evidence_refs") or [] for row in recommended_actions],
+        *[row.get("evidence_refs") or [] for row in obligations],
+    )
+    decision = _recommendation_decision(recommended_actions=recommended_actions, open_risks=open_risks)
+
+    processing_behavior = {
+        "strategy": "llm-first-broad-sweep",
+        "reasoning_mode": "long-thinking",
+        "heuristic_summarization_only": False,
+        "context_inputs": {
+            "target_project": {
+                "project_id": target_project["project_id"],
+                "project_root": target_project["project_root"],
+            },
+            "earth_sweep": {
+                "evidence_refs": earth_sweep_evidence_refs,
+                "projects_considered": sorted(
+                    {row["project_id"] for row in earth_sweep_projects if row["project_id"] in peer_project_ids}
+                ),
+            },
+            "cross_project_context": cross_project_context,
+        },
+        "context_usage": {
+            "earth_sweep_context_used": bool(earth_sweep_evidence_refs or earth_sweep_projects),
+            "cross_project_context_used": bool(cross_project_context),
+            "cross_project_projects_considered": sorted({row["project_id"] for row in cross_project_context}),
+            "earth_sweep_refs_used": earth_sweep_evidence_refs,
+            "cross_project_refs_used": cross_project_refs,
+            "evidence_refs_used": evidence_refs_used,
+        },
+        "recommendation": {
+            "decision": decision,
+            "rationale": _recommendation_rationale(
+                decision=decision,
+                totals=contract_payload["totals"],
+                open_risks=open_risks,
+            ),
+            "confidence": _recommendation_confidence(evidence_refs=evidence_refs_used, open_risks=open_risks),
+            "evidence_refs": evidence_refs_used,
+            "recommended_actions": recommended_actions,
+            "cross_project_obligations": obligations,
+            "open_risks": sorted(open_risks, key=lambda r: (r.get("reason_code", ""), r.get("risk_id", ""))),
+        },
+    }
+
+    if emit is not None:
+        emit(_format_ts_line(f"REQ-027 processing decision={decision}", now_utc=checked_at_utc))
+
+    return {
+        "ok": True,
+        "schema_version": REQ_027_PROCESSING_SCHEMA_VERSION,
+        "requirement_id": REQ_027_REQUIREMENT_ID,
+        "analysis_type": REQ_027_ANALYSIS_TYPE,
+        "call_id": REQ_027_CALL_ID,
+        "checked_at_utc": contract_payload["checked_at_utc"],
+        "target_project": contract_payload["target_project"],
+        "peer_projects": contract_payload["peer_projects"],
+        "linkage_reasoning": contract_payload["linkage_reasoning"],
+        "totals": contract_payload["totals"],
+        "processing_behavior": processing_behavior,
+    }
 
 
 def build_req_027_call_2_ecosystem_linkage_reasoning(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -573,4 +1079,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
