@@ -74,6 +74,17 @@ def _collect_unique_refs(*ref_groups: Sequence[Any]) -> list[str]:
     return sorted(seen)
 
 
+def _collect_call_output_evidence_refs(call_outputs: Sequence[Mapping[str, Any]]) -> list[str]:
+    return _collect_unique_refs(
+        *[
+            claim.get("evidence_refs", [])
+            for call in call_outputs
+            for claim in call.get("emitted_claims", [])
+            if isinstance(call, Mapping) and isinstance(claim, Mapping)
+        ]
+    )
+
+
 def _canonical_input_digest(canonical_input: Mapping[str, Any]) -> str:
     raw = json.dumps(canonical_input, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -385,7 +396,8 @@ def _build_req_036_processing_behavior(
         for row in contradiction_report.get("contradictions", [])
         if isinstance(row, Mapping) and _as_text(row.get("claim_id"))
     ]
-    recommendation_evidence_refs = list(contradiction_report.get("evidence_refs", []))
+    contradiction_evidence_refs = list(contradiction_report.get("evidence_refs", []))
+    recommendation_evidence_refs = contradiction_evidence_refs or _collect_call_output_evidence_refs(call_outputs)
 
     if unresolved_count > 0:
         decision = "requires-resolution-before-final-synthesis"
