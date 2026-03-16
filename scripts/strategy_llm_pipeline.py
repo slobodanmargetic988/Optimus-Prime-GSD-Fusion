@@ -34,6 +34,7 @@ LLM_CALL_TRACE_RELATIVE_PATH = "strategy/current/llm_call_trace.jsonl"
 REQ_026_ALLOWED_PLANNING_STATUSES = {"ready", "partial", "blocked"}
 REQ_026_ALLOWED_RUNTIME_STATUSES = {"healthy", "degraded", "blocked"}
 REQ_026_ALLOWED_RECOMMENDATION_SCOPES = {"local", "cross-project"}
+REQ_026_ALLOWED_CLAIM_PHASES = {"analysis", "synthesis"}
 
 DEFAULT_STAGE_BLUEPRINTS = (
     {
@@ -1667,6 +1668,7 @@ def _req_026_normalize_cross_project_context(
                 ),
             }
         )
+    normalized.sort(key=lambda row: row["project_id"])
     return normalized
 
 
@@ -1741,6 +1743,64 @@ def _req_026_normalize_candidate_recommendations(
                 ),
             }
         )
+    normalized.sort(key=lambda row: row["recommendation_id"])
+    return normalized
+
+
+def _req_026_normalize_strategic_claims(
+    value: Any,
+    *,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req026Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        phase = _require_text(row.get("phase"), field_name=f"{field_name}[{index}].phase").lower()
+        if phase not in REQ_026_ALLOWED_CLAIM_PHASES:
+            raise Req026Error(
+                f"{field_name}[{index}].phase must be one of {sorted(REQ_026_ALLOWED_CLAIM_PHASES)}"
+            )
+        source_call_sequence = row.get("source_call_sequence")
+        if isinstance(source_call_sequence, bool) or not isinstance(source_call_sequence, int) or source_call_sequence < 1:
+            raise Req026Error(f"{field_name}[{index}].source_call_sequence must be an integer >= 1")
+        normalized.append(
+            {
+                "claim_id": _require_text(
+                    row.get("claim_id"),
+                    field_name=f"{field_name}[{index}].claim_id",
+                ),
+                "phase": phase,
+                "summary": _require_text(
+                    row.get("summary"),
+                    field_name=f"{field_name}[{index}].summary",
+                ),
+                "position": _require_text(
+                    row.get("position"),
+                    field_name=f"{field_name}[{index}].position",
+                ),
+                "source_call_sequence": source_call_sequence,
+                "evidence_refs": _req_026_normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                ),
+            }
+        )
+    normalized.sort(
+        key=lambda row: (
+            row["claim_id"],
+            row["phase"],
+            row["source_call_sequence"],
+            row["position"],
+            row["summary"],
+        )
+    )
     return normalized
 
 
@@ -1761,6 +1821,10 @@ def _req_026_normalize_broad_sweep_context(value: Any, *, field_name: str) -> di
         "candidate_recommendations": _req_026_normalize_candidate_recommendations(
             container.get("candidate_recommendations", []),
             field_name=f"{field_name}.candidate_recommendations",
+        ),
+        "strategic_claims": _req_026_normalize_strategic_claims(
+            container.get("strategic_claims", []),
+            field_name=f"{field_name}.strategic_claims",
         ),
     }
 
@@ -1877,6 +1941,10 @@ def _req_026_build_cross_project_context_summary(
     }
 
 
+def _req_026_claim_output_ref(*, source_call_sequence: int, phase: str) -> str:
+    return f"{REQ_026_REQUIREMENT_ID}::call-chain::{source_call_sequence:02d}::{phase}"
+
+
 def _req_026_build_processing_behavior(
     *,
     broad_sweep_context: Mapping[str, Any],
@@ -1888,13 +1956,78 @@ def _req_026_build_processing_behavior(
     earth_sweep_evidence_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
     cross_project_context = list(broad_sweep_context["cross_project_context"])
     candidate_recommendations = list(broad_sweep_context["candidate_recommendations"])
+    strategic_claims = list(broad_sweep_context["strategic_claims"])
     context_by_project = {
         str(row["project_id"]): row for row in cross_project_context
     }
+    available_citation_refs = set(
+        _req_026_dedupe_preserving_order(
+            list(planning_refs)
+            + list(runtime_refs)
+            + list(earth_sweep_evidence_refs)
+            + [ref for row in cross_project_context for ref in row.get("evidence_refs", [])]
+        )
+    )
 
     recommended_next_actions: list[dict[str, Any]] = []
     cross_project_obligations: list[dict[str, Any]] = []
     open_risks: list[dict[str, Any]] = []
+
+    claims_by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in strategic_claims:
+        claim_id = str(row["claim_id"])
+        claims_by_id.setdefault(claim_id, []).append(row)
+        citation_refs = list(row["evidence_refs"])
+        source_output_ref = _req_026_claim_output_ref(
+            source_call_sequence=int(row["source_call_sequence"]),
+            phase=str(row["phase"]),
+        )
+        if not citation_refs or not set(citation_refs).issubset(available_citation_refs):
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim_id}-citation",
+                    "reason_code": "uncited_strategic_claim",
+                    "summary": row["summary"],
+                    "required_evidence_refs": _req_026_dedupe_preserving_order([source_output_ref] + citation_refs),
+                }
+            )
+
+    for claim_id, claim_rows in claims_by_id.items():
+        analysis_rows = [row for row in claim_rows if row["phase"] == "analysis"]
+        synthesis_rows = [row for row in claim_rows if row["phase"] == "synthesis"]
+        contradiction_refs: list[str] | None = None
+        contradiction_summary = ""
+        for analysis_row in analysis_rows:
+            for synthesis_row in synthesis_rows:
+                if analysis_row["position"] == synthesis_row["position"]:
+                    continue
+                contradiction_summary = str(synthesis_row["summary"])
+                contradiction_refs = _req_026_dedupe_preserving_order(
+                    [
+                        _req_026_claim_output_ref(
+                            source_call_sequence=int(analysis_row["source_call_sequence"]),
+                            phase=str(analysis_row["phase"]),
+                        ),
+                        _req_026_claim_output_ref(
+                            source_call_sequence=int(synthesis_row["source_call_sequence"]),
+                            phase=str(synthesis_row["phase"]),
+                        ),
+                    ]
+                    + list(analysis_row["evidence_refs"])
+                    + list(synthesis_row["evidence_refs"])
+                )
+                break
+            if contradiction_refs is not None:
+                break
+        if contradiction_refs is not None:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim_id}-contradiction",
+                    "reason_code": "cross_call_contradiction",
+                    "summary": contradiction_summary,
+                    "required_evidence_refs": contradiction_refs,
+                }
+            )
 
     for row in candidate_recommendations:
         recommendation_id = str(row["recommendation_id"])
@@ -1948,6 +2081,10 @@ def _req_026_build_processing_behavior(
             }
         )
 
+    recommended_next_actions.sort(key=lambda row: row["recommendation_id"])
+    cross_project_obligations.sort(key=lambda row: row["obligation_id"])
+    open_risks.sort(key=lambda row: row["risk_id"])
+
     if assessment_status == "blocked":
         decision = "hold"
         confidence = "low"
@@ -1973,16 +2110,18 @@ def _req_026_build_processing_behavior(
     return {
         "strategy": REQ_026_PROCESSING_STRATEGY,
         "reasoning_mode": REQ_026_REASONING_MODE,
+        "strict_evidence_discipline": True,
         "context_inputs": {
             "broad_sweep_context": {
                 "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
                 "cross_project_context": cross_project_context,
                 "candidate_recommendations": candidate_recommendations,
+                "strategic_claims": strategic_claims,
             }
         },
         "context_usage": {
             "broad_sweep_context_used": bool(
-                earth_sweep_evidence_refs or cross_project_context or candidate_recommendations
+                earth_sweep_evidence_refs or cross_project_context or candidate_recommendations or strategic_claims
             ),
             "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
             "cross_project_context_used": bool(cross_project_context),
@@ -2053,6 +2192,7 @@ def _req_026_canonical_input(
             "earth_sweep_evidence_refs": list(broad_sweep_context["earth_sweep_evidence_refs"]),
             "cross_project_context": [dict(row) for row in broad_sweep_context["cross_project_context"]],
             "candidate_recommendations": [dict(row) for row in broad_sweep_context["candidate_recommendations"]],
+            "strategic_claims": [dict(row) for row in broad_sweep_context["strategic_claims"]],
         },
     }
 
@@ -2085,6 +2225,11 @@ def _build_req_026_llm_call_trace_rows(
         + [
             ref
             for row in broad_sweep_context["candidate_recommendations"]
+            for ref in row.get("evidence_refs", [])
+        ]
+        + [
+            ref
+            for row in broad_sweep_context["strategic_claims"]
             for ref in row.get("evidence_refs", [])
         ]
     )
@@ -2343,6 +2488,8 @@ def validate_req_026_call_1_situational_analysis_reasoning(payload: Mapping[str,
         errors.append(f"processing_behavior.strategy must be {REQ_026_PROCESSING_STRATEGY}")
     if processing_behavior.get("reasoning_mode") != REQ_026_REASONING_MODE:
         errors.append(f"processing_behavior.reasoning_mode must be {REQ_026_REASONING_MODE}")
+    if processing_behavior.get("strict_evidence_discipline") is not True:
+        errors.append("processing_behavior.strict_evidence_discipline must be true")
 
     context_inputs = processing_behavior.get("context_inputs")
     if not isinstance(context_inputs, Mapping):
@@ -2352,9 +2499,46 @@ def validate_req_026_call_1_situational_analysis_reasoning(payload: Mapping[str,
     if not isinstance(broad_sweep_context, Mapping):
         errors.append("processing_behavior.context_inputs.broad_sweep_context must be an object")
         broad_sweep_context = {}
-    for key in ("earth_sweep_evidence_refs", "cross_project_context", "candidate_recommendations"):
+    for key in ("earth_sweep_evidence_refs", "cross_project_context", "candidate_recommendations", "strategic_claims"):
         if not isinstance(broad_sweep_context.get(key), list):
             errors.append(f"processing_behavior.context_inputs.broad_sweep_context.{key} must be an array")
+    strategic_claims = broad_sweep_context.get("strategic_claims", [])
+    if isinstance(strategic_claims, list):
+        for index, row in enumerate(strategic_claims):
+            if not isinstance(row, Mapping):
+                errors.append(
+                    f"processing_behavior.context_inputs.broad_sweep_context.strategic_claims[{index}] must be an object"
+                )
+                continue
+            if not _as_text(row.get("claim_id")):
+                errors.append(
+                    f"processing_behavior.context_inputs.broad_sweep_context.strategic_claims[{index}].claim_id is required"
+                )
+            if _as_text(row.get("phase")) not in REQ_026_ALLOWED_CLAIM_PHASES:
+                errors.append(
+                    f"processing_behavior.context_inputs.broad_sweep_context.strategic_claims[{index}].phase "
+                    f"must be one of {sorted(REQ_026_ALLOWED_CLAIM_PHASES)}"
+                )
+            if not _as_text(row.get("summary")):
+                errors.append(
+                    f"processing_behavior.context_inputs.broad_sweep_context.strategic_claims[{index}].summary is required"
+                )
+            if not _as_text(row.get("position")):
+                errors.append(
+                    f"processing_behavior.context_inputs.broad_sweep_context.strategic_claims[{index}].position is required"
+                )
+            source_call_sequence = row.get("source_call_sequence")
+            if isinstance(source_call_sequence, bool) or not isinstance(source_call_sequence, int) or source_call_sequence < 1:
+                errors.append(
+                    "processing_behavior.context_inputs.broad_sweep_context.strategic_claims"
+                    f"[{index}].source_call_sequence must be an integer >= 1"
+                )
+            evidence_refs = row.get("evidence_refs")
+            if not isinstance(evidence_refs, list) or any(not _as_text(item) for item in evidence_refs):
+                errors.append(
+                    "processing_behavior.context_inputs.broad_sweep_context.strategic_claims"
+                    f"[{index}].evidence_refs must be a string array"
+                )
 
     context_usage = processing_behavior.get("context_usage")
     if not isinstance(context_usage, Mapping):
