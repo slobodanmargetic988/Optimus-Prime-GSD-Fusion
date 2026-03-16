@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-025, REQ-026, and REQ-029 contract/data-model surface for strategy LLM pipeline flows."""
+"""REQ-025, REQ-026, REQ-029, and REQ-031 contract/data-model surface for strategy LLM pipeline flows."""
 
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ REQ_029_REASONING_MODE = "deterministic-recommendation-synthesis"
 REQ_029_CALL_ID = "call-4"
 REQ_029_ALLOWED_SOURCE_CALL_IDS = ("call-1", "call-2", "call-3")
 REQ_029_ALLOWED_RECOMMENDATION_SCOPES = {"local", "cross-project"}
+REQ_029_RECOMMENDATION_ID_RE = re.compile(r"^rec\.[a-z0-9]+(?:-[a-z0-9]+)*$")
 REQ_029_RECOMMENDATION_ID_SCHEMA = "rec-call-4-{source_call_id}-{candidate_id}"
 REQ_029_REQUIRED_DRAFT_FIELDS = [
     "recommendation_id",
@@ -51,6 +52,44 @@ REQ_029_CALL_OBJECTIVES = {
     "call-2": "Refine situational constraints into bounded implementation follow-up candidates.",
     "call-3": "Align execution dependencies and cross-project coordination candidates.",
     "call-4": "Synthesize candidate recommendations from earlier call outputs into deterministic structured recommendation drafts.",
+}
+REQ_031_REQUIREMENT_ID = "REQ-031"
+REQ_031_SCHEMA_VERSION = "req-031.call-6-kpi-impact-estimation-reasoning.v1"
+REQ_031_LLM_CALL_TRACE_SCHEMA_VERSION = "req-031.llm-call-trace-row.v1"
+REQ_031_ANALYSIS_TYPE = "call_6_kpi_impact_estimation_reasoning"
+REQ_031_PROCESSING_STRATEGY = "call-6-kpi-impact-estimation"
+REQ_031_REASONING_MODE = "deterministic-evidence-bounded-estimation"
+REQ_031_CALL_ID = "call-6"
+REQ_031_REQUIRED_CALL_IDS = ("call-1", "call-2", "call-3", "call-4", "call-5", "call-6")
+REQ_031_ALLOWED_ADOPTION_STATUSES = {"planned", "conditional", "pilot"}
+REQ_031_ALLOWED_DIRECTIONS = {"increase", "decrease"}
+REQ_031_ALLOWED_CONFIDENCE_VALUES = {"high", "medium", "low"}
+REQ_031_REQUIRED_ESTIMATE_FIELDS = [
+    "estimate_id",
+    "recommendation_id",
+    "recommendation_summary",
+    "kpi_id",
+    "kpi_name",
+    "baseline_value",
+    "unit",
+    "desired_direction",
+    "adoption_status",
+    "adoption_window",
+    "expected_movement",
+    "estimated_post_adoption_range",
+    "reasoning_summary",
+    "confidence",
+    "caveats",
+    "evidence_backed_assumptions",
+    "evidence_refs",
+]
+REQ_031_CALL_OBJECTIVES = {
+    "call-1": "Anchor the target project state and known evidence limits.",
+    "call-2": "Refine implementation constraints that shape later adoption options.",
+    "call-3": "Align execution dependencies and evidence refresh obligations.",
+    "call-4": "Synthesize deterministic recommendation drafts for bounded adoption choices.",
+    "call-5": "Select which recommendation adoptions are in scope for KPI estimation.",
+    "call-6": "Estimate KPI movement from recommendation adoption using evidence-backed assumptions with explicit confidence and caveats.",
 }
 RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
@@ -98,6 +137,10 @@ class Req029Error(ValueError):
     """Raised when REQ-029 input is malformed."""
 
 
+class Req031Error(ValueError):
+    """Raised when REQ-031 input is malformed."""
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -121,6 +164,12 @@ def _require_mapping(value: Any, *, field_name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{field_name} must be an object")
     return value
+
+
+def _require_number(value: Any, *, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be a number")
+    return float(value)
 
 
 def _normalize_root(value: Any, *, field_name: str) -> str:
@@ -3454,6 +3503,968 @@ def validate_req_029_call_4_recommendation_synthesis(payload: Mapping[str, Any])
     return errors
 
 
+def _req_031_normalize_call_chain(
+    value: Any,
+    *,
+    field_name: str = "call_chain",
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req031Error(f"{field_name} must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_call_ids: set[str] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        sequence = row.get("sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            raise Req031Error(f"{field_name}[{index}].sequence must be an integer")
+        if sequence != index + 1:
+            raise Req031Error(f"{field_name}[{index}].sequence must be {index + 1}")
+        expected_call_id = REQ_031_REQUIRED_CALL_IDS[index] if index < len(REQ_031_REQUIRED_CALL_IDS) else ""
+        call_id = _require_text(row.get("call_id"), field_name=f"{field_name}[{index}].call_id").lower()
+        if call_id != expected_call_id:
+            raise Req031Error(f"{field_name}[{index}].call_id must be {expected_call_id}")
+        if call_id in seen_call_ids:
+            raise Req031Error(f"{field_name}[{index}].call_id must be unique")
+        seen_call_ids.add(call_id)
+        normalized.append(
+            {
+                "sequence": sequence,
+                "call_id": call_id,
+                "phase": _require_text(row.get("phase"), field_name=f"{field_name}[{index}].phase"),
+                "output_ref": _require_text(row.get("output_ref"), field_name=f"{field_name}[{index}].output_ref"),
+            }
+        )
+
+    if len(normalized) != len(REQ_031_REQUIRED_CALL_IDS):
+        raise Req031Error(
+            f"{field_name} must include exactly {len(REQ_031_REQUIRED_CALL_IDS)} rows for Call-6 estimation"
+        )
+    return normalized
+
+
+def _req_031_normalize_recommendation_adoptions(
+    value: Any,
+    *,
+    field_name: str = "recommendation_adoptions",
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req031Error(f"{field_name} must be a non-empty array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        recommendation_id = _require_text(
+            row.get("recommendation_id"),
+            field_name=f"{field_name}[{index}].recommendation_id",
+        )
+        if not REQ_029_RECOMMENDATION_ID_RE.match(recommendation_id):
+            raise Req031Error(
+                f"{field_name}[{index}].recommendation_id must match {REQ_029_RECOMMENDATION_ID_RE.pattern}"
+            )
+        if recommendation_id in seen_ids:
+            raise Req031Error(f"{field_name}[{index}].recommendation_id must be unique")
+        seen_ids.add(recommendation_id)
+
+        adoption_status = _require_text(
+            row.get("adoption_status"),
+            field_name=f"{field_name}[{index}].adoption_status",
+        ).lower()
+        if adoption_status not in REQ_031_ALLOWED_ADOPTION_STATUSES:
+            raise Req031Error(
+                f"{field_name}[{index}].adoption_status must be one of {sorted(REQ_031_ALLOWED_ADOPTION_STATUSES)}"
+            )
+
+        project_id = _as_text(row.get("project_id"))
+        requires_earth_evidence = row.get("requires_earth_evidence")
+        if requires_earth_evidence is None:
+            requires_earth_evidence = bool(project_id)
+        if not isinstance(requires_earth_evidence, bool):
+            raise Req031Error(f"{field_name}[{index}].requires_earth_evidence must be a boolean")
+
+        normalized.append(
+            {
+                "recommendation_id": recommendation_id,
+                "summary": _require_text(row.get("summary"), field_name=f"{field_name}[{index}].summary"),
+                "adoption_status": adoption_status,
+                "adoption_window": _require_text(
+                    row.get("adoption_window"),
+                    field_name=f"{field_name}[{index}].adoption_window",
+                ),
+                "project_id": project_id,
+                "requires_earth_evidence": requires_earth_evidence,
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                    min_items=1,
+                ),
+            }
+        )
+
+    if not normalized:
+        raise Req031Error(f"{field_name} must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: row["recommendation_id"])
+    return normalized
+
+
+def _req_031_normalize_kpi_definitions(
+    value: Any,
+    *,
+    field_name: str = "kpi_definitions",
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req031Error(f"{field_name} must be a non-empty array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        kpi_id = _require_text(row.get("kpi_id"), field_name=f"{field_name}[{index}].kpi_id")
+        if not re.fullmatch(r"kpi\.[a-z0-9]+(?:-[a-z0-9]+)*", kpi_id):
+            raise Req031Error(f"{field_name}[{index}].kpi_id must match kpi.[a-z0-9-] schema")
+        if kpi_id in seen_ids:
+            raise Req031Error(f"{field_name}[{index}].kpi_id must be unique")
+        seen_ids.add(kpi_id)
+
+        desired_direction = _require_text(
+            row.get("desired_direction"),
+            field_name=f"{field_name}[{index}].desired_direction",
+        ).lower()
+        if desired_direction not in REQ_031_ALLOWED_DIRECTIONS:
+            raise Req031Error(
+                f"{field_name}[{index}].desired_direction must be one of {sorted(REQ_031_ALLOWED_DIRECTIONS)}"
+            )
+
+        normalized.append(
+            {
+                "kpi_id": kpi_id,
+                "name": _require_text(row.get("name"), field_name=f"{field_name}[{index}].name"),
+                "unit": _require_text(row.get("unit"), field_name=f"{field_name}[{index}].unit"),
+                "baseline_value": _require_number(
+                    row.get("baseline_value"),
+                    field_name=f"{field_name}[{index}].baseline_value",
+                ),
+                "desired_direction": desired_direction,
+                "source_ref": _require_text(
+                    row.get("source_ref"),
+                    field_name=f"{field_name}[{index}].source_ref",
+                ),
+            }
+        )
+
+    if not normalized:
+        raise Req031Error(f"{field_name} must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: row["kpi_id"])
+    return normalized
+
+
+def _req_031_normalize_impact_assumptions(
+    value: Any,
+    *,
+    recommendation_ids: set[str],
+    kpi_ids: set[str],
+    available_evidence_refs: set[str],
+    field_name: str = "impact_assumptions",
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req031Error(f"{field_name} must be a non-empty array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_assumption_ids: set[str] = set()
+    seen_pairs: set[tuple[str, str]] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        assumption_id = _require_text(
+            row.get("assumption_id"),
+            field_name=f"{field_name}[{index}].assumption_id",
+        )
+        if assumption_id in seen_assumption_ids:
+            raise Req031Error(f"{field_name}[{index}].assumption_id must be unique")
+        seen_assumption_ids.add(assumption_id)
+
+        recommendation_id = _require_text(
+            row.get("recommendation_id"),
+            field_name=f"{field_name}[{index}].recommendation_id",
+        )
+        if recommendation_id not in recommendation_ids:
+            raise Req031Error(f"{field_name}[{index}].recommendation_id must reference recommendation_adoptions")
+
+        kpi_id = _require_text(row.get("kpi_id"), field_name=f"{field_name}[{index}].kpi_id")
+        if kpi_id not in kpi_ids:
+            raise Req031Error(f"{field_name}[{index}].kpi_id must reference kpi_definitions")
+
+        pair = (recommendation_id, kpi_id)
+        if pair in seen_pairs:
+            raise Req031Error(
+                f"{field_name}[{index}] duplicates recommendation_id/kpi_id pair {recommendation_id}/{kpi_id}"
+            )
+        seen_pairs.add(pair)
+
+        expected_movement_lower = _require_number(
+            row.get("expected_movement_lower"),
+            field_name=f"{field_name}[{index}].expected_movement_lower",
+        )
+        expected_movement_upper = _require_number(
+            row.get("expected_movement_upper"),
+            field_name=f"{field_name}[{index}].expected_movement_upper",
+        )
+        if expected_movement_lower > expected_movement_upper:
+            raise Req031Error(
+                f"{field_name}[{index}].expected_movement_lower must be <= expected_movement_upper"
+            )
+
+        confidence = _require_text(
+            row.get("confidence"),
+            field_name=f"{field_name}[{index}].confidence",
+        ).lower()
+        if confidence not in REQ_031_ALLOWED_CONFIDENCE_VALUES:
+            raise Req031Error(
+                f"{field_name}[{index}].confidence must be one of {sorted(REQ_031_ALLOWED_CONFIDENCE_VALUES)}"
+            )
+
+        evidence_refs = _normalize_string_list(
+            row.get("evidence_refs"),
+            field_name=f"{field_name}[{index}].evidence_refs",
+            min_items=1,
+        )
+        missing_refs = sorted(set(evidence_refs) - available_evidence_refs)
+        if missing_refs:
+            raise Req031Error(
+                f"{field_name}[{index}].evidence_refs must stay within available evidence refs; missing {missing_refs}"
+            )
+
+        normalized.append(
+            {
+                "assumption_id": assumption_id,
+                "recommendation_id": recommendation_id,
+                "kpi_id": kpi_id,
+                "statement": _require_text(row.get("statement"), field_name=f"{field_name}[{index}].statement"),
+                "expected_movement_lower": expected_movement_lower,
+                "expected_movement_upper": expected_movement_upper,
+                "confidence": confidence,
+                "caveats": _normalize_string_list(
+                    row.get("caveats"),
+                    field_name=f"{field_name}[{index}].caveats",
+                    min_items=1,
+                ),
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    if not normalized:
+        raise Req031Error(f"{field_name} must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: (row["recommendation_id"], row["kpi_id"], row["assumption_id"]))
+    return normalized
+
+
+def _req_031_estimate_id(*, recommendation_id: str, kpi_id: str) -> str:
+    return f"estimate::{recommendation_id}::{kpi_id}"
+
+
+def _req_031_build_reasoning_summary(
+    *,
+    recommendation_summary: str,
+    kpi_name: str,
+    adoption_window: str,
+    expected_movement_lower: float,
+    expected_movement_upper: float,
+    unit: str,
+    assumption_id: str,
+) -> str:
+    return (
+        f"Adopting '{recommendation_summary}' is estimated to shift {kpi_name} by "
+        f"{expected_movement_lower:g} to {expected_movement_upper:g} {unit} over {adoption_window} "
+        f"under assumption {assumption_id}."
+    )
+
+
+def _req_031_canonical_input(
+    *,
+    project_id: str,
+    call_chain: Sequence[Mapping[str, Any]],
+    recommendation_adoptions: Sequence[Mapping[str, Any]],
+    kpi_definitions: Sequence[Mapping[str, Any]],
+    impact_assumptions: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[str],
+    earth_sweep_evidence_refs: Sequence[str],
+    checked_at_utc: str,
+) -> dict[str, Any]:
+    return {
+        "requirement_id": REQ_031_REQUIREMENT_ID,
+        "analysis_type": REQ_031_ANALYSIS_TYPE,
+        "call_id": REQ_031_CALL_ID,
+        "checked_at_utc": checked_at_utc,
+        "target_project": {"project_id": project_id},
+        "call_chain": [dict(row) for row in call_chain],
+        "target_project_evidence_refs": list(target_project_evidence_refs),
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "recommendation_adoptions": [dict(row) for row in recommendation_adoptions],
+        "kpi_definitions": [dict(row) for row in kpi_definitions],
+        "impact_assumptions": [dict(row) for row in impact_assumptions],
+    }
+
+
+def _build_req_031_llm_call_trace_rows(
+    *,
+    processing_call_id: str,
+    call_chain: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[str],
+    earth_sweep_evidence_refs: Sequence[str],
+    impact_assumptions: Sequence[Mapping[str, Any]],
+    estimate_count: int,
+) -> list[dict[str, Any]]:
+    trace_rows: list[dict[str, Any]] = []
+    prior_output_refs: list[str] = []
+    terminal_evidence_refs = _req_026_dedupe_preserving_order(
+        list(target_project_evidence_refs)
+        + list(earth_sweep_evidence_refs)
+        + [ref for row in impact_assumptions for ref in row.get("evidence_refs", [])]
+    )
+
+    for row in call_chain:
+        call_id = str(row["call_id"])
+        sequence = int(row["sequence"])
+        output_ref = str(row["output_ref"])
+        if call_id == REQ_031_CALL_ID:
+            input_refs = _req_026_dedupe_preserving_order(prior_output_refs + terminal_evidence_refs)
+            handoff_summary = (
+                f"Call 6 hands off kpi_impact_estimation via {output_ref} as the terminal KPI estimation output "
+                f"with {estimate_count} estimate(s)."
+            )
+        else:
+            input_refs = list(prior_output_refs[-1:]) if prior_output_refs else []
+            next_call_id = REQ_031_REQUIRED_CALL_IDS[sequence]
+            handoff_summary = (
+                f"Call {sequence} hands off {_req_029_trace_output_name(output_ref)} via {output_ref} to "
+                f"{next_call_id} after consuming {len(input_refs)} input refs."
+            )
+        trace_rows.append(
+            {
+                "schema_version": REQ_031_LLM_CALL_TRACE_SCHEMA_VERSION,
+                "requirement_id": REQ_031_REQUIREMENT_ID,
+                "processing_call_id": processing_call_id,
+                "call_id": call_id,
+                "sequence": sequence,
+                "call_objective": REQ_031_CALL_OBJECTIVES[call_id],
+                "input_refs": input_refs,
+                "output_refs": [output_ref],
+                "handoff_summary": handoff_summary,
+            }
+        )
+        prior_output_refs.append(output_ref)
+
+    return trace_rows
+
+
+def build_req_031_call_6_kpi_impact_estimation_reasoning(
+    *,
+    target_project: Mapping[str, Any],
+    call_chain: Sequence[Mapping[str, Any]],
+    recommendation_adoptions: Sequence[Mapping[str, Any]],
+    kpi_definitions: Sequence[Mapping[str, Any]],
+    impact_assumptions: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[Any] | None = None,
+    earth_sweep_evidence_refs: Sequence[Any] | None = None,
+    analysis_type: str = REQ_031_ANALYSIS_TYPE,
+    call_id: str = REQ_031_CALL_ID,
+    checked_at_utc: str | None = None,
+) -> dict[str, Any]:
+    if analysis_type != REQ_031_ANALYSIS_TYPE:
+        raise Req031Error(f"analysis_type must be {REQ_031_ANALYSIS_TYPE}")
+    if call_id != REQ_031_CALL_ID:
+        raise Req031Error(f"call_id must be {REQ_031_CALL_ID}")
+
+    project = _require_mapping(target_project, field_name="target_project")
+    project_id = _require_text(project.get("project_id"), field_name="target_project.project_id")
+    normalized_checked_at_utc = _require_text(checked_at_utc or utc_now_iso(), field_name="checked_at_utc")
+    normalized_call_chain = _req_031_normalize_call_chain(call_chain)
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+        min_items=1,
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_recommendation_adoptions = _req_031_normalize_recommendation_adoptions(recommendation_adoptions)
+    normalized_kpi_definitions = _req_031_normalize_kpi_definitions(kpi_definitions)
+
+    for index, row in enumerate(normalized_recommendation_adoptions):
+        if row["requires_earth_evidence"] and not any(
+            _is_earth_evidence_ref(ref) for ref in list(row["evidence_refs"]) + normalized_earth_refs
+        ):
+            raise Req031Error(
+                f"recommendation_adoptions[{index}] requires Earth evidence but no Earth-scoped refs were supplied"
+            )
+
+    available_evidence_refs = set(
+        _collect_unique_refs(
+            normalized_target_refs,
+            normalized_earth_refs,
+            [row["output_ref"] for row in normalized_call_chain],
+            [row["source_ref"] for row in normalized_kpi_definitions],
+            [ref for row in normalized_recommendation_adoptions for ref in row["evidence_refs"]],
+        )
+    )
+    normalized_impact_assumptions = _req_031_normalize_impact_assumptions(
+        impact_assumptions,
+        recommendation_ids={str(row["recommendation_id"]) for row in normalized_recommendation_adoptions},
+        kpi_ids={str(row["kpi_id"]) for row in normalized_kpi_definitions},
+        available_evidence_refs=available_evidence_refs,
+    )
+
+    recommendation_by_id = {
+        str(row["recommendation_id"]): row for row in normalized_recommendation_adoptions
+    }
+    kpi_by_id = {str(row["kpi_id"]): row for row in normalized_kpi_definitions}
+
+    kpi_estimates: list[dict[str, Any]] = []
+    for assumption in normalized_impact_assumptions:
+        recommendation = recommendation_by_id[str(assumption["recommendation_id"])]
+        kpi = kpi_by_id[str(assumption["kpi_id"])]
+        baseline_value = float(kpi["baseline_value"])
+        expected_movement_lower = float(assumption["expected_movement_lower"])
+        expected_movement_upper = float(assumption["expected_movement_upper"])
+        kpi_estimates.append(
+            {
+                "estimate_id": _req_031_estimate_id(
+                    recommendation_id=str(recommendation["recommendation_id"]),
+                    kpi_id=str(kpi["kpi_id"]),
+                ),
+                "recommendation_id": str(recommendation["recommendation_id"]),
+                "recommendation_summary": str(recommendation["summary"]),
+                "kpi_id": str(kpi["kpi_id"]),
+                "kpi_name": str(kpi["name"]),
+                "baseline_value": baseline_value,
+                "unit": str(kpi["unit"]),
+                "desired_direction": str(kpi["desired_direction"]),
+                "adoption_status": str(recommendation["adoption_status"]),
+                "adoption_window": str(recommendation["adoption_window"]),
+                "expected_movement": {
+                    "lower_bound": expected_movement_lower,
+                    "upper_bound": expected_movement_upper,
+                    "unit": str(kpi["unit"]),
+                    "direction": str(kpi["desired_direction"]),
+                },
+                "estimated_post_adoption_range": {
+                    "lower_bound": baseline_value + expected_movement_lower,
+                    "upper_bound": baseline_value + expected_movement_upper,
+                    "unit": str(kpi["unit"]),
+                },
+                "reasoning_summary": _req_031_build_reasoning_summary(
+                    recommendation_summary=str(recommendation["summary"]),
+                    kpi_name=str(kpi["name"]),
+                    adoption_window=str(recommendation["adoption_window"]),
+                    expected_movement_lower=expected_movement_lower,
+                    expected_movement_upper=expected_movement_upper,
+                    unit=str(kpi["unit"]),
+                    assumption_id=str(assumption["assumption_id"]),
+                ),
+                "confidence": str(assumption["confidence"]),
+                "caveats": list(assumption["caveats"]),
+                "evidence_backed_assumptions": [
+                    {
+                        "assumption_id": str(assumption["assumption_id"]),
+                        "statement": str(assumption["statement"]),
+                        "evidence_refs": list(assumption["evidence_refs"]),
+                    }
+                ],
+                "evidence_refs": _req_026_dedupe_preserving_order(
+                    list(recommendation["evidence_refs"])
+                    + [str(kpi["source_ref"])]
+                    + list(assumption["evidence_refs"])
+                ),
+            }
+        )
+
+    kpi_estimates.sort(key=lambda row: str(row["estimate_id"]))
+    low_confidence_estimate_ids = [
+        str(row["estimate_id"]) for row in kpi_estimates if row["confidence"] == "low"
+    ]
+    unique_evidence_refs = _req_026_dedupe_preserving_order(
+        list(normalized_target_refs)
+        + list(normalized_earth_refs)
+        + [ref for row in kpi_estimates for ref in row["evidence_refs"]]
+    )
+
+    canonical_input = _req_031_canonical_input(
+        project_id=project_id,
+        call_chain=normalized_call_chain,
+        recommendation_adoptions=normalized_recommendation_adoptions,
+        kpi_definitions=normalized_kpi_definitions,
+        impact_assumptions=normalized_impact_assumptions,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        checked_at_utc=normalized_checked_at_utc,
+    )
+    canonical_input_sha = _canonical_digest(canonical_input)
+    processing_call_id = f"req031-processing-{canonical_input_sha[:16]}"
+    llm_call_trace_rows = _build_req_031_llm_call_trace_rows(
+        processing_call_id=processing_call_id,
+        call_chain=normalized_call_chain,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        impact_assumptions=normalized_impact_assumptions,
+        estimate_count=len(kpi_estimates),
+    )
+    llm_call_trace_sha = _canonical_digest(llm_call_trace_rows)
+
+    return {
+        "ok": True,
+        "tool": TOOL,
+        "tool_version": TOOL_VERSION,
+        "schema_version": REQ_031_SCHEMA_VERSION,
+        "requirement_id": REQ_031_REQUIREMENT_ID,
+        "analysis_type": REQ_031_ANALYSIS_TYPE,
+        "call_id": REQ_031_CALL_ID,
+        "checked_at_utc": normalized_checked_at_utc,
+        "kpi_impact_estimation": {
+            "target_project": {
+                "project_id": project_id,
+            },
+            "recommendation_adoptions": normalized_recommendation_adoptions,
+            "kpi_estimates": kpi_estimates,
+            "summary": {
+                "recommendation_count": len(normalized_recommendation_adoptions),
+                "kpi_count": len(normalized_kpi_definitions),
+                "estimate_count": len(kpi_estimates),
+                "low_confidence_estimate_count": len(low_confidence_estimate_ids),
+                "caveat_count": sum(len(row["caveats"]) for row in kpi_estimates),
+            },
+        },
+        "processing_behavior": {
+            "strategy": REQ_031_PROCESSING_STRATEGY,
+            "reasoning_mode": REQ_031_REASONING_MODE,
+            "strict_evidence_discipline": True,
+            "context_inputs": {
+                "call_chain": normalized_call_chain,
+                "target_project_evidence_refs": normalized_target_refs,
+                "earth_sweep_evidence_refs": normalized_earth_refs,
+                "recommendation_adoptions": normalized_recommendation_adoptions,
+                "kpi_definitions": normalized_kpi_definitions,
+                "impact_assumptions": normalized_impact_assumptions,
+            },
+            "context_usage": {
+                "source_call_ids_used": [str(row["call_id"]) for row in normalized_call_chain],
+                "earth_sweep_context_used": bool(normalized_earth_refs),
+                "earth_sweep_evidence_refs_used": list(normalized_earth_refs),
+                "recommendation_ids_considered": [
+                    str(row["recommendation_id"]) for row in normalized_recommendation_adoptions
+                ],
+                "kpi_ids_considered": [str(row["kpi_id"]) for row in normalized_kpi_definitions],
+                "estimate_ids_emitted": [str(row["estimate_id"]) for row in kpi_estimates],
+                "low_confidence_estimate_ids": low_confidence_estimate_ids,
+                "caveat_count": sum(len(row["caveats"]) for row in kpi_estimates),
+                "evidence_refs_used": unique_evidence_refs,
+            },
+            "estimation_rules": {
+                "confidence_scale": ["high", "medium", "low"],
+                "required_estimate_fields": list(REQ_031_REQUIRED_ESTIMATE_FIELDS),
+                "caveats_required": True,
+                "bounded_range_required": True,
+                "assumption_evidence_required": True,
+            },
+        },
+        "source": {
+            "recommendation_adoption_count": len(normalized_recommendation_adoptions),
+            "kpi_definition_count": len(normalized_kpi_definitions),
+            "impact_assumption_count": len(normalized_impact_assumptions),
+            "estimate_count": len(kpi_estimates),
+            "evidence_ref_count": len(unique_evidence_refs),
+            "earth_sweep_evidence_count": len(normalized_earth_refs),
+        },
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": canonical_input_sha,
+            "reproducible_call_id": f"req031-{canonical_input_sha[:16]}",
+            "canonical_input": canonical_input,
+            "processing_call_id": processing_call_id,
+            "llm_call_trace_schema_version": REQ_031_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": llm_call_trace_sha,
+            "llm_call_trace_rows": llm_call_trace_rows,
+        },
+    }
+
+
+def validate_req_031_call_6_kpi_impact_estimation_reasoning(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+
+    if payload.get("ok") is not True:
+        errors.append("ok must be true")
+    if payload.get("tool") != TOOL:
+        errors.append(f"tool must be {TOOL}")
+    if payload.get("tool_version") != TOOL_VERSION:
+        errors.append(f"tool_version must be {TOOL_VERSION}")
+    if payload.get("schema_version") != REQ_031_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_031_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_031_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_031_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_031_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_031_ANALYSIS_TYPE}")
+    if payload.get("call_id") != REQ_031_CALL_ID:
+        errors.append(f"call_id must be {REQ_031_CALL_ID}")
+    if not _as_text(payload.get("checked_at_utc")):
+        errors.append("checked_at_utc is required")
+
+    kpi_impact_estimation = payload.get("kpi_impact_estimation")
+    if not isinstance(kpi_impact_estimation, Mapping):
+        errors.append("kpi_impact_estimation must be an object")
+        kpi_impact_estimation = {}
+
+    target_project = kpi_impact_estimation.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("kpi_impact_estimation.target_project must be an object")
+    elif not _as_text(target_project.get("project_id")):
+        errors.append("kpi_impact_estimation.target_project.project_id is required")
+
+    recommendation_adoptions = kpi_impact_estimation.get("recommendation_adoptions")
+    if not isinstance(recommendation_adoptions, list) or not recommendation_adoptions:
+        errors.append("kpi_impact_estimation.recommendation_adoptions must be a non-empty array")
+        recommendation_adoptions = []
+    recommendation_ids: list[str] = []
+    for index, row in enumerate(recommendation_adoptions):
+        if not isinstance(row, Mapping):
+            errors.append(f"kpi_impact_estimation.recommendation_adoptions[{index}] must be an object")
+            continue
+        recommendation_id = _as_text(row.get("recommendation_id"))
+        if not recommendation_id:
+            errors.append(f"kpi_impact_estimation.recommendation_adoptions[{index}].recommendation_id is required")
+        else:
+            recommendation_ids.append(recommendation_id)
+        if not _as_text(row.get("summary")):
+            errors.append(f"kpi_impact_estimation.recommendation_adoptions[{index}].summary is required")
+        if _as_text(row.get("adoption_status")) not in REQ_031_ALLOWED_ADOPTION_STATUSES:
+            errors.append(
+                "kpi_impact_estimation.recommendation_adoptions"
+                f"[{index}].adoption_status must be one of {sorted(REQ_031_ALLOWED_ADOPTION_STATUSES)}"
+            )
+        if not _as_text(row.get("adoption_window")):
+            errors.append(f"kpi_impact_estimation.recommendation_adoptions[{index}].adoption_window is required")
+        if not isinstance(row.get("requires_earth_evidence"), bool):
+            errors.append(
+                f"kpi_impact_estimation.recommendation_adoptions[{index}].requires_earth_evidence must be a boolean"
+            )
+        evidence_refs = row.get("evidence_refs")
+        if not isinstance(evidence_refs, list) or not evidence_refs or any(not _as_text(item) for item in evidence_refs):
+            errors.append(
+                f"kpi_impact_estimation.recommendation_adoptions[{index}].evidence_refs must be a non-empty string array"
+            )
+
+    kpi_estimates = kpi_impact_estimation.get("kpi_estimates")
+    if not isinstance(kpi_estimates, list) or not kpi_estimates:
+        errors.append("kpi_impact_estimation.kpi_estimates must be a non-empty array")
+        kpi_estimates = []
+    estimate_ids: list[str] = []
+    low_confidence_estimate_ids: list[str] = []
+    for index, row in enumerate(kpi_estimates):
+        if not isinstance(row, Mapping):
+            errors.append(f"kpi_impact_estimation.kpi_estimates[{index}] must be an object")
+            continue
+        for key in REQ_031_REQUIRED_ESTIMATE_FIELDS:
+            if key not in row:
+                errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].{key} is required")
+        estimate_id = _as_text(row.get("estimate_id"))
+        if estimate_id:
+            estimate_ids.append(estimate_id)
+        if not _as_text(row.get("recommendation_id")):
+            errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].recommendation_id is required")
+        if not _as_text(row.get("recommendation_summary")):
+            errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].recommendation_summary is required")
+        if not _as_text(row.get("kpi_id")):
+            errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].kpi_id is required")
+        if not _as_text(row.get("kpi_name")):
+            errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].kpi_name is required")
+        if isinstance(row.get("baseline_value"), bool) or not isinstance(row.get("baseline_value"), (int, float)):
+            errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].baseline_value must be numeric")
+        if _as_text(row.get("desired_direction")) not in REQ_031_ALLOWED_DIRECTIONS:
+            errors.append(
+                f"kpi_impact_estimation.kpi_estimates[{index}].desired_direction must be one of "
+                f"{sorted(REQ_031_ALLOWED_DIRECTIONS)}"
+            )
+        if _as_text(row.get("adoption_status")) not in REQ_031_ALLOWED_ADOPTION_STATUSES:
+            errors.append(
+                f"kpi_impact_estimation.kpi_estimates[{index}].adoption_status must be one of "
+                f"{sorted(REQ_031_ALLOWED_ADOPTION_STATUSES)}"
+            )
+        if not _as_text(row.get("adoption_window")):
+            errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].adoption_window is required")
+
+        expected_movement = row.get("expected_movement")
+        if not isinstance(expected_movement, Mapping):
+            errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].expected_movement must be an object")
+        else:
+            for key in ("lower_bound", "upper_bound"):
+                value = expected_movement.get(key)
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    errors.append(
+                        f"kpi_impact_estimation.kpi_estimates[{index}].expected_movement.{key} must be numeric"
+                    )
+            if not _as_text(expected_movement.get("unit")):
+                errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].expected_movement.unit is required")
+            if _as_text(expected_movement.get("direction")) not in REQ_031_ALLOWED_DIRECTIONS:
+                errors.append(
+                    "kpi_impact_estimation.kpi_estimates"
+                    f"[{index}].expected_movement.direction must be increase or decrease"
+                )
+
+        post_range = row.get("estimated_post_adoption_range")
+        if not isinstance(post_range, Mapping):
+            errors.append(
+                f"kpi_impact_estimation.kpi_estimates[{index}].estimated_post_adoption_range must be an object"
+            )
+        else:
+            for key in ("lower_bound", "upper_bound"):
+                value = post_range.get(key)
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    errors.append(
+                        "kpi_impact_estimation.kpi_estimates"
+                        f"[{index}].estimated_post_adoption_range.{key} must be numeric"
+                    )
+            if not _as_text(post_range.get("unit")):
+                errors.append(
+                    f"kpi_impact_estimation.kpi_estimates[{index}].estimated_post_adoption_range.unit is required"
+                )
+
+        if not _as_text(row.get("reasoning_summary")):
+            errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].reasoning_summary is required")
+        confidence = _as_text(row.get("confidence"))
+        if confidence not in REQ_031_ALLOWED_CONFIDENCE_VALUES:
+            errors.append(
+                f"kpi_impact_estimation.kpi_estimates[{index}].confidence must be one of "
+                f"{sorted(REQ_031_ALLOWED_CONFIDENCE_VALUES)}"
+            )
+        elif confidence == "low":
+            low_confidence_estimate_ids.append(estimate_id)
+
+        caveats = row.get("caveats")
+        if not isinstance(caveats, list) or not caveats or any(not _as_text(item) for item in caveats):
+            errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].caveats must be a non-empty string array")
+
+        assumptions = row.get("evidence_backed_assumptions")
+        if not isinstance(assumptions, list) or not assumptions:
+            errors.append(
+                f"kpi_impact_estimation.kpi_estimates[{index}].evidence_backed_assumptions must be a non-empty array"
+            )
+        else:
+            for assumption_index, assumption_row in enumerate(assumptions):
+                if not isinstance(assumption_row, Mapping):
+                    errors.append(
+                        "kpi_impact_estimation.kpi_estimates"
+                        f"[{index}].evidence_backed_assumptions[{assumption_index}] must be an object"
+                    )
+                    continue
+                if not _as_text(assumption_row.get("assumption_id")):
+                    errors.append(
+                        "kpi_impact_estimation.kpi_estimates"
+                        f"[{index}].evidence_backed_assumptions[{assumption_index}].assumption_id is required"
+                    )
+                if not _as_text(assumption_row.get("statement")):
+                    errors.append(
+                        "kpi_impact_estimation.kpi_estimates"
+                        f"[{index}].evidence_backed_assumptions[{assumption_index}].statement is required"
+                    )
+                evidence_refs = assumption_row.get("evidence_refs")
+                if not isinstance(evidence_refs, list) or not evidence_refs or any(not _as_text(item) for item in evidence_refs):
+                    errors.append(
+                        "kpi_impact_estimation.kpi_estimates"
+                        f"[{index}].evidence_backed_assumptions[{assumption_index}].evidence_refs "
+                        "must be a non-empty string array"
+                    )
+
+        evidence_refs = row.get("evidence_refs")
+        if not isinstance(evidence_refs, list) or not evidence_refs or any(not _as_text(item) for item in evidence_refs):
+            errors.append(f"kpi_impact_estimation.kpi_estimates[{index}].evidence_refs must be a non-empty string array")
+
+    summary = kpi_impact_estimation.get("summary")
+    if not isinstance(summary, Mapping):
+        errors.append("kpi_impact_estimation.summary must be an object")
+    else:
+        if summary.get("recommendation_count") != len(recommendation_adoptions):
+            errors.append("kpi_impact_estimation.summary.recommendation_count must match recommendation_adoptions length")
+        unique_kpi_ids = {
+            row.get("kpi_id") for row in kpi_estimates if isinstance(row, Mapping) and _as_text(row.get("kpi_id"))
+        }
+        if summary.get("kpi_count") != len(unique_kpi_ids):
+            errors.append("kpi_impact_estimation.summary.kpi_count must match unique kpi_id count")
+        if summary.get("estimate_count") != len(kpi_estimates):
+            errors.append("kpi_impact_estimation.summary.estimate_count must match kpi_estimates length")
+        if summary.get("low_confidence_estimate_count") != len(low_confidence_estimate_ids):
+            errors.append(
+                "kpi_impact_estimation.summary.low_confidence_estimate_count must match low-confidence estimates"
+            )
+        if summary.get("caveat_count") != sum(
+            len(row.get("caveats", [])) for row in kpi_estimates if isinstance(row, Mapping)
+        ):
+            errors.append("kpi_impact_estimation.summary.caveat_count must match total caveat count")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        processing_behavior = {}
+    if processing_behavior.get("strategy") != REQ_031_PROCESSING_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_031_PROCESSING_STRATEGY}")
+    if processing_behavior.get("reasoning_mode") != REQ_031_REASONING_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {REQ_031_REASONING_MODE}")
+    if processing_behavior.get("strict_evidence_discipline") is not True:
+        errors.append("processing_behavior.strict_evidence_discipline must be true")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        context_inputs = {}
+    for key in (
+        "call_chain",
+        "target_project_evidence_refs",
+        "earth_sweep_evidence_refs",
+        "recommendation_adoptions",
+        "kpi_definitions",
+        "impact_assumptions",
+    ):
+        if not isinstance(context_inputs.get(key), list):
+            errors.append(f"processing_behavior.context_inputs.{key} must be an array")
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+        context_usage = {}
+    if not isinstance(context_usage.get("earth_sweep_context_used"), bool):
+        errors.append("processing_behavior.context_usage.earth_sweep_context_used must be a boolean")
+    for key in (
+        "source_call_ids_used",
+        "earth_sweep_evidence_refs_used",
+        "recommendation_ids_considered",
+        "kpi_ids_considered",
+        "estimate_ids_emitted",
+        "low_confidence_estimate_ids",
+        "evidence_refs_used",
+    ):
+        value = context_usage.get(key)
+        if not isinstance(value, list) or any(not _as_text(item) for item in value):
+            errors.append(f"processing_behavior.context_usage.{key} must be a string array")
+    caveat_count = context_usage.get("caveat_count")
+    if not isinstance(caveat_count, int) or caveat_count < 0:
+        errors.append("processing_behavior.context_usage.caveat_count must be a non-negative integer")
+    if context_usage.get("recommendation_ids_considered") != recommendation_ids:
+        errors.append("processing_behavior.context_usage.recommendation_ids_considered must match recommendation_adoptions")
+    if context_usage.get("estimate_ids_emitted") != estimate_ids:
+        errors.append("processing_behavior.context_usage.estimate_ids_emitted must match kpi_estimates")
+    if context_usage.get("low_confidence_estimate_ids") != low_confidence_estimate_ids:
+        errors.append("processing_behavior.context_usage.low_confidence_estimate_ids must match low-confidence estimates")
+
+    estimation_rules = processing_behavior.get("estimation_rules")
+    if not isinstance(estimation_rules, Mapping):
+        errors.append("processing_behavior.estimation_rules must be an object")
+    else:
+        if estimation_rules.get("confidence_scale") != ["high", "medium", "low"]:
+            errors.append("processing_behavior.estimation_rules.confidence_scale must match the canonical list")
+        if estimation_rules.get("required_estimate_fields") != REQ_031_REQUIRED_ESTIMATE_FIELDS:
+            errors.append("processing_behavior.estimation_rules.required_estimate_fields must match the canonical list")
+        for key in ("caveats_required", "bounded_range_required", "assumption_evidence_required"):
+            if estimation_rules.get(key) is not True:
+                errors.append(f"processing_behavior.estimation_rules.{key} must be true")
+
+    source = payload.get("source")
+    if not isinstance(source, Mapping):
+        errors.append("source must be an object")
+    else:
+        if source.get("recommendation_adoption_count") != len(recommendation_adoptions):
+            errors.append("source.recommendation_adoption_count must match recommendation_adoptions length")
+        unique_kpi_ids = {
+            row.get("kpi_id") for row in kpi_estimates if isinstance(row, Mapping) and _as_text(row.get("kpi_id"))
+        }
+        if source.get("kpi_definition_count") != len(unique_kpi_ids):
+            errors.append("source.kpi_definition_count must match unique kpi_ids in estimates")
+        if source.get("impact_assumption_count") != len(kpi_estimates):
+            errors.append("source.impact_assumption_count must match kpi_estimates length")
+        if source.get("estimate_count") != len(kpi_estimates):
+            errors.append("source.estimate_count must match kpi_estimates length")
+        evidence_ref_count = source.get("evidence_ref_count")
+        if not isinstance(evidence_ref_count, int) or evidence_ref_count <= 0:
+            errors.append("source.evidence_ref_count must be a positive integer")
+        earth_sweep_evidence_count = source.get("earth_sweep_evidence_count")
+        if not isinstance(earth_sweep_evidence_count, int) or earth_sweep_evidence_count < 0:
+            errors.append("source.earth_sweep_evidence_count must be a non-negative integer")
+
+    metadata = payload.get("call_metadata")
+    if metadata is not None:
+        if not isinstance(metadata, Mapping):
+            errors.append("call_metadata must be an object")
+        else:
+            if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+                errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+            canonical_input = metadata.get("canonical_input")
+            if not isinstance(canonical_input, Mapping):
+                errors.append("call_metadata.canonical_input must be an object")
+            else:
+                expected_canonical_sha = _canonical_digest(canonical_input)
+                if metadata.get("canonical_input_sha256") != expected_canonical_sha:
+                    errors.append("call_metadata.canonical_input_sha256 does not match canonical_input")
+            if metadata.get("llm_call_trace_schema_version") != REQ_031_LLM_CALL_TRACE_SCHEMA_VERSION:
+                errors.append(
+                    f"call_metadata.llm_call_trace_schema_version must be {REQ_031_LLM_CALL_TRACE_SCHEMA_VERSION}"
+                )
+            if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+                errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+            rows = metadata.get("llm_call_trace_rows")
+            if not isinstance(rows, list) or len(rows) != 6:
+                errors.append("call_metadata.llm_call_trace_rows must contain exactly six rows")
+                rows = []
+            for index, row in enumerate(rows):
+                if not isinstance(row, Mapping):
+                    errors.append(f"call_metadata.llm_call_trace_rows[{index}] must be an object")
+                    continue
+                if row.get("sequence") != index + 1:
+                    errors.append(f"call_metadata.llm_call_trace_rows[{index}].sequence must be {index + 1}")
+                for key in ("call_id", "call_objective", "handoff_summary"):
+                    if not _as_text(row.get(key)):
+                        errors.append(f"call_metadata.llm_call_trace_rows[{index}].{key} is required")
+                for key in ("input_refs", "output_refs"):
+                    value = row.get(key)
+                    if not isinstance(value, list) or any(not _as_text(item) for item in value):
+                        errors.append(
+                            f"call_metadata.llm_call_trace_rows[{index}].{key} must be a string array"
+                        )
+            expected_trace_rows: list[dict[str, Any]] = []
+            if isinstance(context_inputs, Mapping):
+                try:
+                    expected_trace_rows = _build_req_031_llm_call_trace_rows(
+                        processing_call_id=_require_text(
+                            metadata.get("processing_call_id"),
+                            field_name="call_metadata.processing_call_id",
+                        ),
+                        call_chain=[
+                            _require_mapping(row, field_name=f"processing_behavior.context_inputs.call_chain[{index}]")
+                            for index, row in enumerate(context_inputs.get("call_chain", []))
+                        ],
+                        target_project_evidence_refs=[
+                            _require_text(item, field_name=f"processing_behavior.context_inputs.target_project_evidence_refs[{index}]")
+                            for index, item in enumerate(context_inputs.get("target_project_evidence_refs", []))
+                        ],
+                        earth_sweep_evidence_refs=[
+                            _require_text(item, field_name=f"processing_behavior.context_inputs.earth_sweep_evidence_refs[{index}]")
+                            for index, item in enumerate(context_inputs.get("earth_sweep_evidence_refs", []))
+                        ],
+                        impact_assumptions=[
+                            _require_mapping(row, field_name=f"processing_behavior.context_inputs.impact_assumptions[{index}]")
+                            for index, row in enumerate(context_inputs.get("impact_assumptions", []))
+                        ],
+                        estimate_count=len(kpi_estimates),
+                    )
+                except ValueError as exc:
+                    errors.append(f"call_metadata.llm_call_trace_rows could not be reconstructed: {exc}")
+            if expected_trace_rows:
+                if rows != expected_trace_rows:
+                    errors.append("call_metadata.llm_call_trace_rows must mirror the deterministic per-call trace rows")
+                expected_trace_sha = _canonical_digest(expected_trace_rows)
+                if metadata.get("llm_call_trace_sha256") != expected_trace_sha:
+                    errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
+
+    return errors
+
+
 def _json_dumps(payload: Mapping[str, Any], *, pretty: bool) -> str:
     if pretty:
         return json.dumps(payload, indent=2, sort_keys=False) + "\n"
@@ -3513,17 +4524,32 @@ def _parse_cli_input(input_path: str) -> Mapping[str, Any]:
 
 
 def _detect_requirement(payload: Mapping[str, Any]) -> str:
+    if "impact_assumptions" in payload or payload.get("analysis_type") == REQ_031_ANALYSIS_TYPE:
+        return REQ_031_REQUIREMENT_ID
     if "target_project_root" in payload:
         return REQ_025_REQUIREMENT_ID
     if "earlier_call_outputs" in payload or payload.get("analysis_type") == REQ_029_ANALYSIS_TYPE:
         return REQ_029_REQUIREMENT_ID
     if "target_project" in payload or payload.get("analysis_type") == REQ_026_ANALYSIS_TYPE:
         return REQ_026_REQUIREMENT_ID
-    raise ValueError("input payload does not match REQ-025, REQ-026, or REQ-029 contract anchors")
+    raise ValueError("input payload does not match REQ-025, REQ-026, REQ-029, or REQ-031 contract anchors")
 
 
 def run(payload: Mapping[str, Any]) -> dict[str, Any]:
     requirement_id = _detect_requirement(payload)
+    if requirement_id == REQ_031_REQUIREMENT_ID:
+        return build_req_031_call_6_kpi_impact_estimation_reasoning(
+            target_project=_require_mapping(payload.get("target_project"), field_name="input.target_project"),
+            call_chain=payload.get("call_chain"),
+            recommendation_adoptions=payload.get("recommendation_adoptions"),
+            kpi_definitions=payload.get("kpi_definitions"),
+            impact_assumptions=payload.get("impact_assumptions"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            analysis_type=_as_text(payload.get("analysis_type")) or REQ_031_ANALYSIS_TYPE,
+            call_id=_as_text(payload.get("call_id")) or REQ_031_CALL_ID,
+            checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
+        )
     if requirement_id == REQ_025_REQUIREMENT_ID:
         return build_req_025_multi_call_strategy_pipeline_planner(
             target_project_root=payload.get("target_project_root"),
@@ -3561,6 +4587,8 @@ def run(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def _validate_output(payload: Mapping[str, Any]) -> list[str]:
     requirement_id = _as_text(payload.get("requirement_id"))
+    if requirement_id == REQ_031_REQUIREMENT_ID:
+        return validate_req_031_call_6_kpi_impact_estimation_reasoning(payload)
     if requirement_id == REQ_025_REQUIREMENT_ID:
         return validate_req_025_multi_call_strategy_pipeline_planner(payload)
     if requirement_id == REQ_026_REQUIREMENT_ID:
@@ -3571,7 +4599,9 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Emit REQ-025, REQ-026, or REQ-029 strategy pipeline payloads.")
+    parser = argparse.ArgumentParser(
+        description="Emit REQ-025, REQ-026, REQ-029, or REQ-031 strategy pipeline payloads."
+    )
     parser.add_argument("--input-json", required=True, help="Input JSON path or '-' for stdin.")
     parser.add_argument("--output-json", default="", help="Optional output JSON path.")
     parser.add_argument("--json-pretty", action="store_true", help="Pretty-print JSON output.")
@@ -3587,11 +4617,13 @@ def main(argv: list[str] | None = None) -> int:
         requirement_id = _detect_requirement(input_payload)
         _timestamped_print(f"Starting {requirement_id} pipeline build from input source: {args.input_json}")
         output_payload = run(input_payload)
-    except (Req026Error, Req029Error, ValueError, json.JSONDecodeError) as exc:
+    except (Req026Error, Req029Error, Req031Error, ValueError, json.JSONDecodeError) as exc:
         requirement_id = (
             REQ_026_REQUIREMENT_ID
             if isinstance(exc, Req026Error)
-            else REQ_029_REQUIREMENT_ID if isinstance(exc, Req029Error) else ""
+            else REQ_029_REQUIREMENT_ID
+            if isinstance(exc, Req029Error)
+            else REQ_031_REQUIREMENT_ID if isinstance(exc, Req031Error) else ""
         )
         _timestamped_print(f"Pipeline input processing failed: {exc}")
         error_payload = {

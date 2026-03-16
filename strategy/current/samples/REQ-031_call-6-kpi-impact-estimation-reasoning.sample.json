@@ -1,0 +1,674 @@
+{
+  "ok": true,
+  "tool": "strategy-llm-pipeline",
+  "tool_version": "1.0.0",
+  "schema_version": "req-031.call-6-kpi-impact-estimation-reasoning.v1",
+  "requirement_id": "REQ-031",
+  "analysis_type": "call_6_kpi_impact_estimation_reasoning",
+  "call_id": "call-6",
+  "checked_at_utc": "2026-03-16T14:30:00Z",
+  "kpi_impact_estimation": {
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion"
+    },
+    "recommendation_adoptions": [
+      {
+        "recommendation_id": "rec.local-replay-hardening",
+        "summary": "Keep the local replay diagnostics deterministic.",
+        "adoption_status": "planned",
+        "adoption_window": "next-14-days",
+        "project_id": "",
+        "requires_earth_evidence": false,
+        "evidence_refs": [
+          "REQ-029::call::call-4::output::recommendation_synthesis",
+          "reports/optimus-prime/planning/evidence/TASK-103/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "recommendation_id": "rec.runtime-sync",
+        "summary": "Coordinate replay hardening with runtime-orchestrator.",
+        "adoption_status": "conditional",
+        "adoption_window": "next-30-days",
+        "project_id": "runtime-orchestrator",
+        "requires_earth_evidence": true,
+        "evidence_refs": [
+          "REQ-029::call::call-4::output::recommendation_synthesis",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+        ]
+      }
+    ],
+    "kpi_estimates": [
+      {
+        "estimate_id": "estimate::rec.local-replay-hardening::kpi.mean-time-to-diagnose",
+        "recommendation_id": "rec.local-replay-hardening",
+        "recommendation_summary": "Keep the local replay diagnostics deterministic.",
+        "kpi_id": "kpi.mean-time-to-diagnose",
+        "kpi_name": "Mean time to diagnose replay regressions",
+        "baseline_value": 6.5,
+        "unit": "hours",
+        "desired_direction": "decrease",
+        "adoption_status": "planned",
+        "adoption_window": "next-14-days",
+        "expected_movement": {
+          "lower_bound": -2.0,
+          "upper_bound": -1.0,
+          "unit": "hours",
+          "direction": "decrease"
+        },
+        "estimated_post_adoption_range": {
+          "lower_bound": 4.5,
+          "upper_bound": 5.5,
+          "unit": "hours"
+        },
+        "reasoning_summary": "Adopting 'Keep the local replay diagnostics deterministic.' is estimated to shift Mean time to diagnose replay regressions by -2 to -1 hours over next-14-days under assumption assump.local-diagnosis.",
+        "confidence": "high",
+        "caveats": [
+          "Estimate assumes the branch keeps emitting comparable failure artifacts."
+        ],
+        "evidence_backed_assumptions": [
+          {
+            "assumption_id": "assump.local-diagnosis",
+            "statement": "Deterministic replay diagnostics should shorten time-to-diagnose on repeated failures once branch-head artifacts stop drifting.",
+            "evidence_refs": [
+              "REQ-030::call::call-5::output::adoption_decision",
+              "reports/optimus-prime/planning/STATE.json"
+            ]
+          }
+        ],
+        "evidence_refs": [
+          "REQ-029::call::call-4::output::recommendation_synthesis",
+          "reports/optimus-prime/planning/evidence/TASK-103/TASK_EVIDENCE.json",
+          "reports/optimus-prime/planning/STATE.json",
+          "REQ-030::call::call-5::output::adoption_decision"
+        ]
+      },
+      {
+        "estimate_id": "estimate::rec.local-replay-hardening::kpi.replay-failure-rate",
+        "recommendation_id": "rec.local-replay-hardening",
+        "recommendation_summary": "Keep the local replay diagnostics deterministic.",
+        "kpi_id": "kpi.replay-failure-rate",
+        "kpi_name": "Replay failure rate",
+        "baseline_value": 18.0,
+        "unit": "percent",
+        "desired_direction": "decrease",
+        "adoption_status": "planned",
+        "adoption_window": "next-14-days",
+        "expected_movement": {
+          "lower_bound": -6.0,
+          "upper_bound": -3.0,
+          "unit": "percent",
+          "direction": "decrease"
+        },
+        "estimated_post_adoption_range": {
+          "lower_bound": 12.0,
+          "upper_bound": 15.0,
+          "unit": "percent"
+        },
+        "reasoning_summary": "Adopting 'Keep the local replay diagnostics deterministic.' is estimated to shift Replay failure rate by -6 to -3 percent over next-14-days under assumption assump.local-failure-rate.",
+        "confidence": "medium",
+        "caveats": [
+          "Estimate assumes replay instrumentation changes land without expanding the failure envelope.",
+          "Estimate should be revisited if the recommendation slips beyond the next planned wave."
+        ],
+        "evidence_backed_assumptions": [
+          {
+            "assumption_id": "assump.local-failure-rate",
+            "statement": "Deterministic replay diagnostics should shrink repeated failure incidence before promotion.",
+            "evidence_refs": [
+              "REQ-029::call::call-4::output::recommendation_synthesis",
+              "reports/optimus-prime/planning/VERIFICATION.md"
+            ]
+          }
+        ],
+        "evidence_refs": [
+          "REQ-029::call::call-4::output::recommendation_synthesis",
+          "reports/optimus-prime/planning/evidence/TASK-103/TASK_EVIDENCE.json",
+          "reports/optimus-prime/planning/VERIFICATION.md"
+        ]
+      },
+      {
+        "estimate_id": "estimate::rec.runtime-sync::kpi.replay-failure-rate",
+        "recommendation_id": "rec.runtime-sync",
+        "recommendation_summary": "Coordinate replay hardening with runtime-orchestrator.",
+        "kpi_id": "kpi.replay-failure-rate",
+        "kpi_name": "Replay failure rate",
+        "baseline_value": 18.0,
+        "unit": "percent",
+        "desired_direction": "decrease",
+        "adoption_status": "conditional",
+        "adoption_window": "next-30-days",
+        "expected_movement": {
+          "lower_bound": -4.0,
+          "upper_bound": -1.0,
+          "unit": "percent",
+          "direction": "decrease"
+        },
+        "estimated_post_adoption_range": {
+          "lower_bound": 14.0,
+          "upper_bound": 17.0,
+          "unit": "percent"
+        },
+        "reasoning_summary": "Adopting 'Coordinate replay hardening with runtime-orchestrator.' is estimated to shift Replay failure rate by -4 to -1 percent over next-30-days under assumption assump.runtime-failure-rate.",
+        "confidence": "low",
+        "caveats": [
+          "Estimate can overstate benefit if shared runtime evidence goes stale before rollout.",
+          "Estimate depends on runtime-orchestrator adopting the same recovery interpretation in the same window."
+        ],
+        "evidence_backed_assumptions": [
+          {
+            "assumption_id": "assump.runtime-failure-rate",
+            "statement": "Cross-project runtime coordination should reduce replay failure recurrence once shared runtime recovery assumptions stop diverging.",
+            "evidence_refs": [
+              "REQ-029::call::call-4::output::recommendation_synthesis",
+              "reports/earth/sweeps/2026-03-16/portfolio.json",
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+            ]
+          }
+        ],
+        "evidence_refs": [
+          "REQ-029::call::call-4::output::recommendation_synthesis",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/VERIFICATION.md",
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ]
+      }
+    ],
+    "summary": {
+      "recommendation_count": 2,
+      "kpi_count": 2,
+      "estimate_count": 3,
+      "low_confidence_estimate_count": 1,
+      "caveat_count": 5
+    }
+  },
+  "processing_behavior": {
+    "strategy": "call-6-kpi-impact-estimation",
+    "reasoning_mode": "deterministic-evidence-bounded-estimation",
+    "strict_evidence_discipline": true,
+    "context_inputs": {
+      "call_chain": [
+        {
+          "sequence": 1,
+          "call_id": "call-1",
+          "phase": "analysis",
+          "output_ref": "REQ-026::call::call-1::output::situational_analysis"
+        },
+        {
+          "sequence": 2,
+          "call_id": "call-2",
+          "phase": "planning",
+          "output_ref": "REQ-027::call::call-2::output::constraint_refinement"
+        },
+        {
+          "sequence": 3,
+          "call_id": "call-3",
+          "phase": "alignment",
+          "output_ref": "REQ-028::call::call-3::output::execution_alignment"
+        },
+        {
+          "sequence": 4,
+          "call_id": "call-4",
+          "phase": "synthesis",
+          "output_ref": "REQ-029::call::call-4::output::recommendation_synthesis"
+        },
+        {
+          "sequence": 5,
+          "call_id": "call-5",
+          "phase": "selection",
+          "output_ref": "REQ-030::call::call-5::output::adoption_decision"
+        },
+        {
+          "sequence": 6,
+          "call_id": "call-6",
+          "phase": "estimation",
+          "output_ref": "REQ-031::call::call-6::output::kpi_impact_estimation"
+        }
+      ],
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/STATE.json",
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "reports/optimus-prime/planning/evidence/TASK-103/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/portfolio.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+      ],
+      "recommendation_adoptions": [
+        {
+          "recommendation_id": "rec.local-replay-hardening",
+          "summary": "Keep the local replay diagnostics deterministic.",
+          "adoption_status": "planned",
+          "adoption_window": "next-14-days",
+          "project_id": "",
+          "requires_earth_evidence": false,
+          "evidence_refs": [
+            "REQ-029::call::call-4::output::recommendation_synthesis",
+            "reports/optimus-prime/planning/evidence/TASK-103/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "recommendation_id": "rec.runtime-sync",
+          "summary": "Coordinate replay hardening with runtime-orchestrator.",
+          "adoption_status": "conditional",
+          "adoption_window": "next-30-days",
+          "project_id": "runtime-orchestrator",
+          "requires_earth_evidence": true,
+          "evidence_refs": [
+            "REQ-029::call::call-4::output::recommendation_synthesis",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ],
+      "kpi_definitions": [
+        {
+          "kpi_id": "kpi.mean-time-to-diagnose",
+          "name": "Mean time to diagnose replay regressions",
+          "unit": "hours",
+          "baseline_value": 6.5,
+          "desired_direction": "decrease",
+          "source_ref": "reports/optimus-prime/planning/STATE.json"
+        },
+        {
+          "kpi_id": "kpi.replay-failure-rate",
+          "name": "Replay failure rate",
+          "unit": "percent",
+          "baseline_value": 18.0,
+          "desired_direction": "decrease",
+          "source_ref": "reports/optimus-prime/planning/VERIFICATION.md"
+        }
+      ],
+      "impact_assumptions": [
+        {
+          "assumption_id": "assump.local-diagnosis",
+          "recommendation_id": "rec.local-replay-hardening",
+          "kpi_id": "kpi.mean-time-to-diagnose",
+          "statement": "Deterministic replay diagnostics should shorten time-to-diagnose on repeated failures once branch-head artifacts stop drifting.",
+          "expected_movement_lower": -2.0,
+          "expected_movement_upper": -1.0,
+          "confidence": "high",
+          "caveats": [
+            "Estimate assumes the branch keeps emitting comparable failure artifacts."
+          ],
+          "evidence_refs": [
+            "REQ-030::call::call-5::output::adoption_decision",
+            "reports/optimus-prime/planning/STATE.json"
+          ]
+        },
+        {
+          "assumption_id": "assump.local-failure-rate",
+          "recommendation_id": "rec.local-replay-hardening",
+          "kpi_id": "kpi.replay-failure-rate",
+          "statement": "Deterministic replay diagnostics should shrink repeated failure incidence before promotion.",
+          "expected_movement_lower": -6.0,
+          "expected_movement_upper": -3.0,
+          "confidence": "medium",
+          "caveats": [
+            "Estimate assumes replay instrumentation changes land without expanding the failure envelope.",
+            "Estimate should be revisited if the recommendation slips beyond the next planned wave."
+          ],
+          "evidence_refs": [
+            "REQ-029::call::call-4::output::recommendation_synthesis",
+            "reports/optimus-prime/planning/VERIFICATION.md"
+          ]
+        },
+        {
+          "assumption_id": "assump.runtime-failure-rate",
+          "recommendation_id": "rec.runtime-sync",
+          "kpi_id": "kpi.replay-failure-rate",
+          "statement": "Cross-project runtime coordination should reduce replay failure recurrence once shared runtime recovery assumptions stop diverging.",
+          "expected_movement_lower": -4.0,
+          "expected_movement_upper": -1.0,
+          "confidence": "low",
+          "caveats": [
+            "Estimate can overstate benefit if shared runtime evidence goes stale before rollout.",
+            "Estimate depends on runtime-orchestrator adopting the same recovery interpretation in the same window."
+          ],
+          "evidence_refs": [
+            "REQ-029::call::call-4::output::recommendation_synthesis",
+            "reports/earth/sweeps/2026-03-16/portfolio.json",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ]
+    },
+    "context_usage": {
+      "source_call_ids_used": [
+        "call-1",
+        "call-2",
+        "call-3",
+        "call-4",
+        "call-5",
+        "call-6"
+      ],
+      "earth_sweep_context_used": true,
+      "earth_sweep_evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-16/portfolio.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+      ],
+      "recommendation_ids_considered": [
+        "rec.local-replay-hardening",
+        "rec.runtime-sync"
+      ],
+      "kpi_ids_considered": [
+        "kpi.mean-time-to-diagnose",
+        "kpi.replay-failure-rate"
+      ],
+      "estimate_ids_emitted": [
+        "estimate::rec.local-replay-hardening::kpi.mean-time-to-diagnose",
+        "estimate::rec.local-replay-hardening::kpi.replay-failure-rate",
+        "estimate::rec.runtime-sync::kpi.replay-failure-rate"
+      ],
+      "low_confidence_estimate_ids": [
+        "estimate::rec.runtime-sync::kpi.replay-failure-rate"
+      ],
+      "caveat_count": 5,
+      "evidence_refs_used": [
+        "reports/optimus-prime/planning/STATE.json",
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "reports/optimus-prime/planning/evidence/TASK-103/TASK_EVIDENCE.json",
+        "reports/earth/sweeps/2026-03-16/portfolio.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "REQ-029::call::call-4::output::recommendation_synthesis",
+        "REQ-030::call::call-5::output::adoption_decision"
+      ]
+    },
+    "estimation_rules": {
+      "confidence_scale": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "required_estimate_fields": [
+        "estimate_id",
+        "recommendation_id",
+        "recommendation_summary",
+        "kpi_id",
+        "kpi_name",
+        "baseline_value",
+        "unit",
+        "desired_direction",
+        "adoption_status",
+        "adoption_window",
+        "expected_movement",
+        "estimated_post_adoption_range",
+        "reasoning_summary",
+        "confidence",
+        "caveats",
+        "evidence_backed_assumptions",
+        "evidence_refs"
+      ],
+      "caveats_required": true,
+      "bounded_range_required": true,
+      "assumption_evidence_required": true
+    }
+  },
+  "source": {
+    "recommendation_adoption_count": 2,
+    "kpi_definition_count": 2,
+    "impact_assumption_count": 3,
+    "estimate_count": 3,
+    "evidence_ref_count": 7,
+    "earth_sweep_evidence_count": 2
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "7b4637335d803ad932c7d5d1f3628f5b57f79322e2373ef4fcd7af0836f04133",
+    "reproducible_call_id": "req031-7b4637335d803ad9",
+    "canonical_input": {
+      "requirement_id": "REQ-031",
+      "analysis_type": "call_6_kpi_impact_estimation_reasoning",
+      "call_id": "call-6",
+      "checked_at_utc": "2026-03-16T14:30:00Z",
+      "target_project": {
+        "project_id": "optimus-prime-gsd-fusion"
+      },
+      "call_chain": [
+        {
+          "sequence": 1,
+          "call_id": "call-1",
+          "phase": "analysis",
+          "output_ref": "REQ-026::call::call-1::output::situational_analysis"
+        },
+        {
+          "sequence": 2,
+          "call_id": "call-2",
+          "phase": "planning",
+          "output_ref": "REQ-027::call::call-2::output::constraint_refinement"
+        },
+        {
+          "sequence": 3,
+          "call_id": "call-3",
+          "phase": "alignment",
+          "output_ref": "REQ-028::call::call-3::output::execution_alignment"
+        },
+        {
+          "sequence": 4,
+          "call_id": "call-4",
+          "phase": "synthesis",
+          "output_ref": "REQ-029::call::call-4::output::recommendation_synthesis"
+        },
+        {
+          "sequence": 5,
+          "call_id": "call-5",
+          "phase": "selection",
+          "output_ref": "REQ-030::call::call-5::output::adoption_decision"
+        },
+        {
+          "sequence": 6,
+          "call_id": "call-6",
+          "phase": "estimation",
+          "output_ref": "REQ-031::call::call-6::output::kpi_impact_estimation"
+        }
+      ],
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/STATE.json",
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "reports/optimus-prime/planning/evidence/TASK-103/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/portfolio.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+      ],
+      "recommendation_adoptions": [
+        {
+          "recommendation_id": "rec.local-replay-hardening",
+          "summary": "Keep the local replay diagnostics deterministic.",
+          "adoption_status": "planned",
+          "adoption_window": "next-14-days",
+          "project_id": "",
+          "requires_earth_evidence": false,
+          "evidence_refs": [
+            "REQ-029::call::call-4::output::recommendation_synthesis",
+            "reports/optimus-prime/planning/evidence/TASK-103/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "recommendation_id": "rec.runtime-sync",
+          "summary": "Coordinate replay hardening with runtime-orchestrator.",
+          "adoption_status": "conditional",
+          "adoption_window": "next-30-days",
+          "project_id": "runtime-orchestrator",
+          "requires_earth_evidence": true,
+          "evidence_refs": [
+            "REQ-029::call::call-4::output::recommendation_synthesis",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ],
+      "kpi_definitions": [
+        {
+          "kpi_id": "kpi.mean-time-to-diagnose",
+          "name": "Mean time to diagnose replay regressions",
+          "unit": "hours",
+          "baseline_value": 6.5,
+          "desired_direction": "decrease",
+          "source_ref": "reports/optimus-prime/planning/STATE.json"
+        },
+        {
+          "kpi_id": "kpi.replay-failure-rate",
+          "name": "Replay failure rate",
+          "unit": "percent",
+          "baseline_value": 18.0,
+          "desired_direction": "decrease",
+          "source_ref": "reports/optimus-prime/planning/VERIFICATION.md"
+        }
+      ],
+      "impact_assumptions": [
+        {
+          "assumption_id": "assump.local-diagnosis",
+          "recommendation_id": "rec.local-replay-hardening",
+          "kpi_id": "kpi.mean-time-to-diagnose",
+          "statement": "Deterministic replay diagnostics should shorten time-to-diagnose on repeated failures once branch-head artifacts stop drifting.",
+          "expected_movement_lower": -2.0,
+          "expected_movement_upper": -1.0,
+          "confidence": "high",
+          "caveats": [
+            "Estimate assumes the branch keeps emitting comparable failure artifacts."
+          ],
+          "evidence_refs": [
+            "REQ-030::call::call-5::output::adoption_decision",
+            "reports/optimus-prime/planning/STATE.json"
+          ]
+        },
+        {
+          "assumption_id": "assump.local-failure-rate",
+          "recommendation_id": "rec.local-replay-hardening",
+          "kpi_id": "kpi.replay-failure-rate",
+          "statement": "Deterministic replay diagnostics should shrink repeated failure incidence before promotion.",
+          "expected_movement_lower": -6.0,
+          "expected_movement_upper": -3.0,
+          "confidence": "medium",
+          "caveats": [
+            "Estimate assumes replay instrumentation changes land without expanding the failure envelope.",
+            "Estimate should be revisited if the recommendation slips beyond the next planned wave."
+          ],
+          "evidence_refs": [
+            "REQ-029::call::call-4::output::recommendation_synthesis",
+            "reports/optimus-prime/planning/VERIFICATION.md"
+          ]
+        },
+        {
+          "assumption_id": "assump.runtime-failure-rate",
+          "recommendation_id": "rec.runtime-sync",
+          "kpi_id": "kpi.replay-failure-rate",
+          "statement": "Cross-project runtime coordination should reduce replay failure recurrence once shared runtime recovery assumptions stop diverging.",
+          "expected_movement_lower": -4.0,
+          "expected_movement_upper": -1.0,
+          "confidence": "low",
+          "caveats": [
+            "Estimate can overstate benefit if shared runtime evidence goes stale before rollout.",
+            "Estimate depends on runtime-orchestrator adopting the same recovery interpretation in the same window."
+          ],
+          "evidence_refs": [
+            "REQ-029::call::call-4::output::recommendation_synthesis",
+            "reports/earth/sweeps/2026-03-16/portfolio.json",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ]
+    },
+    "processing_call_id": "req031-processing-7b4637335d803ad9",
+    "llm_call_trace_schema_version": "req-031.llm-call-trace-row.v1",
+    "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
+    "llm_call_trace_sha256": "a5142d28dfe41c87e3c13021f6996a077b8be5308c47becd5f69bfa9db33e0ee",
+    "llm_call_trace_rows": [
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-7b4637335d803ad9",
+        "call_id": "call-1",
+        "sequence": 1,
+        "call_objective": "Anchor the target project state and known evidence limits.",
+        "input_refs": [],
+        "output_refs": [
+          "REQ-026::call::call-1::output::situational_analysis"
+        ],
+        "handoff_summary": "Call 1 hands off situational_analysis via REQ-026::call::call-1::output::situational_analysis to call-2 after consuming 0 input refs."
+      },
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-7b4637335d803ad9",
+        "call_id": "call-2",
+        "sequence": 2,
+        "call_objective": "Refine implementation constraints that shape later adoption options.",
+        "input_refs": [
+          "REQ-026::call::call-1::output::situational_analysis"
+        ],
+        "output_refs": [
+          "REQ-027::call::call-2::output::constraint_refinement"
+        ],
+        "handoff_summary": "Call 2 hands off constraint_refinement via REQ-027::call::call-2::output::constraint_refinement to call-3 after consuming 1 input refs."
+      },
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-7b4637335d803ad9",
+        "call_id": "call-3",
+        "sequence": 3,
+        "call_objective": "Align execution dependencies and evidence refresh obligations.",
+        "input_refs": [
+          "REQ-027::call::call-2::output::constraint_refinement"
+        ],
+        "output_refs": [
+          "REQ-028::call::call-3::output::execution_alignment"
+        ],
+        "handoff_summary": "Call 3 hands off execution_alignment via REQ-028::call::call-3::output::execution_alignment to call-4 after consuming 1 input refs."
+      },
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-7b4637335d803ad9",
+        "call_id": "call-4",
+        "sequence": 4,
+        "call_objective": "Synthesize deterministic recommendation drafts for bounded adoption choices.",
+        "input_refs": [
+          "REQ-028::call::call-3::output::execution_alignment"
+        ],
+        "output_refs": [
+          "REQ-029::call::call-4::output::recommendation_synthesis"
+        ],
+        "handoff_summary": "Call 4 hands off recommendation_synthesis via REQ-029::call::call-4::output::recommendation_synthesis to call-5 after consuming 1 input refs."
+      },
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-7b4637335d803ad9",
+        "call_id": "call-5",
+        "sequence": 5,
+        "call_objective": "Select which recommendation adoptions are in scope for KPI estimation.",
+        "input_refs": [
+          "REQ-029::call::call-4::output::recommendation_synthesis"
+        ],
+        "output_refs": [
+          "REQ-030::call::call-5::output::adoption_decision"
+        ],
+        "handoff_summary": "Call 5 hands off adoption_decision via REQ-030::call::call-5::output::adoption_decision to call-6 after consuming 1 input refs."
+      },
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-7b4637335d803ad9",
+        "call_id": "call-6",
+        "sequence": 6,
+        "call_objective": "Estimate KPI movement from recommendation adoption using evidence-backed assumptions with explicit confidence and caveats.",
+        "input_refs": [
+          "REQ-026::call::call-1::output::situational_analysis",
+          "REQ-027::call::call-2::output::constraint_refinement",
+          "REQ-028::call::call-3::output::execution_alignment",
+          "REQ-029::call::call-4::output::recommendation_synthesis",
+          "REQ-030::call::call-5::output::adoption_decision",
+          "reports/optimus-prime/planning/STATE.json",
+          "reports/optimus-prime/planning/VERIFICATION.md",
+          "reports/optimus-prime/planning/evidence/TASK-103/TASK_EVIDENCE.json",
+          "reports/earth/sweeps/2026-03-16/portfolio.json",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+        ],
+        "output_refs": [
+          "REQ-031::call::call-6::output::kpi_impact_estimation"
+        ],
+        "handoff_summary": "Call 6 hands off kpi_impact_estimation via REQ-031::call::call-6::output::kpi_impact_estimation as the terminal KPI estimation output with 3 estimate(s)."
+      }
+    ]
+  }
+}
