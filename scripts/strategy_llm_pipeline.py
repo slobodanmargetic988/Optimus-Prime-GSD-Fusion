@@ -4,6 +4,7 @@
 Implemented requirement surfaces:
 - REQ-027 Call-2 ecosystem linkage reasoning.
 - REQ-030 Call-5 sequencing and lane design reasoning.
+- REQ-035 Evidence citation discipline in reasoning calls.
 """
 
 from __future__ import annotations
@@ -30,6 +31,11 @@ REQ_030_PROCESSING_SCHEMA_VERSION = "req-030.call-5-sequencing-and-lane-design-p
 REQ_030_REQUIREMENT_ID = "REQ-030"
 REQ_030_ANALYSIS_TYPE = "call_5_sequencing_and_lane_design_reasoning"
 REQ_030_CALL_ID = "call-5"
+
+REQ_035_SCHEMA_VERSION = "req-035.evidence-citation-discipline-in-reasoning-calls.v1"
+REQ_035_REQUIREMENT_ID = "REQ-035"
+REQ_035_ANALYSIS_TYPE = "evidence_citation_discipline_in_reasoning_calls"
+REQ_035_CALL_ID = "reasoning-calls"
 
 _CONFIDENCE_TAGS = ("high", "medium", "low")
 _DIRECTIONS = ("target_to_peer", "peer_to_target", "bidirectional")
@@ -802,6 +808,155 @@ def _normalize_req_030_sequence(
         sequence_rows.append(normalized)
     sequence_rows.sort(key=lambda r: r["order"])
     return sequence_rows
+
+
+def _normalize_req_035_context_provenance_ledger(raw_value: Any) -> dict[str, Any]:
+    ledger = _require_mapping(raw_value, field_name="context_provenance_ledger")
+    ledger_requirement_id = _require_nonempty_text(
+        ledger.get("ledger_requirement_id"),
+        field_name="context_provenance_ledger.ledger_requirement_id",
+    )
+    ledger_scope = _require_nonempty_text(
+        ledger.get("ledger_scope"),
+        field_name="context_provenance_ledger.ledger_scope",
+    )
+    raw_evidence_ids = ledger.get("evidence_ids")
+    if not isinstance(raw_evidence_ids, list) or not raw_evidence_ids:
+        raise ValueError("context_provenance_ledger.evidence_ids must be a non-empty list of evidence ids")
+    evidence_ids: list[str] = []
+    for idx, raw_id in enumerate(raw_evidence_ids):
+        evidence_id = _require_nonempty_text(
+            raw_id,
+            field_name=f"context_provenance_ledger.evidence_ids[{idx}]",
+        )
+        if not evidence_id.startswith("claim-"):
+            raise ValueError(
+                f"context_provenance_ledger.evidence_ids[{idx}] must use REQ-021 claim id format (claim-<id>)"
+            )
+        evidence_ids.append(evidence_id)
+    normalized = {
+        "ledger_requirement_id": ledger_requirement_id,
+        "ledger_scope": ledger_scope,
+        "evidence_ids": sorted(set(evidence_ids)),
+    }
+    extra = sorted(set(ledger.keys()) - set(normalized.keys()))
+    if extra:
+        raise ValueError(f"context_provenance_ledger has unexpected keys: {extra}")
+    return normalized
+
+
+def _normalize_req_035_recommendation(raw_value: Any, *, field_name: str) -> dict[str, str]:
+    recommendation = _require_mapping(raw_value, field_name=field_name)
+    recommendation_id = _require_nonempty_text(
+        recommendation.get("recommendation_id"),
+        field_name=f"{field_name}.recommendation_id",
+    )
+    summary = _require_nonempty_text(
+        recommendation.get("summary"),
+        field_name=f"{field_name}.summary",
+    )
+    rationale = _require_nonempty_text(
+        recommendation.get("rationale"),
+        field_name=f"{field_name}.rationale",
+    )
+    confidence_tag = _normalize_confidence_tag(
+        recommendation.get("confidence_tag"),
+        field_name=f"{field_name}.confidence_tag",
+    )
+    normalized = {
+        "recommendation_id": recommendation_id,
+        "summary": summary,
+        "rationale": rationale,
+        "confidence_tag": confidence_tag,
+    }
+    extra = sorted(set(recommendation.keys()) - set(normalized.keys()))
+    if extra:
+        raise ValueError(f"{field_name} has unexpected keys: {extra}")
+    return normalized
+
+
+def _normalize_req_035_reasoning_calls(raw_value: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, list) or not raw_value:
+        raise ValueError("reasoning_calls must be a non-empty list")
+
+    calls: list[dict[str, Any]] = []
+    seen_call_ids: set[str] = set()
+    seen_recommendation_ids: set[str] = set()
+    for cidx, item in enumerate(raw_value):
+        call = _require_mapping(item, field_name=f"reasoning_calls[{cidx}]")
+        call_id = _require_nonempty_text(call.get("call_id"), field_name=f"reasoning_calls[{cidx}].call_id")
+        if call_id in seen_call_ids:
+            raise ValueError(f"reasoning_calls[{cidx}].call_id must be unique (duplicate: {call_id})")
+        seen_call_ids.add(call_id)
+
+        raw_claims = call.get("strategic_claims")
+        if not isinstance(raw_claims, list) or not raw_claims:
+            raise ValueError(f"reasoning_calls[{cidx}].strategic_claims must be a non-empty list")
+
+        claims: list[dict[str, Any]] = []
+        seen_claim_ids: set[str] = set()
+        for sidx, raw_claim in enumerate(raw_claims):
+            claim = _require_mapping(raw_claim, field_name=f"reasoning_calls[{cidx}].strategic_claims[{sidx}]")
+            strategic_claim_id = _require_nonempty_text(
+                claim.get("strategic_claim_id"),
+                field_name=f"reasoning_calls[{cidx}].strategic_claims[{sidx}].strategic_claim_id",
+            )
+            if strategic_claim_id in seen_claim_ids:
+                raise ValueError(
+                    f"reasoning_calls[{cidx}].strategic_claims[{sidx}].strategic_claim_id must be unique within call "
+                    f"(duplicate: {strategic_claim_id})"
+                )
+            seen_claim_ids.add(strategic_claim_id)
+            summary = _require_nonempty_text(
+                claim.get("summary"),
+                field_name=f"reasoning_calls[{cidx}].strategic_claims[{sidx}].summary",
+            )
+
+            evidence_ids: list[str] = []
+            if claim.get("evidence_ids") is None:
+                evidence_ids = []
+            else:
+                raw_evidence_ids = claim.get("evidence_ids")
+                if not isinstance(raw_evidence_ids, list):
+                    raise ValueError(
+                        f"reasoning_calls[{cidx}].strategic_claims[{sidx}].evidence_ids must be a list of evidence ids"
+                    )
+                for evidx, raw_id in enumerate(raw_evidence_ids):
+                    evidence_ids.append(
+                        _require_nonempty_text(
+                            raw_id,
+                            field_name=f"reasoning_calls[{cidx}].strategic_claims[{sidx}].evidence_ids[{evidx}]",
+                        )
+                    )
+            recommendation = _normalize_req_035_recommendation(
+                claim.get("recommendation"),
+                field_name=f"reasoning_calls[{cidx}].strategic_claims[{sidx}].recommendation",
+            )
+            recommendation_id = recommendation["recommendation_id"]
+            if recommendation_id in seen_recommendation_ids:
+                raise ValueError(
+                    "reasoning_calls[*].strategic_claims[*].recommendation.recommendation_id must be globally unique "
+                    f"(duplicate: {recommendation_id})"
+                )
+            seen_recommendation_ids.add(recommendation_id)
+            normalized_claim = {
+                "strategic_claim_id": strategic_claim_id,
+                "summary": summary,
+                "evidence_ids": sorted(set(evidence_ids)),
+                "recommendation": recommendation,
+            }
+            extra_claim = sorted(set(claim.keys()) - set(normalized_claim.keys()))
+            if extra_claim:
+                raise ValueError(f"reasoning_calls[{cidx}].strategic_claims[{sidx}] has unexpected keys: {extra_claim}")
+            claims.append(normalized_claim)
+        claims.sort(key=lambda row: row["strategic_claim_id"])
+        normalized_call = {"call_id": call_id, "strategic_claims": claims}
+        extra_call = sorted(set(call.keys()) - set(normalized_call.keys()))
+        if extra_call:
+            raise ValueError(f"reasoning_calls[{cidx}] has unexpected keys: {extra_call}")
+        calls.append(normalized_call)
+    calls.sort(key=lambda row: row["call_id"])
+    return calls
 
 
 def _normalize_interaction_obligations(
@@ -2461,6 +2616,660 @@ def validate_req_030_call_5_sequencing_and_lane_design_reasoning(payload: Mappin
     return errors
 
 
+def build_req_035_evidence_citation_discipline_in_reasoning_calls(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build normalized REQ-035 payload for evidence citation discipline in reasoning calls."""
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_035_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_035_ANALYSIS_TYPE}")
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+
+    context_provenance_ledger = _normalize_req_035_context_provenance_ledger(raw.get("context_provenance_ledger"))
+    if context_provenance_ledger["ledger_requirement_id"] != "REQ-021":
+        raise ValueError("context_provenance_ledger.ledger_requirement_id must be REQ-021")
+    reasoning_calls = _normalize_req_035_reasoning_calls(raw.get("reasoning_calls"))
+
+    extra = sorted(set(raw.keys()) - {"analysis_type", "now_utc", "context_provenance_ledger", "reasoning_calls"})
+    if extra:
+        raise ValueError(f"payload has unexpected keys: {extra}")
+
+    ledger_evidence_ids = set(context_provenance_ledger["evidence_ids"])
+    strategic_claim_citation_status: list[dict[str, Any]] = []
+    flagged_claims: list[dict[str, Any]] = []
+    final_recommendations: list[dict[str, Any]] = []
+
+    for call in reasoning_calls:
+        call_id = call["call_id"]
+        for claim in call["strategic_claims"]:
+            strategic_claim_id = claim["strategic_claim_id"]
+            summary = claim["summary"]
+            evidence_ids = list(claim["evidence_ids"])
+            recommendation = claim["recommendation"]
+            recommendation_id = recommendation["recommendation_id"]
+            unknown_evidence_ids = sorted({ev for ev in evidence_ids if ev not in ledger_evidence_ids})
+            flag_reason_codes: list[str] = []
+            if not evidence_ids:
+                flag_reason_codes.append("uncited_strategic_claim")
+            if unknown_evidence_ids:
+                flag_reason_codes.append("evidence_id_not_in_context_provenance_ledger")
+
+            citation_status = "flagged" if flag_reason_codes else "cited"
+            status_row = {
+                "strategic_claim_id": strategic_claim_id,
+                "call_id": call_id,
+                "recommendation_id": recommendation_id,
+                "summary": summary,
+                "evidence_ids": evidence_ids,
+                "citation_status": citation_status,
+                "flag_reason_codes": flag_reason_codes,
+            }
+            strategic_claim_citation_status.append(status_row)
+
+            if citation_status == "flagged":
+                flagged_claims.append(
+                    {
+                        "strategic_claim_id": strategic_claim_id,
+                        "call_id": call_id,
+                        "recommendation_id": recommendation_id,
+                        "summary": summary,
+                        "evidence_ids": evidence_ids,
+                        "flag_reason_codes": flag_reason_codes,
+                        "unknown_evidence_ids": unknown_evidence_ids,
+                        "excluded_from_final_recommendations": True,
+                    }
+                )
+                continue
+
+            final_recommendations.append(
+                {
+                    "recommendation_id": recommendation_id,
+                    "call_id": call_id,
+                    "strategic_claim_id": strategic_claim_id,
+                    "summary": recommendation["summary"],
+                    "rationale": recommendation["rationale"],
+                    "confidence_tag": recommendation["confidence_tag"],
+                    "evidence_ids": evidence_ids,
+                }
+            )
+
+    strategic_claim_citation_status.sort(
+        key=lambda row: (row["call_id"], row["strategic_claim_id"], row["recommendation_id"])
+    )
+    flagged_claims.sort(key=lambda row: (row["call_id"], row["strategic_claim_id"], row["recommendation_id"]))
+    final_recommendations.sort(key=lambda row: row["recommendation_id"])
+
+    totals = {
+        "reasoning_calls": len(reasoning_calls),
+        "strategic_claims": len(strategic_claim_citation_status),
+        "cited_claims": sum(1 for row in strategic_claim_citation_status if row["citation_status"] == "cited"),
+        "flagged_claims": len(flagged_claims),
+        "final_recommendations": len(final_recommendations),
+    }
+
+    output_payload = {
+        "ok": True,
+        "schema_version": REQ_035_SCHEMA_VERSION,
+        "requirement_id": REQ_035_REQUIREMENT_ID,
+        "analysis_type": REQ_035_ANALYSIS_TYPE,
+        "call_id": REQ_035_CALL_ID,
+        "checked_at_utc": checked_at_utc,
+        "context_provenance_ledger": context_provenance_ledger,
+        "reasoning_calls": reasoning_calls,
+        "evidence_citation_discipline": {
+            "strategic_claim_citation_status": strategic_claim_citation_status,
+            "flagged_claims": flagged_claims,
+            "final_recommendations": final_recommendations,
+        },
+        "totals": totals,
+    }
+
+    errors = validate_req_035_evidence_citation_discipline_in_reasoning_calls(output_payload)
+    if errors:
+        raise ValueError(f"built REQ-035 payload failed validation: {errors}")
+    return output_payload
+
+
+def validate_req_035_evidence_citation_discipline_in_reasoning_calls(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-035 evidence citation discipline payload shape."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "ok",
+        "schema_version",
+        "requirement_id",
+        "analysis_type",
+        "call_id",
+        "checked_at_utc",
+        "context_provenance_ledger",
+        "reasoning_calls",
+        "evidence_citation_discipline",
+        "totals",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("ok") is not True:
+        errors.append("ok must be true")
+    if payload.get("schema_version") != REQ_035_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_035_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_035_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_035_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_035_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_035_ANALYSIS_TYPE}")
+    if payload.get("call_id") != REQ_035_CALL_ID:
+        errors.append(f"call_id must be {REQ_035_CALL_ID}")
+    if not isinstance(payload.get("checked_at_utc"), str) or not str(payload.get("checked_at_utc")).strip():
+        errors.append("checked_at_utc must be a non-empty string")
+
+    ledger = payload.get("context_provenance_ledger")
+    ledger_evidence_ids: set[str] = set()
+    if not isinstance(ledger, Mapping):
+        errors.append("context_provenance_ledger must be an object")
+    else:
+        expected_ledger_keys = {"ledger_requirement_id", "ledger_scope", "evidence_ids"}
+        ledger_keys = set(ledger.keys())
+        missing_ledger = sorted(expected_ledger_keys - ledger_keys)
+        if missing_ledger:
+            errors.append(f"context_provenance_ledger missing keys: {missing_ledger}")
+        unexpected_ledger = sorted(ledger_keys - expected_ledger_keys)
+        if unexpected_ledger:
+            errors.append(f"context_provenance_ledger has unexpected keys: {unexpected_ledger}")
+        if ledger.get("ledger_requirement_id") != "REQ-021":
+            errors.append("context_provenance_ledger.ledger_requirement_id must be REQ-021")
+        ledger_scope = ledger.get("ledger_scope")
+        if not isinstance(ledger_scope, str) or not ledger_scope.strip():
+            errors.append("context_provenance_ledger.ledger_scope must be a non-empty string")
+        evidence_ids = ledger.get("evidence_ids")
+        if not isinstance(evidence_ids, list) or not evidence_ids:
+            errors.append("context_provenance_ledger.evidence_ids must be a non-empty list")
+        else:
+            for idx, evidence_id in enumerate(evidence_ids):
+                if not isinstance(evidence_id, str) or not evidence_id.strip():
+                    errors.append(f"context_provenance_ledger.evidence_ids[{idx}] must be a non-empty string")
+                elif not evidence_id.startswith("claim-"):
+                    errors.append(
+                        f"context_provenance_ledger.evidence_ids[{idx}] must use REQ-021 claim id format (claim-<id>)"
+                    )
+                else:
+                    ledger_evidence_ids.add(evidence_id)
+
+    reasoning_calls = payload.get("reasoning_calls")
+    reasoning_claim_refs: set[tuple[str, str, str]] = set()
+    if not isinstance(reasoning_calls, list) or not reasoning_calls:
+        errors.append("reasoning_calls must be a non-empty list")
+        reasoning_calls = []
+    else:
+        seen_call_ids: set[str] = set()
+        seen_recommendation_ids: set[str] = set()
+        for cidx, call in enumerate(reasoning_calls):
+            if not isinstance(call, Mapping):
+                errors.append(f"reasoning_calls[{cidx}] must be an object")
+                continue
+            expected_call_keys = {"call_id", "strategic_claims"}
+            call_keys = set(call.keys())
+            missing_call = sorted(expected_call_keys - call_keys)
+            if missing_call:
+                errors.append(f"reasoning_calls[{cidx}] missing keys: {missing_call}")
+            unexpected_call = sorted(call_keys - expected_call_keys)
+            if unexpected_call:
+                errors.append(f"reasoning_calls[{cidx}] has unexpected keys: {unexpected_call}")
+            call_id = call.get("call_id")
+            if not isinstance(call_id, str) or not call_id.strip():
+                errors.append(f"reasoning_calls[{cidx}].call_id must be a non-empty string")
+                call_id = ""
+            elif call_id in seen_call_ids:
+                errors.append(f"reasoning_calls[{cidx}].call_id must be unique (duplicate: {call_id})")
+            else:
+                seen_call_ids.add(call_id)
+
+            strategic_claims = call.get("strategic_claims")
+            if not isinstance(strategic_claims, list) or not strategic_claims:
+                errors.append(f"reasoning_calls[{cidx}].strategic_claims must be a non-empty list")
+                continue
+            seen_claim_ids: set[str] = set()
+            for sidx, claim in enumerate(strategic_claims):
+                if not isinstance(claim, Mapping):
+                    errors.append(f"reasoning_calls[{cidx}].strategic_claims[{sidx}] must be an object")
+                    continue
+                expected_claim_keys = {"strategic_claim_id", "summary", "evidence_ids", "recommendation"}
+                claim_keys = set(claim.keys())
+                missing_claim = sorted(expected_claim_keys - claim_keys)
+                if missing_claim:
+                    errors.append(f"reasoning_calls[{cidx}].strategic_claims[{sidx}] missing keys: {missing_claim}")
+                unexpected_claim = sorted(claim_keys - expected_claim_keys)
+                if unexpected_claim:
+                    errors.append(
+                        f"reasoning_calls[{cidx}].strategic_claims[{sidx}] has unexpected keys: {unexpected_claim}"
+                    )
+                strategic_claim_id = claim.get("strategic_claim_id")
+                if not isinstance(strategic_claim_id, str) or not strategic_claim_id.strip():
+                    errors.append(
+                        f"reasoning_calls[{cidx}].strategic_claims[{sidx}].strategic_claim_id must be a non-empty string"
+                    )
+                    strategic_claim_id = ""
+                elif strategic_claim_id in seen_claim_ids:
+                    errors.append(
+                        f"reasoning_calls[{cidx}].strategic_claims[{sidx}].strategic_claim_id must be unique within call "
+                        f"(duplicate: {strategic_claim_id})"
+                    )
+                else:
+                    seen_claim_ids.add(strategic_claim_id)
+                summary = claim.get("summary")
+                if not isinstance(summary, str) or not summary.strip():
+                    errors.append(f"reasoning_calls[{cidx}].strategic_claims[{sidx}].summary must be a non-empty string")
+                evidence_ids = claim.get("evidence_ids")
+                if not isinstance(evidence_ids, list):
+                    errors.append(
+                        f"reasoning_calls[{cidx}].strategic_claims[{sidx}].evidence_ids must be a list of strings"
+                    )
+                    evidence_ids = []
+                else:
+                    for evidx, evidence_id in enumerate(evidence_ids):
+                        if not isinstance(evidence_id, str) or not evidence_id.strip():
+                            errors.append(
+                                f"reasoning_calls[{cidx}].strategic_claims[{sidx}].evidence_ids[{evidx}] must be a non-empty string"
+                            )
+                recommendation = claim.get("recommendation")
+                recommendation_id = ""
+                if not isinstance(recommendation, Mapping):
+                    errors.append(f"reasoning_calls[{cidx}].strategic_claims[{sidx}].recommendation must be an object")
+                else:
+                    expected_recommendation_keys = {"recommendation_id", "summary", "rationale", "confidence_tag"}
+                    recommendation_keys = set(recommendation.keys())
+                    missing_recommendation = sorted(expected_recommendation_keys - recommendation_keys)
+                    if missing_recommendation:
+                        errors.append(
+                            f"reasoning_calls[{cidx}].strategic_claims[{sidx}].recommendation missing keys: {missing_recommendation}"
+                        )
+                    unexpected_recommendation = sorted(recommendation_keys - expected_recommendation_keys)
+                    if unexpected_recommendation:
+                        errors.append(
+                            f"reasoning_calls[{cidx}].strategic_claims[{sidx}].recommendation has unexpected keys: {unexpected_recommendation}"
+                        )
+                    recommendation_id = recommendation.get("recommendation_id")  # type: ignore[assignment]
+                    if not isinstance(recommendation_id, str) or not recommendation_id.strip():
+                        errors.append(
+                            f"reasoning_calls[{cidx}].strategic_claims[{sidx}].recommendation.recommendation_id must be a non-empty string"
+                        )
+                        recommendation_id = ""
+                    elif recommendation_id in seen_recommendation_ids:
+                        errors.append(
+                            "reasoning_calls[*].strategic_claims[*].recommendation.recommendation_id must be globally unique "
+                            f"(duplicate: {recommendation_id})"
+                        )
+                    else:
+                        seen_recommendation_ids.add(recommendation_id)
+                    for key in ("summary", "rationale"):
+                        value = recommendation.get(key)
+                        if not isinstance(value, str) or not value.strip():
+                            errors.append(
+                                f"reasoning_calls[{cidx}].strategic_claims[{sidx}].recommendation.{key} must be a non-empty string"
+                            )
+                    if recommendation.get("confidence_tag") not in _CONFIDENCE_TAGS:
+                        errors.append(
+                            f"reasoning_calls[{cidx}].strategic_claims[{sidx}].recommendation.confidence_tag must be one of: {list(_CONFIDENCE_TAGS)}"
+                        )
+                if call_id and strategic_claim_id and recommendation_id:
+                    reasoning_claim_refs.add((call_id, strategic_claim_id, recommendation_id))
+
+    discipline = payload.get("evidence_citation_discipline")
+    status_refs: set[tuple[str, str, str]] = set()
+    flagged_refs: set[tuple[str, str, str]] = set()
+    final_recommendation_ids: set[str] = set()
+    flagged_recommendation_ids: set[str] = set()
+    if not isinstance(discipline, Mapping):
+        errors.append("evidence_citation_discipline must be an object")
+    else:
+        expected_discipline_keys = {
+            "strategic_claim_citation_status",
+            "flagged_claims",
+            "final_recommendations",
+        }
+        discipline_keys = set(discipline.keys())
+        missing_discipline = sorted(expected_discipline_keys - discipline_keys)
+        if missing_discipline:
+            errors.append(f"evidence_citation_discipline missing keys: {missing_discipline}")
+        unexpected_discipline = sorted(discipline_keys - expected_discipline_keys)
+        if unexpected_discipline:
+            errors.append(f"evidence_citation_discipline has unexpected keys: {unexpected_discipline}")
+
+        status_rows = discipline.get("strategic_claim_citation_status")
+        if not isinstance(status_rows, list):
+            errors.append("evidence_citation_discipline.strategic_claim_citation_status must be a list")
+            status_rows = []
+        for idx, row in enumerate(status_rows):
+            if not isinstance(row, Mapping):
+                errors.append(f"evidence_citation_discipline.strategic_claim_citation_status[{idx}] must be an object")
+                continue
+            expected_status_keys = {
+                "strategic_claim_id",
+                "call_id",
+                "recommendation_id",
+                "summary",
+                "evidence_ids",
+                "citation_status",
+                "flag_reason_codes",
+            }
+            status_keys = set(row.keys())
+            missing_status = sorted(expected_status_keys - status_keys)
+            if missing_status:
+                errors.append(
+                    f"evidence_citation_discipline.strategic_claim_citation_status[{idx}] missing keys: {missing_status}"
+                )
+            unexpected_status = sorted(status_keys - expected_status_keys)
+            if unexpected_status:
+                errors.append(
+                    f"evidence_citation_discipline.strategic_claim_citation_status[{idx}] has unexpected keys: {unexpected_status}"
+                )
+
+            call_id = row.get("call_id")
+            claim_id = row.get("strategic_claim_id")
+            recommendation_id = row.get("recommendation_id")
+            if not isinstance(call_id, str) or not call_id.strip():
+                errors.append(
+                    f"evidence_citation_discipline.strategic_claim_citation_status[{idx}].call_id must be a non-empty string"
+                )
+                call_id = ""
+            if not isinstance(claim_id, str) or not claim_id.strip():
+                errors.append(
+                    f"evidence_citation_discipline.strategic_claim_citation_status[{idx}].strategic_claim_id must be a non-empty string"
+                )
+                claim_id = ""
+            if not isinstance(recommendation_id, str) or not recommendation_id.strip():
+                errors.append(
+                    f"evidence_citation_discipline.strategic_claim_citation_status[{idx}].recommendation_id must be a non-empty string"
+                )
+                recommendation_id = ""
+            if call_id and claim_id and recommendation_id:
+                status_refs.add((call_id, claim_id, recommendation_id))
+
+            summary = row.get("summary")
+            if not isinstance(summary, str) or not summary.strip():
+                errors.append(
+                    f"evidence_citation_discipline.strategic_claim_citation_status[{idx}].summary must be a non-empty string"
+                )
+            evidence_ids = row.get("evidence_ids")
+            if not isinstance(evidence_ids, list):
+                errors.append(
+                    f"evidence_citation_discipline.strategic_claim_citation_status[{idx}].evidence_ids must be a list of strings"
+                )
+                evidence_ids = []
+            else:
+                for evidx, evidence_id in enumerate(evidence_ids):
+                    if not isinstance(evidence_id, str) or not evidence_id.strip():
+                        errors.append(
+                            "evidence_citation_discipline.strategic_claim_citation_status"
+                            f"[{idx}].evidence_ids[{evidx}] must be a non-empty string"
+                        )
+
+            citation_status = row.get("citation_status")
+            if citation_status not in {"cited", "flagged"}:
+                errors.append(
+                    "evidence_citation_discipline.strategic_claim_citation_status"
+                    f"[{idx}].citation_status must be one of: ['cited', 'flagged']"
+                )
+            flag_reason_codes = row.get("flag_reason_codes")
+            if not isinstance(flag_reason_codes, list):
+                errors.append(
+                    f"evidence_citation_discipline.strategic_claim_citation_status[{idx}].flag_reason_codes must be a list of strings"
+                )
+                flag_reason_codes = []
+            else:
+                for rcidx, reason in enumerate(flag_reason_codes):
+                    if not isinstance(reason, str) or not reason.strip():
+                        errors.append(
+                            "evidence_citation_discipline.strategic_claim_citation_status"
+                            f"[{idx}].flag_reason_codes[{rcidx}] must be a non-empty string"
+                        )
+
+            if citation_status == "cited":
+                if flag_reason_codes:
+                    errors.append(
+                        f"evidence_citation_discipline.strategic_claim_citation_status[{idx}] cited claims must have empty flag_reason_codes"
+                    )
+                if not evidence_ids:
+                    errors.append(
+                        f"evidence_citation_discipline.strategic_claim_citation_status[{idx}] cited claims must include evidence_ids"
+                    )
+                for evidence_id in evidence_ids:
+                    if isinstance(evidence_id, str) and evidence_id and ledger_evidence_ids and evidence_id not in ledger_evidence_ids:
+                        errors.append(
+                            f"evidence_citation_discipline.strategic_claim_citation_status[{idx}] evidence_ids must exist in context_provenance_ledger.evidence_ids"
+                        )
+            elif citation_status == "flagged":
+                if not flag_reason_codes:
+                    errors.append(
+                        f"evidence_citation_discipline.strategic_claim_citation_status[{idx}] flagged claims must include flag_reason_codes"
+                    )
+                if call_id and claim_id and recommendation_id:
+                    flagged_refs.add((call_id, claim_id, recommendation_id))
+
+        flagged_rows = discipline.get("flagged_claims")
+        if not isinstance(flagged_rows, list):
+            errors.append("evidence_citation_discipline.flagged_claims must be a list")
+            flagged_rows = []
+        for idx, row in enumerate(flagged_rows):
+            if not isinstance(row, Mapping):
+                errors.append(f"evidence_citation_discipline.flagged_claims[{idx}] must be an object")
+                continue
+            expected_flagged_keys = {
+                "strategic_claim_id",
+                "call_id",
+                "recommendation_id",
+                "summary",
+                "evidence_ids",
+                "flag_reason_codes",
+                "unknown_evidence_ids",
+                "excluded_from_final_recommendations",
+            }
+            flagged_keys = set(row.keys())
+            missing_flagged = sorted(expected_flagged_keys - flagged_keys)
+            if missing_flagged:
+                errors.append(f"evidence_citation_discipline.flagged_claims[{idx}] missing keys: {missing_flagged}")
+            unexpected_flagged = sorted(flagged_keys - expected_flagged_keys)
+            if unexpected_flagged:
+                errors.append(
+                    f"evidence_citation_discipline.flagged_claims[{idx}] has unexpected keys: {unexpected_flagged}"
+                )
+
+            call_id = row.get("call_id")
+            claim_id = row.get("strategic_claim_id")
+            recommendation_id = row.get("recommendation_id")
+            if isinstance(call_id, str) and call_id.strip() and isinstance(claim_id, str) and claim_id.strip() and isinstance(recommendation_id, str) and recommendation_id.strip():
+                flagged_refs.add((call_id, claim_id, recommendation_id))
+            else:
+                if not isinstance(call_id, str) or not call_id.strip():
+                    errors.append(f"evidence_citation_discipline.flagged_claims[{idx}].call_id must be a non-empty string")
+                if not isinstance(claim_id, str) or not claim_id.strip():
+                    errors.append(
+                        f"evidence_citation_discipline.flagged_claims[{idx}].strategic_claim_id must be a non-empty string"
+                    )
+                if not isinstance(recommendation_id, str) or not recommendation_id.strip():
+                    errors.append(
+                        f"evidence_citation_discipline.flagged_claims[{idx}].recommendation_id must be a non-empty string"
+                    )
+
+            summary = row.get("summary")
+            if not isinstance(summary, str) or not summary.strip():
+                errors.append(f"evidence_citation_discipline.flagged_claims[{idx}].summary must be a non-empty string")
+            evidence_ids = row.get("evidence_ids")
+            if not isinstance(evidence_ids, list):
+                errors.append(f"evidence_citation_discipline.flagged_claims[{idx}].evidence_ids must be a list of strings")
+                evidence_ids = []
+            else:
+                for evidx, evidence_id in enumerate(evidence_ids):
+                    if not isinstance(evidence_id, str) or not evidence_id.strip():
+                        errors.append(
+                            f"evidence_citation_discipline.flagged_claims[{idx}].evidence_ids[{evidx}] must be a non-empty string"
+                        )
+            reason_codes = row.get("flag_reason_codes")
+            if not isinstance(reason_codes, list) or not reason_codes:
+                errors.append(
+                    f"evidence_citation_discipline.flagged_claims[{idx}].flag_reason_codes must be a non-empty list"
+                )
+            else:
+                for rcidx, reason in enumerate(reason_codes):
+                    if not isinstance(reason, str) or not reason.strip():
+                        errors.append(
+                            f"evidence_citation_discipline.flagged_claims[{idx}].flag_reason_codes[{rcidx}] must be a non-empty string"
+                        )
+            unknown_evidence_ids = row.get("unknown_evidence_ids")
+            if not isinstance(unknown_evidence_ids, list):
+                errors.append(
+                    f"evidence_citation_discipline.flagged_claims[{idx}].unknown_evidence_ids must be a list of strings"
+                )
+            else:
+                for evidx, evidence_id in enumerate(unknown_evidence_ids):
+                    if not isinstance(evidence_id, str) or not evidence_id.strip():
+                        errors.append(
+                            f"evidence_citation_discipline.flagged_claims[{idx}].unknown_evidence_ids[{evidx}] must be a non-empty string"
+                        )
+                    elif ledger_evidence_ids and evidence_id in ledger_evidence_ids:
+                        errors.append(
+                            f"evidence_citation_discipline.flagged_claims[{idx}].unknown_evidence_ids[{evidx}] must not exist in context_provenance_ledger.evidence_ids"
+                        )
+            if row.get("excluded_from_final_recommendations") is not True:
+                errors.append(
+                    f"evidence_citation_discipline.flagged_claims[{idx}].excluded_from_final_recommendations must be true"
+                )
+            if isinstance(recommendation_id, str) and recommendation_id.strip():
+                flagged_recommendation_ids.add(recommendation_id)
+
+        final_rows = discipline.get("final_recommendations")
+        if not isinstance(final_rows, list):
+            errors.append("evidence_citation_discipline.final_recommendations must be a list")
+            final_rows = []
+        for idx, row in enumerate(final_rows):
+            if not isinstance(row, Mapping):
+                errors.append(f"evidence_citation_discipline.final_recommendations[{idx}] must be an object")
+                continue
+            expected_final_keys = {
+                "recommendation_id",
+                "call_id",
+                "strategic_claim_id",
+                "summary",
+                "rationale",
+                "confidence_tag",
+                "evidence_ids",
+            }
+            final_keys = set(row.keys())
+            missing_final = sorted(expected_final_keys - final_keys)
+            if missing_final:
+                errors.append(f"evidence_citation_discipline.final_recommendations[{idx}] missing keys: {missing_final}")
+            unexpected_final = sorted(final_keys - expected_final_keys)
+            if unexpected_final:
+                errors.append(
+                    f"evidence_citation_discipline.final_recommendations[{idx}] has unexpected keys: {unexpected_final}"
+                )
+            recommendation_id = row.get("recommendation_id")
+            if not isinstance(recommendation_id, str) or not recommendation_id.strip():
+                errors.append(
+                    f"evidence_citation_discipline.final_recommendations[{idx}].recommendation_id must be a non-empty string"
+                )
+                recommendation_id = ""
+            elif recommendation_id in final_recommendation_ids:
+                errors.append(
+                    f"evidence_citation_discipline.final_recommendations[{idx}].recommendation_id must be unique (duplicate: {recommendation_id})"
+                )
+            else:
+                final_recommendation_ids.add(recommendation_id)
+            call_id = row.get("call_id")
+            if not isinstance(call_id, str) or not call_id.strip():
+                errors.append(
+                    f"evidence_citation_discipline.final_recommendations[{idx}].call_id must be a non-empty string"
+                )
+                call_id = ""
+            claim_id = row.get("strategic_claim_id")
+            if not isinstance(claim_id, str) or not claim_id.strip():
+                errors.append(
+                    f"evidence_citation_discipline.final_recommendations[{idx}].strategic_claim_id must be a non-empty string"
+                )
+                claim_id = ""
+            for key in ("summary", "rationale"):
+                value = row.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(
+                        f"evidence_citation_discipline.final_recommendations[{idx}].{key} must be a non-empty string"
+                    )
+            confidence_tag = row.get("confidence_tag")
+            if confidence_tag not in _CONFIDENCE_TAGS:
+                errors.append(
+                    f"evidence_citation_discipline.final_recommendations[{idx}].confidence_tag must be one of: {list(_CONFIDENCE_TAGS)}"
+                )
+            evidence_ids = row.get("evidence_ids")
+            if not isinstance(evidence_ids, list) or not evidence_ids:
+                errors.append(
+                    f"evidence_citation_discipline.final_recommendations[{idx}].evidence_ids must be a non-empty list of strings"
+                )
+            else:
+                for evidx, evidence_id in enumerate(evidence_ids):
+                    if not isinstance(evidence_id, str) or not evidence_id.strip():
+                        errors.append(
+                            f"evidence_citation_discipline.final_recommendations[{idx}].evidence_ids[{evidx}] must be a non-empty string"
+                        )
+                    elif ledger_evidence_ids and evidence_id not in ledger_evidence_ids:
+                        errors.append(
+                            f"evidence_citation_discipline.final_recommendations[{idx}].evidence_ids[{evidx}] must exist in context_provenance_ledger.evidence_ids"
+                        )
+
+    if reasoning_claim_refs and status_refs != reasoning_claim_refs:
+        errors.append("evidence_citation_discipline.strategic_claim_citation_status must cover all reasoning_calls strategic claims")
+    if flagged_refs and status_refs and not flagged_refs.issubset(status_refs):
+        errors.append("evidence_citation_discipline.flagged_claims entries must exist in strategic_claim_citation_status")
+    if flagged_recommendation_ids and final_recommendation_ids and (flagged_recommendation_ids & final_recommendation_ids):
+        errors.append("flagged claims must be excluded from evidence_citation_discipline.final_recommendations")
+
+    totals = payload.get("totals")
+    if not isinstance(totals, Mapping):
+        errors.append("totals must be an object")
+    else:
+        expected_totals = {
+            "reasoning_calls",
+            "strategic_claims",
+            "cited_claims",
+            "flagged_claims",
+            "final_recommendations",
+        }
+        totals_keys = set(totals.keys())
+        missing_totals = sorted(expected_totals - totals_keys)
+        if missing_totals:
+            errors.append(f"totals missing keys: {missing_totals}")
+        unexpected_totals = sorted(totals_keys - expected_totals)
+        if unexpected_totals:
+            errors.append(f"totals has unexpected keys: {unexpected_totals}")
+        for key in expected_totals:
+            value = totals.get(key)
+            if not isinstance(value, int) or value < 0:
+                errors.append(f"totals.{key} must be a non-negative integer")
+
+        expected_reasoning_calls = len(reasoning_calls) if isinstance(reasoning_calls, list) else None
+        if expected_reasoning_calls is not None and isinstance(totals.get("reasoning_calls"), int):
+            if totals["reasoning_calls"] != expected_reasoning_calls:
+                errors.append("totals.reasoning_calls must equal len(reasoning_calls)")
+        if isinstance(totals.get("strategic_claims"), int) and status_refs:
+            if totals["strategic_claims"] != len(status_refs):
+                errors.append("totals.strategic_claims must equal len(strategic_claim_citation_status)")
+        if isinstance(totals.get("flagged_claims"), int) and flagged_refs:
+            if totals["flagged_claims"] != len(flagged_refs):
+                errors.append("totals.flagged_claims must equal len(flagged_claims)")
+        if isinstance(totals.get("final_recommendations"), int) and final_recommendation_ids:
+            if totals["final_recommendations"] != len(final_recommendation_ids):
+                errors.append("totals.final_recommendations must equal len(final_recommendations)")
+        if isinstance(totals.get("cited_claims"), int) and status_refs:
+            expected_cited = len(status_refs) - len(flagged_refs)
+            if totals["cited_claims"] != expected_cited:
+                errors.append("totals.cited_claims must equal strategic_claims - flagged_claims")
+
+    return errors
+
+
 def _validate_req_030_dependency(raw_value: Any, *, errors: list[str], field_prefix: str) -> None:
     if not isinstance(raw_value, Mapping):
         errors.append(f"{field_prefix} must be an object")
@@ -2492,16 +3301,20 @@ def _validate_req_030_dependency(raw_value: Any, *, errors: list[str], field_pre
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     analysis_type = str(payload.get("analysis_type") or "").strip()
+    if analysis_type == REQ_035_ANALYSIS_TYPE:
+        return build_req_035_evidence_citation_discipline_in_reasoning_calls(payload)
     if analysis_type == REQ_030_ANALYSIS_TYPE:
         return build_req_030_call_5_sequencing_and_lane_design_reasoning(payload)
     if analysis_type and analysis_type != REQ_027_ANALYSIS_TYPE:
-        raise ValueError(f"analysis_type must be {REQ_027_ANALYSIS_TYPE} or {REQ_030_ANALYSIS_TYPE}")
+        raise ValueError(
+            f"analysis_type must be {REQ_027_ANALYSIS_TYPE} or {REQ_030_ANALYSIS_TYPE} or {REQ_035_ANALYSIS_TYPE}"
+        )
     return build_req_027_call_2_ecosystem_linkage_reasoning(payload)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Strategy LLM pipeline contract surface (REQ-027 Call-2, REQ-030 Call-5)."
+        description="Strategy LLM pipeline contract surface (REQ-027 Call-2, REQ-030 Call-5, REQ-035)."
     )
     parser.add_argument("--input-json", required=True, help='Input payload path or "-" for stdin.')
     parser.add_argument("--output-json", default="-", help='Output path or "-" for stdout.')

@@ -1,0 +1,77 @@
+{
+  "analysis_type": "evidence_citation_discipline_in_reasoning_calls",
+  "now_utc": "2026-03-16T12:00:00Z",
+  "context_provenance_ledger": {
+    "ledger_requirement_id": "REQ-021",
+    "ledger_scope": "strategy_context_sweep.processing_behavior",
+    "evidence_ids": [
+      "claim-23dfac9616af",
+      "claim-8fddad1261c3",
+      "claim-a22fb5f56e63",
+      "claim-beaf89bbe2d1"
+    ]
+  },
+  "reasoning_calls": [
+    {
+      "call_id": "call-2",
+      "strategic_claims": [
+        {
+          "strategic_claim_id": "sc.call2.existing-link-preserve",
+          "summary": "Existing linkage obligations remain promotable when claim citations are present.",
+          "evidence_ids": [
+            "claim-23dfac9616af"
+          ],
+          "recommendation": {
+            "recommendation_id": "rec.req-035.keep-evidence-backed-links",
+            "summary": "Promote only evidence-backed linkage obligations.",
+            "rationale": "Claim-level citations prove the linkage recommendation is grounded in context provenance.",
+            "confidence_tag": "high"
+          }
+        },
+        {
+          "strategic_claim_id": "sc.call2.missing-citations",
+          "summary": "A missing-link assertion without citations must not be promoted.",
+          "evidence_ids": [],
+          "recommendation": {
+            "recommendation_id": "rec.req-035.collect-citations-before-missing-links",
+            "summary": "Collect citations before promoting missing-link remediation.",
+            "rationale": "Uncited strategic claims are ineligible for the final recommendation set.",
+            "confidence_tag": "medium"
+          }
+        }
+      ]
+    },
+    {
+      "call_id": "call-5",
+      "strategic_claims": [
+        {
+          "strategic_claim_id": "sc.call5.contract-first-sequencing",
+          "summary": "Contract-first sequencing remains valid when recommendation claims cite the provenance ledger.",
+          "evidence_ids": [
+            "claim-a22fb5f56e63",
+            "claim-beaf89bbe2d1"
+          ],
+          "recommendation": {
+            "recommendation_id": "rec.req-035.sequence-contract-first",
+            "summary": "Keep contract-first sequencing in the executable lane order.",
+            "rationale": "Cited call-5 claims justify preserving contract-first sequencing as a final recommendation.",
+            "confidence_tag": "high"
+          }
+        },
+        {
+          "strategic_claim_id": "sc.call5.unknown-ledger-evidence",
+          "summary": "A cross-project acceleration claim citing unknown evidence IDs must be blocked.",
+          "evidence_ids": [
+            "claim-not-in-ledger"
+          ],
+          "recommendation": {
+            "recommendation_id": "rec.req-035.defer-uncited-cross-project-acceleration",
+            "summary": "Defer uncited cross-project acceleration recommendations.",
+            "rationale": "Evidence IDs outside the provenance ledger violate citation discipline for reasoning outputs.",
+            "confidence_tag": "low"
+          }
+        }
+      ]
+    }
+  ]
+}
