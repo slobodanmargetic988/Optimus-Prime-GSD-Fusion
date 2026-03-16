@@ -1789,6 +1789,58 @@ def _req_035_recommendation_decision(*, promoted_actions: list[dict[str, Any]], 
     return "insufficient-context"
 
 
+def _req_035_cross_call_contradiction_risks(
+    *,
+    strategic_claim_citation_status: list[dict[str, Any]],
+    ledger_evidence_ids: list[str],
+) -> list[dict[str, Any]]:
+    grouped_by_claim: dict[str, list[dict[str, Any]]] = {}
+    for row in strategic_claim_citation_status:
+        claim_id = str(row.get("strategic_claim_id") or "").strip()
+        if not claim_id:
+            continue
+        grouped_by_claim.setdefault(claim_id, []).append(row)
+
+    contradiction_risks: list[dict[str, Any]] = []
+    for claim_id in sorted(grouped_by_claim):
+        rows = grouped_by_claim[claim_id]
+        statuses = sorted(
+            {
+                str(row.get("citation_status") or "").strip()
+                for row in rows
+                if str(row.get("citation_status") or "").strip()
+            }
+        )
+        if len(statuses) < 2:
+            continue
+
+        call_ids = sorted({str(row.get("call_id") or "").strip() for row in rows if str(row.get("call_id") or "").strip()})
+        recommendation_ids = sorted(
+            {
+                str(row.get("recommendation_id") or "").strip()
+                for row in rows
+                if str(row.get("recommendation_id") or "").strip()
+            }
+        )
+        claim_refs = _collect_unique_refs(*[list(row.get("evidence_ids") or []) for row in rows])
+        required_refs = claim_refs or _collect_unique_refs(ledger_evidence_ids)
+        contradiction_risks.append(
+            {
+                "risk_id": (
+                    f"risk.{_stable_id_fragment('req-035', claim_id, 'analysis-synthesis-contradiction', ','.join(statuses), ','.join(call_ids), ','.join(recommendation_ids))}"
+                ),
+                "summary": (
+                    f"Strategic claim '{claim_id}' has contradictory citation outcomes across reasoning calls "
+                    f"({','.join(call_ids)}) and cannot be synthesized deterministically."
+                ),
+                "reason_code": "analysis_synthesis_contradiction_cross_call_citation_status",
+                "required_evidence_refs": required_refs,
+            }
+        )
+
+    return contradiction_risks
+
+
 def _req_030_infer_cross_project_targets(
     *,
     recommendation: Mapping[str, Any],
@@ -2227,6 +2279,7 @@ def process_req_035_evidence_citation_discipline_in_reasoning_calls(
     discipline = contract_payload["evidence_citation_discipline"]
     final_rows = list(discipline["final_recommendations"])
     flagged_rows = list(discipline["flagged_claims"])
+    strategic_claim_citation_status = list(discipline["strategic_claim_citation_status"])
 
     claim_lookup: dict[tuple[str, str], Mapping[str, Any]] = {}
     for call in reasoning_calls:
@@ -2255,6 +2308,13 @@ def process_req_035_evidence_citation_discipline_in_reasoning_calls(
                 "required_evidence_refs": required_refs,
             }
         )
+
+    open_risks.extend(
+        _req_035_cross_call_contradiction_risks(
+            strategic_claim_citation_status=strategic_claim_citation_status,
+            ledger_evidence_ids=context_provenance_ledger["evidence_ids"],
+        )
+    )
 
     for recommendation in final_rows:
         recommendation_id = recommendation["recommendation_id"]
