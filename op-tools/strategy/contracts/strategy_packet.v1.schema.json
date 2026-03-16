@@ -11,6 +11,8 @@
     "recommendations",
     "constraints",
     "kpi_targets",
+    "assumptions",
+    "kpi_target_artifact",
     "source"
   ],
   "properties": {
@@ -115,6 +117,94 @@
             "enum": ["increase", "decrease", "maintain"]
           },
           "target": {"type": "string"}
+        }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assumption_id", "statement"],
+        "properties": {
+          "assumption_id": {
+            "type": "string",
+            "pattern": "^assumption\\.[a-z0-9][a-z0-9-]{1,95}$"
+          },
+          "statement": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "kpi_target_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kpi_targets", "totals"],
+      "properties": {
+        "kpi_targets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "target_id",
+              "metric_name",
+              "expected_direction",
+              "baseline_reference",
+              "confidence_level",
+              "originating_recommendation_ids",
+              "assumption_ids"
+            ],
+            "properties": {
+              "target_id": {
+                "type": "string",
+                "pattern": "^kpi\\.[a-z0-9][a-z0-9-]{1,95}$"
+              },
+              "metric_name": {"type": "string", "minLength": 1},
+              "expected_direction": {
+                "type": "string",
+                "enum": ["increase", "decrease", "maintain"]
+              },
+              "baseline_reference": {"type": "string", "minLength": 1},
+              "confidence_level": {
+                "type": "string",
+                "enum": ["high", "medium", "low"]
+              },
+              "originating_recommendation_ids": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^rec\\.[a-z0-9][a-z0-9-]{1,95}$"
+                }
+              },
+              "assumption_ids": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^assumption\\.[a-z0-9][a-z0-9-]{1,95}$"
+                }
+              }
+            }
+          }
+        },
+        "totals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kpi_targets",
+            "unique_recommendations_linked",
+            "unique_assumptions_linked"
+          ],
+          "properties": {
+            "kpi_targets": {"type": "integer", "minimum": 1},
+            "unique_recommendations_linked": {"type": "integer", "minimum": 1},
+            "unique_assumptions_linked": {"type": "integer", "minimum": 1}
+          }
         }
       }
     },
