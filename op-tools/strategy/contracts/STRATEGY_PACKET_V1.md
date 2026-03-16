@@ -17,6 +17,8 @@ Define a deterministic strategy output contract that planners and runtime orches
 - `constraints`: explicit hard/soft constraints for planning and dispatch
 - `kpi_targets`: expected measurable outcomes
 - `source`: generator context
+- `gate_policy`: machine-readable thresholds for REQ-059 build gating
+- `strategy_quality_report`: consumability artifact covering citation coverage, contradiction status, confidence distribution, and gate verdicts
 
 ## Required Canonical IDs
 
@@ -46,3 +48,4 @@ Each recommendation entry must include:
 
 - Machine schema: `contracts/strategy_packet.v1.schema.json`
 - Deterministic sample: `examples/strategy_packet.sample.v1.json`
+- Consumability validator: `python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json`

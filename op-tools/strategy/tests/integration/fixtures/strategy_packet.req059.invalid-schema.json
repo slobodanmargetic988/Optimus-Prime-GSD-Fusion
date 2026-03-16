@@ -1,0 +1,69 @@
+{
+  "schema_version": "strategy-packet.v1",
+  "identity": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "run_id": "run.20260312t201000z-s001",
+    "event_id": "event.20260312t201400z-strategy-packet"
+  },
+  "strategy": {
+    "revision_id": "strat.20260312-r1",
+    "summary": "Trigger schema diagnostics with deterministic field paths."
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.dispatch-quality-first",
+      "priority": "urgent",
+      "summary": "Emit schema errors.",
+      "rationale": "Validator consumers need exact field paths.",
+      "expected_impact": "Reliable gate failures.",
+      "risk_level": "medium"
+    }
+  ],
+  "constraints": {
+    "hard": [],
+    "soft": []
+  },
+  "kpi_targets": [
+    {
+      "metric": "schema_failure_detection",
+      "direction": "increase"
+    }
+  ],
+  "source": {
+    "repo": "Optimus-Prime-GSD-Fusion"
+  },
+  "gate_policy": {
+    "min_citation_coverage_ratio": 0.85,
+    "max_unresolved_contradictions": 0,
+    "min_high_confidence_ratio": 0.5
+  },
+  "strategy_quality_report": {
+    "citation_coverage": {
+      "cited_claims": 1,
+      "uncited_claims": 0,
+      "total_claims": 1,
+      "coverage_ratio": 1.0
+    },
+    "contradiction_status": {
+      "has_unresolved_contradictions": false,
+      "unresolved_contradiction_count": 0,
+      "unresolved_contradiction_ids": []
+    },
+    "confidence_distribution": {
+      "high": 1,
+      "medium": 0,
+      "low": 0,
+      "total": 1,
+      "high_ratio": 1.0,
+      "medium_ratio": 0.0,
+      "low_ratio": 0.0
+    },
+    "gate_verdicts": {
+      "citation_coverage_pass": true,
+      "contradiction_pass": true,
+      "confidence_distribution_pass": true,
+      "overall_pass": true,
+      "failed_gate_ids": []
+    }
+  }
+}

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "strategy_artifacts_handoff.py"
+VALIDATOR_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "strategy_packet_validate.py"
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "contracts" / "strategy_packet.v1.schema.json"
+CURRENT_PACKET_PATH = Path(__file__).resolve().parents[2] / "strategy" / "current" / "strategy_packet.v1.json"
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 SPEC = importlib.util.spec_from_file_location("strategy_artifacts_handoff", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
@@ -140,4 +147,154 @@ def test_quality_report_records_unsupported_cross_project_obligations_as_open_ri
     assert report["gate_verdict"]["verdict"] == "fail"
     assert report["gate_verdict"]["blocking_reasons"] == [
         "unsupported_cross_project_obligations"
+    ]
+
+
+def test_strategy_packet_validator_passes_valid_req_059_packet() -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(VALIDATOR_SCRIPT_PATH),
+            "--input",
+            str(CURRENT_PACKET_PATH),
+            "--schema",
+            str(SCHEMA_PATH),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload == {
+        "ok": True,
+        "verdict": "pass",
+        "ready_for_consumption": True,
+        "diagnostics": [],
+        "summary": {
+            "diagnostic_count": 0,
+            "error_count": 0,
+            "warning_count": 0,
+        },
+    }
+
+
+def test_strategy_packet_validator_reports_req_059_gate_diagnostics() -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(VALIDATOR_SCRIPT_PATH),
+            "--input",
+            str(FIXTURES_DIR / "strategy_packet.req059.invalid-gate.json"),
+            "--schema",
+            str(SCHEMA_PATH),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+
+    assert payload["ok"] is False
+    assert payload["verdict"] == "fail"
+    assert payload["ready_for_consumption"] is False
+    assert payload["summary"] == {
+        "diagnostic_count": 7,
+        "error_count": 7,
+        "warning_count": 0,
+    }
+    assert payload["diagnostics"] == [
+        {
+            "field_path": "strategy_quality_report.citation_coverage.coverage_ratio",
+            "message": "REQ-059 coverage_ratio must equal 0.3333.",
+            "reason_code": "req059.coverage_ratio_mismatch",
+            "severity": "error",
+        },
+        {
+            "field_path": "strategy_quality_report.contradiction_status.has_unresolved_contradictions",
+            "message": "REQ-059 has_unresolved_contradictions must be true.",
+            "reason_code": "req059.unresolved_flag_mismatch",
+            "severity": "error",
+        },
+        {
+            "field_path": "strategy_quality_report.gate_verdicts.citation_coverage_pass",
+            "message": "REQ-059 citation_coverage_pass must be false.",
+            "reason_code": "req059.gate_verdict_mismatch",
+            "severity": "error",
+        },
+        {
+            "field_path": "strategy_quality_report.gate_verdicts.confidence_distribution_pass",
+            "message": "REQ-059 confidence_distribution_pass must be false.",
+            "reason_code": "req059.gate_verdict_mismatch",
+            "severity": "error",
+        },
+        {
+            "field_path": "strategy_quality_report.gate_verdicts.contradiction_pass",
+            "message": "REQ-059 contradiction_pass must be false.",
+            "reason_code": "req059.gate_verdict_mismatch",
+            "severity": "error",
+        },
+        {
+            "field_path": "strategy_quality_report.gate_verdicts.failed_gate_ids",
+            "message": "REQ-059 failed_gate_ids must match the computed failed gate ids.",
+            "reason_code": "req059.failed_gate_ids_mismatch",
+            "severity": "error",
+        },
+        {
+            "field_path": "strategy_quality_report.gate_verdicts.overall_pass",
+            "message": "REQ-059 overall_pass must be false.",
+            "reason_code": "req059.gate_verdict_mismatch",
+            "severity": "error",
+        },
+    ]
+
+
+def test_strategy_packet_validator_reports_schema_diagnostics_with_field_paths() -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(VALIDATOR_SCRIPT_PATH),
+            "--input",
+            str(FIXTURES_DIR / "strategy_packet.req059.invalid-schema.json"),
+            "--schema",
+            str(SCHEMA_PATH),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+
+    assert payload["ok"] is False
+    assert payload["verdict"] == "fail"
+    assert payload["ready_for_consumption"] is False
+    assert payload["summary"] == {
+        "diagnostic_count": 3,
+        "error_count": 3,
+        "warning_count": 0,
+    }
+    assert payload["diagnostics"] == [
+        {
+            "field_path": "identity.project_id",
+            "message": "'optimus-prime-gsd-fusion' does not match '^prj\\\\.[a-z0-9][a-z0-9-]{1,95}$'",
+            "reason_code": "schema.pattern",
+            "severity": "error",
+        },
+        {
+            "field_path": "recommendations[0].priority",
+            "message": "'urgent' is not one of ['high', 'medium', 'low']",
+            "reason_code": "schema.enum",
+            "severity": "error",
+        },
+        {
+            "field_path": "source.tool",
+            "message": "'tool' is a required property",
+            "reason_code": "schema.required",
+            "severity": "error",
+        },
     ]
