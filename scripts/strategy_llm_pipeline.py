@@ -33,6 +33,12 @@ _DIRECTIONS = ("target_to_peer", "peer_to_target", "bidirectional")
 _OBLIGATED_PARTIES = ("target", "peer", "both")
 _LOG_CHECK_SENTINEL = ".log_size_check.json"
 _MAX_LOG_BYTES = 3_000_000_000
+_LLM_CALL_TRACE_SCHEMA_VERSION = "optimus-prime.llm-call-trace.v1"
+_REQ_027_CALL_2_OBJECTIVE = (
+    "Reason about ecosystem links and interaction obligations between the target project and peer projects; "
+    "distinguish existing links, missing links, and proposed links with confidence tags; "
+    "surface evidence-backed cross-project obligations plus context gaps that block promotion."
+)
 
 
 def _require_mapping(value: Any, *, field_name: str) -> Mapping[str, Any]:
@@ -102,6 +108,177 @@ def _format_ts_line(message: str, *, now_utc: str | None = None) -> str:
 
 def _default_log_dir() -> Path:
     return Path.home() / "projects" / "LOGS"
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _default_llm_call_trace_path() -> Path:
+    return _repo_root() / "strategy" / "current" / "llm_call_trace.jsonl"
+
+
+def _default_llm_call_trace_artifacts_dir() -> Path:
+    return _repo_root() / "strategy" / "current" / "llm_call_trace_artifacts"
+
+
+def _canonical_json_bytes(payload: Any) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _sha256_hex(payload: Any) -> str:
+    return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+
+
+def _write_json_artifact(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _append_jsonl_row(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n")
+
+
+def _best_effort_extract_string_refs(raw_value: Any) -> list[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, str):
+        ref = raw_value.strip()
+        return [ref] if ref else []
+    if isinstance(raw_value, list):
+        out: list[str] = []
+        for item in raw_value:
+            if item is None:
+                continue
+            ref = str(item).strip()
+            if ref:
+                out.append(ref)
+        return out
+    return []
+
+
+def _trace_input_refs(
+    *,
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    earth_sweep_projects: list[dict[str, Any]],
+) -> list[str]:
+    refs: set[str] = set()
+    refs.update(earth_sweep_evidence_refs)
+    for row in cross_project_context:
+        refs.update(_best_effort_extract_string_refs(row.get("evidence_refs")))
+    for project in earth_sweep_projects:
+        for obligation in project.get("obligations") or []:
+            if not isinstance(obligation, Mapping):
+                continue
+            refs.update(_best_effort_extract_string_refs(obligation.get("earth_sweep_evidence_refs")))
+            refs.update(_best_effort_extract_string_refs(obligation.get("evidence_refs")))
+        for idea in project.get("unresolved_ideas") or []:
+            if not isinstance(idea, Mapping):
+                continue
+            refs.update(_best_effort_extract_string_refs(idea.get("evidence_refs")))
+    return sorted(refs)
+
+
+def _handoff_summary_for_req_027_call_2(result: Mapping[str, Any]) -> str:
+    totals = result.get("totals") if isinstance(result.get("totals"), Mapping) else {}
+    behavior = result.get("processing_behavior") if isinstance(result.get("processing_behavior"), Mapping) else {}
+    recommendation = behavior.get("recommendation") if isinstance(behavior.get("recommendation"), Mapping) else {}
+    decision = str(recommendation.get("decision") or "").strip() or "unknown"
+    confidence = str(recommendation.get("confidence") or "").strip() or "unknown"
+    obligations = recommendation.get("cross_project_obligations") if isinstance(recommendation.get("cross_project_obligations"), list) else []
+    risks = recommendation.get("open_risks") if isinstance(recommendation.get("open_risks"), list) else []
+    return (
+        f"{REQ_027_REQUIREMENT_ID} {REQ_027_CALL_ID} handoff: "
+        f"decision={decision} confidence={confidence} "
+        f"peers={int(totals.get('peer_projects') or 0)} "
+        f"existing={int(totals.get('existing_links') or 0)} "
+        f"missing={int(totals.get('missing_links') or 0)} "
+        f"proposed={int(totals.get('proposed_links') or 0)} "
+        f"obligations={len(obligations)} open_risks={len(risks)}"
+    )
+
+
+def _record_req_027_call_2_llm_call_trace(
+    *,
+    checked_at_utc: str,
+    target_project: Mapping[str, Any],
+    peer_projects: list[dict[str, Any]],
+    earth_sweep_evidence_refs: list[str],
+    earth_sweep_projects: list[dict[str, Any]],
+    cross_project_context: list[dict[str, Any]],
+    result: Mapping[str, Any],
+    trace_path: Path | None = None,
+    artifacts_dir: Path | None = None,
+) -> dict[str, Any]:
+    trace_file = trace_path or _default_llm_call_trace_path()
+    artifacts_root = artifacts_dir or _default_llm_call_trace_artifacts_dir()
+    peer_project_ids = sorted({str(row.get("project_id") or "").strip() for row in peer_projects if row.get("project_id")})
+
+    input_snapshot = {
+        "schema_version": "optimus-prime.req-027.call-2-input-snapshot.v1",
+        "checked_at_utc": checked_at_utc,
+        "requirement_id": REQ_027_REQUIREMENT_ID,
+        "analysis_type": REQ_027_ANALYSIS_TYPE,
+        "call_id": REQ_027_CALL_ID,
+        "target_project": dict(target_project),
+        "peer_projects": peer_projects,
+        "broad_sweep_context": {
+            "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+            "earth_sweep_projects": earth_sweep_projects,
+            "cross_project_context": cross_project_context,
+        },
+    }
+    output_snapshot = {
+        "schema_version": "optimus-prime.req-027.call-2-output-snapshot.v1",
+        "checked_at_utc": checked_at_utc,
+        "requirement_id": REQ_027_REQUIREMENT_ID,
+        "analysis_type": REQ_027_ANALYSIS_TYPE,
+        "call_id": REQ_027_CALL_ID,
+        "result": dict(result),
+    }
+
+    input_digest = _sha256_hex(input_snapshot)
+    output_digest = _sha256_hex(output_snapshot)
+    bundle_dir = artifacts_root / "req-027" / "call-2" / input_digest[:16]
+    input_path = bundle_dir / "input.normalized.json"
+    output_path = bundle_dir / "output.normalized.json"
+    _write_json_artifact(input_path, input_snapshot)
+    _write_json_artifact(output_path, output_snapshot)
+
+    input_refs = _trace_input_refs(
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+        earth_sweep_projects=earth_sweep_projects,
+    )
+    behavior = result.get("processing_behavior") if isinstance(result.get("processing_behavior"), Mapping) else {}
+    usage = behavior.get("context_usage") if isinstance(behavior.get("context_usage"), Mapping) else {}
+    output_refs = sorted({str(ref) for ref in (usage.get("evidence_refs_used") or []) if str(ref).strip()})
+
+    row = {
+        "schema_version": _LLM_CALL_TRACE_SCHEMA_VERSION,
+        "checked_at_utc": checked_at_utc,
+        "requirement_id": REQ_027_REQUIREMENT_ID,
+        "analysis_type": REQ_027_ANALYSIS_TYPE,
+        "call_id": REQ_027_CALL_ID,
+        "call_objective": _REQ_027_CALL_2_OBJECTIVE,
+        "target_project_id": str(target_project.get("project_id") or "").strip(),
+        "peer_project_ids": peer_project_ids,
+        "input_refs": input_refs,
+        "output_refs": output_refs,
+        "artifacts": [
+            {"kind": "input_snapshot", "path": str(input_path), "sha256": input_digest},
+            {"kind": "output_snapshot", "path": str(output_path), "sha256": output_digest},
+        ],
+        "handoff_summary": _handoff_summary_for_req_027_call_2(result),
+        "totals": dict(result.get("totals") or {}) if isinstance(result.get("totals"), Mapping) else {},
+    }
+    _append_jsonl_row(trace_file, row)
+    return row
 
 
 def _tail_file(path: Path, *, keep_bytes: int) -> bytes:
@@ -476,6 +653,8 @@ def process_req_027_call_2_ecosystem_linkage_reasoning(
     payload: Mapping[str, Any],
     *,
     emit: Callable[[str], None] | None = None,
+    trace_path: str | Path | None = None,
+    trace_artifacts_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Implement REQ-027 reasoning/processing behavior using broad-sweep context inputs.
 
@@ -721,7 +900,7 @@ def process_req_027_call_2_ecosystem_linkage_reasoning(
     if emit is not None:
         emit(_format_ts_line(f"REQ-027 processing decision={decision}", now_utc=checked_at_utc))
 
-    return {
+    result = {
         "ok": True,
         "schema_version": REQ_027_PROCESSING_SCHEMA_VERSION,
         "requirement_id": REQ_027_REQUIREMENT_ID,
@@ -734,6 +913,18 @@ def process_req_027_call_2_ecosystem_linkage_reasoning(
         "totals": contract_payload["totals"],
         "processing_behavior": processing_behavior,
     }
+    _record_req_027_call_2_llm_call_trace(
+        checked_at_utc=checked_at_utc,
+        target_project=target_project,
+        peer_projects=peer_projects,
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        earth_sweep_projects=[row for row in earth_sweep_projects if row.get("project_id") in peer_project_ids],
+        cross_project_context=cross_project_context,
+        result=result,
+        trace_path=Path(trace_path) if trace_path is not None else None,
+        artifacts_dir=Path(trace_artifacts_dir) if trace_artifacts_dir is not None else None,
+    )
+    return result
 
 
 def build_req_027_call_2_ecosystem_linkage_reasoning(payload: Mapping[str, Any]) -> dict[str, Any]:
