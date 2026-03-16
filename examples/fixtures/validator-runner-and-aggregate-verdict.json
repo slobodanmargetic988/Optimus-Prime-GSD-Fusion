@@ -1,0 +1,6 @@
+{
+  "analysis_type": "validator_runner_and_aggregate_verdict",
+  "now_utc": "2026-03-16T11:00:00Z",
+  "strategy_packet_path": "op-tools/strategy/examples/strategy_packet.sample.v1.json",
+  "schema_path": "contracts/strategy_packet.v1.schema.json"
+}

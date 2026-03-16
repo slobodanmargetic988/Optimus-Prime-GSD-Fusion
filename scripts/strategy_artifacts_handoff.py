@@ -27,6 +27,8 @@ REQ_054_CALL_ID = "recommendation-to-planner-mapping"
 REQ_060_REQUIREMENT_ID = "REQ-060"
 REQ_060_ANALYSIS_TYPE = "strategy_packet_v1_schema_validator"
 REQ_060_DEFAULT_SCHEMA_PATH = "contracts/strategy_packet.v1.schema.json"
+REQ_066_REQUIREMENT_ID = "REQ-066"
+REQ_066_ANALYSIS_TYPE = "validator_runner_and_aggregate_verdict"
 REQUIRED_RECOMMENDATION_FIELDS = (
     "recommendation_id",
     "priority",
@@ -1713,15 +1715,260 @@ def validate_req_060_strategy_packet_v1_schema_validator(payload: Mapping[str, A
     return errors
 
 
+def _req_066_validator_registry() -> tuple[dict[str, Any], ...]:
+    return (
+        {
+            "validator_id": "strategy_packet_v1_schema_validator",
+            "requirement_id": REQ_060_REQUIREMENT_ID,
+            "analysis_type": REQ_060_ANALYSIS_TYPE,
+            "builder": build_req_060_strategy_packet_v1_schema_validator,
+        },
+    )
+
+
+def build_req_066_validator_runner_and_aggregate_verdict(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build deterministic aggregate validator verdicts for REQ-066."""
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_066_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_066_ANALYSIS_TYPE}")
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+
+    validators: list[dict[str, Any]] = []
+    for definition in _req_066_validator_registry():
+        validator_input = dict(raw)
+        validator_input["analysis_type"] = definition["analysis_type"]
+        result = definition["builder"](validator_input)
+        validators.append(
+            {
+                "validator_id": definition["validator_id"],
+                "requirement_id": definition["requirement_id"],
+                "analysis_type": definition["analysis_type"],
+                "ok": result["ok"],
+                "verdict": result["verdict"],
+                "blocking_reason_codes": list(result["reason_codes"]),
+                "diagnostic_count": result["diagnostic_count"],
+                "summary": result["summary"],
+            }
+        )
+
+    validator_count = len(validators)
+    failed_validator_count = sum(1 for row in validators if row["ok"] is False)
+    passed_validator_count = validator_count - failed_validator_count
+    ok = failed_validator_count == 0
+    output_payload = {
+        "requirement_id": REQ_066_REQUIREMENT_ID,
+        "analysis_type": REQ_066_ANALYSIS_TYPE,
+        "checked_at_utc": checked_at_utc,
+        "ok": ok,
+        "verdict": "pass" if ok else "fail",
+        "blocking_reason_codes": sorted(
+            {
+                reason_code
+                for row in validators
+                for reason_code in row["blocking_reason_codes"]
+            }
+        ),
+        "validator_count": validator_count,
+        "passed_validator_count": passed_validator_count,
+        "failed_validator_count": failed_validator_count,
+        "summary": (
+            "All validators passed; aggregate verdict is pass."
+            if ok
+            else f"{failed_validator_count} of {validator_count} validators reported blocking failures."
+        ),
+        "validators": validators,
+    }
+    errors = validate_req_066_validator_runner_and_aggregate_verdict(output_payload)
+    if errors:
+        raise ValueError(f"built REQ-066 payload failed validation: {errors}")
+    return output_payload
+
+
+def validate_req_066_validator_runner_and_aggregate_verdict(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-066 aggregate validator verdict output shape."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "requirement_id",
+        "analysis_type",
+        "checked_at_utc",
+        "ok",
+        "verdict",
+        "blocking_reason_codes",
+        "validator_count",
+        "passed_validator_count",
+        "failed_validator_count",
+        "summary",
+        "validators",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("requirement_id") != REQ_066_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_066_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_066_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_066_ANALYSIS_TYPE}")
+    checked_at_utc = payload.get("checked_at_utc")
+    if not isinstance(checked_at_utc, str) or not checked_at_utc.strip():
+        errors.append("checked_at_utc must be a non-empty string")
+    ok = payload.get("ok")
+    if not isinstance(ok, bool):
+        errors.append("ok must be a boolean")
+    verdict = payload.get("verdict")
+    if verdict not in {"pass", "fail"}:
+        errors.append("verdict must be pass or fail")
+
+    blocking_reason_codes = payload.get("blocking_reason_codes")
+    normalized_aggregate_reason_codes: list[str] = []
+    if not isinstance(blocking_reason_codes, list):
+        errors.append("blocking_reason_codes must be a list")
+    else:
+        for index, item in enumerate(blocking_reason_codes):
+            if not isinstance(item, str) or not item.strip():
+                errors.append(f"blocking_reason_codes[{index}] must be a non-empty string")
+                continue
+            normalized_aggregate_reason_codes.append(item)
+        if normalized_aggregate_reason_codes != sorted(set(normalized_aggregate_reason_codes)):
+            errors.append("blocking_reason_codes must be sorted unique strings")
+
+    validator_count = payload.get("validator_count")
+    passed_validator_count = payload.get("passed_validator_count")
+    failed_validator_count = payload.get("failed_validator_count")
+    for field_name, value in (
+        ("validator_count", validator_count),
+        ("passed_validator_count", passed_validator_count),
+        ("failed_validator_count", failed_validator_count),
+    ):
+        if not isinstance(value, int) or value < 0:
+            errors.append(f"{field_name} must be a non-negative integer")
+
+    summary = payload.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        errors.append("summary must be a non-empty string")
+
+    validators = payload.get("validators")
+    normalized_validator_reason_codes: list[str] = []
+    if not isinstance(validators, list):
+        errors.append("validators must be a list")
+    else:
+        if not validators:
+            errors.append("validators must contain at least one validator result")
+        for index, row in enumerate(validators):
+            if not isinstance(row, Mapping):
+                errors.append(f"validators[{index}] must be an object")
+                continue
+            expected_row_keys = {
+                "validator_id",
+                "requirement_id",
+                "analysis_type",
+                "ok",
+                "verdict",
+                "blocking_reason_codes",
+                "diagnostic_count",
+                "summary",
+            }
+            row_keys = set(row.keys())
+            missing_row = sorted(expected_row_keys - row_keys)
+            if missing_row:
+                errors.append(f"validators[{index}] missing keys: {missing_row}")
+            unexpected_row = sorted(row_keys - expected_row_keys)
+            if unexpected_row:
+                errors.append(f"validators[{index}] has unexpected keys: {unexpected_row}")
+            for key in ("validator_id", "requirement_id", "analysis_type", "summary"):
+                value = row.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"validators[{index}].{key} must be a non-empty string")
+            row_ok = row.get("ok")
+            if not isinstance(row_ok, bool):
+                errors.append(f"validators[{index}].ok must be a boolean")
+            row_verdict = row.get("verdict")
+            if row_verdict not in {"pass", "fail"}:
+                errors.append(f"validators[{index}].verdict must be pass or fail")
+            row_reason_codes = row.get("blocking_reason_codes")
+            normalized_row_reason_codes: list[str] = []
+            if not isinstance(row_reason_codes, list):
+                errors.append(f"validators[{index}].blocking_reason_codes must be a list")
+            else:
+                for reason_index, reason_code in enumerate(row_reason_codes):
+                    if not isinstance(reason_code, str) or not reason_code.strip():
+                        errors.append(
+                            f"validators[{index}].blocking_reason_codes[{reason_index}] must be a non-empty string"
+                        )
+                        continue
+                    normalized_row_reason_codes.append(reason_code)
+                    normalized_validator_reason_codes.append(reason_code)
+                if normalized_row_reason_codes != sorted(set(normalized_row_reason_codes)):
+                    errors.append(f"validators[{index}].blocking_reason_codes must be sorted unique strings")
+            diagnostic_count = row.get("diagnostic_count")
+            if not isinstance(diagnostic_count, int) or diagnostic_count < 0:
+                errors.append(f"validators[{index}].diagnostic_count must be a non-negative integer")
+
+            if row_ok is True:
+                if row_verdict != "pass":
+                    errors.append(f"validators[{index}].verdict must be pass when ok is true")
+                if normalized_row_reason_codes:
+                    errors.append(f"validators[{index}].blocking_reason_codes must be empty when ok is true")
+                if isinstance(diagnostic_count, int) and diagnostic_count != 0:
+                    errors.append(f"validators[{index}].diagnostic_count must be 0 when ok is true")
+            if row_ok is False:
+                if row_verdict != "fail":
+                    errors.append(f"validators[{index}].verdict must be fail when ok is false")
+                if not normalized_row_reason_codes:
+                    errors.append(f"validators[{index}].blocking_reason_codes must be non-empty when ok is false")
+                if isinstance(diagnostic_count, int) and diagnostic_count < 1:
+                    errors.append(f"validators[{index}].diagnostic_count must be positive when ok is false")
+
+    if isinstance(validators, list) and isinstance(validator_count, int) and validator_count != len(validators):
+        errors.append("validator_count must match validators length")
+    if (
+        isinstance(validator_count, int)
+        and isinstance(passed_validator_count, int)
+        and isinstance(failed_validator_count, int)
+        and passed_validator_count + failed_validator_count != validator_count
+    ):
+        errors.append("passed_validator_count plus failed_validator_count must equal validator_count")
+    if normalized_aggregate_reason_codes and normalized_aggregate_reason_codes != sorted(set(normalized_validator_reason_codes)):
+        errors.append("blocking_reason_codes must match the sorted unique validator blocking reason codes")
+
+    if ok is True:
+        if verdict != "pass":
+            errors.append("verdict must be pass when ok is true")
+        if isinstance(failed_validator_count, int) and failed_validator_count != 0:
+            errors.append("failed_validator_count must be 0 when ok is true")
+        if isinstance(validator_count, int) and isinstance(passed_validator_count, int) and passed_validator_count != validator_count:
+            errors.append("passed_validator_count must equal validator_count when ok is true")
+        if normalized_aggregate_reason_codes:
+            errors.append("blocking_reason_codes must be empty when ok is true")
+    if ok is False:
+        if verdict != "fail":
+            errors.append("verdict must be fail when ok is false")
+        if isinstance(failed_validator_count, int) and failed_validator_count < 1:
+            errors.append("failed_validator_count must be positive when ok is false")
+        if not normalized_aggregate_reason_codes:
+            errors.append("blocking_reason_codes must be non-empty when ok is false")
+
+    return errors
+
+
 def run(payload: Mapping[str, Any]) -> dict[str, Any]:
     analysis_type = str(payload.get("analysis_type") or "").strip()
     if analysis_type == REQ_054_ANALYSIS_TYPE:
         return build_req_054_recommendation_to_planner_mapping_artifact(payload)
     if analysis_type == REQ_060_ANALYSIS_TYPE:
         return build_req_060_strategy_packet_v1_schema_validator(payload)
+    if analysis_type == REQ_066_ANALYSIS_TYPE:
+        return build_req_066_validator_runner_and_aggregate_verdict(payload)
     raise ValueError(
         "analysis_type must be one of: "
-        f"{REQ_054_ANALYSIS_TYPE}, {REQ_060_ANALYSIS_TYPE}"
+        f"{REQ_054_ANALYSIS_TYPE}, {REQ_060_ANALYSIS_TYPE}, {REQ_066_ANALYSIS_TYPE}"
     )
 
 
