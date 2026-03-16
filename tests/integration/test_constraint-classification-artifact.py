@@ -107,6 +107,9 @@ def test_req_055_integration_uses_broad_sweep_context_with_deterministic_recomme
             "risk_id": "risk-idea-review-shared-observability-handoff",
             "summary": "Validate ownership handoff details before adding additional sync obligations.",
             "reason_code": "unresolved_idea_open_risk",
+            "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json",
+            ],
             "required_evidence_refs": [
                 "reports/earth/sweeps/2026-03-16/shared-observability.json",
             ],
@@ -125,6 +128,26 @@ def test_req_055_integration_uses_broad_sweep_context_with_deterministic_recomme
         "guardrail-task-floor",
         "guidance-batch-size",
         "speculative-cross-project-sync",
+    ]
+    assert usage["recommendation_mapping"] == [
+        {
+            "constraint_id": "guardrail-task-floor",
+            "action_id": "constraint-guardrail-task-floor",
+            "classification": "hard",
+            "policy_role": "mandatory_guardrail",
+        },
+        {
+            "constraint_id": "guidance-batch-size",
+            "action_id": "constraint-guidance-batch-size",
+            "classification": "soft",
+            "policy_role": "optional_guidance",
+        },
+        {
+            "constraint_id": "speculative-cross-project-sync",
+            "action_id": "constraint-speculative-cross-project-sync",
+            "classification": "speculative",
+            "policy_role": "optional_guidance",
+        },
     ]
     assert usage["recommendation_fields_complete"] is True
     assert usage["required_recommendation_fields"] == [
@@ -155,6 +178,9 @@ def test_req_055_integration_missing_earth_refs_moves_cross_project_obligation_t
             "risk_id": "risk-obligation-align-runtime-policy",
             "summary": "Align planner policy interpretation with runtime orchestrator.",
             "reason_code": "missing_earth_sweep_evidence_refs",
+            "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            ],
             "required_evidence_refs": [
                 "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
             ],
@@ -163,6 +189,9 @@ def test_req_055_integration_missing_earth_refs_moves_cross_project_obligation_t
             "risk_id": "risk-idea-review-shared-observability-handoff",
             "summary": "Validate ownership handoff details before adding additional sync obligations.",
             "reason_code": "unresolved_idea_open_risk",
+            "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json",
+            ],
             "required_evidence_refs": [
                 "reports/earth/sweeps/2026-03-16/shared-observability.json",
             ],

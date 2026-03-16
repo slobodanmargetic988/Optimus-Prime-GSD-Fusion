@@ -37,6 +37,7 @@ _CONTEXT_USAGE_REQUIRED_FIELDS = (
     "projects_considered",
     "earth_sweep_evidence_refs_considered",
     "constraint_ids_used",
+    "recommendation_mapping",
     "recommendation_fields_complete",
     "required_recommendation_fields",
 )
@@ -300,6 +301,7 @@ def _build_req_055_processing_behavior(
     )
 
     recommended_actions: list[dict[str, Any]] = []
+    recommendation_mapping: list[dict[str, str]] = []
     for row in constraints:
         classification = str(row["classification"])
         action_scope = {
@@ -307,14 +309,23 @@ def _build_req_055_processing_behavior(
             "soft": "optional-guidance",
             "speculative": "investigation",
         }[classification]
+        action_id = f"constraint-{row['constraint_id']}"
         recommended_actions.append(
             {
-                "action_id": f"constraint-{row['constraint_id']}",
+                "action_id": action_id,
                 "summary": row["statement"],
                 "rationale": row["rationale"],
                 "action_scope": action_scope,
                 "next_step": f"Apply {classification} constraint handling in planner policy.",
                 "evidence_refs": sorted({*row["evidence_refs"], *row["source_refs"]}),
+            }
+        )
+        recommendation_mapping.append(
+            {
+                "constraint_id": str(row["constraint_id"]),
+                "action_id": action_id,
+                "classification": classification,
+                "policy_role": str(row["policy_role"]),
             }
         )
 
@@ -339,6 +350,7 @@ def _build_req_055_processing_behavior(
                 "risk_id": f"risk-{row['obligation_id']}",
                 "summary": row["summary"],
                 "reason_code": "missing_earth_sweep_evidence_refs",
+                "evidence_refs": required_refs,
                 "required_evidence_refs": required_refs,
             }
         )
@@ -350,6 +362,7 @@ def _build_req_055_processing_behavior(
                 "risk_id": f"risk-{row['idea_id']}",
                 "summary": row["summary"],
                 "reason_code": "unresolved_idea_open_risk",
+                "evidence_refs": required_refs,
                 "required_evidence_refs": required_refs,
             }
         )
@@ -404,6 +417,7 @@ def _build_req_055_processing_behavior(
         "projects_considered": projects_considered,
         "earth_sweep_evidence_refs_considered": earth_refs,
         "constraint_ids_used": [row["constraint_id"] for row in constraints],
+        "recommendation_mapping": recommendation_mapping,
         "recommendation_fields_complete": recommendation_fields_complete,
         "required_recommendation_fields": required_recommendation_fields,
     }
@@ -563,7 +577,7 @@ def _validate_req_055_recommendation_row(row: Any, *, index: int, kind: str) -> 
         expected_keys = {"obligation_id", "project_id", "summary", "evidence_refs"}
         required_text = ("obligation_id", "project_id", "summary")
     else:
-        expected_keys = {"risk_id", "summary", "reason_code", "required_evidence_refs"}
+        expected_keys = {"risk_id", "summary", "reason_code", "evidence_refs", "required_evidence_refs"}
         required_text = ("risk_id", "summary", "reason_code")
 
     row_keys = set(row.keys())
@@ -579,16 +593,59 @@ def _validate_req_055_recommendation_row(row: Any, *, index: int, kind: str) -> 
         if not isinstance(value, str) or not value.strip():
             errors.append(f"{path}.{key} must be a non-empty string")
 
-    list_key = "required_evidence_refs" if kind == "open_risks" else "evidence_refs"
-    value = row.get(list_key)
-    if not isinstance(value, list):
-        errors.append(f"{path}.{list_key} must be a list")
-    else:
+    list_keys = ("evidence_refs", "required_evidence_refs") if kind == "open_risks" else ("evidence_refs",)
+    for list_key in list_keys:
+        value = row.get(list_key)
+        if not isinstance(value, list):
+            errors.append(f"{path}.{list_key} must be a list")
+            continue
         for list_index, item in enumerate(value):
             if not isinstance(item, str) or not item.strip():
                 errors.append(f"{path}.{list_key}[{list_index}] must be a non-empty string")
 
     return errors
+
+
+def _validate_req_055_recommendation_mapping_row(row: Any, *, index: int) -> tuple[list[str], str]:
+    errors: list[str] = []
+    path = f"processing_behavior.context_usage.recommendation_mapping[{index}]"
+    if not isinstance(row, Mapping):
+        return [f"{path} must be an object"], ""
+
+    expected_keys = {"constraint_id", "action_id", "classification", "policy_role"}
+    row_keys = set(row.keys())
+    missing = sorted(expected_keys - row_keys)
+    if missing:
+        errors.append(f"{path} missing keys: {missing}")
+    unexpected = sorted(row_keys - expected_keys)
+    if unexpected:
+        errors.append(f"{path} has unexpected keys: {unexpected}")
+
+    constraint_id = ""
+    for key in ("constraint_id", "action_id", "classification", "policy_role"):
+        value = row.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{path}.{key} must be a non-empty string")
+            continue
+        if key == "constraint_id":
+            constraint_id = value
+
+    classification = row.get("classification")
+    if isinstance(classification, str) and classification not in _CLASSIFICATIONS:
+        errors.append(f"{path}.classification must be one of: {sorted(_CLASSIFICATIONS)}")
+
+    policy_role = row.get("policy_role")
+    if isinstance(classification, str) and classification in _CLASSIFICATIONS:
+        expected_policy_role = "mandatory_guardrail" if classification == "hard" else "optional_guidance"
+        if policy_role != expected_policy_role:
+            errors.append(f"{path}.policy_role must be {expected_policy_role}")
+
+    expected_action_id = f"constraint-{constraint_id}" if constraint_id else ""
+    action_id = row.get("action_id")
+    if expected_action_id and action_id != expected_action_id:
+        errors.append(f"{path}.action_id must equal {expected_action_id}")
+
+    return errors, constraint_id
 
 
 def _validate_req_055_processing_behavior(
@@ -684,6 +741,28 @@ def _validate_req_055_processing_behavior(
             errors.append(
                 "processing_behavior.context_usage.constraint_ids_used must match classified constraint IDs"
             )
+
+        recommendation_mapping = context_usage.get("recommendation_mapping")
+        if not isinstance(recommendation_mapping, list):
+            errors.append("processing_behavior.context_usage.recommendation_mapping must be a list")
+        else:
+            mapped_constraint_ids: list[str] = []
+            seen_mapped_constraint_ids: set[str] = set()
+            for index, row in enumerate(recommendation_mapping):
+                row_errors, constraint_id = _validate_req_055_recommendation_mapping_row(row, index=index)
+                errors.extend(row_errors)
+                if constraint_id:
+                    if constraint_id in seen_mapped_constraint_ids:
+                        errors.append(
+                            "processing_behavior.context_usage.recommendation_mapping constraint_ids must be unique"
+                        )
+                    else:
+                        seen_mapped_constraint_ids.add(constraint_id)
+                        mapped_constraint_ids.append(constraint_id)
+            if mapped_constraint_ids != all_constraint_ids:
+                errors.append(
+                    "processing_behavior.context_usage.recommendation_mapping must cover classified constraint IDs in order"
+                )
 
         if context_usage.get("required_recommendation_fields") != list(_RECOMMENDATION_REQUIRED_FIELDS):
             errors.append(
