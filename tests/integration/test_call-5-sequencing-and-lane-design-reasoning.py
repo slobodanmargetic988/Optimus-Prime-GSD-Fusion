@@ -11,7 +11,7 @@ def _reset_call_trace() -> None:
         trace_path.unlink()
     artifacts_dir = Path("strategy/current/llm_call_trace_artifacts")
     if artifacts_dir.exists():
-        shutil.rmtree(artifacts_dir)
+        shutil.rmtree(artifacts_dir, ignore_errors=True)
 
 
 def _read_last_trace_row() -> dict:
@@ -141,6 +141,13 @@ def test_req030_processing_emits_lanes_sequence_and_evidence_gated_cross_project
     assert cross_item["why_now"]
 
     row = _read_last_trace_row()
+    metadata = result["call_metadata"]
+    assert metadata["llm_call_trace_rows"] == [row]
+    assert metadata["llm_call_trace_schema_version"] == "optimus-prime.llm-call-trace.v1"
+    assert metadata["llm_call_trace_path"] == "strategy/current/llm_call_trace.jsonl"
+    assert metadata["reproducibility"] == "deterministic-input-fingerprint"
+    assert metadata["reproducible_call_id"].startswith("req030-")
+    assert metadata["processing_call_id"].startswith("req030-processing-")
     assert row["requirement_id"] == pipeline.REQ_030_REQUIREMENT_ID
     assert row["call_id"] == pipeline.REQ_030_CALL_ID
     assert row["call_objective"]
@@ -210,3 +217,76 @@ def test_req030_processing_without_earth_sweep_evidence_does_not_invent_cross_pr
     row = _read_last_trace_row()
     assert row["totals"]["sequence_items"] == len(result["sequencing_and_lane_design_reasoning"]["sequence"])
 
+
+def test_req030_processing_call_metadata_is_replay_stable_across_input_reordering() -> None:
+    _reset_call_trace()
+    payload = {
+        "analysis_type": pipeline.REQ_030_ANALYSIS_TYPE,
+        "now_utc": "2026-03-16T12:40:00Z",
+        "target_project": {
+            "project_id": "optimus-prime-gsd-fusion",
+            "project_root": "/workspace/projects/optimus-prime-gsd-fusion",
+        },
+        "constraints": {
+            "max_parallel_lanes": 3,
+            "max_active_work_items": 5,
+            "notes": [
+                "Expose coordination dependencies explicitly.",
+                "Keep sequencing deterministic.",
+            ],
+        },
+        "recommendations": [
+            {
+                "recommendation_id": "rec.earth-ops-alignment",
+                "summary": "Coordinate sequencing assumptions with earth-ops before promotion.",
+                "rationale": "Cross-project coordination must stay evidence-backed.",
+                "expected_impact": "Reduce sequencing drift.",
+                "risk_level": "low",
+            },
+            {
+                "recommendation_id": "rec.local-implementation",
+                "summary": "Implement the REQ-030 processing layer for Call-5 sequencing and lane design reasoning.",
+                "rationale": "The contract normalizer exists, but processing metadata must stay replay-stable.",
+                "expected_impact": "Deterministic call-5 outputs and metadata.",
+                "risk_level": "medium",
+            },
+        ],
+        "broad_sweep_context": {
+            "earth_sweep_evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/portfolio.json",
+            ],
+            "cross_project_context": [
+                {
+                    "project_id": "earth-ops",
+                    "project_root": "/workspace/projects/Earth/earth-ops",
+                    "evidence_refs": [
+                        "reports/earth/sweeps/2026-03-16/earth-ops.json",
+                    ],
+                    "context_note": "Earth-ops owns release coordination conventions.",
+                },
+                {
+                    "project_id": "analytics-hub",
+                    "project_root": "/workspace/projects/Earth/analytics-hub",
+                    "evidence_refs": [
+                        "reports/earth/sweeps/2026-03-16/analytics-hub.json",
+                    ],
+                    "context_note": "Analytics-hub consumes sequencing output for reporting.",
+                },
+            ],
+        },
+    }
+
+    first = pipeline.process_req_030_call_5_sequencing_and_lane_design_reasoning(payload)
+
+    _reset_call_trace()
+    reordered = dict(payload)
+    reordered["recommendations"] = list(reversed(payload["recommendations"]))
+    reordered["broad_sweep_context"] = dict(payload["broad_sweep_context"])
+    reordered["broad_sweep_context"]["cross_project_context"] = list(
+        reversed(payload["broad_sweep_context"]["cross_project_context"])
+    )
+    second = pipeline.process_req_030_call_5_sequencing_and_lane_design_reasoning(reordered)
+
+    assert first["call_metadata"] == second["call_metadata"]
+    assert first["call_metadata"]["canonical_processing_input"] == second["call_metadata"]["canonical_processing_input"]
+    assert first["call_metadata"]["llm_call_trace_rows"] == second["call_metadata"]["llm_call_trace_rows"]

@@ -39,6 +39,8 @@ _DEPENDS_ON_TYPES = ("recommendation", "external")
 _LOG_CHECK_SENTINEL = ".log_size_check.json"
 _MAX_LOG_BYTES = 3_000_000_000
 _LLM_CALL_TRACE_SCHEMA_VERSION = "optimus-prime.llm-call-trace.v1"
+_LLM_CALL_TRACE_RELATIVE_PATH = "strategy/current/llm_call_trace.jsonl"
+_LLM_CALL_TRACE_ARTIFACTS_RELATIVE_DIR = "strategy/current/llm_call_trace_artifacts"
 _REQ_027_CALL_2_OBJECTIVE = (
     "Reason about ecosystem links and interaction obligations between the target project and peer projects; "
     "distinguish existing links, missing links, and proposed links with confidence tags; "
@@ -134,11 +136,15 @@ def _repo_root() -> Path:
 
 
 def _default_llm_call_trace_path() -> Path:
-    return _repo_root() / "strategy" / "current" / "llm_call_trace.jsonl"
+    return _repo_root() / _LLM_CALL_TRACE_RELATIVE_PATH
 
 
 def _default_llm_call_trace_artifacts_dir() -> Path:
-    return _repo_root() / "strategy" / "current" / "llm_call_trace_artifacts"
+    return _repo_root() / _LLM_CALL_TRACE_ARTIFACTS_RELATIVE_DIR
+
+
+def _repo_relative_path(path: Path) -> str:
+    return path.resolve().relative_to(_repo_root()).as_posix()
 
 
 def _canonical_json_bytes(payload: Any) -> bytes:
@@ -147,6 +153,10 @@ def _canonical_json_bytes(payload: Any) -> bytes:
 
 def _sha256_hex(payload: Any) -> str:
     return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+
+
+def _canonicalize(payload: Any) -> Any:
+    return json.loads(_canonical_json_bytes(payload).decode("utf-8"))
 
 
 def _write_json_artifact(path: Path, payload: Any) -> None:
@@ -311,12 +321,50 @@ def _handoff_summary_for_req_030_call_5(result: Mapping[str, Any]) -> str:
     totals = result.get("totals") if isinstance(result.get("totals"), Mapping) else {}
     lanes = int(totals.get("lanes") or 0)
     sequence_items = int(totals.get("sequence_items") or 0)
+    dependencies = int(totals.get("total_dependencies") or 0)
     return (
         f"{REQ_030_REQUIREMENT_ID} {REQ_030_CALL_ID} handoff: "
         f"decision={decision} confidence={confidence} "
-        f"lanes={lanes} sequence_items={sequence_items} "
+        f"lanes={lanes} sequence_items={sequence_items} dependencies={dependencies} "
+        "why_now=explicit coordination_dependencies=explicit "
         f"obligations={len(obligations)} open_risks={len(risks)}"
     )
+
+
+def _req_030_canonical_input(
+    *,
+    checked_at_utc: str,
+    target_project: Mapping[str, Any],
+    constraints: Mapping[str, Any],
+    recommendations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "analysis_type": REQ_030_ANALYSIS_TYPE,
+        "call_id": REQ_030_CALL_ID,
+        "checked_at_utc": checked_at_utc,
+        "target_project": _canonicalize(target_project),
+        "constraints": _canonicalize(constraints),
+        "recommendations": _canonicalize(recommendations),
+    }
+
+
+def _req_030_canonical_processing_input(
+    *,
+    earth_sweep_evidence_refs: list[str],
+    earth_sweep_projects: list[dict[str, Any]],
+    cross_project_context: list[dict[str, Any]],
+    result: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "earth_sweep_evidence_refs": _canonicalize(earth_sweep_evidence_refs),
+        "earth_sweep_projects": _canonicalize(earth_sweep_projects),
+        "cross_project_context": _canonicalize(cross_project_context),
+        "sequencing_and_lane_design_reasoning": _canonicalize(
+            result.get("sequencing_and_lane_design_reasoning") or {}
+        ),
+        "totals": _canonicalize(result.get("totals") or {}),
+        "processing_behavior": _canonicalize(result.get("processing_behavior") or {}),
+    }
 
 
 def _record_req_030_call_5_llm_call_trace(
@@ -372,9 +420,18 @@ def _record_req_030_call_5_llm_call_trace(
         cross_project_context=cross_project_context,
         earth_sweep_projects=earth_sweep_projects,
     )
-    behavior = result.get("processing_behavior") if isinstance(result.get("processing_behavior"), Mapping) else {}
-    usage = behavior.get("context_usage") if isinstance(behavior.get("context_usage"), Mapping) else {}
-    output_refs = sorted({str(ref) for ref in (usage.get("evidence_refs_used") or []) if str(ref).strip()})
+    recommendation = {}
+    if isinstance(result.get("processing_behavior"), Mapping):
+        recommendation = result["processing_behavior"].get("recommendation") or {}
+    output_refs = [
+        f"{REQ_030_REQUIREMENT_ID}::call::{REQ_030_CALL_ID}::output::sequencing_and_lane_design_reasoning",
+        f"{REQ_030_REQUIREMENT_ID}::call::{REQ_030_CALL_ID}::output::recommended_actions",
+        _repo_relative_path(output_path),
+    ]
+    if isinstance(recommendation, Mapping) and recommendation.get("cross_project_obligations"):
+        output_refs.append(f"{REQ_030_REQUIREMENT_ID}::call::{REQ_030_CALL_ID}::output::cross_project_obligations")
+    if isinstance(recommendation, Mapping) and recommendation.get("open_risks"):
+        output_refs.append(f"{REQ_030_REQUIREMENT_ID}::call::{REQ_030_CALL_ID}::output::open_risks")
 
     row = {
         "schema_version": _LLM_CALL_TRACE_SCHEMA_VERSION,
@@ -386,10 +443,10 @@ def _record_req_030_call_5_llm_call_trace(
         "target_project_id": str(target_project.get("project_id") or "").strip(),
         "peer_project_ids": sorted({str(row.get("project_id") or "").strip() for row in cross_project_context if row.get("project_id")}),
         "input_refs": input_refs,
-        "output_refs": output_refs,
+        "output_refs": sorted(set(output_refs)),
         "artifacts": [
-            {"kind": "input_snapshot", "path": str(input_path), "sha256": input_digest},
-            {"kind": "output_snapshot", "path": str(output_path), "sha256": output_digest},
+            {"kind": "input_snapshot", "path": _repo_relative_path(input_path), "sha256": input_digest},
+            {"kind": "output_snapshot", "path": _repo_relative_path(output_path), "sha256": output_digest},
         ],
         "handoff_summary": _handoff_summary_for_req_030_call_5(result),
         "totals": dict(result.get("totals") or {}) if isinstance(result.get("totals"), Mapping) else {},
@@ -1677,7 +1734,7 @@ def process_req_030_call_5_sequencing_and_lane_design_reasoning(
         "processing_behavior": processing_behavior,
     }
 
-    _record_req_030_call_5_llm_call_trace(
+    trace_row = _record_req_030_call_5_llm_call_trace(
         checked_at_utc=checked_at_utc,
         target_project=target_project,
         constraints=constraints,
@@ -1689,6 +1746,34 @@ def process_req_030_call_5_sequencing_and_lane_design_reasoning(
         trace_path=Path(trace_path) if trace_path is not None else None,
         artifacts_dir=Path(trace_artifacts_dir) if trace_artifacts_dir is not None else None,
     )
+
+    canonical_input = _req_030_canonical_input(
+        checked_at_utc=checked_at_utc,
+        target_project=target_project,
+        constraints=constraints,
+        recommendations=recommendations,
+    )
+    canonical_processing_input = _req_030_canonical_processing_input(
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        earth_sweep_projects=earth_sweep_projects,
+        cross_project_context=cross_project_context,
+        result=result,
+    )
+    canonical_input_sha = _sha256_hex(canonical_input)
+    processing_input_sha = _sha256_hex(canonical_processing_input)
+    result["call_metadata"] = {
+        "reproducibility": "deterministic-input-fingerprint",
+        "canonical_input": canonical_input,
+        "canonical_input_sha256": canonical_input_sha,
+        "reproducible_call_id": f"req030-{canonical_input_sha[:16]}",
+        "canonical_processing_input": canonical_processing_input,
+        "processing_input_sha256": processing_input_sha,
+        "processing_call_id": f"req030-processing-{processing_input_sha[:16]}",
+        "llm_call_trace_schema_version": _LLM_CALL_TRACE_SCHEMA_VERSION,
+        "llm_call_trace_path": _LLM_CALL_TRACE_RELATIVE_PATH,
+        "llm_call_trace_sha256": _sha256_hex([trace_row]),
+        "llm_call_trace_rows": [trace_row],
+    }
     return result
 
 
