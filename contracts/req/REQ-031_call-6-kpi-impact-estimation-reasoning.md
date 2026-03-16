@@ -255,6 +255,8 @@ Normalization rules:
 - `context_usage`
   - `source_call_ids_used`
   - `earth_sweep_context_used`
+  - `cross_project_context_used`
+  - `cross_project_project_ids_used`
   - `earth_sweep_evidence_refs_used`
   - `recommendation_ids_considered`
   - `kpi_ids_considered`

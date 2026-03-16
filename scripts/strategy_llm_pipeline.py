@@ -3983,6 +3983,13 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
     low_confidence_estimate_ids = [
         str(row["estimate_id"]) for row in kpi_estimates if row["confidence"] == "low"
     ]
+    cross_project_project_ids = sorted(
+        {
+            str(row["project_id"])
+            for row in normalized_recommendation_adoptions
+            if _as_text(row.get("project_id"))
+        }
+    )
     unique_evidence_refs = _req_026_dedupe_preserving_order(
         list(normalized_target_refs)
         + list(normalized_earth_refs)
@@ -4049,6 +4056,8 @@ def build_req_031_call_6_kpi_impact_estimation_reasoning(
             "context_usage": {
                 "source_call_ids_used": [str(row["call_id"]) for row in normalized_call_chain],
                 "earth_sweep_context_used": bool(normalized_earth_refs),
+                "cross_project_context_used": bool(cross_project_project_ids),
+                "cross_project_project_ids_used": cross_project_project_ids,
                 "earth_sweep_evidence_refs_used": list(normalized_earth_refs),
                 "recommendation_ids_considered": [
                     str(row["recommendation_id"]) for row in normalized_recommendation_adoptions
@@ -4332,8 +4341,11 @@ def validate_req_031_call_6_kpi_impact_estimation_reasoning(payload: Mapping[str
         context_usage = {}
     if not isinstance(context_usage.get("earth_sweep_context_used"), bool):
         errors.append("processing_behavior.context_usage.earth_sweep_context_used must be a boolean")
+    if not isinstance(context_usage.get("cross_project_context_used"), bool):
+        errors.append("processing_behavior.context_usage.cross_project_context_used must be a boolean")
     for key in (
         "source_call_ids_used",
+        "cross_project_project_ids_used",
         "earth_sweep_evidence_refs_used",
         "recommendation_ids_considered",
         "kpi_ids_considered",
@@ -4349,6 +4361,21 @@ def validate_req_031_call_6_kpi_impact_estimation_reasoning(payload: Mapping[str
         errors.append("processing_behavior.context_usage.caveat_count must be a non-negative integer")
     if context_usage.get("recommendation_ids_considered") != recommendation_ids:
         errors.append("processing_behavior.context_usage.recommendation_ids_considered must match recommendation_adoptions")
+    expected_cross_project_ids = sorted(
+        {
+            _as_text(row.get("project_id"))
+            for row in recommendation_adoptions
+            if isinstance(row, Mapping) and _as_text(row.get("project_id"))
+        }
+    )
+    if context_usage.get("cross_project_project_ids_used") != expected_cross_project_ids:
+        errors.append(
+            "processing_behavior.context_usage.cross_project_project_ids_used must match cross-project recommendations"
+        )
+    if context_usage.get("cross_project_context_used") != bool(expected_cross_project_ids):
+        errors.append(
+            "processing_behavior.context_usage.cross_project_context_used must match cross-project recommendations"
+        )
     if context_usage.get("estimate_ids_emitted") != estimate_ids:
         errors.append("processing_behavior.context_usage.estimate_ids_emitted must match kpi_estimates")
     if context_usage.get("low_confidence_estimate_ids") != low_confidence_estimate_ids:
