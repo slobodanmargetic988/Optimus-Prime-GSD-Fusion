@@ -91,6 +91,27 @@ REQ_031_CALL_OBJECTIVES = {
     "call-5": "Select which recommendation adoptions are in scope for KPI estimation.",
     "call-6": "Estimate KPI movement from recommendation adoption using evidence-backed assumptions with explicit confidence and caveats.",
 }
+REQ_034_REQUIREMENT_ID = "REQ-034"
+REQ_034_SCHEMA_VERSION = "req-034.cross-call-memory-handoff-contract.v1"
+REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION = "req-034.llm-call-trace-row.v1"
+REQ_034_ANALYSIS_TYPE = "cross_call_memory_handoff_contract"
+REQ_034_PROCESSING_STRATEGY = "cross-call-memory-handoff"
+REQ_034_REASONING_MODE = "deterministic-bounded-memory-handoff"
+REQ_034_ALLOWED_ENTRY_KINDS = {"constraint", "decision", "fact", "risk"}
+REQ_034_REQUIRED_HANDOFF_FIELDS = [
+    "memory_id",
+    "memory_key",
+    "kind",
+    "summary",
+    "position",
+    "source_call_id",
+    "source_output_ref",
+    "carry_forward",
+    "supersedes_memory_ids",
+    "citation_refs",
+]
+REQ_034_DEFAULT_MAX_ENTRIES = 8
+REQ_034_DEFAULT_MAX_CITATION_REFS_PER_ENTRY = 3
 RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 PIPELINE_STRATEGY = "multi-call-strategy-pipeline-planner"
@@ -139,6 +160,10 @@ class Req029Error(ValueError):
 
 class Req031Error(ValueError):
     """Raised when REQ-031 input is malformed."""
+
+
+class Req034Error(ValueError):
+    """Raised when REQ-034 input is malformed."""
 
 
 def utc_now_iso() -> str:
@@ -4738,6 +4763,950 @@ def validate_req_031_call_6_kpi_impact_estimation_reasoning(payload: Mapping[str
     return errors
 
 
+def _req_034_require_positive_int(
+    value: Any,
+    *,
+    field_name: str,
+    minimum: int = 1,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise Req034Error(f"{field_name} must be an integer")
+    if value < minimum:
+        raise Req034Error(f"{field_name} must be at least {minimum}")
+    return value
+
+
+def _req_034_normalize_current_call(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, str]:
+    row = _require_mapping(value, field_name=field_name)
+    return {
+        "call_id": _require_text(row.get("call_id"), field_name=f"{field_name}.call_id").lower(),
+        "objective": _require_text(row.get("objective"), field_name=f"{field_name}.objective"),
+    }
+
+
+def _req_034_normalize_call_chain(
+    value: Any,
+    *,
+    field_name: str,
+    current_call_id: str,
+) -> list[dict[str, Any]]:
+    if value is None or not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req034Error(f"{field_name} must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_call_ids: set[str] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        sequence = row.get("sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            raise Req034Error(f"{field_name}[{index}].sequence must be an integer")
+        if sequence != index + 1:
+            raise Req034Error(f"{field_name}[{index}].sequence must be {index + 1}")
+        call_id = _require_text(row.get("call_id"), field_name=f"{field_name}[{index}].call_id").lower()
+        if call_id in seen_call_ids:
+            raise Req034Error(f"{field_name}[{index}].call_id must be unique")
+        seen_call_ids.add(call_id)
+        normalized.append(
+            {
+                "sequence": sequence,
+                "call_id": call_id,
+                "phase": _require_text(row.get("phase"), field_name=f"{field_name}[{index}].phase"),
+                "output_ref": _require_text(row.get("output_ref"), field_name=f"{field_name}[{index}].output_ref"),
+            }
+        )
+
+    if len(normalized) < 2:
+        raise Req034Error(f"{field_name} must include at least one prior call plus {current_call_id}")
+    if normalized[-1]["call_id"] != current_call_id:
+        raise Req034Error(f"{field_name} must terminate with current_call.call_id {current_call_id}")
+    return normalized
+
+
+def _req_034_normalize_memory_budget(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, int]:
+    if value is None:
+        return {
+            "max_entries": REQ_034_DEFAULT_MAX_ENTRIES,
+            "max_citation_refs_per_entry": REQ_034_DEFAULT_MAX_CITATION_REFS_PER_ENTRY,
+        }
+    row = _require_mapping(value, field_name=field_name)
+    return {
+        "max_entries": _req_034_require_positive_int(
+            row.get("max_entries", REQ_034_DEFAULT_MAX_ENTRIES),
+            field_name=f"{field_name}.max_entries",
+        ),
+        "max_citation_refs_per_entry": _req_034_require_positive_int(
+            row.get("max_citation_refs_per_entry", REQ_034_DEFAULT_MAX_CITATION_REFS_PER_ENTRY),
+            field_name=f"{field_name}.max_citation_refs_per_entry",
+        ),
+    }
+
+
+def _req_034_normalize_handoff_item(
+    value: Any,
+    *,
+    field_name: str,
+    source_call_id: str,
+    source_output_ref: str,
+) -> dict[str, Any]:
+    row = _require_mapping(value, field_name=field_name)
+    kind = _require_text(row.get("kind"), field_name=f"{field_name}.kind").lower()
+    if kind not in REQ_034_ALLOWED_ENTRY_KINDS:
+        raise Req034Error(f"{field_name}.kind must be one of {sorted(REQ_034_ALLOWED_ENTRY_KINDS)}")
+    carry_forward = row.get("carry_forward")
+    if not isinstance(carry_forward, bool):
+        raise Req034Error(f"{field_name}.carry_forward must be a boolean")
+    return {
+        "memory_id": _require_text(row.get("memory_id"), field_name=f"{field_name}.memory_id"),
+        "memory_key": _require_text(row.get("memory_key"), field_name=f"{field_name}.memory_key"),
+        "kind": kind,
+        "summary": _require_text(row.get("summary"), field_name=f"{field_name}.summary"),
+        "position": _require_text(row.get("position"), field_name=f"{field_name}.position"),
+        "source_call_id": source_call_id,
+        "source_output_ref": source_output_ref,
+        "carry_forward": carry_forward,
+        "supersedes_memory_ids": _normalize_string_list(
+            row.get("supersedes_memory_ids"),
+            field_name=f"{field_name}.supersedes_memory_ids",
+        ),
+        "citation_refs": _normalize_string_list(
+            row.get("citation_refs"),
+            field_name=f"{field_name}.citation_refs",
+            min_items=1,
+        ),
+    }
+
+
+def _req_034_normalize_prior_call_memory(
+    value: Any,
+    *,
+    field_name: str,
+    call_chain: Sequence[Mapping[str, Any]],
+    current_call_id: str,
+) -> list[dict[str, Any]]:
+    if value is None or not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req034Error(f"{field_name} must be an array")
+
+    chain_by_call_id = {str(row["call_id"]): row for row in call_chain}
+    expected_prior_call_ids = [str(row["call_id"]) for row in call_chain[:-1]]
+    seen_call_ids: set[str] = set()
+    seen_memory_ids: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        call_id = _require_text(row.get("call_id"), field_name=f"{field_name}[{index}].call_id").lower()
+        if call_id == current_call_id or call_id not in chain_by_call_id:
+            raise Req034Error(f"{field_name}[{index}].call_id must reference a prior call from call_chain")
+        if call_id in seen_call_ids:
+            raise Req034Error(f"{field_name}[{index}].call_id must be unique")
+        seen_call_ids.add(call_id)
+        source_output_ref = _require_text(row.get("output_ref"), field_name=f"{field_name}[{index}].output_ref")
+        if source_output_ref != chain_by_call_id[call_id]["output_ref"]:
+            raise Req034Error(f"{field_name}[{index}].output_ref must match call_chain for {call_id}")
+        raw_items = row.get("handoff_items")
+        if raw_items is None or not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes, bytearray)):
+            raise Req034Error(f"{field_name}[{index}].handoff_items must be a non-empty array")
+        if not raw_items:
+            raise Req034Error(f"{field_name}[{index}].handoff_items must be a non-empty array")
+        handoff_items: list[dict[str, Any]] = []
+        for item_index, raw_item in enumerate(raw_items):
+            item = _req_034_normalize_handoff_item(
+                raw_item,
+                field_name=f"{field_name}[{index}].handoff_items[{item_index}]",
+                source_call_id=call_id,
+                source_output_ref=source_output_ref,
+            )
+            if item["memory_id"] in seen_memory_ids:
+                raise Req034Error(f"{field_name}[{index}].handoff_items[{item_index}].memory_id must be unique")
+            seen_memory_ids.add(item["memory_id"])
+            handoff_items.append(item)
+        handoff_items.sort(key=lambda item: item["memory_id"])
+        normalized.append(
+            {
+                "call_id": call_id,
+                "sequence": chain_by_call_id[call_id]["sequence"],
+                "output_ref": source_output_ref,
+                "summary": _require_text(row.get("summary"), field_name=f"{field_name}[{index}].summary"),
+                "handoff_items": handoff_items,
+            }
+        )
+
+    if sorted(seen_call_ids) != sorted(expected_prior_call_ids):
+        raise Req034Error(
+            f"{field_name} must include exactly {expected_prior_call_ids} so every prior call contributes bounded memory"
+        )
+    normalized.sort(key=lambda row: int(row["sequence"]))
+    return normalized
+
+
+def _req_034_canonical_input(
+    *,
+    target_project_id: str,
+    current_call: Mapping[str, Any],
+    call_chain: Sequence[Mapping[str, Any]],
+    memory_budget: Mapping[str, Any],
+    allowed_context_refs: Sequence[str],
+    prior_call_memory: Sequence[Mapping[str, Any]],
+    checked_at_utc: str,
+) -> dict[str, Any]:
+    return {
+        "requirement_id": REQ_034_REQUIREMENT_ID,
+        "analysis_type": REQ_034_ANALYSIS_TYPE,
+        "call_id": current_call["call_id"],
+        "checked_at_utc": checked_at_utc,
+        "target_project": {"project_id": target_project_id},
+        "current_call": {
+            "call_id": current_call["call_id"],
+            "objective": current_call["objective"],
+        },
+        "call_chain": [
+            {
+                "sequence": row["sequence"],
+                "call_id": row["call_id"],
+                "phase": row["phase"],
+                "output_ref": row["output_ref"],
+            }
+            for row in call_chain
+        ],
+        "memory_budget": {
+            "max_entries": memory_budget["max_entries"],
+            "max_citation_refs_per_entry": memory_budget["max_citation_refs_per_entry"],
+        },
+        "allowed_context_refs": list(allowed_context_refs),
+        "prior_call_memory": [
+            {
+                "call_id": row["call_id"],
+                "output_ref": row["output_ref"],
+                "summary": row["summary"],
+                "handoff_items": [
+                    {
+                        "memory_id": item["memory_id"],
+                        "memory_key": item["memory_key"],
+                        "kind": item["kind"],
+                        "summary": item["summary"],
+                        "position": item["position"],
+                        "carry_forward": item["carry_forward"],
+                        "supersedes_memory_ids": list(item["supersedes_memory_ids"]),
+                        "citation_refs": list(item["citation_refs"]),
+                    }
+                    for item in row["handoff_items"]
+                ],
+            }
+            for row in prior_call_memory
+        ],
+    }
+
+
+def _build_req_034_open_risk(
+    *,
+    reason_code: str,
+    memory_id: str,
+    memory_key: str,
+    source_call_id: str,
+    summary: str,
+    required_citation_refs: Sequence[str],
+) -> dict[str, Any]:
+    return {
+        "risk_id": f"risk-{reason_code}-{memory_id}",
+        "reason_code": reason_code,
+        "summary": summary,
+        "memory_id": memory_id,
+        "memory_key": memory_key,
+        "source_call_id": source_call_id,
+        "required_citation_refs": list(required_citation_refs),
+    }
+
+
+def _build_req_034_handoff_materialization(
+    *,
+    prior_call_memory: Sequence[Mapping[str, Any]],
+    memory_budget: Mapping[str, Any],
+    allowed_context_refs: Sequence[str],
+    call_chain: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]], int, int, int]:
+    available_context_refs = set(allowed_context_refs) | {
+        _require_text(row.get("output_ref"), field_name="call_chain[].output_ref") for row in call_chain
+    }
+    retained_by_key: dict[str, dict[str, Any]] = {}
+    superseded_memory_ids: set[str] = set()
+    open_risks: list[dict[str, Any]] = []
+    citation_refs_truncated_count = 0
+    input_item_count = 0
+    for row in prior_call_memory:
+        for item in row["handoff_items"]:
+            input_item_count += 1
+            if not item["carry_forward"]:
+                continue
+            blocked_citation_refs = sorted(set(item["citation_refs"]) - available_context_refs)
+            if blocked_citation_refs:
+                open_risks.append(
+                    _build_req_034_open_risk(
+                        reason_code="context_leakage_prevented",
+                        memory_id=str(item["memory_id"]),
+                        memory_key=str(item["memory_key"]),
+                        source_call_id=str(item["source_call_id"]),
+                        summary=(
+                            f"Blocked memory '{item['memory_id']}' from {item['source_call_id']} because it cited "
+                            "refs outside the bounded context window."
+                        ),
+                        required_citation_refs=blocked_citation_refs,
+                    )
+                )
+                continue
+            trimmed_citation_refs = list(item["citation_refs"][: memory_budget["max_citation_refs_per_entry"]])
+            citation_refs_truncated_count += len(item["citation_refs"]) - len(trimmed_citation_refs)
+            candidate = {
+                "memory_id": item["memory_id"],
+                "memory_key": item["memory_key"],
+                "kind": item["kind"],
+                "summary": item["summary"],
+                "position": item["position"],
+                "source_call_id": item["source_call_id"],
+                "source_output_ref": item["source_output_ref"],
+                "source_call_sequence": row["sequence"],
+                "carry_forward": item["carry_forward"],
+                "supersedes_memory_ids": list(item["supersedes_memory_ids"]),
+                "citation_refs": trimmed_citation_refs,
+            }
+            existing = retained_by_key.get(str(item["memory_key"]))
+            if existing is None:
+                retained_by_key[str(item["memory_key"])] = candidate
+                continue
+            if (
+                str(item["position"]) != str(existing["position"])
+                and str(existing["memory_id"]) not in item["supersedes_memory_ids"]
+            ):
+                open_risks.append(
+                    _build_req_034_open_risk(
+                        reason_code="contradiction_drift_prevented",
+                        memory_id=str(item["memory_id"]),
+                        memory_key=str(item["memory_key"]),
+                        source_call_id=str(item["source_call_id"]),
+                        summary=(
+                            f"Blocked memory '{item['memory_id']}' from {item['source_call_id']} because it contradicted "
+                            f"earlier memory for key '{item['memory_key']}' without superseding it."
+                        ),
+                        required_citation_refs=_collect_unique_refs(
+                            existing["citation_refs"],
+                            item["citation_refs"],
+                            [str(existing["source_output_ref"])],
+                            [str(item["source_output_ref"])],
+                        ),
+                    )
+                )
+                continue
+            superseded_memory_ids.add(str(existing["memory_id"]))
+            retained_by_key[str(item["memory_key"])] = candidate
+
+    retained_items = list(retained_by_key.values())
+    retained_items.sort(key=lambda item: (-int(item["source_call_sequence"]), str(item["memory_id"])))
+    kept_items = retained_items[: memory_budget["max_entries"]]
+    dropped_due_to_budget_count = max(0, len(retained_items) - len(kept_items))
+    final_items = sorted(kept_items, key=lambda item: (int(item["source_call_sequence"]), str(item["memory_id"])))
+    return (
+        final_items,
+        sorted(superseded_memory_ids),
+        sorted(open_risks, key=lambda risk: str(risk["risk_id"])),
+        input_item_count,
+        citation_refs_truncated_count,
+        dropped_due_to_budget_count,
+    )
+
+
+def _build_req_034_llm_call_trace_rows(
+    *,
+    processing_call_id: str,
+    call_chain: Sequence[Mapping[str, Any]],
+    prior_call_memory: Sequence[Mapping[str, Any]],
+    retained_items: Sequence[Mapping[str, Any]],
+    open_risks: Sequence[Mapping[str, Any]],
+    current_call: Mapping[str, Any],
+    max_entries: int,
+) -> list[dict[str, Any]]:
+    input_rows_by_call_id = {str(row["call_id"]): row for row in prior_call_memory}
+    retained_by_call_id: dict[str, list[Mapping[str, Any]]] = {}
+    for item in retained_items:
+        retained_by_call_id.setdefault(str(item["source_call_id"]), []).append(item)
+    open_risks_by_call_id: dict[str, list[Mapping[str, Any]]] = {}
+    for risk in open_risks:
+        open_risks_by_call_id.setdefault(str(risk["source_call_id"]), []).append(risk)
+
+    trace_rows: list[dict[str, Any]] = []
+    previous_output_ref = ""
+    terminal_call_id = str(current_call["call_id"])
+    for row in call_chain:
+        call_id = str(row["call_id"])
+        if call_id != terminal_call_id:
+            source_row = input_rows_by_call_id[call_id]
+            citation_refs = _req_026_dedupe_preserving_order(
+                [ref for item in source_row["handoff_items"] for ref in item["citation_refs"]]
+            )
+            input_refs = _req_026_dedupe_preserving_order(
+                ([previous_output_ref] if previous_output_ref else []) + citation_refs
+            )
+            retained_count = len(retained_by_call_id.get(call_id, []))
+            blocked_count = len(open_risks_by_call_id.get(call_id, []))
+            handoff_summary = (
+                f"Call {row['sequence']} contributes {retained_count} retained memory item(s) via {row['output_ref']} "
+                f"for {terminal_call_id}; {blocked_count} item(s) were blocked before final handoff."
+            )
+            trace_rows.append(
+                {
+                    "schema_version": REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION,
+                    "requirement_id": REQ_034_REQUIREMENT_ID,
+                    "processing_call_id": processing_call_id,
+                    "call_id": call_id,
+                    "sequence": row["sequence"],
+                    "call_objective": f"Preserve cited handoff memory from {call_id} into {terminal_call_id}.",
+                    "input_refs": input_refs,
+                    "output_refs": [row["output_ref"]],
+                    "handoff_summary": handoff_summary,
+                }
+            )
+            previous_output_ref = str(row["output_ref"])
+            continue
+
+        input_refs = _req_026_dedupe_preserving_order(
+            [str(source_row["output_ref"]) for source_row in prior_call_memory]
+            + [ref for item in retained_items for ref in item["citation_refs"]]
+            + [ref for risk in open_risks for ref in risk["required_citation_refs"]]
+        )
+        trace_rows.append(
+            {
+                "schema_version": REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION,
+                "requirement_id": REQ_034_REQUIREMENT_ID,
+                "processing_call_id": processing_call_id,
+                "call_id": call_id,
+                "sequence": row["sequence"],
+                "call_objective": str(current_call["objective"]),
+                "input_refs": input_refs,
+                "output_refs": [row["output_ref"]],
+                "handoff_summary": (
+                    f"Call {row['sequence']} receives {len(retained_items)} retained memory item(s) with "
+                    f"{len(open_risks)} open risk(s) under a max_entries budget of {max_entries}."
+                ),
+            }
+        )
+    return trace_rows
+
+
+def build_req_034_cross_call_memory_handoff_contract(
+    *,
+    target_project: Mapping[str, Any],
+    current_call: Mapping[str, Any],
+    call_chain: Sequence[Mapping[str, Any]],
+    prior_call_memory: Sequence[Mapping[str, Any]],
+    allowed_context_refs: Sequence[str],
+    memory_budget: Mapping[str, Any] | None = None,
+    analysis_type: str = REQ_034_ANALYSIS_TYPE,
+    call_id: str | None = None,
+    checked_at_utc: str | None = None,
+) -> dict[str, Any]:
+    if analysis_type != REQ_034_ANALYSIS_TYPE:
+        raise Req034Error(f"analysis_type must be {REQ_034_ANALYSIS_TYPE}")
+
+    project = _require_mapping(target_project, field_name="target_project")
+    project_id = _require_text(project.get("project_id"), field_name="target_project.project_id")
+    normalized_current_call = _req_034_normalize_current_call(current_call, field_name="current_call")
+    if call_id is not None and _require_text(call_id, field_name="call_id").lower() != normalized_current_call["call_id"]:
+        raise Req034Error("call_id must match current_call.call_id when provided")
+    normalized_call_chain = _req_034_normalize_call_chain(
+        call_chain,
+        field_name="call_chain",
+        current_call_id=normalized_current_call["call_id"],
+    )
+    normalized_memory_budget = _req_034_normalize_memory_budget(memory_budget, field_name="memory_budget")
+    normalized_allowed_context_refs = _normalize_string_list(
+        allowed_context_refs,
+        field_name="allowed_context_refs",
+        min_items=1,
+    )
+    normalized_prior_call_memory = _req_034_normalize_prior_call_memory(
+        prior_call_memory,
+        field_name="prior_call_memory",
+        call_chain=normalized_call_chain,
+        current_call_id=normalized_current_call["call_id"],
+    )
+    normalized_checked_at_utc = _require_text(checked_at_utc or utc_now_iso(), field_name="checked_at_utc")
+    canonical_input = _req_034_canonical_input(
+        target_project_id=project_id,
+        current_call=normalized_current_call,
+        call_chain=normalized_call_chain,
+        memory_budget=normalized_memory_budget,
+        allowed_context_refs=normalized_allowed_context_refs,
+        prior_call_memory=normalized_prior_call_memory,
+        checked_at_utc=normalized_checked_at_utc,
+    )
+    canonical_input_sha = _canonical_digest(canonical_input)
+    processing_call_id = f"req034-processing-{canonical_input_sha[:16]}"
+    (
+        retained_items,
+        superseded_memory_ids,
+        open_risks,
+        input_item_count,
+        citation_refs_truncated_count,
+        dropped_due_to_budget_count,
+    ) = (
+        _build_req_034_handoff_materialization(
+            prior_call_memory=normalized_prior_call_memory,
+            memory_budget=normalized_memory_budget,
+            allowed_context_refs=normalized_allowed_context_refs,
+            call_chain=normalized_call_chain,
+        )
+    )
+    llm_call_trace_rows = _build_req_034_llm_call_trace_rows(
+        processing_call_id=processing_call_id,
+        call_chain=normalized_call_chain,
+        prior_call_memory=normalized_prior_call_memory,
+        retained_items=retained_items,
+        open_risks=open_risks,
+        current_call=normalized_current_call,
+        max_entries=normalized_memory_budget["max_entries"],
+    )
+    llm_call_trace_sha = _canonical_digest(llm_call_trace_rows)
+    evidence_refs_used = _collect_unique_refs(*[item["citation_refs"] for item in retained_items])
+    allowed_context_refs_used = sorted(set(evidence_refs_used) & set(normalized_allowed_context_refs))
+
+    return {
+        "ok": True,
+        "tool": TOOL,
+        "tool_version": TOOL_VERSION,
+        "schema_version": REQ_034_SCHEMA_VERSION,
+        "requirement_id": REQ_034_REQUIREMENT_ID,
+        "analysis_type": REQ_034_ANALYSIS_TYPE,
+        "call_id": normalized_current_call["call_id"],
+        "checked_at_utc": normalized_checked_at_utc,
+        "cross_call_memory_handoff": {
+            "target_project": {"project_id": project_id},
+            "current_call": {
+                "call_id": normalized_current_call["call_id"],
+                "objective": normalized_current_call["objective"],
+            },
+            "source_calls": [row["call_id"] for row in normalized_prior_call_memory],
+            "handoff_items": retained_items,
+            "bounded_context": {
+                "max_entries": normalized_memory_budget["max_entries"],
+                "max_citation_refs_per_entry": normalized_memory_budget["max_citation_refs_per_entry"],
+                "source_call_count": len(normalized_prior_call_memory),
+                "input_item_count": input_item_count,
+                "retained_item_count": len(retained_items),
+                "dropped_item_count": input_item_count - len(retained_items),
+                "dropped_due_to_budget_count": dropped_due_to_budget_count,
+                "citation_ref_count": sum(len(item["citation_refs"]) for item in retained_items),
+                "citation_refs_truncated_count": citation_refs_truncated_count,
+            },
+            "summary": {
+                "source_call_count": len(normalized_prior_call_memory),
+                "input_item_count": input_item_count,
+                "retained_item_count": len(retained_items),
+                "superseded_item_count": len(superseded_memory_ids),
+                "open_risk_count": len(open_risks),
+            },
+        },
+        "processing_behavior": {
+            "strategy": REQ_034_PROCESSING_STRATEGY,
+            "reasoning_mode": REQ_034_REASONING_MODE,
+            "strict_evidence_discipline": True,
+            "context_inputs": {
+                "current_call": normalized_current_call,
+                "call_chain": normalized_call_chain,
+                "prior_call_memory": normalized_prior_call_memory,
+                "allowed_context_refs": normalized_allowed_context_refs,
+                "memory_budget": normalized_memory_budget,
+            },
+            "context_usage": {
+                "source_call_ids_used": [row["call_id"] for row in normalized_prior_call_memory],
+                "source_output_refs_used": [row["output_ref"] for row in normalized_prior_call_memory],
+                "allowed_context_refs_used": allowed_context_refs_used,
+                "retained_memory_ids": [item["memory_id"] for item in retained_items],
+                "superseded_memory_ids": superseded_memory_ids,
+                "open_risk_ids_emitted": [risk["risk_id"] for risk in open_risks],
+                "reason_codes_emitted": [risk["reason_code"] for risk in open_risks],
+                "evidence_refs_used": evidence_refs_used,
+            },
+            "handoff_rules": {
+                "required_handoff_fields": list(REQ_034_REQUIRED_HANDOFF_FIELDS),
+                "allowed_entry_kinds": sorted(REQ_034_ALLOWED_ENTRY_KINDS),
+                "max_entries": normalized_memory_budget["max_entries"],
+                "max_citation_refs_per_entry": normalized_memory_budget["max_citation_refs_per_entry"],
+                "contradiction_requires_supersession": True,
+                "citation_refs_required": True,
+            },
+            "diagnostics": {
+                "open_risks": open_risks,
+            },
+        },
+        "source": {
+            "source_call_count": len(normalized_prior_call_memory),
+            "input_item_count": input_item_count,
+            "retained_item_count": len(retained_items),
+            "open_risk_count": len(open_risks),
+            "evidence_ref_count": len(evidence_refs_used),
+        },
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": canonical_input_sha,
+            "reproducible_call_id": f"req034-{canonical_input_sha[:16]}",
+            "canonical_input": canonical_input,
+            "processing_call_id": processing_call_id,
+            "llm_call_trace_schema_version": REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": llm_call_trace_sha,
+            "llm_call_trace_rows": llm_call_trace_rows,
+        },
+    }
+
+
+def validate_req_034_cross_call_memory_handoff_contract(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+
+    if payload.get("ok") is not True:
+        errors.append("ok must be true")
+    if payload.get("tool") != TOOL:
+        errors.append(f"tool must be {TOOL}")
+    if payload.get("tool_version") != TOOL_VERSION:
+        errors.append(f"tool_version must be {TOOL_VERSION}")
+    if payload.get("schema_version") != REQ_034_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_034_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_034_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_034_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_034_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_034_ANALYSIS_TYPE}")
+    if not _as_text(payload.get("call_id")):
+        errors.append("call_id is required")
+    if not _as_text(payload.get("checked_at_utc")):
+        errors.append("checked_at_utc is required")
+
+    handoff = payload.get("cross_call_memory_handoff")
+    retained_memory_ids: list[str] = []
+    superseded_memory_ids: list[str] = []
+    evidence_refs_used: list[str] = []
+    open_risks: list[Any] = []
+    if not isinstance(handoff, Mapping):
+        errors.append("cross_call_memory_handoff must be an object")
+        handoff = {}
+    else:
+        target_project = handoff.get("target_project")
+        if not isinstance(target_project, Mapping):
+            errors.append("cross_call_memory_handoff.target_project must be an object")
+        elif not _as_text(target_project.get("project_id")):
+            errors.append("cross_call_memory_handoff.target_project.project_id is required")
+
+        current_call = handoff.get("current_call")
+        if not isinstance(current_call, Mapping):
+            errors.append("cross_call_memory_handoff.current_call must be an object")
+        else:
+            current_call_id = _as_text(current_call.get("call_id"))
+            if not current_call_id:
+                errors.append("cross_call_memory_handoff.current_call.call_id is required")
+            elif _as_text(payload.get("call_id")) != current_call_id:
+                errors.append("call_id must match cross_call_memory_handoff.current_call.call_id")
+            if not _as_text(current_call.get("objective")):
+                errors.append("cross_call_memory_handoff.current_call.objective is required")
+
+        source_calls = handoff.get("source_calls")
+        if not isinstance(source_calls, list) or not source_calls or any(not _as_text(item) for item in source_calls):
+            errors.append("cross_call_memory_handoff.source_calls must be a non-empty string array")
+            source_calls = []
+
+        handoff_items = handoff.get("handoff_items")
+        if not isinstance(handoff_items, list):
+            errors.append("cross_call_memory_handoff.handoff_items must be an array")
+            handoff_items = []
+        seen_memory_ids: set[str] = set()
+        for index, row in enumerate(handoff_items):
+            if not isinstance(row, Mapping):
+                errors.append(f"cross_call_memory_handoff.handoff_items[{index}] must be an object")
+                continue
+            for key in REQ_034_REQUIRED_HANDOFF_FIELDS:
+                if key not in row:
+                    errors.append(f"cross_call_memory_handoff.handoff_items[{index}].{key} is required")
+            memory_id = _as_text(row.get("memory_id"))
+            if not memory_id:
+                errors.append(f"cross_call_memory_handoff.handoff_items[{index}].memory_id is required")
+            elif memory_id in seen_memory_ids:
+                errors.append(f"cross_call_memory_handoff.handoff_items[{index}].memory_id must be unique")
+            else:
+                seen_memory_ids.add(memory_id)
+                retained_memory_ids.append(memory_id)
+            if _as_text(row.get("kind")) not in REQ_034_ALLOWED_ENTRY_KINDS:
+                errors.append(
+                    "cross_call_memory_handoff.handoff_items"
+                    f"[{index}].kind must be one of {sorted(REQ_034_ALLOWED_ENTRY_KINDS)}"
+                )
+            if _as_text(row.get("source_call_id")) and _as_text(row.get("source_call_id")) not in source_calls:
+                errors.append(
+                    f"cross_call_memory_handoff.handoff_items[{index}].source_call_id must reference source_calls"
+                )
+            citation_refs = row.get("citation_refs")
+            if not isinstance(citation_refs, list) or not citation_refs or any(not _as_text(item) for item in citation_refs):
+                errors.append(
+                    f"cross_call_memory_handoff.handoff_items[{index}].citation_refs must be a non-empty string array"
+                )
+            else:
+                evidence_refs_used.extend([_as_text(item) for item in citation_refs])
+
+        bounded_context = handoff.get("bounded_context")
+        if not isinstance(bounded_context, Mapping):
+            errors.append("cross_call_memory_handoff.bounded_context must be an object")
+        else:
+            max_entries = bounded_context.get("max_entries")
+            max_citation_refs_per_entry = bounded_context.get("max_citation_refs_per_entry")
+            if not isinstance(max_entries, int) or max_entries <= 0:
+                errors.append("cross_call_memory_handoff.bounded_context.max_entries must be a positive integer")
+            if not isinstance(max_citation_refs_per_entry, int) or max_citation_refs_per_entry <= 0:
+                errors.append(
+                    "cross_call_memory_handoff.bounded_context.max_citation_refs_per_entry must be a positive integer"
+                )
+            for key in (
+                "source_call_count",
+                "input_item_count",
+                "retained_item_count",
+                "dropped_item_count",
+                "dropped_due_to_budget_count",
+                "citation_ref_count",
+                "citation_refs_truncated_count",
+            ):
+                value = bounded_context.get(key)
+                if not isinstance(value, int) or value < 0:
+                    errors.append(f"cross_call_memory_handoff.bounded_context.{key} must be a non-negative integer")
+            if isinstance(max_entries, int) and len(retained_memory_ids) > max_entries:
+                errors.append("cross_call_memory_handoff.handoff_items must stay within bounded_context.max_entries")
+            if isinstance(max_citation_refs_per_entry, int):
+                for index, row in enumerate(handoff_items):
+                    if isinstance(row, Mapping) and isinstance(row.get("citation_refs"), list):
+                        if len(row["citation_refs"]) > max_citation_refs_per_entry:
+                            errors.append(
+                                "cross_call_memory_handoff.handoff_items"
+                                f"[{index}].citation_refs must not exceed bounded_context.max_citation_refs_per_entry"
+                            )
+            if bounded_context.get("retained_item_count") != len(retained_memory_ids):
+                errors.append("cross_call_memory_handoff.bounded_context.retained_item_count must match handoff_items")
+            if bounded_context.get("source_call_count") != len(source_calls):
+                errors.append("cross_call_memory_handoff.bounded_context.source_call_count must match source_calls")
+            if bounded_context.get("citation_ref_count") != len(evidence_refs_used):
+                errors.append("cross_call_memory_handoff.bounded_context.citation_ref_count must match citation_refs used")
+
+        summary = handoff.get("summary")
+        if not isinstance(summary, Mapping):
+            errors.append("cross_call_memory_handoff.summary must be an object")
+        else:
+            if summary.get("source_call_count") != len(source_calls):
+                errors.append("cross_call_memory_handoff.summary.source_call_count must match source_calls")
+            if summary.get("retained_item_count") != len(retained_memory_ids):
+                errors.append("cross_call_memory_handoff.summary.retained_item_count must match handoff_items")
+
+    processing_behavior = payload.get("processing_behavior")
+    context_inputs: Mapping[str, Any] = {}
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+    else:
+        if processing_behavior.get("strategy") != REQ_034_PROCESSING_STRATEGY:
+            errors.append(f"processing_behavior.strategy must be {REQ_034_PROCESSING_STRATEGY}")
+        if processing_behavior.get("reasoning_mode") != REQ_034_REASONING_MODE:
+            errors.append(f"processing_behavior.reasoning_mode must be {REQ_034_REASONING_MODE}")
+        if processing_behavior.get("strict_evidence_discipline") is not True:
+            errors.append("processing_behavior.strict_evidence_discipline must be true")
+        context_inputs = processing_behavior.get("context_inputs") if isinstance(processing_behavior.get("context_inputs"), Mapping) else {}
+        if not context_inputs:
+            errors.append("processing_behavior.context_inputs must be an object")
+        else:
+            allowed_context_refs = context_inputs.get("allowed_context_refs")
+            if (
+                not isinstance(allowed_context_refs, list)
+                or not allowed_context_refs
+                or any(not _as_text(item) for item in allowed_context_refs)
+            ):
+                errors.append("processing_behavior.context_inputs.allowed_context_refs must be a non-empty string array")
+            if not isinstance(context_inputs.get("memory_budget"), Mapping):
+                errors.append("processing_behavior.context_inputs.memory_budget must be an object")
+            chain_rows = context_inputs.get("call_chain")
+            if not isinstance(chain_rows, list) or len(chain_rows) < 2:
+                errors.append("processing_behavior.context_inputs.call_chain must contain at least two rows")
+            prior_rows = context_inputs.get("prior_call_memory")
+            if not isinstance(prior_rows, list) or not prior_rows:
+                errors.append("processing_behavior.context_inputs.prior_call_memory must be a non-empty array")
+
+        context_usage = processing_behavior.get("context_usage")
+        if not isinstance(context_usage, Mapping):
+            errors.append("processing_behavior.context_usage must be an object")
+        else:
+            for key in (
+                "source_call_ids_used",
+                "source_output_refs_used",
+                "allowed_context_refs_used",
+                "retained_memory_ids",
+                "superseded_memory_ids",
+                "open_risk_ids_emitted",
+                "reason_codes_emitted",
+                "evidence_refs_used",
+            ):
+                value = context_usage.get(key)
+                if not isinstance(value, list) or any(not _as_text(item) for item in value):
+                    errors.append(f"processing_behavior.context_usage.{key} must be a string array")
+            if context_usage.get("retained_memory_ids") != retained_memory_ids:
+                errors.append("processing_behavior.context_usage.retained_memory_ids must match handoff_items")
+            superseded_memory_ids = context_usage.get("superseded_memory_ids") if isinstance(
+                context_usage.get("superseded_memory_ids"), list
+            ) else []
+            if context_usage.get("evidence_refs_used") != sorted(set(evidence_refs_used)):
+                errors.append("processing_behavior.context_usage.evidence_refs_used must match handoff citation refs")
+
+        handoff_rules = processing_behavior.get("handoff_rules")
+        if not isinstance(handoff_rules, Mapping):
+            errors.append("processing_behavior.handoff_rules must be an object")
+        else:
+            if handoff_rules.get("required_handoff_fields") != REQ_034_REQUIRED_HANDOFF_FIELDS:
+                errors.append("processing_behavior.handoff_rules.required_handoff_fields must match the canonical list")
+            if handoff_rules.get("allowed_entry_kinds") != sorted(REQ_034_ALLOWED_ENTRY_KINDS):
+                errors.append("processing_behavior.handoff_rules.allowed_entry_kinds must match the canonical list")
+            if handoff_rules.get("contradiction_requires_supersession") is not True:
+                errors.append("processing_behavior.handoff_rules.contradiction_requires_supersession must be true")
+            if handoff_rules.get("citation_refs_required") is not True:
+                errors.append("processing_behavior.handoff_rules.citation_refs_required must be true")
+
+        diagnostics = processing_behavior.get("diagnostics")
+        if not isinstance(diagnostics, Mapping):
+            errors.append("processing_behavior.diagnostics must be an object")
+        else:
+            open_risks = diagnostics.get("open_risks")
+            if not isinstance(open_risks, list):
+                errors.append("processing_behavior.diagnostics.open_risks must be an array")
+                open_risks = []
+            for index, row in enumerate(open_risks):
+                if not isinstance(row, Mapping):
+                    errors.append(f"processing_behavior.diagnostics.open_risks[{index}] must be an object")
+                    continue
+                for key in ("risk_id", "reason_code", "summary", "memory_id", "memory_key", "source_call_id"):
+                    if not _as_text(row.get(key)):
+                        errors.append(f"processing_behavior.diagnostics.open_risks[{index}].{key} is required")
+                required_citation_refs = row.get("required_citation_refs")
+                if (
+                    not isinstance(required_citation_refs, list)
+                    or not required_citation_refs
+                    or any(not _as_text(item) for item in required_citation_refs)
+                ):
+                    errors.append(
+                        "processing_behavior.diagnostics.open_risks"
+                        f"[{index}].required_citation_refs must be a non-empty string array"
+                    )
+            if isinstance(processing_behavior.get("context_usage"), Mapping):
+                usage = processing_behavior["context_usage"]
+                if usage.get("open_risk_ids_emitted") != [
+                    _as_text(row.get("risk_id")) for row in open_risks if isinstance(row, Mapping)
+                ]:
+                    errors.append("processing_behavior.context_usage.open_risk_ids_emitted must match diagnostics.open_risks")
+                if usage.get("reason_codes_emitted") != [
+                    _as_text(row.get("reason_code")) for row in open_risks if isinstance(row, Mapping)
+                ]:
+                    errors.append("processing_behavior.context_usage.reason_codes_emitted must match diagnostics.open_risks")
+
+    source = payload.get("source")
+    if not isinstance(source, Mapping):
+        errors.append("source must be an object")
+    else:
+        if source.get("retained_item_count") != len(retained_memory_ids):
+            errors.append("source.retained_item_count must match handoff_items length")
+        if source.get("open_risk_count") != len(open_risks):
+            errors.append("source.open_risk_count must match diagnostics.open_risks length")
+        if source.get("evidence_ref_count") != len(sorted(set(evidence_refs_used))):
+            errors.append("source.evidence_ref_count must match unique citation refs in handoff_items")
+
+    metadata = payload.get("call_metadata")
+    if metadata is not None:
+        if not isinstance(metadata, Mapping):
+            errors.append("call_metadata must be an object")
+        else:
+            if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+                errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+            canonical_input = metadata.get("canonical_input")
+            if not isinstance(canonical_input, Mapping):
+                errors.append("call_metadata.canonical_input must be an object")
+            else:
+                expected_canonical_sha = _canonical_digest(canonical_input)
+                if metadata.get("canonical_input_sha256") != expected_canonical_sha:
+                    errors.append("call_metadata.canonical_input_sha256 does not match canonical_input")
+            if metadata.get("llm_call_trace_schema_version") != REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION:
+                errors.append(
+                    f"call_metadata.llm_call_trace_schema_version must be {REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION}"
+                )
+            if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+                errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+            rows = metadata.get("llm_call_trace_rows")
+            if not isinstance(rows, list):
+                errors.append("call_metadata.llm_call_trace_rows must be an array")
+                rows = []
+            expected_trace_rows: list[dict[str, Any]] = []
+            if isinstance(context_inputs, Mapping):
+                chain_rows = context_inputs.get("call_chain")
+                prior_rows = context_inputs.get("prior_call_memory")
+                current_call = context_inputs.get("current_call")
+                memory_budget = context_inputs.get("memory_budget")
+                if (
+                    isinstance(chain_rows, list)
+                    and isinstance(prior_rows, list)
+                    and isinstance(current_call, Mapping)
+                    and isinstance(memory_budget, Mapping)
+                ):
+                    try:
+                        expected_trace_rows = _build_req_034_llm_call_trace_rows(
+                            processing_call_id=_require_text(
+                                metadata.get("processing_call_id"),
+                                field_name="call_metadata.processing_call_id",
+                            ),
+                            call_chain=[
+                                _require_mapping(row, field_name=f"processing_behavior.context_inputs.call_chain[{index}]")
+                                for index, row in enumerate(chain_rows)
+                            ],
+                            prior_call_memory=[
+                                _require_mapping(
+                                    row,
+                                    field_name=f"processing_behavior.context_inputs.prior_call_memory[{index}]",
+                                )
+                                for index, row in enumerate(prior_rows)
+                            ],
+                            retained_items=[
+                                _require_mapping(
+                                    row,
+                                    field_name=f"cross_call_memory_handoff.handoff_items[{index}]",
+                                )
+                                for index, row in enumerate(handoff.get("handoff_items", []))
+                            ],
+                            open_risks=[
+                                _require_mapping(
+                                    row,
+                                    field_name=f"processing_behavior.diagnostics.open_risks[{index}]",
+                                )
+                                for index, row in enumerate(open_risks)
+                            ],
+                            current_call=_require_mapping(
+                                current_call,
+                                field_name="processing_behavior.context_inputs.current_call",
+                            ),
+                            max_entries=_req_034_require_positive_int(
+                                memory_budget.get("max_entries"),
+                                field_name="processing_behavior.context_inputs.memory_budget.max_entries",
+                            ),
+                        )
+                    except ValueError as exc:
+                        errors.append(f"call_metadata.llm_call_trace_rows could not be reconstructed: {exc}")
+            if expected_trace_rows:
+                if rows != expected_trace_rows:
+                    errors.append("call_metadata.llm_call_trace_rows must mirror the deterministic per-call trace rows")
+                expected_trace_sha = _canonical_digest(expected_trace_rows)
+                if metadata.get("llm_call_trace_sha256") != expected_trace_sha:
+                    errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
+
+    return errors
+
+
 def _json_dumps(payload: Mapping[str, Any], *, pretty: bool) -> str:
     if pretty:
         return json.dumps(payload, indent=2, sort_keys=False) + "\n"
@@ -4799,13 +5768,15 @@ def _parse_cli_input(input_path: str) -> Mapping[str, Any]:
 def _detect_requirement(payload: Mapping[str, Any]) -> str:
     if "impact_assumptions" in payload or payload.get("analysis_type") == REQ_031_ANALYSIS_TYPE:
         return REQ_031_REQUIREMENT_ID
+    if "prior_call_memory" in payload or payload.get("analysis_type") == REQ_034_ANALYSIS_TYPE:
+        return REQ_034_REQUIREMENT_ID
     if "target_project_root" in payload:
         return REQ_025_REQUIREMENT_ID
     if "earlier_call_outputs" in payload or payload.get("analysis_type") == REQ_029_ANALYSIS_TYPE:
         return REQ_029_REQUIREMENT_ID
     if "target_project" in payload or payload.get("analysis_type") == REQ_026_ANALYSIS_TYPE:
         return REQ_026_REQUIREMENT_ID
-    raise ValueError("input payload does not match REQ-025, REQ-026, REQ-029, or REQ-031 contract anchors")
+    raise ValueError("input payload does not match REQ-025, REQ-026, REQ-029, REQ-031, or REQ-034 contract anchors")
 
 
 def run(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -4822,6 +5793,20 @@ def run(payload: Mapping[str, Any]) -> dict[str, Any]:
             strategic_claims=payload.get("strategic_claims"),
             analysis_type=_as_text(payload.get("analysis_type")) or REQ_031_ANALYSIS_TYPE,
             call_id=_as_text(payload.get("call_id")) or REQ_031_CALL_ID,
+            checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
+        )
+    if requirement_id == REQ_034_REQUIREMENT_ID:
+        return build_req_034_cross_call_memory_handoff_contract(
+            target_project=_require_mapping(payload.get("target_project"), field_name="input.target_project"),
+            current_call=_require_mapping(payload.get("current_call"), field_name="input.current_call"),
+            call_chain=payload.get("call_chain"),
+            prior_call_memory=payload.get("prior_call_memory"),
+            allowed_context_refs=payload.get("allowed_context_refs"),
+            memory_budget=_require_mapping(payload.get("memory_budget"), field_name="input.memory_budget")
+            if payload.get("memory_budget") is not None
+            else None,
+            analysis_type=_as_text(payload.get("analysis_type")) or REQ_034_ANALYSIS_TYPE,
+            call_id=_as_text(payload.get("call_id")) or None,
             checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
         )
     if requirement_id == REQ_025_REQUIREMENT_ID:
@@ -4863,6 +5848,8 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
     requirement_id = _as_text(payload.get("requirement_id"))
     if requirement_id == REQ_031_REQUIREMENT_ID:
         return validate_req_031_call_6_kpi_impact_estimation_reasoning(payload)
+    if requirement_id == REQ_034_REQUIREMENT_ID:
+        return validate_req_034_cross_call_memory_handoff_contract(payload)
     if requirement_id == REQ_025_REQUIREMENT_ID:
         return validate_req_025_multi_call_strategy_pipeline_planner(payload)
     if requirement_id == REQ_026_REQUIREMENT_ID:
@@ -4874,7 +5861,7 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Emit REQ-025, REQ-026, REQ-029, or REQ-031 strategy pipeline payloads."
+        description="Emit REQ-025, REQ-026, REQ-029, REQ-031, or REQ-034 strategy pipeline payloads."
     )
     parser.add_argument("--input-json", required=True, help="Input JSON path or '-' for stdin.")
     parser.add_argument("--output-json", default="", help="Optional output JSON path.")
@@ -4891,13 +5878,15 @@ def main(argv: list[str] | None = None) -> int:
         requirement_id = _detect_requirement(input_payload)
         _timestamped_print(f"Starting {requirement_id} pipeline build from input source: {args.input_json}")
         output_payload = run(input_payload)
-    except (Req026Error, Req029Error, Req031Error, ValueError, json.JSONDecodeError) as exc:
+    except (Req026Error, Req029Error, Req031Error, Req034Error, ValueError, json.JSONDecodeError) as exc:
         requirement_id = (
             REQ_026_REQUIREMENT_ID
             if isinstance(exc, Req026Error)
             else REQ_029_REQUIREMENT_ID
             if isinstance(exc, Req029Error)
-            else REQ_031_REQUIREMENT_ID if isinstance(exc, Req031Error) else ""
+            else REQ_031_REQUIREMENT_ID
+            if isinstance(exc, Req031Error)
+            else REQ_034_REQUIREMENT_ID if isinstance(exc, Req034Error) else ""
         )
         _timestamped_print(f"Pipeline input processing failed: {exc}")
         error_payload = {

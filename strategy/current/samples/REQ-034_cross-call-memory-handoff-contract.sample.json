@@ -1,0 +1,544 @@
+{
+  "ok": true,
+  "tool": "strategy-llm-pipeline",
+  "tool_version": "1.0.0",
+  "schema_version": "req-034.cross-call-memory-handoff-contract.v1",
+  "requirement_id": "REQ-034",
+  "analysis_type": "cross_call_memory_handoff_contract",
+  "call_id": "call-4",
+  "checked_at_utc": "2026-03-16T16:00:00Z",
+  "cross_call_memory_handoff": {
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion"
+    },
+    "current_call": {
+      "call_id": "call-4",
+      "objective": "Carry bounded cited memory from earlier calls into the current reasoning pass without contradiction drift or context leakage."
+    },
+    "source_calls": [
+      "call-1",
+      "call-2",
+      "call-3"
+    ],
+    "handoff_items": [
+      {
+        "memory_id": "mem.scope-lock.v1",
+        "memory_key": "scope-lock",
+        "kind": "decision",
+        "summary": "Keep implementation limited to the REQ-034 contract and data-model surface.",
+        "position": "req-034-only",
+        "source_call_id": "call-2",
+        "source_output_ref": "REQ-027::call::call-2::output::constraint_refinement",
+        "source_call_sequence": 2,
+        "carry_forward": true,
+        "supersedes_memory_ids": [],
+        "citation_refs": [
+          "REQ-027::call::call-2::output::constraint_refinement",
+          "scope.md"
+        ]
+      },
+      {
+        "memory_id": "mem.verification-freshness.v2",
+        "memory_key": "verification-freshness",
+        "kind": "constraint",
+        "summary": "Carry the verification-refresh guard into later calls until branch-head evidence is refreshed.",
+        "position": "refresh-before-widening",
+        "source_call_id": "call-2",
+        "source_output_ref": "REQ-027::call::call-2::output::constraint_refinement",
+        "source_call_sequence": 2,
+        "carry_forward": true,
+        "supersedes_memory_ids": [
+          "mem.verification-freshness.v1"
+        ],
+        "citation_refs": [
+          "REQ-027::call::call-2::output::constraint_refinement",
+          "reports/optimus-prime/planning/STATE.json"
+        ]
+      },
+      {
+        "memory_id": "mem.runtime-dependency.v2",
+        "memory_key": "runtime-dependency",
+        "kind": "risk",
+        "summary": "Route shared runtime follow-up through runtime-orchestrator with cited earth evidence.",
+        "position": "route-through-runtime-orchestrator",
+        "source_call_id": "call-3",
+        "source_output_ref": "REQ-028::call::call-3::output::execution_alignment",
+        "source_call_sequence": 3,
+        "carry_forward": true,
+        "supersedes_memory_ids": [
+          "mem.runtime-dependency.v1"
+        ],
+        "citation_refs": [
+          "REQ-028::call::call-3::output::execution_alignment",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+        ]
+      }
+    ],
+    "bounded_context": {
+      "max_entries": 3,
+      "max_citation_refs_per_entry": 2,
+      "source_call_count": 3,
+      "input_item_count": 5,
+      "retained_item_count": 3,
+      "dropped_item_count": 2,
+      "dropped_due_to_budget_count": 0,
+      "citation_ref_count": 6,
+      "citation_refs_truncated_count": 1
+    },
+    "summary": {
+      "source_call_count": 3,
+      "input_item_count": 5,
+      "retained_item_count": 3,
+      "superseded_item_count": 2,
+      "open_risk_count": 0
+    }
+  },
+  "processing_behavior": {
+    "strategy": "cross-call-memory-handoff",
+    "reasoning_mode": "deterministic-bounded-memory-handoff",
+    "strict_evidence_discipline": true,
+    "context_inputs": {
+      "current_call": {
+        "call_id": "call-4",
+        "objective": "Carry bounded cited memory from earlier calls into the current reasoning pass without contradiction drift or context leakage."
+      },
+      "call_chain": [
+        {
+          "sequence": 1,
+          "call_id": "call-1",
+          "phase": "analysis",
+          "output_ref": "REQ-026::call::call-1::output::situational_analysis"
+        },
+        {
+          "sequence": 2,
+          "call_id": "call-2",
+          "phase": "planning",
+          "output_ref": "REQ-027::call::call-2::output::constraint_refinement"
+        },
+        {
+          "sequence": 3,
+          "call_id": "call-3",
+          "phase": "alignment",
+          "output_ref": "REQ-028::call::call-3::output::execution_alignment"
+        },
+        {
+          "sequence": 4,
+          "call_id": "call-4",
+          "phase": "handoff",
+          "output_ref": "REQ-034::call::call-4::output::cross_call_memory_handoff"
+        }
+      ],
+      "prior_call_memory": [
+        {
+          "call_id": "call-1",
+          "sequence": 1,
+          "output_ref": "REQ-026::call::call-1::output::situational_analysis",
+          "summary": "Call-1 surfaced the main verification and runtime coordination facts that later calls must preserve.",
+          "handoff_items": [
+            {
+              "memory_id": "mem.runtime-dependency.v1",
+              "memory_key": "runtime-dependency",
+              "kind": "risk",
+              "summary": "Shared runtime interpretation still depends on runtime-orchestrator.",
+              "position": "route-through-runtime-orchestrator",
+              "source_call_id": "call-1",
+              "source_output_ref": "REQ-026::call::call-1::output::situational_analysis",
+              "carry_forward": true,
+              "supersedes_memory_ids": [],
+              "citation_refs": [
+                "REQ-026::call::call-1::output::situational_analysis",
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+              ]
+            },
+            {
+              "memory_id": "mem.verification-freshness.v1",
+              "memory_key": "verification-freshness",
+              "kind": "constraint",
+              "summary": "Refresh verification evidence before widening execution scope.",
+              "position": "refresh-before-widening",
+              "source_call_id": "call-1",
+              "source_output_ref": "REQ-026::call::call-1::output::situational_analysis",
+              "carry_forward": true,
+              "supersedes_memory_ids": [],
+              "citation_refs": [
+                "REQ-026::call::call-1::output::situational_analysis",
+                "reports/optimus-prime/planning/VERIFICATION.md"
+              ]
+            }
+          ]
+        },
+        {
+          "call_id": "call-2",
+          "sequence": 2,
+          "output_ref": "REQ-027::call::call-2::output::constraint_refinement",
+          "summary": "Call-2 narrowed what must be preserved into strict scope and verification handoff items.",
+          "handoff_items": [
+            {
+              "memory_id": "mem.scope-lock.v1",
+              "memory_key": "scope-lock",
+              "kind": "decision",
+              "summary": "Keep implementation limited to the REQ-034 contract and data-model surface.",
+              "position": "req-034-only",
+              "source_call_id": "call-2",
+              "source_output_ref": "REQ-027::call::call-2::output::constraint_refinement",
+              "carry_forward": true,
+              "supersedes_memory_ids": [],
+              "citation_refs": [
+                "REQ-027::call::call-2::output::constraint_refinement",
+                "scope.md"
+              ]
+            },
+            {
+              "memory_id": "mem.verification-freshness.v2",
+              "memory_key": "verification-freshness",
+              "kind": "constraint",
+              "summary": "Carry the verification-refresh guard into later calls until branch-head evidence is refreshed.",
+              "position": "refresh-before-widening",
+              "source_call_id": "call-2",
+              "source_output_ref": "REQ-027::call::call-2::output::constraint_refinement",
+              "carry_forward": true,
+              "supersedes_memory_ids": [
+                "mem.verification-freshness.v1"
+              ],
+              "citation_refs": [
+                "REQ-027::call::call-2::output::constraint_refinement",
+                "reports/optimus-prime/planning/STATE.json"
+              ]
+            }
+          ]
+        },
+        {
+          "call_id": "call-3",
+          "sequence": 3,
+          "output_ref": "REQ-028::call::call-3::output::execution_alignment",
+          "summary": "Call-3 refreshed the runtime dependency with cited alignment output and earth evidence.",
+          "handoff_items": [
+            {
+              "memory_id": "mem.runtime-dependency.v2",
+              "memory_key": "runtime-dependency",
+              "kind": "risk",
+              "summary": "Route shared runtime follow-up through runtime-orchestrator with cited earth evidence.",
+              "position": "route-through-runtime-orchestrator",
+              "source_call_id": "call-3",
+              "source_output_ref": "REQ-028::call::call-3::output::execution_alignment",
+              "carry_forward": true,
+              "supersedes_memory_ids": [
+                "mem.runtime-dependency.v1"
+              ],
+              "citation_refs": [
+                "REQ-028::call::call-3::output::execution_alignment",
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+                "reports/optimus-prime/planning/STATE.json"
+              ]
+            }
+          ]
+        }
+      ],
+      "allowed_context_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/STATE.json",
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "scope.md"
+      ],
+      "memory_budget": {
+        "max_entries": 3,
+        "max_citation_refs_per_entry": 2
+      }
+    },
+    "context_usage": {
+      "source_call_ids_used": [
+        "call-1",
+        "call-2",
+        "call-3"
+      ],
+      "source_output_refs_used": [
+        "REQ-026::call::call-1::output::situational_analysis",
+        "REQ-027::call::call-2::output::constraint_refinement",
+        "REQ-028::call::call-3::output::execution_alignment"
+      ],
+      "allowed_context_refs_used": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/STATE.json",
+        "scope.md"
+      ],
+      "retained_memory_ids": [
+        "mem.scope-lock.v1",
+        "mem.verification-freshness.v2",
+        "mem.runtime-dependency.v2"
+      ],
+      "superseded_memory_ids": [
+        "mem.runtime-dependency.v1",
+        "mem.verification-freshness.v1"
+      ],
+      "open_risk_ids_emitted": [],
+      "reason_codes_emitted": [],
+      "evidence_refs_used": [
+        "REQ-027::call::call-2::output::constraint_refinement",
+        "REQ-028::call::call-3::output::execution_alignment",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/STATE.json",
+        "scope.md"
+      ]
+    },
+    "handoff_rules": {
+      "required_handoff_fields": [
+        "memory_id",
+        "memory_key",
+        "kind",
+        "summary",
+        "position",
+        "source_call_id",
+        "source_output_ref",
+        "carry_forward",
+        "supersedes_memory_ids",
+        "citation_refs"
+      ],
+      "allowed_entry_kinds": [
+        "constraint",
+        "decision",
+        "fact",
+        "risk"
+      ],
+      "max_entries": 3,
+      "max_citation_refs_per_entry": 2,
+      "contradiction_requires_supersession": true,
+      "citation_refs_required": true
+    },
+    "diagnostics": {
+      "open_risks": []
+    }
+  },
+  "source": {
+    "source_call_count": 3,
+    "input_item_count": 5,
+    "retained_item_count": 3,
+    "open_risk_count": 0,
+    "evidence_ref_count": 5
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "0164d6c553c7123fc4a85645f17de476903e2cf817ec5c5725708ae53a7e02dd",
+    "reproducible_call_id": "req034-0164d6c553c7123f",
+    "canonical_input": {
+      "requirement_id": "REQ-034",
+      "analysis_type": "cross_call_memory_handoff_contract",
+      "call_id": "call-4",
+      "checked_at_utc": "2026-03-16T16:00:00Z",
+      "target_project": {
+        "project_id": "optimus-prime-gsd-fusion"
+      },
+      "current_call": {
+        "call_id": "call-4",
+        "objective": "Carry bounded cited memory from earlier calls into the current reasoning pass without contradiction drift or context leakage."
+      },
+      "call_chain": [
+        {
+          "sequence": 1,
+          "call_id": "call-1",
+          "phase": "analysis",
+          "output_ref": "REQ-026::call::call-1::output::situational_analysis"
+        },
+        {
+          "sequence": 2,
+          "call_id": "call-2",
+          "phase": "planning",
+          "output_ref": "REQ-027::call::call-2::output::constraint_refinement"
+        },
+        {
+          "sequence": 3,
+          "call_id": "call-3",
+          "phase": "alignment",
+          "output_ref": "REQ-028::call::call-3::output::execution_alignment"
+        },
+        {
+          "sequence": 4,
+          "call_id": "call-4",
+          "phase": "handoff",
+          "output_ref": "REQ-034::call::call-4::output::cross_call_memory_handoff"
+        }
+      ],
+      "memory_budget": {
+        "max_entries": 3,
+        "max_citation_refs_per_entry": 2
+      },
+      "allowed_context_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/STATE.json",
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "scope.md"
+      ],
+      "prior_call_memory": [
+        {
+          "call_id": "call-1",
+          "output_ref": "REQ-026::call::call-1::output::situational_analysis",
+          "summary": "Call-1 surfaced the main verification and runtime coordination facts that later calls must preserve.",
+          "handoff_items": [
+            {
+              "memory_id": "mem.runtime-dependency.v1",
+              "memory_key": "runtime-dependency",
+              "kind": "risk",
+              "summary": "Shared runtime interpretation still depends on runtime-orchestrator.",
+              "position": "route-through-runtime-orchestrator",
+              "carry_forward": true,
+              "supersedes_memory_ids": [],
+              "citation_refs": [
+                "REQ-026::call::call-1::output::situational_analysis",
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+              ]
+            },
+            {
+              "memory_id": "mem.verification-freshness.v1",
+              "memory_key": "verification-freshness",
+              "kind": "constraint",
+              "summary": "Refresh verification evidence before widening execution scope.",
+              "position": "refresh-before-widening",
+              "carry_forward": true,
+              "supersedes_memory_ids": [],
+              "citation_refs": [
+                "REQ-026::call::call-1::output::situational_analysis",
+                "reports/optimus-prime/planning/VERIFICATION.md"
+              ]
+            }
+          ]
+        },
+        {
+          "call_id": "call-2",
+          "output_ref": "REQ-027::call::call-2::output::constraint_refinement",
+          "summary": "Call-2 narrowed what must be preserved into strict scope and verification handoff items.",
+          "handoff_items": [
+            {
+              "memory_id": "mem.scope-lock.v1",
+              "memory_key": "scope-lock",
+              "kind": "decision",
+              "summary": "Keep implementation limited to the REQ-034 contract and data-model surface.",
+              "position": "req-034-only",
+              "carry_forward": true,
+              "supersedes_memory_ids": [],
+              "citation_refs": [
+                "REQ-027::call::call-2::output::constraint_refinement",
+                "scope.md"
+              ]
+            },
+            {
+              "memory_id": "mem.verification-freshness.v2",
+              "memory_key": "verification-freshness",
+              "kind": "constraint",
+              "summary": "Carry the verification-refresh guard into later calls until branch-head evidence is refreshed.",
+              "position": "refresh-before-widening",
+              "carry_forward": true,
+              "supersedes_memory_ids": [
+                "mem.verification-freshness.v1"
+              ],
+              "citation_refs": [
+                "REQ-027::call::call-2::output::constraint_refinement",
+                "reports/optimus-prime/planning/STATE.json"
+              ]
+            }
+          ]
+        },
+        {
+          "call_id": "call-3",
+          "output_ref": "REQ-028::call::call-3::output::execution_alignment",
+          "summary": "Call-3 refreshed the runtime dependency with cited alignment output and earth evidence.",
+          "handoff_items": [
+            {
+              "memory_id": "mem.runtime-dependency.v2",
+              "memory_key": "runtime-dependency",
+              "kind": "risk",
+              "summary": "Route shared runtime follow-up through runtime-orchestrator with cited earth evidence.",
+              "position": "route-through-runtime-orchestrator",
+              "carry_forward": true,
+              "supersedes_memory_ids": [
+                "mem.runtime-dependency.v1"
+              ],
+              "citation_refs": [
+                "REQ-028::call::call-3::output::execution_alignment",
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+                "reports/optimus-prime/planning/STATE.json"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "processing_call_id": "req034-processing-0164d6c553c7123f",
+    "llm_call_trace_schema_version": "req-034.llm-call-trace-row.v1",
+    "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
+    "llm_call_trace_sha256": "98bb1ff288ae4105164c853699a9611a2684db95cdccf7311882ad3aff6d8298",
+    "llm_call_trace_rows": [
+      {
+        "schema_version": "req-034.llm-call-trace-row.v1",
+        "requirement_id": "REQ-034",
+        "processing_call_id": "req034-processing-0164d6c553c7123f",
+        "call_id": "call-1",
+        "sequence": 1,
+        "call_objective": "Preserve cited handoff memory from call-1 into call-4.",
+        "input_refs": [
+          "REQ-026::call::call-1::output::situational_analysis",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/VERIFICATION.md"
+        ],
+        "output_refs": [
+          "REQ-026::call::call-1::output::situational_analysis"
+        ],
+        "handoff_summary": "Call 1 contributes 0 retained memory item(s) via REQ-026::call::call-1::output::situational_analysis for call-4; 0 item(s) were blocked before final handoff."
+      },
+      {
+        "schema_version": "req-034.llm-call-trace-row.v1",
+        "requirement_id": "REQ-034",
+        "processing_call_id": "req034-processing-0164d6c553c7123f",
+        "call_id": "call-2",
+        "sequence": 2,
+        "call_objective": "Preserve cited handoff memory from call-2 into call-4.",
+        "input_refs": [
+          "REQ-026::call::call-1::output::situational_analysis",
+          "REQ-027::call::call-2::output::constraint_refinement",
+          "scope.md",
+          "reports/optimus-prime/planning/STATE.json"
+        ],
+        "output_refs": [
+          "REQ-027::call::call-2::output::constraint_refinement"
+        ],
+        "handoff_summary": "Call 2 contributes 2 retained memory item(s) via REQ-027::call::call-2::output::constraint_refinement for call-4; 0 item(s) were blocked before final handoff."
+      },
+      {
+        "schema_version": "req-034.llm-call-trace-row.v1",
+        "requirement_id": "REQ-034",
+        "processing_call_id": "req034-processing-0164d6c553c7123f",
+        "call_id": "call-3",
+        "sequence": 3,
+        "call_objective": "Preserve cited handoff memory from call-3 into call-4.",
+        "input_refs": [
+          "REQ-027::call::call-2::output::constraint_refinement",
+          "REQ-028::call::call-3::output::execution_alignment",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/STATE.json"
+        ],
+        "output_refs": [
+          "REQ-028::call::call-3::output::execution_alignment"
+        ],
+        "handoff_summary": "Call 3 contributes 1 retained memory item(s) via REQ-028::call::call-3::output::execution_alignment for call-4; 0 item(s) were blocked before final handoff."
+      },
+      {
+        "schema_version": "req-034.llm-call-trace-row.v1",
+        "requirement_id": "REQ-034",
+        "processing_call_id": "req034-processing-0164d6c553c7123f",
+        "call_id": "call-4",
+        "sequence": 4,
+        "call_objective": "Carry bounded cited memory from earlier calls into the current reasoning pass without contradiction drift or context leakage.",
+        "input_refs": [
+          "REQ-026::call::call-1::output::situational_analysis",
+          "REQ-027::call::call-2::output::constraint_refinement",
+          "REQ-028::call::call-3::output::execution_alignment",
+          "scope.md",
+          "reports/optimus-prime/planning/STATE.json",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+        ],
+        "output_refs": [
+          "REQ-034::call::call-4::output::cross_call_memory_handoff"
+        ],
+        "handoff_summary": "Call 4 receives 3 retained memory item(s) with 0 open risk(s) under a max_entries budget of 3."
+      }
+    ]
+  }
+}
