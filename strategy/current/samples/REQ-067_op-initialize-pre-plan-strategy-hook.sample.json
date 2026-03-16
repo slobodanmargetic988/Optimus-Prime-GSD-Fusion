@@ -1,0 +1,53 @@
+{
+  "analysis_type": "op_initialize_pre_plan_strategy_hook",
+  "call_id": "op-initialize-pre-plan-strategy-hook",
+  "checked_at_utc": "2026-03-16T11:40:00Z",
+  "ok": true,
+  "pre_plan_strategy_hook": {
+    "deterministic_failure": {
+      "mode": "fail_closed",
+      "planner_action": "proceed_to_op_plan",
+      "reason_code": "none",
+      "status": "not_triggered"
+    },
+    "hook_stage": "op-initialize:pre-plan",
+    "planner_readiness": {
+      "context_ready": true,
+      "decision": "allow_planning",
+      "gating_reason_codes": [],
+      "hook_applied": true,
+      "missing_context_fields": [],
+      "next_command": "/op-plan"
+    },
+    "strategy_context": {
+      "constraint_ids": [
+        "guardrail-task-floor",
+        "guidance-batch-size"
+      ],
+      "recommendation_ids": [
+        "rec.contract-enforce-quality-floor",
+        "rec.pre-plan-sequence-alignment"
+      ],
+      "strategy_artifact_refs": [
+        "strategy/current/ECOSYSTEM_LINK_MAP.json",
+        "strategy/current/STRATEGY.json",
+        "strategy/current/STRATEGY_CHANGELOG.md"
+      ],
+      "strategy_is_current": true,
+      "strategy_revision_id": "strategy-rev-20260316-113000"
+    },
+    "strictness": "strict"
+  },
+  "requirement_id": "REQ-067",
+  "schema_version": "1.0",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "totals": {
+    "constraint_ids": 2,
+    "missing_context_fields": 0,
+    "recommendation_ids": 2,
+    "strategy_artifact_refs": 3
+  }
+}

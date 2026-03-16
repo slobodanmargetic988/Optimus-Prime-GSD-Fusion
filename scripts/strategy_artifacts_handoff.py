@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-055 constraint classification artifact surface."""
+"""Strategy artifact handoff surfaces for REQ-055/REQ-061/REQ-067."""
 
 from __future__ import annotations
 
@@ -19,6 +19,10 @@ REQ_061_REQUIREMENT_ID = "REQ-061"
 REQ_061_SCHEMA_VERSION = "1.0"
 REQ_061_ANALYSIS_TYPE = "recommendation_quality_validator"
 REQ_061_CALL_ID = "recommendation-quality-validator"
+REQ_067_REQUIREMENT_ID = "REQ-067"
+REQ_067_SCHEMA_VERSION = "1.0"
+REQ_067_ANALYSIS_TYPE = "op_initialize_pre_plan_strategy_hook"
+REQ_067_CALL_ID = "op-initialize-pre-plan-strategy-hook"
 
 _CLASSIFICATIONS = {"hard", "soft", "speculative"}
 _CLASSIFICATION_BUCKETS = {
@@ -107,6 +111,16 @@ _REQ_061_PROCESSING_ALLOWED_PLANNER_STATUS = {
     "blocked_by_quality",
     "blocked_by_missing_earth_sweep_evidence",
 }
+_REQ_067_ALLOWED_STRICTNESS = {"strict", "advisory"}
+_REQ_067_ALLOWED_FAILURE_MODES = {"fail_closed", "fail_open"}
+_REQ_067_ALLOWED_FAILURE_STATUS = {"not_triggered", "triggered"}
+_REQ_067_ALLOWED_READINESS_DECISIONS = {
+    "allow_planning",
+    "allow_planning_with_warning",
+    "block_planning",
+}
+_REQ_067_REASON_CODE_MISSING_CONTEXT = "pre_plan_strategy_context_missing"
+_REQ_067_REASON_CODE_MISSING_CONTEXT_SOFT = "pre_plan_strategy_context_missing_soft"
 
 
 def _utc_timestamp() -> str:
@@ -2338,6 +2352,516 @@ def validate_req_061_recommendation_quality_validator(payload: Mapping[str, Any]
     return errors
 
 
+def _normalize_req_067_hook_config(value: Any) -> dict[str, str]:
+    if value is None:
+        raw: Mapping[str, Any] = {}
+    else:
+        raw = _require_mapping(value, field_name="hook_config")
+
+    expected_keys = {"strictness", "deterministic_failure_mode"}
+    raw_keys = set(raw.keys())
+    unexpected = sorted(raw_keys - expected_keys)
+    if unexpected:
+        raise ValueError(f"hook_config has unexpected keys: {unexpected}")
+
+    strictness = _require_nonempty_text(
+        raw.get("strictness", "strict"),
+        field_name="hook_config.strictness",
+    ).lower()
+    if strictness not in _REQ_067_ALLOWED_STRICTNESS:
+        raise ValueError(f"hook_config.strictness must be one of: {sorted(_REQ_067_ALLOWED_STRICTNESS)}")
+
+    mode_value = raw.get("deterministic_failure_mode")
+    if mode_value is None:
+        deterministic_failure_mode = "fail_closed" if strictness == "strict" else "fail_open"
+    else:
+        deterministic_failure_mode = _require_nonempty_text(
+            mode_value,
+            field_name="hook_config.deterministic_failure_mode",
+        ).lower()
+        if deterministic_failure_mode not in _REQ_067_ALLOWED_FAILURE_MODES:
+            raise ValueError(
+                "hook_config.deterministic_failure_mode must be one of: "
+                f"{sorted(_REQ_067_ALLOWED_FAILURE_MODES)}"
+            )
+
+    return {
+        "strictness": strictness,
+        "deterministic_failure_mode": deterministic_failure_mode,
+    }
+
+
+def _normalize_req_067_strategy_context(value: Any) -> dict[str, Any]:
+    raw = _require_mapping(value, field_name="strategy_context")
+    expected_keys = {
+        "strategy_revision_id",
+        "strategy_artifact_refs",
+        "recommendation_ids",
+        "constraint_ids",
+        "strategy_is_current",
+    }
+    raw_keys = set(raw.keys())
+    unexpected = sorted(raw_keys - expected_keys)
+    if unexpected:
+        raise ValueError(f"strategy_context has unexpected keys: {unexpected}")
+
+    required_keys = {"strategy_revision_id", "strategy_artifact_refs"}
+    missing = sorted(required_keys - raw_keys)
+    if missing:
+        raise ValueError(f"strategy_context missing keys: {missing}")
+
+    strategy_is_current = raw.get("strategy_is_current", True)
+    if not isinstance(strategy_is_current, bool):
+        raise ValueError("strategy_context.strategy_is_current must be a boolean")
+
+    return {
+        "strategy_revision_id": _require_nonempty_text(
+            raw.get("strategy_revision_id"),
+            field_name="strategy_context.strategy_revision_id",
+        ),
+        "strategy_artifact_refs": _normalize_text_list(
+            raw.get("strategy_artifact_refs"),
+            field_name="strategy_context.strategy_artifact_refs",
+        ),
+        "recommendation_ids": _normalize_text_list(
+            raw.get("recommendation_ids"),
+            field_name="strategy_context.recommendation_ids",
+        ),
+        "constraint_ids": _normalize_text_list(
+            raw.get("constraint_ids"),
+            field_name="strategy_context.constraint_ids",
+        ),
+        "strategy_is_current": strategy_is_current,
+    }
+
+
+def _build_req_067_pre_plan_strategy_hook(
+    *,
+    strategy_context: Mapping[str, Any],
+    hook_config: Mapping[str, str],
+) -> dict[str, Any]:
+    missing_context_fields: list[str] = []
+    if not strategy_context["strategy_artifact_refs"]:
+        missing_context_fields.append("strategy_artifact_refs")
+    if strategy_context["strategy_is_current"] is not True:
+        missing_context_fields.append("strategy_is_current")
+
+    context_ready = not missing_context_fields
+    failure_mode = str(hook_config["deterministic_failure_mode"])
+    if context_ready:
+        decision = "allow_planning"
+        failure_status = "not_triggered"
+        reason_code = "none"
+        planner_action = "proceed_to_op_plan"
+        gating_reason_codes: list[str] = []
+    elif failure_mode == "fail_closed":
+        decision = "block_planning"
+        failure_status = "triggered"
+        reason_code = _REQ_067_REASON_CODE_MISSING_CONTEXT
+        planner_action = "halt_before_op_plan"
+        gating_reason_codes = [reason_code]
+    else:
+        decision = "allow_planning_with_warning"
+        failure_status = "triggered"
+        reason_code = _REQ_067_REASON_CODE_MISSING_CONTEXT_SOFT
+        planner_action = "continue_with_strategy_warning"
+        gating_reason_codes = [reason_code]
+
+    return {
+        "hook_stage": "op-initialize:pre-plan",
+        "strictness": hook_config["strictness"],
+        "strategy_context": dict(strategy_context),
+        "deterministic_failure": {
+            "mode": failure_mode,
+            "status": failure_status,
+            "reason_code": reason_code,
+            "planner_action": planner_action,
+        },
+        "planner_readiness": {
+            "hook_applied": True,
+            "context_ready": context_ready,
+            "missing_context_fields": missing_context_fields,
+            "decision": decision,
+            "gating_reason_codes": gating_reason_codes,
+            "next_command": "/op-plan",
+        },
+    }
+
+
+def build_req_067_op_initialize_pre_plan_strategy_hook(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build normalized REQ-067 payload for op-initialize pre-plan strategy hook."""
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_067_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_067_ANALYSIS_TYPE}")
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+    target_project = _normalize_target_project(raw.get("target_project"))
+    strategy_context = _normalize_req_067_strategy_context(raw.get("strategy_context"))
+    hook_config = _normalize_req_067_hook_config(raw.get("hook_config"))
+    pre_plan_strategy_hook = _build_req_067_pre_plan_strategy_hook(
+        strategy_context=strategy_context,
+        hook_config=hook_config,
+    )
+    missing_context_fields = pre_plan_strategy_hook["planner_readiness"]["missing_context_fields"]
+
+    built = {
+        "ok": True,
+        "schema_version": REQ_067_SCHEMA_VERSION,
+        "requirement_id": REQ_067_REQUIREMENT_ID,
+        "analysis_type": REQ_067_ANALYSIS_TYPE,
+        "call_id": REQ_067_CALL_ID,
+        "checked_at_utc": checked_at_utc,
+        "target_project": target_project,
+        "pre_plan_strategy_hook": pre_plan_strategy_hook,
+        "totals": {
+            "strategy_artifact_refs": len(strategy_context["strategy_artifact_refs"]),
+            "recommendation_ids": len(strategy_context["recommendation_ids"]),
+            "constraint_ids": len(strategy_context["constraint_ids"]),
+            "missing_context_fields": len(missing_context_fields),
+        },
+    }
+    errors = validate_req_067_op_initialize_pre_plan_strategy_hook(built)
+    if errors:
+        raise ValueError(f"built REQ-067 payload failed validation: {errors}")
+    return built
+
+
+def validate_req_067_op_initialize_pre_plan_strategy_hook(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-067 op-initialize pre-plan strategy hook shape."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "ok",
+        "schema_version",
+        "requirement_id",
+        "analysis_type",
+        "call_id",
+        "checked_at_utc",
+        "target_project",
+        "pre_plan_strategy_hook",
+        "totals",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("ok") is not True:
+        errors.append("ok must be true")
+    if payload.get("schema_version") != REQ_067_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_067_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_067_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_067_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_067_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_067_ANALYSIS_TYPE}")
+    if payload.get("call_id") != REQ_067_CALL_ID:
+        errors.append(f"call_id must be {REQ_067_CALL_ID}")
+    if not isinstance(payload.get("checked_at_utc"), str) or not str(payload.get("checked_at_utc")).strip():
+        errors.append("checked_at_utc must be a non-empty string")
+
+    target_project = payload.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("target_project must be an object")
+    else:
+        expected_target = {"project_id", "project_root"}
+        target_keys = set(target_project.keys())
+        missing_target = sorted(expected_target - target_keys)
+        if missing_target:
+            errors.append(f"target_project missing keys: {missing_target}")
+        unexpected_target = sorted(target_keys - expected_target)
+        if unexpected_target:
+            errors.append(f"target_project has unexpected keys: {unexpected_target}")
+        project_id = target_project.get("project_id")
+        if not isinstance(project_id, str) or not project_id.strip():
+            errors.append("target_project.project_id must be a non-empty string")
+        project_root = target_project.get("project_root")
+        if not isinstance(project_root, str) or not project_root.strip():
+            errors.append("target_project.project_root must be a non-empty string")
+        elif not str(project_root).startswith("/"):
+            errors.append("target_project.project_root must be an absolute path")
+
+    pre_plan_strategy_hook = payload.get("pre_plan_strategy_hook")
+    strategy_context: Mapping[str, Any] | None = None
+    deterministic_failure: Mapping[str, Any] | None = None
+    planner_readiness: Mapping[str, Any] | None = None
+    if not isinstance(pre_plan_strategy_hook, Mapping):
+        errors.append("pre_plan_strategy_hook must be an object")
+    else:
+        expected_hook_keys = {
+            "hook_stage",
+            "strictness",
+            "strategy_context",
+            "deterministic_failure",
+            "planner_readiness",
+        }
+        hook_keys = set(pre_plan_strategy_hook.keys())
+        missing_hook = sorted(expected_hook_keys - hook_keys)
+        if missing_hook:
+            errors.append(f"pre_plan_strategy_hook missing keys: {missing_hook}")
+        unexpected_hook = sorted(hook_keys - expected_hook_keys)
+        if unexpected_hook:
+            errors.append(f"pre_plan_strategy_hook has unexpected keys: {unexpected_hook}")
+
+        if pre_plan_strategy_hook.get("hook_stage") != "op-initialize:pre-plan":
+            errors.append("pre_plan_strategy_hook.hook_stage must be op-initialize:pre-plan")
+
+        strictness = pre_plan_strategy_hook.get("strictness")
+        if strictness not in _REQ_067_ALLOWED_STRICTNESS:
+            errors.append(
+                f"pre_plan_strategy_hook.strictness must be one of: {sorted(_REQ_067_ALLOWED_STRICTNESS)}"
+            )
+
+        strategy_context = pre_plan_strategy_hook.get("strategy_context")
+        if not isinstance(strategy_context, Mapping):
+            errors.append("pre_plan_strategy_hook.strategy_context must be an object")
+        else:
+            expected_context_keys = {
+                "strategy_revision_id",
+                "strategy_artifact_refs",
+                "recommendation_ids",
+                "constraint_ids",
+                "strategy_is_current",
+            }
+            context_keys = set(strategy_context.keys())
+            missing_context = sorted(expected_context_keys - context_keys)
+            if missing_context:
+                errors.append(f"pre_plan_strategy_hook.strategy_context missing keys: {missing_context}")
+            unexpected_context = sorted(context_keys - expected_context_keys)
+            if unexpected_context:
+                errors.append(f"pre_plan_strategy_hook.strategy_context has unexpected keys: {unexpected_context}")
+
+            strategy_revision_id = strategy_context.get("strategy_revision_id")
+            if not isinstance(strategy_revision_id, str) or not strategy_revision_id.strip():
+                errors.append(
+                    "pre_plan_strategy_hook.strategy_context.strategy_revision_id must be a non-empty string"
+                )
+
+            for key in ("strategy_artifact_refs", "recommendation_ids", "constraint_ids"):
+                value = strategy_context.get(key)
+                if not isinstance(value, list):
+                    errors.append(f"pre_plan_strategy_hook.strategy_context.{key} must be a list")
+                    continue
+                for index, item in enumerate(value):
+                    if not isinstance(item, str) or not item.strip():
+                        errors.append(
+                            f"pre_plan_strategy_hook.strategy_context.{key}[{index}] must be a non-empty string"
+                        )
+
+            if not isinstance(strategy_context.get("strategy_is_current"), bool):
+                errors.append("pre_plan_strategy_hook.strategy_context.strategy_is_current must be a boolean")
+
+        deterministic_failure = pre_plan_strategy_hook.get("deterministic_failure")
+        if not isinstance(deterministic_failure, Mapping):
+            errors.append("pre_plan_strategy_hook.deterministic_failure must be an object")
+        else:
+            expected_failure_keys = {"mode", "status", "reason_code", "planner_action"}
+            failure_keys = set(deterministic_failure.keys())
+            missing_failure = sorted(expected_failure_keys - failure_keys)
+            if missing_failure:
+                errors.append(f"pre_plan_strategy_hook.deterministic_failure missing keys: {missing_failure}")
+            unexpected_failure = sorted(failure_keys - expected_failure_keys)
+            if unexpected_failure:
+                errors.append(
+                    f"pre_plan_strategy_hook.deterministic_failure has unexpected keys: {unexpected_failure}"
+                )
+
+            mode = deterministic_failure.get("mode")
+            if mode not in _REQ_067_ALLOWED_FAILURE_MODES:
+                errors.append(
+                    "pre_plan_strategy_hook.deterministic_failure.mode must be one of: "
+                    f"{sorted(_REQ_067_ALLOWED_FAILURE_MODES)}"
+                )
+            status = deterministic_failure.get("status")
+            if status not in _REQ_067_ALLOWED_FAILURE_STATUS:
+                errors.append(
+                    "pre_plan_strategy_hook.deterministic_failure.status must be one of: "
+                    f"{sorted(_REQ_067_ALLOWED_FAILURE_STATUS)}"
+                )
+            for key in ("reason_code", "planner_action"):
+                value = deterministic_failure.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"pre_plan_strategy_hook.deterministic_failure.{key} must be a non-empty string")
+
+        planner_readiness = pre_plan_strategy_hook.get("planner_readiness")
+        if not isinstance(planner_readiness, Mapping):
+            errors.append("pre_plan_strategy_hook.planner_readiness must be an object")
+        else:
+            expected_readiness_keys = {
+                "hook_applied",
+                "context_ready",
+                "missing_context_fields",
+                "decision",
+                "gating_reason_codes",
+                "next_command",
+            }
+            readiness_keys = set(planner_readiness.keys())
+            missing_readiness = sorted(expected_readiness_keys - readiness_keys)
+            if missing_readiness:
+                errors.append(f"pre_plan_strategy_hook.planner_readiness missing keys: {missing_readiness}")
+            unexpected_readiness = sorted(readiness_keys - expected_readiness_keys)
+            if unexpected_readiness:
+                errors.append(
+                    f"pre_plan_strategy_hook.planner_readiness has unexpected keys: {unexpected_readiness}"
+                )
+
+            if planner_readiness.get("hook_applied") is not True:
+                errors.append("pre_plan_strategy_hook.planner_readiness.hook_applied must be true")
+            if not isinstance(planner_readiness.get("context_ready"), bool):
+                errors.append("pre_plan_strategy_hook.planner_readiness.context_ready must be a boolean")
+            decision = planner_readiness.get("decision")
+            if decision not in _REQ_067_ALLOWED_READINESS_DECISIONS:
+                errors.append(
+                    "pre_plan_strategy_hook.planner_readiness.decision must be one of: "
+                    f"{sorted(_REQ_067_ALLOWED_READINESS_DECISIONS)}"
+                )
+            if planner_readiness.get("next_command") != "/op-plan":
+                errors.append("pre_plan_strategy_hook.planner_readiness.next_command must be /op-plan")
+
+            for key in ("missing_context_fields", "gating_reason_codes"):
+                value = planner_readiness.get(key)
+                if not isinstance(value, list):
+                    errors.append(f"pre_plan_strategy_hook.planner_readiness.{key} must be a list")
+                    continue
+                for index, item in enumerate(value):
+                    if not isinstance(item, str) or not item.strip():
+                        errors.append(
+                            f"pre_plan_strategy_hook.planner_readiness.{key}[{index}] must be a non-empty string"
+                        )
+
+    if (
+        isinstance(strategy_context, Mapping)
+        and isinstance(deterministic_failure, Mapping)
+        and isinstance(planner_readiness, Mapping)
+        and isinstance(planner_readiness.get("missing_context_fields"), list)
+    ):
+        context_ready = bool(planner_readiness.get("context_ready"))
+        missing_context_fields = list(planner_readiness.get("missing_context_fields"))
+        expected_missing_context_fields: list[str] = []
+        artifact_refs = strategy_context.get("strategy_artifact_refs")
+        if isinstance(artifact_refs, list) and not artifact_refs:
+            expected_missing_context_fields.append("strategy_artifact_refs")
+        if strategy_context.get("strategy_is_current") is not True:
+            expected_missing_context_fields.append("strategy_is_current")
+
+        if missing_context_fields != expected_missing_context_fields:
+            errors.append(
+                "pre_plan_strategy_hook.planner_readiness.missing_context_fields must match derived strategy context gaps"
+            )
+        if context_ready != (len(expected_missing_context_fields) == 0):
+            errors.append("pre_plan_strategy_hook.planner_readiness.context_ready must match derived context readiness")
+
+        mode = deterministic_failure.get("mode")
+        status = deterministic_failure.get("status")
+        reason_code = deterministic_failure.get("reason_code")
+        planner_action = deterministic_failure.get("planner_action")
+        decision = planner_readiness.get("decision")
+        gating_reason_codes = planner_readiness.get("gating_reason_codes")
+
+        if context_ready:
+            if decision != "allow_planning":
+                errors.append(
+                    "pre_plan_strategy_hook.planner_readiness.decision must be allow_planning when context_ready is true"
+                )
+            if status != "not_triggered":
+                errors.append(
+                    "pre_plan_strategy_hook.deterministic_failure.status must be not_triggered when context_ready is true"
+                )
+            if reason_code != "none":
+                errors.append(
+                    "pre_plan_strategy_hook.deterministic_failure.reason_code must be none when context_ready is true"
+                )
+            if planner_action != "proceed_to_op_plan":
+                errors.append(
+                    "pre_plan_strategy_hook.deterministic_failure.planner_action must be proceed_to_op_plan when context_ready is true"
+                )
+            if gating_reason_codes != []:
+                errors.append(
+                    "pre_plan_strategy_hook.planner_readiness.gating_reason_codes must be empty when context_ready is true"
+                )
+        else:
+            expected_reason_code = (
+                _REQ_067_REASON_CODE_MISSING_CONTEXT
+                if mode == "fail_closed"
+                else _REQ_067_REASON_CODE_MISSING_CONTEXT_SOFT
+            )
+            expected_decision = "block_planning" if mode == "fail_closed" else "allow_planning_with_warning"
+            expected_planner_action = (
+                "halt_before_op_plan"
+                if mode == "fail_closed"
+                else "continue_with_strategy_warning"
+            )
+            if status != "triggered":
+                errors.append(
+                    "pre_plan_strategy_hook.deterministic_failure.status must be triggered when context_ready is false"
+                )
+            if reason_code != expected_reason_code:
+                errors.append(
+                    "pre_plan_strategy_hook.deterministic_failure.reason_code must match configured deterministic failure mode"
+                )
+            if planner_action != expected_planner_action:
+                errors.append(
+                    "pre_plan_strategy_hook.deterministic_failure.planner_action must match configured deterministic failure mode"
+                )
+            if decision != expected_decision:
+                errors.append(
+                    "pre_plan_strategy_hook.planner_readiness.decision must match configured deterministic failure mode"
+                )
+            if gating_reason_codes != [expected_reason_code]:
+                errors.append(
+                    "pre_plan_strategy_hook.planner_readiness.gating_reason_codes must match deterministic failure reason code"
+                )
+
+    totals = payload.get("totals")
+    if not isinstance(totals, Mapping):
+        errors.append("totals must be an object")
+    else:
+        expected_totals = {
+            "strategy_artifact_refs",
+            "recommendation_ids",
+            "constraint_ids",
+            "missing_context_fields",
+        }
+        totals_keys = set(totals.keys())
+        missing_totals = sorted(expected_totals - totals_keys)
+        if missing_totals:
+            errors.append(f"totals missing keys: {missing_totals}")
+        unexpected_totals = sorted(totals_keys - expected_totals)
+        if unexpected_totals:
+            errors.append(f"totals has unexpected keys: {unexpected_totals}")
+
+        for key in expected_totals:
+            value = totals.get(key)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                errors.append(f"totals.{key} must be a non-negative integer")
+
+        if isinstance(strategy_context, Mapping):
+            expected_counts = {
+                "strategy_artifact_refs": len(strategy_context.get("strategy_artifact_refs", []))
+                if isinstance(strategy_context.get("strategy_artifact_refs"), list)
+                else 0,
+                "recommendation_ids": len(strategy_context.get("recommendation_ids", []))
+                if isinstance(strategy_context.get("recommendation_ids"), list)
+                else 0,
+                "constraint_ids": len(strategy_context.get("constraint_ids", []))
+                if isinstance(strategy_context.get("constraint_ids"), list)
+                else 0,
+            }
+            for key, expected_value in expected_counts.items():
+                if totals.get(key) != expected_value:
+                    errors.append(f"totals.{key} must match strategy context counts")
+
+        if isinstance(planner_readiness, Mapping) and isinstance(planner_readiness.get("missing_context_fields"), list):
+            if totals.get("missing_context_fields") != len(planner_readiness.get("missing_context_fields", [])):
+                errors.append("totals.missing_context_fields must match planner readiness missing_context_fields")
+
+    return errors
+
+
 def _load_input_payload(path_value: str) -> dict[str, Any]:
     if path_value == "-":
         raw_text = sys.stdin.read()
@@ -2365,6 +2889,8 @@ def _build_artifact_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         return build_req_055_constraint_classification_artifact(payload)
     if analysis_type == REQ_061_ANALYSIS_TYPE:
         return build_req_061_recommendation_quality_validator(payload)
+    if analysis_type == REQ_067_ANALYSIS_TYPE:
+        return build_req_067_op_initialize_pre_plan_strategy_hook(payload)
     raise ValueError(f"unsupported analysis_type: {analysis_type}")
 
 

@@ -1,0 +1,102 @@
+{
+  "input": {
+    "analysis_type": "op_initialize_pre_plan_strategy_hook",
+    "now_utc": "2026-03-16T11:40:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "hook_config": {
+      "strictness": "strict",
+      "deterministic_failure_mode": "fail_closed"
+    },
+    "strategy_context": {
+      "strategy_revision_id": "strategy-rev-20260316-113000",
+      "strategy_artifact_refs": [
+        "strategy/current/ECOSYSTEM_LINK_MAP.json",
+        "strategy/current/STRATEGY.json",
+        "strategy/current/STRATEGY_CHANGELOG.md"
+      ],
+      "recommendation_ids": [
+        "rec.contract-enforce-quality-floor",
+        "rec.pre-plan-sequence-alignment"
+      ],
+      "constraint_ids": [
+        "guardrail-task-floor",
+        "guidance-batch-size"
+      ],
+      "strategy_is_current": true
+    }
+  },
+  "missing_context_fail_closed_input": {
+    "analysis_type": "op_initialize_pre_plan_strategy_hook",
+    "now_utc": "2026-03-16T11:40:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "hook_config": {
+      "strictness": "strict",
+      "deterministic_failure_mode": "fail_closed"
+    },
+    "strategy_context": {
+      "strategy_revision_id": "strategy-rev-20260316-113000",
+      "strategy_artifact_refs": [],
+      "recommendation_ids": [
+        "rec.pre-plan-sequence-alignment"
+      ],
+      "constraint_ids": [
+        "guardrail-task-floor"
+      ],
+      "strategy_is_current": false
+    }
+  },
+  "missing_context_fail_open_input": {
+    "analysis_type": "op_initialize_pre_plan_strategy_hook",
+    "now_utc": "2026-03-16T11:40:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "hook_config": {
+      "strictness": "advisory",
+      "deterministic_failure_mode": "fail_open"
+    },
+    "strategy_context": {
+      "strategy_revision_id": "strategy-rev-20260316-113000",
+      "strategy_artifact_refs": [],
+      "recommendation_ids": [
+        "rec.pre-plan-sequence-alignment"
+      ],
+      "constraint_ids": [
+        "guardrail-task-floor"
+      ],
+      "strategy_is_current": false
+    }
+  },
+  "invalid_strictness_input": {
+    "analysis_type": "op_initialize_pre_plan_strategy_hook",
+    "now_utc": "2026-03-16T11:40:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "hook_config": {
+      "strictness": "rigid",
+      "deterministic_failure_mode": "fail_closed"
+    },
+    "strategy_context": {
+      "strategy_revision_id": "strategy-rev-20260316-113000",
+      "strategy_artifact_refs": [
+        "strategy/current/STRATEGY.json"
+      ],
+      "recommendation_ids": [
+        "rec.pre-plan-sequence-alignment"
+      ],
+      "constraint_ids": [
+        "guardrail-task-floor"
+      ],
+      "strategy_is_current": true
+    }
+  }
+}
