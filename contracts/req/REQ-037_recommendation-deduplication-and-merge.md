@@ -81,6 +81,20 @@ Top-level required keys:
 - `evidence_refs`
 - `summary`
 
+`call_metadata` required keys:
+
+- `reproducibility`
+- `canonical_input_sha256`
+- `reproducible_call_id`
+- `canonical_input`
+- `processing_input_sha256`
+- `processing_call_id`
+- `canonical_processing_input`
+- `llm_call_trace_schema_version`
+- `llm_call_trace_path`
+- `llm_call_trace_sha256`
+- `llm_call_trace_rows[]`
+
 `deduplication_index` required keys:
 
 - `input_draft_count`
@@ -121,6 +135,7 @@ Top-level required keys:
 - Fixture input: `examples/fixtures/recommendation-deduplication-and-merge.json`
 - Contract test: `tests/contracts/test_recommendation-deduplication-and-merge.py`
 - Canonical sample output: `strategy/current/samples/REQ-037_recommendation-deduplication-and-merge.sample.json`
+- Replay-stable trace artifact path: `strategy/current/llm_call_trace.jsonl`
 
 ## Sample structure
 

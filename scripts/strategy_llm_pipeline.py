@@ -652,6 +652,171 @@ def _build_req_037_processing_behavior(
     }
 
 
+def _build_req_037_call_id(
+    *,
+    revision_identity: str,
+    processing_input_sha: str,
+    sequence: int,
+    draft_id: str,
+    recommendation_id: str,
+    semantic_signature: str,
+) -> str:
+    material = "|".join(
+        [
+            revision_identity,
+            processing_input_sha,
+            str(sequence),
+            draft_id,
+            recommendation_id,
+            semantic_signature,
+        ]
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:10]
+    return f"req037-call-{sequence:02d}-{digest}"
+
+
+def _build_req_037_trace_expected_output(*, sequence: int, draft_id: str, recommendation_id: str) -> str:
+    return (
+        f"recommendation_merge_state_{sequence:02d}_"
+        f"{_slug_id_fragment(recommendation_id)}_{_slug_id_fragment(draft_id)}"
+    )
+
+
+def _build_req_037_trace_handoff_summary(
+    *,
+    sequence: int,
+    draft_id: str,
+    recommendation_id: str,
+    output_ref: str,
+    input_ref_count: int,
+    next_call_id: str,
+    recommendation_decision: str,
+    merged_recommendation_count: int,
+) -> str:
+    if next_call_id:
+        return (
+            f"Call {sequence} hands off draft {draft_id} for {recommendation_id} via {output_ref} "
+            f"to {next_call_id} after consuming {input_ref_count} input refs."
+        )
+    return (
+        f"Call {sequence} hands off draft {draft_id} for {recommendation_id} via {output_ref} "
+        f"as the terminal merge output with recommendation decision {recommendation_decision} "
+        f"across {merged_recommendation_count} merged recommendation(s)."
+    )
+
+
+def _build_req_037_llm_call_trace_rows(
+    *,
+    revision_identity: str,
+    processing_input_sha: str,
+    processing_call_id: str,
+    target_project_evidence_refs: Sequence[str],
+    earth_sweep_evidence_refs: Sequence[str],
+    cross_project_context: Sequence[Mapping[str, Any]],
+    recommendation_drafts: Sequence[Mapping[str, Any]],
+    merged_recommendation_count: int,
+    recommendation_decision: str,
+) -> list[dict[str, Any]]:
+    plan_id = f"req037-plan-{processing_input_sha[:16]}"
+    shared_input_refs = _collect_unique_refs(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        *[row["evidence_refs"] for row in cross_project_context],
+    )
+    trace_call_specs: list[dict[str, Any]] = []
+    output_ref_by_call_id: dict[str, str] = {}
+
+    for sequence, row in enumerate(recommendation_drafts, start=1):
+        draft_id = _require_text(row.get("draft_id"), field_name="recommendation_drafts[].draft_id")
+        recommendation_id = _require_text(
+            row.get("recommendation_id"),
+            field_name="recommendation_drafts[].recommendation_id",
+        )
+        semantic_signature = _require_text(
+            row.get("semantic_signature"),
+            field_name="recommendation_drafts[].semantic_signature",
+        )
+        call_id = _build_req_037_call_id(
+            revision_identity=revision_identity,
+            processing_input_sha=processing_input_sha,
+            sequence=sequence,
+            draft_id=draft_id,
+            recommendation_id=recommendation_id,
+            semantic_signature=semantic_signature,
+        )
+        expected_output = _build_req_037_trace_expected_output(
+            sequence=sequence,
+            draft_id=draft_id,
+            recommendation_id=recommendation_id,
+        )
+        output_ref_by_call_id[call_id] = _build_call_output_ref(
+            plan_id=plan_id,
+            call_id=call_id,
+            expected_output=expected_output,
+        )
+        trace_call_specs.append(
+            {
+                "call_id": call_id,
+                "sequence": sequence,
+                "draft_id": draft_id,
+                "recommendation_id": recommendation_id,
+                "semantic_signature": semantic_signature,
+                "expected_output": expected_output,
+                "draft_evidence_refs": list(
+                    _normalize_string_list(
+                        row.get("evidence_refs"),
+                        field_name="recommendation_drafts[].evidence_refs",
+                        min_items=1,
+                    )
+                ),
+            }
+        )
+
+    trace_rows: list[dict[str, Any]] = []
+    for index, spec in enumerate(trace_call_specs):
+        depends_on = [] if index == 0 else [trace_call_specs[index - 1]["call_id"]]
+        dependency_output_refs = [output_ref_by_call_id[call_id] for call_id in depends_on]
+        input_refs = _collect_unique_refs(
+            shared_input_refs,
+            spec["draft_evidence_refs"],
+            dependency_output_refs,
+        )
+        output_ref = output_ref_by_call_id[spec["call_id"]]
+        next_call_id = ""
+        if index + 1 < len(trace_call_specs):
+            next_call_id = trace_call_specs[index + 1]["call_id"]
+        trace_rows.append(
+            {
+                "schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+                "requirement_id": REQ_037_REQUIREMENT_ID,
+                "plan_id": plan_id,
+                "processing_call_id": processing_call_id,
+                "call_id": spec["call_id"],
+                "sequence": spec["sequence"],
+                "call_objective": (
+                    f"Merge recommendation draft {spec['draft_id']} into stable recommendation "
+                    f"{spec['recommendation_id']} while preserving rationale, evidence refs, and "
+                    f"semantic signature {spec['semantic_signature']}."
+                ),
+                "depends_on": depends_on,
+                "expected_output": spec["expected_output"],
+                "input_refs": input_refs,
+                "output_refs": [output_ref],
+                "handoff_summary": _build_req_037_trace_handoff_summary(
+                    sequence=spec["sequence"],
+                    draft_id=spec["draft_id"],
+                    recommendation_id=spec["recommendation_id"],
+                    output_ref=output_ref,
+                    input_ref_count=len(input_refs),
+                    next_call_id=next_call_id,
+                    recommendation_decision=recommendation_decision,
+                    merged_recommendation_count=merged_recommendation_count,
+                ),
+            }
+        )
+    return trace_rows
+
+
 def _build_call_id(
     *,
     revision_identity: str,
@@ -781,6 +946,18 @@ def build_req_037_recommendation_deduplication_and_merge(
         recommendation_drafts=normalized_drafts,
         merged_recommendations=merged_recommendations,
     )
+    llm_call_trace_rows = _build_req_037_llm_call_trace_rows(
+        revision_identity=normalized_revision_identity,
+        processing_input_sha=processing_sha,
+        processing_call_id=f"req037-processing-{processing_sha[:16]}",
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_project_context,
+        recommendation_drafts=normalized_drafts,
+        merged_recommendation_count=len(merged_recommendations),
+        recommendation_decision=_as_text(processing_behavior["recommendation"]["decision"]),
+    )
+    llm_call_trace_sha = _canonical_digest(llm_call_trace_rows)
 
     return {
         "requirement_id": REQ_037_REQUIREMENT_ID,
@@ -804,6 +981,10 @@ def build_req_037_recommendation_deduplication_and_merge(
             "processing_input_sha256": processing_sha,
             "processing_call_id": f"req037-processing-{processing_sha[:16]}",
             "canonical_processing_input": canonical_processing_input,
+            "llm_call_trace_schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": llm_call_trace_sha,
+            "llm_call_trace_rows": llm_call_trace_rows,
         },
         "merged_at": normalized_merged_at,
         "deduplication_index": {
@@ -2472,6 +2653,10 @@ def validate_req_037_recommendation_deduplication_and_merge(payload: Mapping[str
             "processing_input_sha256",
             "processing_call_id",
             "canonical_processing_input",
+            "llm_call_trace_schema_version",
+            "llm_call_trace_path",
+            "llm_call_trace_sha256",
+            "llm_call_trace_rows",
         }
         metadata_keys = set(metadata.keys())
         missing_metadata = sorted(required_metadata - metadata_keys)
@@ -2519,6 +2704,31 @@ def validate_req_037_recommendation_deduplication_and_merge(payload: Mapping[str
                 errors.append("call_metadata.processing_input_sha256 does not match processing input")
             if metadata.get("processing_call_id") != f"req037-processing-{expected_processing_sha[:16]}":
                 errors.append("call_metadata.processing_call_id does not match processing digest")
+            if metadata.get("llm_call_trace_schema_version") != REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION:
+                errors.append(
+                    f"call_metadata.llm_call_trace_schema_version must be {REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION}"
+                )
+            if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+                errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+            expected_trace_rows = _build_req_037_llm_call_trace_rows(
+                revision_identity=_as_text(entrypoint.get("revision_identity")),
+                processing_input_sha=expected_processing_sha,
+                processing_call_id=f"req037-processing-{expected_processing_sha[:16]}",
+                target_project_evidence_refs=target_project_refs_from_context,
+                earth_sweep_evidence_refs=earth_sweep_refs_from_context,
+                cross_project_context=normalized_cross_project_context,
+                recommendation_drafts=normalized_recommendation_drafts,
+                merged_recommendation_count=len(merged_recommendations),
+                recommendation_decision=_as_text(
+                    processing_behavior.get("recommendation", {}).get("decision")
+                    if isinstance(processing_behavior.get("recommendation"), Mapping)
+                    else ""
+                ),
+            )
+            if metadata.get("llm_call_trace_rows") != expected_trace_rows:
+                errors.append("call_metadata.llm_call_trace_rows must mirror deterministic REQ-037 trace rows")
+            if metadata.get("llm_call_trace_sha256") != _canonical_digest(expected_trace_rows):
+                errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
 
     return errors
 

@@ -110,3 +110,48 @@ def test_req_037_cross_project_merge_without_earth_evidence_becomes_open_risk() 
             ],
         }
     ]
+
+
+def test_req_037_emits_replay_stable_per_call_trace_rows() -> None:
+    fixture = _read_json(FIXTURE_PATH)
+    payload = module.build_req_037_recommendation_deduplication_and_merge(
+        target_project_root=fixture["target_project_root"],
+        earth_root=fixture["earth_root"],
+        output_root=fixture["output_root"],
+        revision_identity=fixture["revision_identity"],
+        target_project_evidence_refs=fixture["target_project_evidence_refs"],
+        earth_sweep_evidence_refs=fixture["earth_sweep_evidence_refs"],
+        cross_project_context=fixture["cross_project_context"],
+        recommendation_drafts=fixture["recommendation_drafts"],
+        merged_at="2026-03-16T12:00:00Z",
+    )
+    replay_payload = module.build_req_037_recommendation_deduplication_and_merge(
+        target_project_root=fixture["target_project_root"],
+        earth_root=fixture["earth_root"],
+        output_root=fixture["output_root"],
+        revision_identity=fixture["revision_identity"],
+        target_project_evidence_refs=fixture["target_project_evidence_refs"],
+        earth_sweep_evidence_refs=fixture["earth_sweep_evidence_refs"],
+        cross_project_context=fixture["cross_project_context"],
+        recommendation_drafts=fixture["recommendation_drafts"],
+        merged_at="2026-03-16T12:00:00Z",
+    )
+
+    metadata = payload["call_metadata"]
+    replay_metadata = replay_payload["call_metadata"]
+    trace_rows = metadata["llm_call_trace_rows"]
+
+    assert metadata == replay_metadata
+    assert metadata["llm_call_trace_schema_version"] == module.REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION
+    assert metadata["llm_call_trace_path"] == module.LLM_CALL_TRACE_RELATIVE_PATH
+    assert metadata["llm_call_trace_sha256"] == module._canonical_digest(trace_rows)
+    assert len(trace_rows) == len(fixture["recommendation_drafts"])
+    assert [row["sequence"] for row in trace_rows] == [1, 2, 3]
+    assert all(row["call_objective"] for row in trace_rows)
+    assert all(row["input_refs"] for row in trace_rows)
+    assert all(row["output_refs"] for row in trace_rows)
+    assert all(row["handoff_summary"] for row in trace_rows)
+    assert trace_rows[0]["depends_on"] == []
+    assert trace_rows[1]["depends_on"] == [trace_rows[0]["call_id"]]
+    assert trace_rows[2]["depends_on"] == [trace_rows[1]["call_id"]]
+    assert "recommendation decision proceed across 2 merged recommendation(s)." in trace_rows[2]["handoff_summary"]
