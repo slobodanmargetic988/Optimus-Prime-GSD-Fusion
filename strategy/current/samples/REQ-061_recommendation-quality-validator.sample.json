@@ -1,0 +1,138 @@
+{
+  "analysis_type": "recommendation_quality_validator",
+  "call_id": "recommendation-quality-validator",
+  "checked_at_utc": "2026-03-16T10:20:00Z",
+  "ok": true,
+  "quality_thresholds": {
+    "min_evidence_citations": 2,
+    "min_rationale_word_count": 12,
+    "required_recommendation_fields": [
+      "summary",
+      "rationale",
+      "packet_kind",
+      "lane",
+      "priority",
+      "sequence_hint",
+      "evidence_refs"
+    ]
+  },
+  "quality_validation": {
+    "accepted_recommendations": [
+      {
+        "completeness_status": "complete",
+        "decision": "accepted",
+        "evidence_citations": {
+          "count": 2,
+          "evidence_refs": [
+            "contracts/req/REQ-046_final-strategy-synthesis-composer.md",
+            "reports/quality/req-039-rationale-quality-score.json"
+          ],
+          "minimum_required": 2,
+          "status": "meets_minimum"
+        },
+        "failure_reason_codes": [],
+        "lane": "execution",
+        "missing_fields": [],
+        "packet_kind": "target-project",
+        "priority": "high",
+        "rationale_quality": {
+          "minimum_required": 12,
+          "status": "meets_minimum",
+          "word_count": 21
+        },
+        "recommendation_id": "rec.contract-enforce-quality-floor",
+        "sequence_hint": 1,
+        "summary": "Enforce recommendation quality checks before planner packet handoff."
+      }
+    ],
+    "blocked_recommendations": [
+      {
+        "completeness_status": "complete",
+        "decision": "blocked",
+        "evidence_citations": {
+          "count": 1,
+          "evidence_refs": [
+            "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          ],
+          "minimum_required": 2,
+          "status": "below_minimum"
+        },
+        "failure_reason_codes": [
+          "low_substance_rationale",
+          "insufficient_evidence_citations"
+        ],
+        "lane": "coordination",
+        "missing_fields": [],
+        "packet_kind": "cross-project",
+        "priority": "medium",
+        "rationale_quality": {
+          "minimum_required": 12,
+          "status": "low_substance",
+          "word_count": 4
+        },
+        "recommendation_id": "rec.review-reuse-drift",
+        "sequence_hint": 2,
+        "summary": "Review reuse drift before widening shared contract rollout."
+      },
+      {
+        "completeness_status": "incomplete",
+        "decision": "blocked",
+        "evidence_citations": {
+          "count": 2,
+          "evidence_refs": [
+            "contracts/req/REQ-055_constraint-classification-artifact.md",
+            "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json"
+          ],
+          "minimum_required": 2,
+          "status": "meets_minimum"
+        },
+        "failure_reason_codes": [
+          "incomplete_recommendation"
+        ],
+        "lane": "",
+        "missing_fields": [
+          "lane"
+        ],
+        "packet_kind": "target-project",
+        "priority": "medium",
+        "rationale_quality": {
+          "minimum_required": 12,
+          "status": "meets_minimum",
+          "word_count": 25
+        },
+        "recommendation_id": "rec.fill-routing-gap",
+        "sequence_hint": 3,
+        "summary": "Fill routing metadata before planner handoff."
+      }
+    ],
+    "planner_readiness": {
+      "allowed_recommendation_ids": [
+        "rec.contract-enforce-quality-floor"
+      ],
+      "blocked_recommendation_ids": [
+        "rec.review-reuse-drift",
+        "rec.fill-routing-gap"
+      ],
+      "blocking_reason_codes": [
+        "incomplete_recommendation",
+        "insufficient_evidence_citations",
+        "low_substance_rationale"
+      ],
+      "decision": "allow_planner_packet"
+    }
+  },
+  "requirement_id": "REQ-061",
+  "schema_version": "1.0",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "totals": {
+    "accepted_recommendations": 1,
+    "blocked_recommendations": 2,
+    "candidate_recommendations": 3,
+    "citation_failures": 1,
+    "incomplete_recommendations": 1,
+    "low_substance_recommendations": 1
+  }
+}
