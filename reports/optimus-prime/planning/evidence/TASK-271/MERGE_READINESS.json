@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "task_id": "TASK-271",
+  "updated_at": "2026-03-16T00:06:04Z",
+  "lane_id": "phase-3/lane-p3-a",
+  "lane_branch_ref": "op-simple-canary-20260314T214654Z-ac48393d-w02",
+  "lane_head_sha": "e0e677931bba313ef9a0c25462757c4a654f21ec",
+  "run_base_ref": "origin/op-simple-canary-20260314T214654Z-ac48393d",
+  "run_base_sha": "485fa5d0f16d44dca94efd2cf91bcc35ca09a734",
+  "lane_vs_run_base": {
+    "merge_base_sha": "485fa5d0f16d44dca94efd2cf91bcc35ca09a734",
+    "ahead_count": 7,
+    "behind_count": 0
+  },
+  "run_base_merged_into_lane": {
+    "command": "git merge --no-ff --no-edit origin/op-simple-canary-20260314T214654Z-ac48393d",
+    "status": "merged",
+    "merge_commit_sha": "e0e677931bba313ef9a0c25462757c4a654f21ec",
+    "notes": "Merge applied cleanly with ort strategy."
+  },
+  "lane_mergeability_into_run_base": {
+    "command": "bash -lc 'mb=$(git merge-base origin/op-simple-canary-20260314T214654Z-ac48393d HEAD); if git merge-tree \"$mb\" origin/op-simple-canary-20260314T214654Z-ac48393d HEAD | rg -q \"^<<<<<<< \"; then exit 2; else exit 0; fi'",
+    "conflict_markers_found": false,
+    "status": "ready"
+  }
+}
