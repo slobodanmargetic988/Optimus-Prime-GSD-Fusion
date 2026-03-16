@@ -1,0 +1,91 @@
+{
+  "requirement_id": "REQ-037",
+  "surface": "recommendation_deduplication_and_merge",
+  "schema_version": "req-037.recommendation-deduplication-and-merge.v1",
+  "merged_at": "2026-03-16T12:00:00Z",
+  "deduplication_index": {
+    "input_draft_count": 3,
+    "merged_recommendation_count": 2,
+    "duplicate_group_count": 1,
+    "recommendation_ids": [
+      "rec.runtime-bridge-alignment",
+      "rec.trace-citation-discipline"
+    ],
+    "semantic_signatures": [
+      "runtime-bridge-alignment",
+      "trace-citation-discipline"
+    ]
+  },
+  "merged_recommendations": [
+    {
+      "recommendation_id": "rec.runtime-bridge-alignment",
+      "semantic_signature": "runtime-bridge-alignment",
+      "summary": "Align runtime bridge assumptions before planner promotion.",
+      "summary_variants": [
+        "Align planner promotion with shared runtime bridge assumptions.",
+        "Align runtime bridge assumptions before planner promotion."
+      ],
+      "merged_from_draft_ids": [
+        "draft-earth-runtime-001",
+        "draft-local-runtime-002"
+      ],
+      "source_rationales": [
+        {
+          "draft_id": "draft-earth-runtime-001",
+          "rationale": "Earth sweep evidence shows the runtime bridge is already shared across planning packets.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+            "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json"
+          ]
+        },
+        {
+          "draft_id": "draft-local-runtime-002",
+          "rationale": "Local planner traces show the same action already exists under the stable recommendation ID.",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json",
+            "strategy/current/llm_call_trace.jsonl"
+          ]
+        }
+      ],
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json",
+        "strategy/current/llm_call_trace.jsonl",
+        "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json"
+      ],
+      "duplicate_count": 2
+    },
+    {
+      "recommendation_id": "rec.trace-citation-discipline",
+      "semantic_signature": "trace-citation-discipline",
+      "summary": "Keep merged recommendations citation-complete.",
+      "summary_variants": [
+        "Keep merged recommendations citation-complete."
+      ],
+      "merged_from_draft_ids": [
+        "draft-local-trace-003"
+      ],
+      "source_rationales": [
+        {
+          "draft_id": "draft-local-trace-003",
+          "rationale": "Merged recommendation output must retain per-source rationale and evidence links for replay.",
+          "evidence_refs": [
+            "contracts/req/REQ-025_multi-call-strategy-pipeline-planner.md"
+          ]
+        }
+      ],
+      "evidence_refs": [
+        "contracts/req/REQ-025_multi-call-strategy-pipeline-planner.md"
+      ],
+      "duplicate_count": 1
+    }
+  ],
+  "evidence_refs": [
+    "contracts/req/REQ-025_multi-call-strategy-pipeline-planner.md",
+    "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+    "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json",
+    "strategy/current/llm_call_trace.jsonl",
+    "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json"
+  ],
+  "summary": "3 draft(s) collapsed into 2 merged recommendation(s) across 1 duplicate group(s)."
+}

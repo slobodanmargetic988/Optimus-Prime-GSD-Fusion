@@ -1,0 +1,36 @@
+{
+  "recommendation_drafts": [
+    {
+      "draft_id": "draft-earth-runtime-001",
+      "recommendation_id": "rec.runtime-bridge-alignment",
+      "semantic_signature": "runtime-bridge-alignment",
+      "summary": "Align runtime bridge assumptions before planner promotion.",
+      "rationale": "Earth sweep evidence shows the runtime bridge is already shared across planning packets.",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json"
+      ]
+    },
+    {
+      "draft_id": "draft-local-runtime-002",
+      "recommendation_id": "rec.runtime-bridge-alignment",
+      "semantic_signature": "runtime-bridge-alignment",
+      "summary": "Align planner promotion with shared runtime bridge assumptions.",
+      "rationale": "Local planner traces show the same action already exists under the stable recommendation ID.",
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json",
+        "strategy/current/llm_call_trace.jsonl"
+      ]
+    },
+    {
+      "draft_id": "draft-local-trace-003",
+      "recommendation_id": "rec.trace-citation-discipline",
+      "semantic_signature": "trace-citation-discipline",
+      "summary": "Keep merged recommendations citation-complete.",
+      "rationale": "Merged recommendation output must retain per-source rationale and evidence links for replay.",
+      "evidence_refs": [
+        "contracts/req/REQ-025_multi-call-strategy-pipeline-planner.md"
+      ]
+    }
+  ]
+}

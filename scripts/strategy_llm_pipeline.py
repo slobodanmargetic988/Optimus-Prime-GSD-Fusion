@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-025 contract/data-model surface for multi-call strategy pipeline planner."""
+"""REQ-025/REQ-028/REQ-037 contract/data-model surfaces for strategy pipeline artifacts."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ REQ_025_SCHEMA_VERSION = "req-025.multi-call-strategy-pipeline-planner.v1"
 REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION = "req-025.llm-call-trace-row.v1"
 REQ_028_REQUIREMENT_ID = "REQ-028"
 REQ_028_SCHEMA_VERSION = "req-028.call-3-gap-and-opportunity-reasoning.v1"
+REQ_037_REQUIREMENT_ID = "REQ-037"
+REQ_037_SCHEMA_VERSION = "req-037.recommendation-deduplication-and-merge.v1"
 RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 PIPELINE_STRATEGY = "multi-call-strategy-pipeline-planner"
@@ -320,6 +322,132 @@ def _canonical_digest(payload: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _normalize_semantic_signature(value: Any, *, summary: str) -> str:
+    text = _as_text(value)
+    if text:
+        return text.lower()
+    normalized_summary = "".join(ch.lower() if ch.isalnum() else "-" for ch in summary)
+    while "--" in normalized_summary:
+        normalized_summary = normalized_summary.replace("--", "-")
+    return normalized_summary.strip("-")
+
+
+def _normalize_req_037_recommendation_drafts(raw_value: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError("recommendation_drafts must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    recommendation_to_signature: dict[str, str] = {}
+    signature_to_recommendation: dict[str, str] = {}
+    seen_draft_ids: set[str] = set()
+
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"recommendation_drafts[{index}] must be an object")
+        draft_id = _require_text(item.get("draft_id"), field_name=f"recommendation_drafts[{index}].draft_id")
+        if draft_id in seen_draft_ids:
+            raise ValueError(f"recommendation_drafts[{index}].draft_id duplicates {draft_id}")
+        seen_draft_ids.add(draft_id)
+        recommendation_id = _require_text(
+            item.get("recommendation_id"),
+            field_name=f"recommendation_drafts[{index}].recommendation_id",
+        )
+        summary = _require_text(item.get("summary"), field_name=f"recommendation_drafts[{index}].summary")
+        rationale = _require_text(item.get("rationale"), field_name=f"recommendation_drafts[{index}].rationale")
+        semantic_signature = _normalize_semantic_signature(item.get("semantic_signature"), summary=summary)
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"recommendation_drafts[{index}].evidence_refs",
+            min_items=1,
+        )
+
+        existing_signature = recommendation_to_signature.get(recommendation_id)
+        if existing_signature and existing_signature != semantic_signature:
+            raise ValueError(
+                "stable recommendation_id cannot map to multiple semantic signatures: "
+                f"{recommendation_id}"
+            )
+        recommendation_to_signature[recommendation_id] = semantic_signature
+
+        existing_recommendation = signature_to_recommendation.get(semantic_signature)
+        if existing_recommendation and existing_recommendation != recommendation_id:
+            raise ValueError(
+                "semantic duplicate cannot map to multiple stable recommendation_ids: "
+                f"{semantic_signature}"
+            )
+        signature_to_recommendation[semantic_signature] = recommendation_id
+
+        normalized.append(
+            {
+                "draft_id": draft_id,
+                "recommendation_id": recommendation_id,
+                "semantic_signature": semantic_signature,
+                "summary": summary,
+                "rationale": rationale,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    if not normalized:
+        raise ValueError("recommendation_drafts must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: (row["recommendation_id"], row["semantic_signature"], row["draft_id"]))
+    return normalized
+
+
+def _build_req_037_merged_recommendations(
+    recommendation_drafts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for row in recommendation_drafts:
+        recommendation_id = _require_text(row.get("recommendation_id"), field_name="recommendation_drafts[].recommendation_id")
+        semantic_signature = _require_text(
+            row.get("semantic_signature"),
+            field_name="recommendation_drafts[].semantic_signature",
+        )
+        grouped.setdefault((recommendation_id, semantic_signature), []).append(row)
+
+    merged_rows: list[dict[str, Any]] = []
+    for recommendation_id, semantic_signature in sorted(grouped.keys()):
+        drafts = sorted(
+            grouped[(recommendation_id, semantic_signature)],
+            key=lambda row: _require_text(row.get("draft_id"), field_name="recommendation_drafts[].draft_id"),
+        )
+        canonical_summary = _require_text(drafts[0].get("summary"), field_name="recommendation_drafts[].summary")
+        summary_variants = sorted(
+            {
+                _require_text(row.get("summary"), field_name="recommendation_drafts[].summary")
+                for row in drafts
+            }
+        )
+        source_rationales = [
+            {
+                "draft_id": _require_text(row.get("draft_id"), field_name="recommendation_drafts[].draft_id"),
+                "rationale": _require_text(row.get("rationale"), field_name="recommendation_drafts[].rationale"),
+                "evidence_refs": list(
+                    _normalize_string_list(
+                        row.get("evidence_refs"),
+                        field_name="recommendation_drafts[].evidence_refs",
+                        min_items=1,
+                    )
+                ),
+            }
+            for row in drafts
+        ]
+        merged_rows.append(
+            {
+                "recommendation_id": recommendation_id,
+                "semantic_signature": semantic_signature,
+                "summary": canonical_summary,
+                "summary_variants": summary_variants,
+                "merged_from_draft_ids": [row["draft_id"] for row in source_rationales],
+                "source_rationales": source_rationales,
+                "evidence_refs": _collect_unique_refs(*[row["evidence_refs"] for row in source_rationales]),
+                "duplicate_count": len(drafts),
+            }
+        )
+    return merged_rows
+
+
 def _build_call_id(
     *,
     revision_identity: str,
@@ -392,6 +520,39 @@ def _recommendation_confidence(*, evidence_refs: list[str], open_risks: list[dic
     if open_risks:
         return "medium"
     return "high"
+
+
+def build_req_037_recommendation_deduplication_and_merge(
+    *,
+    recommendation_drafts: Sequence[Mapping[str, Any]] | None,
+    merged_at: str | None = None,
+) -> dict[str, Any]:
+    """Build the REQ-037 recommendation deduplication and merge surface."""
+    normalized_drafts = _normalize_req_037_recommendation_drafts(recommendation_drafts)
+    normalized_merged_at = _require_text(merged_at if merged_at is not None else utc_now_iso(), field_name="merged_at")
+    merged_recommendations = _build_req_037_merged_recommendations(normalized_drafts)
+    evidence_refs = _collect_unique_refs(*[row["evidence_refs"] for row in merged_recommendations])
+    duplicate_group_count = sum(1 for row in merged_recommendations if int(row["duplicate_count"]) > 1)
+
+    return {
+        "requirement_id": REQ_037_REQUIREMENT_ID,
+        "surface": "recommendation_deduplication_and_merge",
+        "schema_version": REQ_037_SCHEMA_VERSION,
+        "merged_at": normalized_merged_at,
+        "deduplication_index": {
+            "input_draft_count": len(normalized_drafts),
+            "merged_recommendation_count": len(merged_recommendations),
+            "duplicate_group_count": duplicate_group_count,
+            "recommendation_ids": [row["recommendation_id"] for row in merged_recommendations],
+            "semantic_signatures": [row["semantic_signature"] for row in merged_recommendations],
+        },
+        "merged_recommendations": merged_recommendations,
+        "evidence_refs": evidence_refs,
+        "summary": (
+            f"{len(normalized_drafts)} draft(s) collapsed into {len(merged_recommendations)} "
+            f"merged recommendation(s) across {duplicate_group_count} duplicate group(s)."
+        ),
+    }
 
 
 def _canonical_processing_input(
@@ -1563,6 +1724,204 @@ def validate_req_025_multi_call_strategy_pipeline_planner(payload: Mapping[str, 
         expected_trace_sha = _canonical_digest(expected_trace_rows)
         if metadata.get("llm_call_trace_sha256") != expected_trace_sha:
             errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
+
+    return errors
+
+
+def validate_req_037_recommendation_deduplication_and_merge(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-037 payload shape and merge invariants."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "requirement_id",
+        "surface",
+        "schema_version",
+        "merged_at",
+        "deduplication_index",
+        "merged_recommendations",
+        "evidence_refs",
+        "summary",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("requirement_id") != REQ_037_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_037_REQUIREMENT_ID}")
+    if payload.get("surface") != "recommendation_deduplication_and_merge":
+        errors.append("surface must be recommendation_deduplication_and_merge")
+    if payload.get("schema_version") != REQ_037_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_037_SCHEMA_VERSION}")
+    if not _as_text(payload.get("merged_at")):
+        errors.append("merged_at must be a non-empty string")
+    if not _as_text(payload.get("summary")):
+        errors.append("summary must be a non-empty string")
+
+    deduplication_index = payload.get("deduplication_index")
+    merged_recommendations = payload.get("merged_recommendations")
+    top_level_evidence_refs = payload.get("evidence_refs")
+    if not isinstance(deduplication_index, Mapping):
+        errors.append("deduplication_index must be an object")
+        deduplication_index = {}
+    if not isinstance(merged_recommendations, list):
+        errors.append("merged_recommendations must be a list")
+        merged_recommendations = []
+    if not isinstance(top_level_evidence_refs, list):
+        errors.append("evidence_refs must be a list")
+        top_level_evidence_refs = []
+
+    observed_pairs: list[tuple[str, str]] = []
+    merged_evidence_groups: list[list[str]] = []
+    recommendation_id_to_signature: dict[str, str] = {}
+    signature_to_recommendation_id: dict[str, str] = {}
+    duplicate_group_count = 0
+    merged_draft_ids_seen: set[str] = set()
+
+    for index, row in enumerate(merged_recommendations):
+        if not isinstance(row, Mapping):
+            errors.append(f"merged_recommendations[{index}] must be an object")
+            continue
+        recommendation_id = _as_text(row.get("recommendation_id"))
+        semantic_signature = _as_text(row.get("semantic_signature")).lower()
+        summary = _as_text(row.get("summary"))
+        summary_variants = row.get("summary_variants")
+        merged_from_draft_ids = row.get("merged_from_draft_ids")
+        source_rationales = row.get("source_rationales")
+        evidence_refs = row.get("evidence_refs")
+        duplicate_count = row.get("duplicate_count")
+
+        if not recommendation_id:
+            errors.append(f"merged_recommendations[{index}].recommendation_id must be non-empty")
+        if not semantic_signature:
+            errors.append(f"merged_recommendations[{index}].semantic_signature must be non-empty")
+        if not summary:
+            errors.append(f"merged_recommendations[{index}].summary must be non-empty")
+
+        normalized_summary_variants: list[str] = []
+        if not isinstance(summary_variants, list) or not summary_variants:
+            errors.append(f"merged_recommendations[{index}].summary_variants must be a non-empty list")
+        else:
+            normalized_summary_variants = sorted({_as_text(value) for value in summary_variants if _as_text(value)})
+            if list(summary_variants) != normalized_summary_variants:
+                errors.append(f"merged_recommendations[{index}].summary_variants must be sorted and unique")
+            if summary and summary not in normalized_summary_variants:
+                errors.append(f"merged_recommendations[{index}].summary must be present in summary_variants")
+
+        normalized_merged_from_draft_ids: list[str] = []
+        if not isinstance(merged_from_draft_ids, list) or not merged_from_draft_ids:
+            errors.append(f"merged_recommendations[{index}].merged_from_draft_ids must be a non-empty list")
+        else:
+            normalized_merged_from_draft_ids = [_as_text(value) for value in merged_from_draft_ids if _as_text(value)]
+            if list(merged_from_draft_ids) != sorted(normalized_merged_from_draft_ids):
+                errors.append(f"merged_recommendations[{index}].merged_from_draft_ids must be sorted")
+            for draft_id in normalized_merged_from_draft_ids:
+                if draft_id in merged_draft_ids_seen:
+                    errors.append(f"merged_recommendations[{index}].merged_from_draft_ids reuses {draft_id}")
+                merged_draft_ids_seen.add(draft_id)
+
+        normalized_source_draft_ids: list[str] = []
+        source_evidence_groups: list[list[str]] = []
+        if not isinstance(source_rationales, list) or not source_rationales:
+            errors.append(f"merged_recommendations[{index}].source_rationales must be a non-empty list")
+            source_rationales = []
+        for source_index, source in enumerate(source_rationales):
+            if not isinstance(source, Mapping):
+                errors.append(f"merged_recommendations[{index}].source_rationales[{source_index}] must be an object")
+                continue
+            draft_id = _as_text(source.get("draft_id"))
+            rationale = _as_text(source.get("rationale"))
+            source_evidence_refs = source.get("evidence_refs")
+            if not draft_id:
+                errors.append(
+                    f"merged_recommendations[{index}].source_rationales[{source_index}].draft_id must be non-empty"
+                )
+            else:
+                normalized_source_draft_ids.append(draft_id)
+            if not rationale:
+                errors.append(
+                    f"merged_recommendations[{index}].source_rationales[{source_index}].rationale must be non-empty"
+                )
+            if not isinstance(source_evidence_refs, list) or not source_evidence_refs:
+                errors.append(
+                    f"merged_recommendations[{index}].source_rationales[{source_index}].evidence_refs must be a non-empty list"
+                )
+                continue
+            normalized_source_evidence_refs = sorted({_as_text(ref) for ref in source_evidence_refs if _as_text(ref)})
+            if list(source_evidence_refs) != normalized_source_evidence_refs:
+                errors.append(
+                    f"merged_recommendations[{index}].source_rationales[{source_index}].evidence_refs must be sorted and unique"
+                )
+            source_evidence_groups.append(normalized_source_evidence_refs)
+
+        normalized_evidence_refs: list[str] = []
+        if not isinstance(evidence_refs, list) or not evidence_refs:
+            errors.append(f"merged_recommendations[{index}].evidence_refs must be a non-empty list")
+        else:
+            normalized_evidence_refs = sorted({_as_text(ref) for ref in evidence_refs if _as_text(ref)})
+            if list(evidence_refs) != normalized_evidence_refs:
+                errors.append(f"merged_recommendations[{index}].evidence_refs must be sorted and unique")
+            merged_evidence_groups.append(normalized_evidence_refs)
+
+        if isinstance(duplicate_count, bool) or not isinstance(duplicate_count, int) or duplicate_count < 1:
+            errors.append(f"merged_recommendations[{index}].duplicate_count must be an integer >= 1")
+            duplicate_count = 1
+        if int(duplicate_count) > 1:
+            duplicate_group_count += 1
+
+        if normalized_merged_from_draft_ids and normalized_source_draft_ids:
+            if normalized_merged_from_draft_ids != normalized_source_draft_ids:
+                errors.append(
+                    f"merged_recommendations[{index}].merged_from_draft_ids must mirror source_rationales[].draft_id ordering"
+                )
+        if normalized_evidence_refs and source_evidence_groups:
+            expected_evidence_refs = _collect_unique_refs(*source_evidence_groups)
+            if normalized_evidence_refs != expected_evidence_refs:
+                errors.append(
+                    f"merged_recommendations[{index}].evidence_refs must equal the union of source_rationales[].evidence_refs"
+                )
+        if int(duplicate_count) != len(source_rationales):
+            errors.append(f"merged_recommendations[{index}].duplicate_count must equal len(source_rationales)")
+
+        existing_signature = recommendation_id_to_signature.get(recommendation_id)
+        if recommendation_id and semantic_signature:
+            if existing_signature and existing_signature != semantic_signature:
+                errors.append(f"recommendation_id {recommendation_id} maps to multiple semantic signatures")
+            recommendation_id_to_signature[recommendation_id] = semantic_signature
+            existing_recommendation_id = signature_to_recommendation_id.get(semantic_signature)
+            if existing_recommendation_id and existing_recommendation_id != recommendation_id:
+                errors.append(f"semantic_signature {semantic_signature} maps to multiple recommendation_ids")
+            signature_to_recommendation_id[semantic_signature] = recommendation_id
+            observed_pairs.append((recommendation_id, semantic_signature))
+
+    sorted_pairs = sorted(observed_pairs)
+    sorted_recommendation_ids = [recommendation_id for recommendation_id, _ in sorted_pairs]
+    sorted_semantic_signatures = [semantic_signature for _, semantic_signature in sorted_pairs]
+    if observed_pairs != sorted_pairs:
+        errors.append("merged_recommendations must be sorted by recommendation_id and semantic_signature")
+
+    normalized_top_level_evidence_refs = sorted({_as_text(ref) for ref in top_level_evidence_refs if _as_text(ref)})
+    if list(top_level_evidence_refs) != normalized_top_level_evidence_refs:
+        errors.append("evidence_refs must be sorted and unique")
+    expected_top_level_evidence_refs = _collect_unique_refs(*merged_evidence_groups)
+    if normalized_top_level_evidence_refs != expected_top_level_evidence_refs:
+        errors.append("evidence_refs must equal the union of merged_recommendations[].evidence_refs")
+
+    if deduplication_index.get("input_draft_count") != len(merged_draft_ids_seen):
+        errors.append("deduplication_index.input_draft_count must equal the merged draft count")
+    if deduplication_index.get("merged_recommendation_count") != len(merged_recommendations):
+        errors.append("deduplication_index.merged_recommendation_count must equal len(merged_recommendations)")
+    if deduplication_index.get("duplicate_group_count") != duplicate_group_count:
+        errors.append("deduplication_index.duplicate_group_count must match duplicate_count > 1 groups")
+    if deduplication_index.get("recommendation_ids") != sorted_recommendation_ids:
+        errors.append("deduplication_index.recommendation_ids must mirror merged recommendation IDs")
+    if deduplication_index.get("semantic_signatures") != sorted_semantic_signatures:
+        errors.append("deduplication_index.semantic_signatures must mirror merged semantic signatures")
 
     return errors
 
