@@ -1,0 +1,106 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-unknown",
+  "task_id": "TASK-084",
+  "requirement_ids": [
+    "REQ-026"
+  ],
+  "updated_at": "2026-03-16T00:10:41Z",
+  "dev": {
+    "status": "done",
+    "checks": [
+      "Implement REQ-026 Call-1 situational analysis reasoning with broad-sweep context inputs and deterministic recommendation output fields.",
+      "Gate cross-project obligations on Earth-sweep evidence refs and emit unsupported ideas as open_risks instead of silent obligations."
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_call-1-situational-analysis-reasoning.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.04s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-084/contract_call-1-situational-analysis-reasoning.output.txt"
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_call-1-situational-analysis-reasoning.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": ".. [100%] 2 passed in 0.00s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-084/integration_call-1-situational-analysis-reasoning.output.txt"
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "cross_project_obligations_require_earth_sweep_evidence_refs",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "recommendation_fields_complete_and_context_usage_deterministic",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "contracts/req/REQ-026_call-1-situational-analysis-reasoning.md",
+      "examples/fixtures/call-1-situational-analysis-reasoning.json",
+      "strategy/current/samples/REQ-026_call-1-situational-analysis-reasoning.sample.json",
+      "tests/contracts/test_call-1-situational-analysis-reasoning.py",
+      "tests/integration/test_call-1-situational-analysis-reasoning.py",
+      "reports/optimus-prime/planning/evidence/TASK-084/contract_call-1-situational-analysis-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-084/integration_call-1-situational-analysis-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-084/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "done",
+    "checks": [
+      "python3 -m pytest tests/integration/test_call-1-situational-analysis-reasoning.py -q"
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_call-1-situational-analysis-reasoning.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": ".. [100%] 2 passed in 0.00s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-084/integration_call-1-situational-analysis-reasoning.output.txt"
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-026",
+        "passed": true,
+        "notes": "Call-1 situational analysis recommendation records complete evidence refs, uses cross-project context deterministically, and converts unsupported cross-project ideas into open_risks."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-084/integration_call-1-situational-analysis-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-084/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_026_broad_sweep_context_ingested",
+      "req_026_cross_project_context_usage_verified",
+      "req_026_open_risk_gating_verified",
+      "task_evidence_path_resolved"
+    ]
+  }
+}

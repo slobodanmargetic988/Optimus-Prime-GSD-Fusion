@@ -101,6 +101,36 @@ Accepted builder input shape:
         ]
       }
     ]
+  },
+  "broad_sweep_context": {
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-16/portfolio.json"
+    ],
+    "cross_project_context": [
+      {
+        "project_id": "runtime-orchestrator",
+        "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+        ],
+        "context_note": "Runtime orchestrator owns the shared recovery envelope touched by degraded fallback behavior."
+      }
+    ],
+    "candidate_recommendations": [
+      {
+        "recommendation_id": "rec-runtime-orchestrator-sync",
+        "summary": "Coordinate degraded fallback interpretation with runtime-orchestrator before shared runtime assumptions change.",
+        "rationale": "Earth-sweep context confirms runtime-orchestrator owns the shared recovery envelope implicated by degraded runtime evidence.",
+        "recommendation_scope": "cross-project",
+        "project_id": "runtime-orchestrator",
+        "requires_earth_evidence": true,
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/VERIFICATION.md"
+        ],
+        "next_step": "Open a cross-project follow-up with Earth-sweep and runtime verification refs attached."
+      }
+    ]
   }
 }
 ```
@@ -127,6 +157,9 @@ Rules:
 - Artifact `unknowns[]` may contain:
   - non-empty question strings, or
   - objects with `question` and `why_it_matters`.
+- `broad_sweep_context.earth_sweep_evidence_refs[]` may be empty, but cross-project recommendations that require Earth evidence cannot become obligations unless these refs are present.
+- `broad_sweep_context.cross_project_context[]` records Earth-sweep-backed project context with `project_id`, `project_root`, `evidence_refs[]`, and `context_note`.
+- `broad_sweep_context.candidate_recommendations[]` records deterministic local or cross-project next-step proposals for Call-1 recommendation shaping.
 - Call-1 output must include at least one explicit unknown for later calls.
 
 ## Output contract
@@ -143,6 +176,7 @@ Top-level required keys:
 - `checked_at_utc`
 - `situational_analysis`
 - `unknowns`
+- `processing_behavior`
 - `source`
 
 `situational_analysis` required sections:
@@ -172,6 +206,20 @@ Top-level required keys:
   - `state_summary`
   - `evidence_basis[]`
   - `follow_up_required`
+- `processing_behavior`
+  - `strategy`
+  - `reasoning_mode`
+  - `context_inputs.broad_sweep_context`
+  - `context_usage`
+  - `recommendation`
+    - `decision`
+    - `rationale`
+    - `confidence`
+    - `evidence_refs[]`
+    - `recommended_next_actions[]`
+    - `cross_project_context`
+    - `cross_project_obligations[]`
+    - `open_risks[]`
 
 `unknowns[]` row shape:
 
@@ -210,6 +258,8 @@ Normalization rules:
   - `planning_evidence`
   - `runtime_evidence`
 - `unknowns[].must_be_resolved_by` is fixed to `call-2`.
+- Cross-project obligations may only be emitted when Earth-sweep evidence refs are present and matched to the referenced project context.
+- Unsupported cross-project ideas must be emitted as `processing_behavior.recommendation.open_risks[]`, never silently promoted to obligations.
 
 ## Sample structure
 
@@ -228,5 +278,6 @@ contains:
 - `situational_analysis.target_project` with authoritative mission/scope anchors,
 - `situational_analysis.planning_state` and `situational_analysis.runtime_state`,
 - `situational_analysis.reasoning` with bounded Call-1 assessment output,
+- `processing_behavior` with normalized broad-sweep context inputs, usage accounting, and an evidence-gated recommendation,
 - `unknowns[]` with explicit later-call follow-up requirements,
 - `source` counts for measurable contract verification.

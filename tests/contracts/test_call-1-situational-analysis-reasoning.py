@@ -50,6 +50,29 @@ def test_req_026_builder_emits_bounded_call_1_assessment() -> None:
     assert [row["category"] for row in payload["unknowns"]] == anchors["unknown_categories"]
     assert all(row["must_be_resolved_by"] == "call-2" for row in payload["unknowns"])
 
+    processing = payload["processing_behavior"]
+    recommendation = processing["recommendation"]
+
+    assert processing["strategy"] == anchors["processing_strategy"]
+    assert processing["reasoning_mode"] == anchors["reasoning_mode"]
+    assert processing["context_usage"]["broad_sweep_context_used"] is True
+    assert processing["context_usage"]["earth_sweep_context_used"] is True
+    assert processing["context_usage"]["cross_project_context_used"] is True
+    assert processing["context_usage"]["cross_project_projects_considered"] == anchors["cross_project_projects_considered"]
+    assert (
+        processing["context_usage"]["candidate_recommendation_ids_considered"]
+        == anchors["candidate_recommendation_ids"]
+    )
+    assert recommendation["decision"] == anchors["recommendation_decision"]
+    assert recommendation["confidence"] == anchors["recommendation_confidence"]
+    assert [row["recommendation_id"] for row in recommendation["recommended_next_actions"]] == anchors[
+        "local_recommendation_ids"
+    ]
+    assert [row["obligation_id"] for row in recommendation["cross_project_obligations"]] == anchors[
+        "obligation_ids"
+    ]
+    assert [row["risk_id"] for row in recommendation["open_risks"]] == anchors["open_risk_ids"]
+
 
 def test_req_026_sample_and_contract_doc_are_aligned() -> None:
     sample = _read_json(SAMPLE_PATH)

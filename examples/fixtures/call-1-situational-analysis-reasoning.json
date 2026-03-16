@@ -79,6 +79,69 @@
           "unknowns": []
         }
       ]
+    },
+    "broad_sweep_context": {
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/portfolio.json"
+      ],
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime orchestrator owns the shared recovery envelope touched by degraded fallback behavior."
+        },
+        {
+          "project_id": "planner-core",
+          "project_root": "/workspace/projects/Earth/planner-core",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/planner-core.json"
+          ],
+          "context_note": "Planner core may already reserve follow-up capacity for unknown resolution in later calls."
+        }
+      ],
+      "candidate_recommendations": [
+        {
+          "recommendation_id": "rec-call-2-follow-up",
+          "summary": "Carry explicit Call-1 unknowns into the next implementation-planning pass before scope expands.",
+          "rationale": "Planning and runtime evidence both show follow-up work is still required before later calls can safely commit to execution.",
+          "recommendation_scope": "local",
+          "project_id": "",
+          "requires_earth_evidence": false,
+          "evidence_refs": [
+            "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+            "reports/optimus-prime/planning/VERIFICATION.md"
+          ],
+          "next_step": "Record the unknowns in the Call-2 packet and attach updated verification evidence."
+        },
+        {
+          "recommendation_id": "rec-runtime-orchestrator-sync",
+          "summary": "Coordinate degraded fallback interpretation with runtime-orchestrator before shared runtime assumptions change.",
+          "rationale": "Earth-sweep context confirms runtime-orchestrator owns the shared recovery envelope implicated by degraded runtime evidence.",
+          "recommendation_scope": "cross-project",
+          "project_id": "runtime-orchestrator",
+          "requires_earth_evidence": true,
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/VERIFICATION.md"
+          ],
+          "next_step": "Open a cross-project follow-up with Earth-sweep and runtime verification refs attached."
+        },
+        {
+          "recommendation_id": "rec-analytics-unknown-routing",
+          "summary": "Route situational-analysis unknowns into analytics-hub reporting.",
+          "rationale": "The idea is plausible, but Call-1 must not create a cross-project obligation without matched Earth-sweep context.",
+          "recommendation_scope": "cross-project",
+          "project_id": "analytics-hub",
+          "requires_earth_evidence": true,
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+          ],
+          "next_step": "Confirm analytics-hub participation with Earth-sweep evidence before adding any cross-project obligation."
+        }
+      ]
     }
   },
   "expected_contract_anchors": {
@@ -112,6 +175,28 @@
       "planning",
       "planning",
       "runtime"
+    ],
+    "processing_strategy": "call-1-situational-analysis",
+    "reasoning_mode": "deterministic-broad-sweep",
+    "cross_project_projects_considered": [
+      "runtime-orchestrator",
+      "planner-core"
+    ],
+    "candidate_recommendation_ids": [
+      "rec-call-2-follow-up",
+      "rec-runtime-orchestrator-sync",
+      "rec-analytics-unknown-routing"
+    ],
+    "recommendation_decision": "proceed-with-open-risks",
+    "recommendation_confidence": "low",
+    "local_recommendation_ids": [
+      "rec-call-2-follow-up"
+    ],
+    "obligation_ids": [
+      "obligation-rec-runtime-orchestrator-sync"
+    ],
+    "open_risk_ids": [
+      "risk-rec-analytics-unknown-routing"
     ]
   }
 }

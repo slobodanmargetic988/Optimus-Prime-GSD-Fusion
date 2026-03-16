@@ -74,6 +74,184 @@
       "follow_up_required": true
     }
   },
+  "processing_behavior": {
+    "strategy": "call-1-situational-analysis",
+    "reasoning_mode": "deterministic-broad-sweep",
+    "context_inputs": {
+      "broad_sweep_context": {
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ],
+        "cross_project_context": [
+          {
+            "project_id": "runtime-orchestrator",
+            "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+            ],
+            "context_note": "Runtime orchestrator owns the shared recovery envelope touched by degraded fallback behavior."
+          },
+          {
+            "project_id": "planner-core",
+            "project_root": "/workspace/projects/Earth/planner-core",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/planner-core.json"
+            ],
+            "context_note": "Planner core may already reserve follow-up capacity for unknown resolution in later calls."
+          }
+        ],
+        "candidate_recommendations": [
+          {
+            "recommendation_id": "rec-call-2-follow-up",
+            "summary": "Carry explicit Call-1 unknowns into the next implementation-planning pass before scope expands.",
+            "rationale": "Planning and runtime evidence both show follow-up work is still required before later calls can safely commit to execution.",
+            "recommendation_scope": "local",
+            "project_id": "",
+            "requires_earth_evidence": false,
+            "evidence_refs": [
+              "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+              "reports/optimus-prime/planning/VERIFICATION.md"
+            ],
+            "next_step": "Record the unknowns in the Call-2 packet and attach updated verification evidence."
+          },
+          {
+            "recommendation_id": "rec-runtime-orchestrator-sync",
+            "summary": "Coordinate degraded fallback interpretation with runtime-orchestrator before shared runtime assumptions change.",
+            "rationale": "Earth-sweep context confirms runtime-orchestrator owns the shared recovery envelope implicated by degraded runtime evidence.",
+            "recommendation_scope": "cross-project",
+            "project_id": "runtime-orchestrator",
+            "requires_earth_evidence": true,
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+              "reports/optimus-prime/planning/VERIFICATION.md"
+            ],
+            "next_step": "Open a cross-project follow-up with Earth-sweep and runtime verification refs attached."
+          },
+          {
+            "recommendation_id": "rec-analytics-unknown-routing",
+            "summary": "Route situational-analysis unknowns into analytics-hub reporting.",
+            "rationale": "The idea is plausible, but Call-1 must not create a cross-project obligation without matched Earth-sweep context.",
+            "recommendation_scope": "cross-project",
+            "project_id": "analytics-hub",
+            "requires_earth_evidence": true,
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+            ],
+            "next_step": "Confirm analytics-hub participation with Earth-sweep evidence before adding any cross-project obligation."
+          }
+        ]
+      }
+    },
+    "context_usage": {
+      "broad_sweep_context_used": true,
+      "earth_sweep_context_used": true,
+      "cross_project_context_used": true,
+      "earth_sweep_evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-16/portfolio.json"
+      ],
+      "cross_project_projects_considered": [
+        "runtime-orchestrator",
+        "planner-core"
+      ],
+      "cross_project_projects_with_evidence_refs": [
+        "runtime-orchestrator",
+        "planner-core"
+      ],
+      "cross_project_projects_without_evidence_refs": [],
+      "candidate_recommendation_ids_considered": [
+        "rec-call-2-follow-up",
+        "rec-runtime-orchestrator-sync",
+        "rec-analytics-unknown-routing"
+      ],
+      "local_recommendation_ids_emitted": [
+        "rec-call-2-follow-up"
+      ],
+      "cross_project_obligation_ids_emitted": [
+        "obligation-rec-runtime-orchestrator-sync"
+      ],
+      "open_risk_ids_emitted": [
+        "risk-rec-analytics-unknown-routing"
+      ],
+      "unknown_ids_for_later_calls": [
+        "unknown.001",
+        "unknown.002",
+        "unknown.003"
+      ]
+    },
+    "recommendation": {
+      "decision": "proceed-with-open-risks",
+      "rationale": "assessment=needs-follow-up unknowns=3 local=1 obligations=1 open_risks=1",
+      "confidence": "low",
+      "evidence_refs": [
+        "reports/optimus-prime/planning/PLAN_PACKETS.json",
+        "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "reports/optimus-prime/planning/STATE.json",
+        "reports/earth/sweeps/2026-03-16/portfolio.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+      ],
+      "recommended_next_actions": [
+        {
+          "recommendation_id": "rec-call-2-follow-up",
+          "summary": "Carry explicit Call-1 unknowns into the next implementation-planning pass before scope expands.",
+          "rationale": "Planning and runtime evidence both show follow-up work is still required before later calls can safely commit to execution.",
+          "next_step": "Record the unknowns in the Call-2 packet and attach updated verification evidence.",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+            "reports/optimus-prime/planning/VERIFICATION.md"
+          ]
+        }
+      ],
+      "cross_project_context": {
+        "cross_project": true,
+        "projects_considered": [
+          "runtime-orchestrator",
+          "planner-core"
+        ],
+        "projects_with_evidence_refs": [
+          "runtime-orchestrator",
+          "planner-core"
+        ],
+        "projects_without_evidence_refs": [],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ],
+        "evidence_refs_by_project": {
+          "runtime-orchestrator": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "planner-core": [
+            "reports/earth/sweeps/2026-03-16/planner-core.json"
+          ]
+        }
+      },
+      "cross_project_obligations": [
+        {
+          "obligation_id": "obligation-rec-runtime-orchestrator-sync",
+          "project_id": "runtime-orchestrator",
+          "summary": "Coordinate degraded fallback interpretation with runtime-orchestrator before shared runtime assumptions change.",
+          "rationale": "Earth-sweep context confirms runtime-orchestrator owns the shared recovery envelope implicated by degraded runtime evidence.",
+          "next_step": "Open a cross-project follow-up with Earth-sweep and runtime verification refs attached.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/portfolio.json",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/VERIFICATION.md"
+          ]
+        }
+      ],
+      "open_risks": [
+        {
+          "risk_id": "risk-rec-analytics-unknown-routing",
+          "reason_code": "missing_cross_project_context",
+          "summary": "Route situational-analysis unknowns into analytics-hub reporting.",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+          ]
+        }
+      ]
+    }
+  },
   "unknowns": [
     {
       "unknown_id": "unknown.001",
@@ -116,6 +294,9 @@
     "planning_artifact_count": 2,
     "runtime_artifact_count": 2,
     "mission_source": "mission.md",
-    "scope_source": "scope.md"
+    "scope_source": "scope.md",
+    "earth_sweep_evidence_count": 1,
+    "cross_project_context_count": 2,
+    "candidate_recommendation_count": 3
   }
 }
