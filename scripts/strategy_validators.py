@@ -38,8 +38,10 @@ _SCHEMA_REASON_CODE_BY_VALIDATOR = {
     "additionalProperties": "schema_additional_property",
     "const": "schema_const_mismatch",
     "enum": "schema_enum_violation",
+    "maximum": "schema_maximum_violation",
     "minItems": "schema_min_items_violation",
     "minLength": "schema_min_length_violation",
+    "minimum": "schema_minimum_violation",
     "pattern": "schema_pattern_mismatch",
     "required": "schema_required_field_missing",
     "type": "schema_type_mismatch",
@@ -90,11 +92,21 @@ def _schema_field_path(error: Any) -> str:
         match = re.search(r"'([^']+)' is a required property", error.message)
         if match:
             path.append(match.group(1))
+    elif error.validator == "additionalProperties":
+        match = re.search(r"\('([^']+)' was unexpected\)", error.message)
+        if match:
+            path.append(match.group(1))
     return _format_field_path(path)
 
 
 def _schema_reason_code(error: Any) -> str:
-    return _SCHEMA_REASON_CODE_BY_VALIDATOR.get(str(error.validator), "schema_validation_failed")
+    validator_name = str(error.validator)
+    reason_code = _SCHEMA_REASON_CODE_BY_VALIDATOR.get(validator_name)
+    if reason_code is not None:
+        return reason_code
+
+    normalized_validator = re.sub(r"(?<!^)(?=[A-Z])", "_", validator_name).lower()
+    return f"schema_{normalized_validator}_violation"
 
 
 def _diagnostic(*, field_path: str, reason_code: str, message: str, severity: str = SEVERITY_ERROR) -> dict[str, str]:

@@ -259,3 +259,83 @@ def test_req_060_integration_keeps_invalid_recommendation_fields_and_missing_ear
         "unresolved_idea_count": 0,
         "recommendation_ids_with_context": [],
     }
+
+
+def test_req_060_integration_reports_explicit_schema_field_paths_for_unexpected_fields() -> None:
+    payload = copy.deepcopy(_read_json(FIXTURE_PATH))
+    payload.pop("strategy_packet_path")
+    payload["strategy_packet"] = _read_json(PACKET_SAMPLE_PATH)
+    payload["strategy_packet"]["source"]["unexpected_field"] = "debug-only"
+    payload["strategy_packet"]["recommendation_to_planner_mapping_artifact"][
+        "recommendation_to_task_intent_mappings"
+    ][0]["sequence_hint"] = 0
+
+    out = module.build_req_060_strategy_packet_v1_schema_validator(payload)
+
+    assert module.validate_req_060_strategy_packet_v1_schema_validator(out) == []
+    assert out["ok"] is False
+    assert out["verdict"] == "fail"
+    assert out["planner_consumability"] == "planner_blocked"
+    assert out["reason_codes"] == [
+        "req_054_contract_violation",
+        "schema_additional_property",
+        "schema_minimum_violation",
+    ]
+    assert out["diagnostic_count"] == 3
+    assert out["diagnostics"] == [
+        {
+            "severity": "error",
+            "reason_code": "req_054_contract_violation",
+            "field_path": (
+                "recommendation_to_planner_mapping_artifact."
+                "recommendation_to_task_intent_mappings[0].sequence_hint"
+            ),
+            "message": (
+                "recommendation_to_planner_mapping_artifact."
+                "recommendation_to_task_intent_mappings[0].sequence_hint "
+                "must be a positive integer"
+            ),
+        },
+        {
+            "severity": "error",
+            "reason_code": "schema_minimum_violation",
+            "field_path": (
+                "recommendation_to_planner_mapping_artifact."
+                "recommendation_to_task_intent_mappings[0].sequence_hint"
+            ),
+            "message": "0 is less than the minimum of 1",
+        },
+        {
+            "severity": "error",
+            "reason_code": "schema_additional_property",
+            "field_path": "source.unexpected_field",
+            "message": "Additional properties are not allowed ('unexpected_field' was unexpected)",
+        },
+    ]
+
+
+def test_req_060_integration_blocks_non_object_packet_payloads_without_coercion() -> None:
+    payload = copy.deepcopy(_read_json(FIXTURE_PATH))
+    payload.pop("strategy_packet_path")
+    payload["strategy_packet"] = ["not", "an", "object"]
+
+    out = module.build_req_060_strategy_packet_v1_schema_validator(payload)
+
+    assert module.validate_req_060_strategy_packet_v1_schema_validator(out) == []
+    assert out == {
+        "ok": False,
+        "checked_at_utc": "2026-03-16T10:30:00Z",
+        "verdict": "fail",
+        "planner_consumability": "planner_blocked",
+        "reason_codes": ["packet_payload_not_object"],
+        "diagnostic_count": 1,
+        "summary": "Strategy packet is not planner-consumable; packet JSON root must be an object.",
+        "diagnostics": [
+            {
+                "severity": "error",
+                "reason_code": "packet_payload_not_object",
+                "field_path": "$",
+                "message": "strategy packet JSON root must be an object",
+            }
+        ],
+    }
