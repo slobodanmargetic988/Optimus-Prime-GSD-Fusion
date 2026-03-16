@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import UTC, datetime
@@ -14,13 +15,32 @@ REQ_056_REQUIREMENT_ID = "REQ-056"
 REQ_056_SCHEMA_VERSION = "1.0"
 REQ_056_ANALYSIS_TYPE = "kpi_target_artifact"
 REQ_056_CALL_ID = "kpi-target-artifact"
+REQ_056_PROCESSING_STRATEGY = "kpi-target-broad-sweep"
+REQ_056_REASONING_MODE = "deterministic-broad-sweep"
 
 _EXPECTED_DIRECTIONS = {"increase", "decrease", "maintain"}
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
+_EARTH_SWEEP_PREFIX = "reports/earth/sweeps/"
+_MISSING_EARTH_SWEEP_EVIDENCE = "missing_earth_sweep_evidence_refs"
+_UNRESOLVED_CROSS_PROJECT_IDEA = "unresolved_cross_project_idea"
+_REQ_056_RECOMMENDATION_FIELDS = [
+    "decision",
+    "rationale",
+    "confidence",
+    "evidence_refs",
+    "linked_kpi_target_ids",
+    "cross_project_obligations",
+    "open_risks",
+]
 
 
 def _utc_timestamp() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _stable_id_fragment(*parts: Any) -> str:
+    joined = "||".join(str(part).strip() for part in parts if str(part).strip())
+    return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:12]
 
 
 def _require_mapping(value: Any, *, field_name: str) -> Mapping[str, Any]:
@@ -33,6 +53,20 @@ def _require_nonempty_text(value: Any, *, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string")
     return value.strip()
+
+
+def _normalize_reference(value: Any, *, field_name: str) -> str:
+    text = _require_nonempty_text(value, field_name=field_name)
+    base, anchor = text.split("#", 1) if "#" in text else (text, "")
+    normalized_base = base.replace("\\", "/")
+    while normalized_base.startswith("./"):
+        normalized_base = normalized_base[2:]
+    normalized_base = normalized_base.replace("/./", "/")
+    normalized_base = normalized_base.strip()
+    normalized = normalized_base if not anchor else f"{normalized_base}#{anchor.strip()}"
+    if not normalized:
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return normalized
 
 
 def _normalize_text_list(value: Any, *, field_name: str, min_items: int = 0) -> list[str]:
@@ -51,6 +85,38 @@ def _normalize_text_list(value: Any, *, field_name: str, min_items: int = 0) -> 
     if len(normalized_sorted) < min_items:
         raise ValueError(f"{field_name} must include at least {min_items} value(s)")
     return normalized_sorted
+
+
+def _normalize_ref_list(value: Any, *, field_name: str, min_items: int = 0) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, row in enumerate(value):
+        item = _normalize_reference(row, field_name=f"{field_name}[{index}]")
+        if item not in seen:
+            normalized.append(item)
+            seen.add(item)
+
+    normalized_sorted = sorted(normalized)
+    if len(normalized_sorted) < min_items:
+        raise ValueError(f"{field_name} must include at least {min_items} value(s)")
+    return normalized_sorted
+
+
+def _collect_unique_refs(*groups: Any) -> list[str]:
+    refs: set[str] = set()
+    for group in groups:
+        if isinstance(group, str):
+            refs.add(_normalize_reference(group, field_name="reference"))
+            continue
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if isinstance(item, str) and item.strip():
+                refs.add(_normalize_reference(item, field_name="reference"))
+    return sorted(refs)
 
 
 def _normalize_target_project(value: Any) -> dict[str, str]:
@@ -118,7 +184,7 @@ def _normalize_kpi_targets(value: Any) -> list[dict[str, Any]]:
         if expected_direction not in _EXPECTED_DIRECTIONS:
             raise ValueError(f"{field_prefix}.expected_direction must be one of: {sorted(_EXPECTED_DIRECTIONS)}")
 
-        baseline_reference = _require_nonempty_text(
+        baseline_reference = _normalize_reference(
             raw.get("baseline_reference"),
             field_name=f"{field_prefix}.baseline_reference",
         )
@@ -141,7 +207,7 @@ def _normalize_kpi_targets(value: Any) -> list[dict[str, Any]]:
             min_items=1,
         )
         rationale = _require_nonempty_text(raw.get("rationale"), field_name=f"{field_prefix}.rationale")
-        evidence_refs = _normalize_text_list(
+        evidence_refs = _normalize_ref_list(
             raw.get("evidence_refs"),
             field_name=f"{field_prefix}.evidence_refs",
             min_items=1,
@@ -164,6 +230,372 @@ def _normalize_kpi_targets(value: Any) -> list[dict[str, Any]]:
     return sorted(normalized, key=lambda row: row["target_id"])
 
 
+def _normalize_req_056_obligations(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("broad_sweep_context.cross_project_obligations must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        field_prefix = f"broad_sweep_context.cross_project_obligations[{index}]"
+        row = _require_mapping(item, field_name=field_prefix)
+        project_raw = row.get("project_id", row.get("target_project_id"))
+        if project_raw is None:
+            raise ValueError(f"{field_prefix}.project_id is required")
+        normalized.append(
+            {
+                "project_id": _require_nonempty_text(project_raw, field_name=f"{field_prefix}.project_id"),
+                "recommendation_ids": _normalize_text_list(
+                    row.get("recommendation_ids"),
+                    field_name=f"{field_prefix}.recommendation_ids",
+                    min_items=1,
+                ),
+                "earth_sweep_evidence_refs": _normalize_ref_list(
+                    row.get("earth_sweep_evidence_refs", []),
+                    field_name=f"{field_prefix}.earth_sweep_evidence_refs",
+                ),
+            }
+        )
+
+    return sorted(
+        normalized,
+        key=lambda row: (
+            row["project_id"],
+            row["recommendation_ids"],
+            row["earth_sweep_evidence_refs"],
+        ),
+    )
+
+
+def _normalize_req_056_unresolved_ideas(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("broad_sweep_context.unresolved_ideas must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        field_prefix = f"broad_sweep_context.unresolved_ideas[{index}]"
+        row = _require_mapping(item, field_name=field_prefix)
+        project_raw = row.get("project_id", row.get("target_project_id"))
+        if project_raw is None:
+            raise ValueError(f"{field_prefix}.project_id is required")
+        summary_raw = row.get("summary", row.get("idea"))
+        if summary_raw is None:
+            raise ValueError(f"{field_prefix}.summary is required")
+        idea_id = row.get("idea_id") or f"idea.{_stable_id_fragment(project_raw, summary_raw)}"
+        normalized.append(
+            {
+                "idea_id": _require_nonempty_text(idea_id, field_name=f"{field_prefix}.idea_id"),
+                "summary": _require_nonempty_text(summary_raw, field_name=f"{field_prefix}.summary"),
+                "project_id": _require_nonempty_text(project_raw, field_name=f"{field_prefix}.project_id"),
+                "recommendation_ids": _normalize_text_list(
+                    row.get("recommendation_ids", []),
+                    field_name=f"{field_prefix}.recommendation_ids",
+                ),
+                "earth_sweep_evidence_refs": _normalize_ref_list(
+                    row.get("earth_sweep_evidence_refs", []),
+                    field_name=f"{field_prefix}.earth_sweep_evidence_refs",
+                ),
+            }
+        )
+
+    return sorted(
+        normalized,
+        key=lambda row: (
+            row["project_id"],
+            row["idea_id"],
+            row["recommendation_ids"],
+            row["earth_sweep_evidence_refs"],
+        ),
+    )
+
+
+def _normalize_broad_sweep_context(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {
+            "earth_sweep_evidence_refs": [],
+            "projects_considered": [],
+            "cross_project_obligations": [],
+            "unresolved_ideas": [],
+        }
+
+    raw = _require_mapping(value, field_name="broad_sweep_context")
+    expected_keys = {
+        "earth_sweep_evidence_refs",
+        "projects_considered",
+        "cross_project_obligations",
+        "unresolved_ideas",
+    }
+    raw_keys = set(raw.keys())
+    unexpected = sorted(raw_keys - expected_keys)
+    if unexpected:
+        raise ValueError(f"broad_sweep_context has unexpected keys: {unexpected}")
+
+    return {
+        "earth_sweep_evidence_refs": _normalize_ref_list(
+            raw.get("earth_sweep_evidence_refs", []),
+            field_name="broad_sweep_context.earth_sweep_evidence_refs",
+        ),
+        "projects_considered": _normalize_text_list(
+            raw.get("projects_considered", []),
+            field_name="broad_sweep_context.projects_considered",
+        ),
+        "cross_project_obligations": _normalize_req_056_obligations(raw.get("cross_project_obligations", [])),
+        "unresolved_ideas": _normalize_req_056_unresolved_ideas(raw.get("unresolved_ideas", [])),
+    }
+
+
+def _req_056_target_earth_refs(row: Mapping[str, Any]) -> list[str]:
+    refs = list(row.get("evidence_refs", []))
+    baseline_reference = str(row.get("baseline_reference") or "")
+    if baseline_reference.startswith(_EARTH_SWEEP_PREFIX):
+        refs.append(baseline_reference)
+    return sorted({ref for ref in refs if ref.startswith(_EARTH_SWEEP_PREFIX)})
+
+
+def _req_056_linked_target_ids_for_recommendations(
+    *,
+    recommendation_ids: list[str],
+    kpi_targets: list[dict[str, Any]],
+) -> list[str]:
+    matched_target_ids: list[str] = []
+    recommendation_id_set = set(recommendation_ids)
+    for row in kpi_targets:
+        if recommendation_id_set.intersection(row["originating_recommendation_ids"]):
+            matched_target_ids.append(str(row["target_id"]))
+    return sorted(set(matched_target_ids))
+
+
+def _req_056_earth_refs_for_recommendations(
+    *,
+    recommendation_ids: list[str],
+    kpi_targets: list[dict[str, Any]],
+) -> list[str]:
+    refs: list[str] = []
+    recommendation_id_set = set(recommendation_ids)
+    for row in kpi_targets:
+        if recommendation_id_set.intersection(row["originating_recommendation_ids"]):
+            refs.extend(_req_056_target_earth_refs(row))
+    return sorted(set(refs))
+
+
+def _req_056_recommendation_decision(
+    *,
+    cross_project_obligations: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+    has_cross_project_targets: bool,
+) -> str:
+    if open_risks and not cross_project_obligations and has_cross_project_targets:
+        missing_earth_risks = [
+            row for row in open_risks if row.get("reason_code") == _MISSING_EARTH_SWEEP_EVIDENCE
+        ]
+        if missing_earth_risks:
+            return "collect-earth-evidence"
+    if open_risks:
+        return "proceed-with-open-risks"
+    return "proceed"
+
+
+def _req_056_recommendation_confidence(
+    *,
+    kpi_targets: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+    decision: str,
+) -> str:
+    confidence_values = [str(row["confidence_level"]) for row in kpi_targets]
+    if decision == "collect-earth-evidence":
+        return "low"
+    if "low" in confidence_values:
+        return "low"
+    if open_risks or "medium" in confidence_values:
+        return "medium"
+    return "high"
+
+
+def _req_056_recommendation_rationale(
+    *,
+    linked_kpi_target_ids: list[str],
+    cross_project_obligations: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+) -> str:
+    return (
+        f"KPI targets={len(linked_kpi_target_ids)} "
+        f"supported_cross_project_obligations={len(cross_project_obligations)} "
+        f"open_risks={len(open_risks)}"
+    )
+
+
+def _build_req_056_processing_behavior(
+    *,
+    target_project: dict[str, str],
+    kpi_targets: list[dict[str, Any]],
+    broad_sweep_context: dict[str, Any],
+) -> dict[str, Any]:
+    linked_recommendation_ids = sorted(
+        {recommendation_id for row in kpi_targets for recommendation_id in row["originating_recommendation_ids"]}
+    )
+    linked_assumption_ids = sorted({assumption_id for row in kpi_targets for assumption_id in row["assumption_ids"]})
+    linked_kpi_target_ids = [str(row["target_id"]) for row in kpi_targets]
+
+    target_level_earth_refs = _collect_unique_refs(*[_req_056_target_earth_refs(row) for row in kpi_targets])
+    context_earth_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
+    cross_project_recommendation_ids: set[str] = set()
+    for row in kpi_targets:
+        if _req_056_target_earth_refs(row):
+            cross_project_recommendation_ids.update(row["originating_recommendation_ids"])
+
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+
+    for row in broad_sweep_context["cross_project_obligations"]:
+        linked_ids = sorted(set(row["recommendation_ids"]).intersection(linked_recommendation_ids))
+        if not linked_ids:
+            continue
+        cross_project_recommendation_ids.update(linked_ids)
+        obligation_refs = list(row["earth_sweep_evidence_refs"])
+        target_ids = _req_056_linked_target_ids_for_recommendations(recommendation_ids=linked_ids, kpi_targets=kpi_targets)
+        if obligation_refs:
+            cross_project_obligations.append(
+                {
+                    "obligation_id": f"obligation.{_stable_id_fragment(row['project_id'], linked_ids)}",
+                    "project_id": row["project_id"],
+                    "linked_kpi_target_ids": target_ids,
+                    "recommendation_ids": linked_ids,
+                    "evidence_refs": obligation_refs,
+                }
+            )
+            continue
+
+        open_risks.append(
+            {
+                "risk_id": f"risk.{_stable_id_fragment(row['project_id'], linked_ids, 'missing-earth-evidence')}",
+                "summary": f"Cross-project KPI dependency for {row['project_id']} lacks Earth-sweep evidence refs.",
+                "reason_code": _MISSING_EARTH_SWEEP_EVIDENCE,
+                "project_id": row["project_id"],
+                "linked_kpi_target_ids": target_ids,
+                "linked_recommendation_ids": linked_ids,
+                "evidence_refs": [],
+                "required_evidence_refs": _req_056_earth_refs_for_recommendations(
+                    recommendation_ids=linked_ids,
+                    kpi_targets=kpi_targets,
+                )
+                or ["missing:earth-sweep-evidence-ref"],
+            }
+        )
+
+    for row in broad_sweep_context["unresolved_ideas"]:
+        if row["recommendation_ids"]:
+            linked_ids = sorted(set(row["recommendation_ids"]).intersection(linked_recommendation_ids))
+            if not linked_ids:
+                continue
+        else:
+            linked_ids = []
+        cross_project_recommendation_ids.update(linked_ids)
+        target_ids = _req_056_linked_target_ids_for_recommendations(recommendation_ids=linked_ids, kpi_targets=kpi_targets)
+        required_refs = _collect_unique_refs(
+            row["earth_sweep_evidence_refs"],
+            _req_056_earth_refs_for_recommendations(recommendation_ids=linked_ids, kpi_targets=kpi_targets),
+        ) or ["missing:earth-sweep-evidence-ref"]
+        open_risks.append(
+            {
+                "risk_id": f"risk.{_stable_id_fragment(row['idea_id'], row['project_id'])}",
+                "summary": row["summary"],
+                "reason_code": _UNRESOLVED_CROSS_PROJECT_IDEA,
+                "project_id": row["project_id"],
+                "linked_kpi_target_ids": target_ids,
+                "linked_recommendation_ids": linked_ids,
+                "evidence_refs": row["earth_sweep_evidence_refs"],
+                "required_evidence_refs": required_refs,
+            }
+        )
+
+    cross_project_obligations = sorted(
+        cross_project_obligations,
+        key=lambda row: (row["project_id"], row["recommendation_ids"], row["linked_kpi_target_ids"]),
+    )
+    open_risks = sorted(open_risks, key=lambda row: (row["project_id"], row["reason_code"], row["risk_id"]))
+
+    projects_considered = sorted(
+        set(broad_sweep_context["projects_considered"])
+        | {row["project_id"] for row in broad_sweep_context["cross_project_obligations"]}
+        | {row["project_id"] for row in broad_sweep_context["unresolved_ideas"]}
+    )
+    earth_refs_used = _collect_unique_refs(
+        context_earth_refs,
+        target_level_earth_refs,
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["evidence_refs"] for row in open_risks],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    recommendation_refs = _collect_unique_refs(
+        [row["baseline_reference"] for row in kpi_targets],
+        *[row["evidence_refs"] for row in kpi_targets],
+        earth_refs_used,
+    )
+
+    has_cross_project_targets = bool(cross_project_recommendation_ids)
+    decision = _req_056_recommendation_decision(
+        cross_project_obligations=cross_project_obligations,
+        open_risks=open_risks,
+        has_cross_project_targets=has_cross_project_targets,
+    )
+    recommendation = {
+        "decision": decision,
+        "rationale": _req_056_recommendation_rationale(
+            linked_kpi_target_ids=linked_kpi_target_ids,
+            cross_project_obligations=cross_project_obligations,
+            open_risks=open_risks,
+        ),
+        "confidence": _req_056_recommendation_confidence(
+            kpi_targets=kpi_targets,
+            open_risks=open_risks,
+            decision=decision,
+        ),
+        "evidence_refs": recommendation_refs,
+        "linked_kpi_target_ids": linked_kpi_target_ids,
+        "cross_project_obligations": cross_project_obligations,
+        "open_risks": open_risks,
+    }
+    recommendation_generation = {
+        "recommendation_fields_complete": set(recommendation.keys()) == set(_REQ_056_RECOMMENDATION_FIELDS),
+        "required_recommendation_fields": list(_REQ_056_RECOMMENDATION_FIELDS),
+        "cross_project_context_used": bool(projects_considered or cross_project_obligations or open_risks),
+        "evidence_refs_used": recommendation_refs,
+    }
+
+    return {
+        "strategy": REQ_056_PROCESSING_STRATEGY,
+        "reasoning_mode": REQ_056_REASONING_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": {
+            "target_project": target_project,
+            "kpi_targets": kpi_targets,
+            "broad_sweep_context": broad_sweep_context,
+        },
+        "context_usage": {
+            "target_project_context_used": True,
+            "broad_sweep_context_used": bool(
+                projects_considered
+                or broad_sweep_context["earth_sweep_evidence_refs"]
+                or broad_sweep_context["cross_project_obligations"]
+                or broad_sweep_context["unresolved_ideas"]
+            ),
+            "cross_project_context_used": recommendation_generation["cross_project_context_used"],
+            "earth_sweep_context_used": bool(earth_refs_used),
+            "projects_considered": projects_considered,
+            "earth_sweep_evidence_refs_used": earth_refs_used,
+            "linked_recommendation_ids_used": linked_recommendation_ids,
+            "linked_assumption_ids_used": linked_assumption_ids,
+            "linked_kpi_target_ids_used": linked_kpi_target_ids,
+            "evidence_refs_used": recommendation_refs,
+        },
+        "recommendation_generation": recommendation_generation,
+        "recommendation": recommendation,
+    }
+
+
 def build_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Build normalized REQ-056 payload for KPI target artifact handoff."""
     raw = _require_mapping(payload, field_name="payload")
@@ -171,7 +603,7 @@ def build_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> dict[str, A
     if analysis_type and analysis_type != REQ_056_ANALYSIS_TYPE:
         raise ValueError(f"analysis_type must be {REQ_056_ANALYSIS_TYPE}")
 
-    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc") or raw.get("checked_at_utc"), field_name="now_utc")
     target_project = _normalize_target_project(raw.get("target_project"))
     kpi_targets = _normalize_kpi_targets(raw.get("kpi_targets"))
 
@@ -180,7 +612,7 @@ def build_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> dict[str, A
     )
     linked_assumptions = sorted({assumption_id for row in kpi_targets for assumption_id in row["assumption_ids"]})
 
-    built = {
+    built: dict[str, Any] = {
         "ok": True,
         "schema_version": REQ_056_SCHEMA_VERSION,
         "requirement_id": REQ_056_REQUIREMENT_ID,
@@ -197,6 +629,14 @@ def build_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> dict[str, A
             "unique_assumptions_linked": len(linked_assumptions),
         },
     }
+
+    if "broad_sweep_context" in raw:
+        broad_sweep_context = _normalize_broad_sweep_context(raw.get("broad_sweep_context"))
+        built["processing_behavior"] = _build_req_056_processing_behavior(
+            target_project=target_project,
+            kpi_targets=kpi_targets,
+            broad_sweep_context=broad_sweep_context,
+        )
 
     errors = validate_req_056_kpi_target_artifact(built)
     if errors:
@@ -321,6 +761,175 @@ def _validate_kpi_target_row(
     return errors, recommendation_ids, assumption_ids
 
 
+def _validate_req_056_processing_behavior(payload: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["processing_behavior must be an object"]
+
+    expected_keys = {
+        "strategy",
+        "reasoning_mode",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "recommendation_generation",
+        "recommendation",
+    }
+    payload_keys = set(payload.keys())
+    missing_keys = sorted(expected_keys - payload_keys)
+    if missing_keys:
+        errors.append(f"processing_behavior missing keys: {missing_keys}")
+    unexpected_keys = sorted(payload_keys - expected_keys)
+    if unexpected_keys:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected_keys}")
+
+    if payload.get("strategy") != REQ_056_PROCESSING_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_056_PROCESSING_STRATEGY}")
+    if payload.get("reasoning_mode") != REQ_056_REASONING_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {REQ_056_REASONING_MODE}")
+    if payload.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    context_inputs = payload.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+    else:
+        for key in ("target_project", "kpi_targets", "broad_sweep_context"):
+            if key not in context_inputs:
+                errors.append(f"processing_behavior.context_inputs missing {key}")
+
+    context_usage = payload.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        expected_usage_fields = {
+            "target_project_context_used",
+            "broad_sweep_context_used",
+            "cross_project_context_used",
+            "earth_sweep_context_used",
+            "projects_considered",
+            "earth_sweep_evidence_refs_used",
+            "linked_recommendation_ids_used",
+            "linked_assumption_ids_used",
+            "linked_kpi_target_ids_used",
+            "evidence_refs_used",
+        }
+        missing_usage = sorted(expected_usage_fields - set(context_usage.keys()))
+        if missing_usage:
+            errors.append(f"processing_behavior.context_usage missing keys: {missing_usage}")
+        for key in (
+            "target_project_context_used",
+            "broad_sweep_context_used",
+            "cross_project_context_used",
+            "earth_sweep_context_used",
+        ):
+            if key in context_usage and not isinstance(context_usage.get(key), bool):
+                errors.append(f"processing_behavior.context_usage.{key} must be a boolean")
+        for key in (
+            "projects_considered",
+            "earth_sweep_evidence_refs_used",
+            "linked_recommendation_ids_used",
+            "linked_assumption_ids_used",
+            "linked_kpi_target_ids_used",
+            "evidence_refs_used",
+        ):
+            if key in context_usage and not isinstance(context_usage.get(key), list):
+                errors.append(f"processing_behavior.context_usage.{key} must be a list")
+
+    recommendation_generation = payload.get("recommendation_generation")
+    if not isinstance(recommendation_generation, Mapping):
+        errors.append("processing_behavior.recommendation_generation must be an object")
+    else:
+        expected_generation_fields = {
+            "recommendation_fields_complete",
+            "required_recommendation_fields",
+            "cross_project_context_used",
+            "evidence_refs_used",
+        }
+        missing_generation = sorted(expected_generation_fields - set(recommendation_generation.keys()))
+        if missing_generation:
+            errors.append(f"processing_behavior.recommendation_generation missing keys: {missing_generation}")
+        if (
+            "recommendation_fields_complete" in recommendation_generation
+            and not isinstance(recommendation_generation.get("recommendation_fields_complete"), bool)
+        ):
+            errors.append(
+                "processing_behavior.recommendation_generation.recommendation_fields_complete must be a boolean"
+            )
+        for key in ("required_recommendation_fields", "evidence_refs_used"):
+            if key in recommendation_generation and not isinstance(recommendation_generation.get(key), list):
+                errors.append(f"processing_behavior.recommendation_generation.{key} must be a list")
+        if (
+            "cross_project_context_used" in recommendation_generation
+            and not isinstance(recommendation_generation.get("cross_project_context_used"), bool)
+        ):
+            errors.append("processing_behavior.recommendation_generation.cross_project_context_used must be a boolean")
+
+    recommendation = payload.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        recommendation_keys = set(recommendation.keys())
+        expected_recommendation_keys = set(_REQ_056_RECOMMENDATION_FIELDS)
+        missing_recommendation = sorted(expected_recommendation_keys - recommendation_keys)
+        if missing_recommendation:
+            errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+        unexpected_recommendation = sorted(recommendation_keys - expected_recommendation_keys)
+        if unexpected_recommendation:
+            errors.append(f"processing_behavior.recommendation has unexpected keys: {unexpected_recommendation}")
+        if recommendation.get("decision") not in {"proceed", "proceed-with-open-risks", "collect-earth-evidence"}:
+            errors.append(
+                "processing_behavior.recommendation.decision must be one of: "
+                "['collect-earth-evidence', 'proceed', 'proceed-with-open-risks']"
+            )
+        if recommendation.get("confidence") not in _CONFIDENCE_LEVELS:
+            errors.append(
+                f"processing_behavior.recommendation.confidence must be one of: {sorted(_CONFIDENCE_LEVELS)}"
+            )
+        for key in ("rationale",):
+            if key in recommendation and (
+                not isinstance(recommendation.get(key), str) or not str(recommendation.get(key)).strip()
+            ):
+                errors.append(f"processing_behavior.recommendation.{key} must be a non-empty string")
+        for key in ("evidence_refs", "linked_kpi_target_ids", "cross_project_obligations", "open_risks"):
+            if key in recommendation and not isinstance(recommendation.get(key), list):
+                errors.append(f"processing_behavior.recommendation.{key} must be a list")
+
+        if isinstance(recommendation_generation, Mapping):
+            expected_complete = recommendation_keys == expected_recommendation_keys
+            if recommendation_generation.get("recommendation_fields_complete") != expected_complete:
+                errors.append(
+                    "processing_behavior.recommendation_generation.recommendation_fields_complete "
+                    "must match recommendation field completeness"
+                )
+            if recommendation_generation.get("required_recommendation_fields") != _REQ_056_RECOMMENDATION_FIELDS:
+                errors.append(
+                    "processing_behavior.recommendation_generation.required_recommendation_fields "
+                    "must match REQ-056 recommendation fields"
+                )
+            if recommendation_generation.get("evidence_refs_used") != recommendation.get("evidence_refs"):
+                errors.append(
+                    "processing_behavior.recommendation_generation.evidence_refs_used must match "
+                    "processing_behavior.recommendation.evidence_refs"
+                )
+
+        if isinstance(context_usage, Mapping):
+            if context_usage.get("cross_project_context_used") != bool(
+                recommendation.get("cross_project_obligations") or recommendation.get("open_risks")
+            ):
+                errors.append(
+                    "processing_behavior.context_usage.cross_project_context_used must match "
+                    "cross-project recommendation output usage"
+                )
+            if context_usage.get("evidence_refs_used") != recommendation.get("evidence_refs"):
+                errors.append(
+                    "processing_behavior.context_usage.evidence_refs_used must match "
+                    "processing_behavior.recommendation.evidence_refs"
+                )
+
+    return errors
+
+
 def validate_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> list[str]:
     """Validate REQ-056 KPI target artifact payload shape."""
     errors: list[str] = []
@@ -337,9 +946,10 @@ def validate_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> list[str
         "target_project",
         "kpi_target_artifact",
         "totals",
+        "processing_behavior",
     }
     top_keys = set(payload.keys())
-    missing_top = sorted(expected_top - top_keys)
+    missing_top = sorted((expected_top - {"processing_behavior"}) - top_keys)
     if missing_top:
         errors.append(f"missing top-level keys: {missing_top}")
     unexpected_top = sorted(top_keys - expected_top)
@@ -443,6 +1053,9 @@ def validate_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> list[str
             errors.append("totals.unique_recommendations_linked must equal unique linked recommendation count")
         if totals.get("unique_assumptions_linked") != len(linked_assumption_ids):
             errors.append("totals.unique_assumptions_linked must equal unique linked assumption count")
+
+    if "processing_behavior" in payload:
+        errors.extend(_validate_req_056_processing_behavior(payload.get("processing_behavior")))
 
     return errors
 
