@@ -1,4 +1,25 @@
 {
+  "target_project_root": "/workspace/projects/optimus-prime",
+  "earth_root": "/workspace/projects/Earth",
+  "output_root": "/workspace/projects/optimus-prime/strategy/out",
+  "revision_identity": "rev-req037-fixture-r1",
+  "target_project_evidence_refs": [
+    "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json"
+  ],
+  "earth_sweep_evidence_refs": [
+    "reports/earth/sweeps/2026-03-15/portfolio.json",
+    "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+  ],
+  "cross_project_context": [
+    {
+      "project_id": "runtime-orchestrator",
+      "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+      ],
+      "context_note": "Earth sweep confirms runtime bridge assumptions are shared across planner packets."
+    }
+  ],
   "recommendation_drafts": [
     {
       "draft_id": "draft-earth-runtime-001",
@@ -6,6 +27,10 @@
       "semantic_signature": "runtime-bridge-alignment",
       "summary": "Align runtime bridge assumptions before planner promotion.",
       "rationale": "Earth sweep evidence shows the runtime bridge is already shared across planning packets.",
+      "action_scope": "cross-project",
+      "requires_earth_evidence": true,
+      "project_id": "runtime-orchestrator",
+      "next_step": "Merge the runtime alignment recommendation under one stable ID before promotion.",
       "evidence_refs": [
         "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
         "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json"
@@ -17,6 +42,10 @@
       "semantic_signature": "runtime-bridge-alignment",
       "summary": "Align planner promotion with shared runtime bridge assumptions.",
       "rationale": "Local planner traces show the same action already exists under the stable recommendation ID.",
+      "action_scope": "cross-project",
+      "requires_earth_evidence": true,
+      "project_id": "runtime-orchestrator",
+      "next_step": "Retain Earth-backed runtime citations when duplicate drafts are merged.",
       "evidence_refs": [
         "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json",
         "strategy/current/llm_call_trace.jsonl"
@@ -28,6 +57,10 @@
       "semantic_signature": "trace-citation-discipline",
       "summary": "Keep merged recommendations citation-complete.",
       "rationale": "Merged recommendation output must retain per-source rationale and evidence links for replay.",
+      "action_scope": "local",
+      "requires_earth_evidence": false,
+      "project_id": "",
+      "next_step": "Keep evidence refs and source rationales replay-stable in the merged output.",
       "evidence_refs": [
         "contracts/req/REQ-025_multi-call-strategy-pipeline-planner.md"
       ]

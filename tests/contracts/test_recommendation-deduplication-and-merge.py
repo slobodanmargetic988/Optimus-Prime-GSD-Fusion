@@ -25,6 +25,13 @@ def _read_json(path: Path) -> dict:
 def test_req_037_merges_duplicate_recommendation_drafts_preserving_rationale_and_evidence() -> None:
     fixture = _read_json(FIXTURE_PATH)
     payload = module.build_req_037_recommendation_deduplication_and_merge(
+        target_project_root=fixture["target_project_root"],
+        earth_root=fixture["earth_root"],
+        output_root=fixture["output_root"],
+        revision_identity=fixture["revision_identity"],
+        target_project_evidence_refs=fixture["target_project_evidence_refs"],
+        earth_sweep_evidence_refs=fixture["earth_sweep_evidence_refs"],
+        cross_project_context=fixture["cross_project_context"],
         recommendation_drafts=fixture["recommendation_drafts"],
         merged_at="2026-03-16T12:00:00Z",
     )
@@ -34,6 +41,9 @@ def test_req_037_merges_duplicate_recommendation_drafts_preserving_rationale_and
         "requirement_id",
         "surface",
         "schema_version",
+        "recommendation_deduplication_and_merge_entrypoint",
+        "processing_behavior",
+        "call_metadata",
         "merged_at",
         "deduplication_index",
         "merged_recommendations",
@@ -43,6 +53,15 @@ def test_req_037_merges_duplicate_recommendation_drafts_preserving_rationale_and
     assert payload["requirement_id"] == "REQ-037"
     assert payload["surface"] == "recommendation_deduplication_and_merge"
     assert payload["schema_version"] == "req-037.recommendation-deduplication-and-merge.v1"
+    assert payload["recommendation_deduplication_and_merge_entrypoint"] == {
+        "runtime_mode": "llm-first",
+        "execution_mode": "long-thinking",
+        "target_project_root": fixture["target_project_root"],
+        "earth_root": fixture["earth_root"],
+        "output_root": fixture["output_root"],
+        "revision_identity": fixture["revision_identity"],
+        "merged_at": "2026-03-16T12:00:00Z",
+    }
     assert payload["deduplication_index"] == {
         "input_draft_count": 3,
         "merged_recommendation_count": 2,
@@ -75,11 +94,34 @@ def test_req_037_merges_duplicate_recommendation_drafts_preserving_rationale_and
         "strategy/current/llm_call_trace.jsonl",
         "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json",
     ]
+    recommendation = payload["processing_behavior"]["recommendation"]
+    assert recommendation["cross_project_obligations"] == [
+        {
+            "obligation_id": "obligation-rec-runtime-bridge-alignment",
+            "project_id": "runtime-orchestrator",
+            "summary": "Align runtime bridge assumptions before planner promotion.",
+            "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/portfolio.json",
+                "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+                "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json",
+                "strategy/current/llm_call_trace.jsonl",
+                "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json",
+            ],
+        }
+    ]
+    assert recommendation["open_risks"] == []
 
 
 def test_req_037_sample_matches_builder_output_for_fixture() -> None:
     fixture = _read_json(FIXTURE_PATH)
     expected = module.build_req_037_recommendation_deduplication_and_merge(
+        target_project_root=fixture["target_project_root"],
+        earth_root=fixture["earth_root"],
+        output_root=fixture["output_root"],
+        revision_identity=fixture["revision_identity"],
+        target_project_evidence_refs=fixture["target_project_evidence_refs"],
+        earth_sweep_evidence_refs=fixture["earth_sweep_evidence_refs"],
+        cross_project_context=fixture["cross_project_context"],
         recommendation_drafts=fixture["recommendation_drafts"],
         merged_at="2026-03-16T12:00:00Z",
     )
@@ -94,6 +136,9 @@ def test_req_037_contract_doc_includes_sample_structure_reference() -> None:
         "requirement_id",
         "surface",
         "schema_version",
+        "recommendation_deduplication_and_merge_entrypoint",
+        "processing_behavior",
+        "call_metadata",
         "merged_at",
         "deduplication_index",
         "merged_recommendations",
@@ -121,6 +166,13 @@ def test_req_037_rejects_semantic_duplication_across_multiple_stable_ids() -> No
 
     with pytest.raises(ValueError, match=r"multiple stable recommendation_ids"):
         module.build_req_037_recommendation_deduplication_and_merge(
+            target_project_root=fixture["target_project_root"],
+            earth_root=fixture["earth_root"],
+            output_root=fixture["output_root"],
+            revision_identity=fixture["revision_identity"],
+            target_project_evidence_refs=fixture["target_project_evidence_refs"],
+            earth_sweep_evidence_refs=fixture["earth_sweep_evidence_refs"],
+            cross_project_context=fixture["cross_project_context"],
             recommendation_drafts=conflicting,
             merged_at="2026-03-16T12:00:00Z",
         )

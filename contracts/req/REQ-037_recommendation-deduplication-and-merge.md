@@ -32,6 +32,14 @@ Validator:
 The builder expects:
 
 - `recommendation_drafts[]` (non-empty array, required)
+- Optional broad-sweep context inputs:
+  - `target_project_root`
+  - `earth_root`
+  - `output_root`
+  - `revision_identity`
+  - `target_project_evidence_refs[]`
+  - `earth_sweep_evidence_refs[]`
+  - `cross_project_context[]`
 
 Each `recommendation_drafts[]` row must include:
 
@@ -45,6 +53,10 @@ Optional input field:
 
 - `semantic_signature`
   - When omitted, the builder derives a normalized signature from `summary`.
+- `action_scope`
+- `requires_earth_evidence`
+- `project_id`
+- `next_step`
 
 Behavior guarantees:
 
@@ -60,6 +72,9 @@ Top-level required keys:
 - `requirement_id` (must be `REQ-037`)
 - `surface` (must be `recommendation_deduplication_and_merge`)
 - `schema_version` (must be `req-037.recommendation-deduplication-and-merge.v1`)
+- `recommendation_deduplication_and_merge_entrypoint`
+- `processing_behavior`
+- `call_metadata`
 - `merged_at`
 - `deduplication_index`
 - `merged_recommendations`
@@ -91,6 +106,16 @@ Top-level required keys:
 - `rationale`
 - `evidence_refs[]`
 
+`processing_behavior.recommendation` required keys:
+
+- `decision`
+- `rationale`
+- `confidence`
+- `evidence_refs[]`
+- `merged_recommendations[]`
+- `cross_project_obligations[]`
+- `open_risks[]`
+
 ## Executable artifacts
 
 - Fixture input: `examples/fixtures/recommendation-deduplication-and-merge.json`
@@ -110,6 +135,9 @@ Its top-level shape is:
   "requirement_id": "REQ-037",
   "surface": "recommendation_deduplication_and_merge",
   "schema_version": "req-037.recommendation-deduplication-and-merge.v1",
+  "recommendation_deduplication_and_merge_entrypoint": {},
+  "processing_behavior": {},
+  "call_metadata": {},
   "merged_at": "2026-03-16T12:00:00Z",
   "deduplication_index": {},
   "merged_recommendations": [],

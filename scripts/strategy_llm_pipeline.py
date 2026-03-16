@@ -26,6 +26,7 @@ RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 PIPELINE_STRATEGY = "multi-call-strategy-pipeline-planner"
 REQ_028_STRATEGY = "call-3-gap-and-opportunity-reasoning"
+REQ_037_STRATEGY = "recommendation-deduplication-and-merge"
 REQ_028_REASONING_FOCUS = "strategic-gaps-and-opportunities-beyond-local-mission"
 REQ_028_CALL_SEQUENCE = 3
 REQ_028_TRACE_CALL_OBJECTIVE = "Reason about strategic gaps and opportunities not visible from the local mission alone."
@@ -34,6 +35,10 @@ MIN_CALL_DEPTH = 1
 MAX_CALL_DEPTH = 8
 DEFAULT_CALL_DEPTH = 4
 LLM_CALL_TRACE_RELATIVE_PATH = "strategy/current/llm_call_trace.jsonl"
+DEFAULT_TARGET_PROJECT_ROOT = "/workspace/projects/optimus-prime"
+DEFAULT_EARTH_ROOT = "/workspace/projects/Earth"
+DEFAULT_OUTPUT_ROOT = "/workspace/projects/optimus-prime/strategy/out"
+DEFAULT_REQ_037_REVISION_ID = "rev-req037-fixture-r1"
 
 DEFAULT_STAGE_BLUEPRINTS = (
     {
@@ -355,6 +360,18 @@ def _normalize_req_037_recommendation_drafts(raw_value: Any) -> list[dict[str, A
         summary = _require_text(item.get("summary"), field_name=f"recommendation_drafts[{index}].summary")
         rationale = _require_text(item.get("rationale"), field_name=f"recommendation_drafts[{index}].rationale")
         semantic_signature = _normalize_semantic_signature(item.get("semantic_signature"), summary=summary)
+        action_scope = _normalize_action_scope(
+            item.get("action_scope"),
+            field_name=f"recommendation_drafts[{index}].action_scope",
+        )
+        requires_earth_evidence = bool(item.get("requires_earth_evidence", action_scope == "cross-project"))
+        project_id = _as_text(item.get("project_id"))
+        next_step = _require_text(
+            item.get("next_step")
+            if item.get("next_step") is not None
+            else f"Merge duplicate drafts for '{recommendation_id}' with deterministic evidence coverage.",
+            field_name=f"recommendation_drafts[{index}].next_step",
+        )
         evidence_refs = _normalize_string_list(
             item.get("evidence_refs"),
             field_name=f"recommendation_drafts[{index}].evidence_refs",
@@ -384,7 +401,11 @@ def _normalize_req_037_recommendation_drafts(raw_value: Any) -> list[dict[str, A
                 "semantic_signature": semantic_signature,
                 "summary": summary,
                 "rationale": rationale,
+                "action_scope": action_scope,
+                "requires_earth_evidence": requires_earth_evidence,
+                "project_id": project_id,
                 "evidence_refs": evidence_refs,
+                "next_step": next_step,
             }
         )
 
@@ -446,6 +467,189 @@ def _build_req_037_merged_recommendations(
             }
         )
     return merged_rows
+
+
+def _group_req_037_recommendation_drafts(
+    recommendation_drafts: Sequence[Mapping[str, Any]],
+) -> dict[tuple[str, str], list[Mapping[str, Any]]]:
+    grouped: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for row in recommendation_drafts:
+        recommendation_id = _require_text(row.get("recommendation_id"), field_name="recommendation_drafts[].recommendation_id")
+        semantic_signature = _require_text(
+            row.get("semantic_signature"),
+            field_name="recommendation_drafts[].semantic_signature",
+        )
+        grouped.setdefault((recommendation_id, semantic_signature), []).append(row)
+    return grouped
+
+
+def _canonical_req_037_input(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    merged_at: str,
+) -> dict[str, Any]:
+    return {
+        "runtime_mode": RUNTIME_MODE,
+        "execution_mode": EXECUTION_MODE,
+        "target_project_root": target_project_root,
+        "earth_root": earth_root,
+        "output_root": output_root,
+        "revision_identity": revision_identity,
+        "merged_at": merged_at,
+    }
+
+
+def _canonical_req_037_processing_input(
+    *,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    recommendation_drafts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "target_project_evidence_refs": list(target_project_evidence_refs),
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "cross_project_context": [
+            {
+                "project_id": row["project_id"],
+                "project_root": row["project_root"],
+                "evidence_refs": list(row["evidence_refs"]),
+                "context_note": row["context_note"],
+            }
+            for row in cross_project_context
+        ],
+        "recommendation_drafts": [
+            {
+                "draft_id": row["draft_id"],
+                "recommendation_id": row["recommendation_id"],
+                "semantic_signature": row["semantic_signature"],
+                "summary": row["summary"],
+                "rationale": row["rationale"],
+                "action_scope": row["action_scope"],
+                "requires_earth_evidence": row["requires_earth_evidence"],
+                "project_id": row["project_id"],
+                "evidence_refs": list(row["evidence_refs"]),
+                "next_step": row["next_step"],
+            }
+            for row in recommendation_drafts
+        ],
+    }
+
+
+def _build_req_037_processing_behavior(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    recommendation_drafts: list[dict[str, Any]],
+    merged_recommendations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    grouped_drafts = _group_req_037_recommendation_drafts(recommendation_drafts)
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+
+    for merged_row in merged_recommendations:
+        recommendation_id = _require_text(
+            merged_row.get("recommendation_id"),
+            field_name="merged_recommendations[].recommendation_id",
+        )
+        semantic_signature = _require_text(
+            merged_row.get("semantic_signature"),
+            field_name="merged_recommendations[].semantic_signature",
+        )
+        drafts = grouped_drafts[(recommendation_id, semantic_signature)]
+        requires_earth_evidence = any(bool(row.get("requires_earth_evidence")) for row in drafts)
+        if not requires_earth_evidence:
+            continue
+
+        merged_refs = list(merged_row["evidence_refs"])
+        earth_refs = _collect_unique_refs(
+            [ref for ref in merged_refs if _is_earth_evidence_ref(ref)],
+            earth_sweep_evidence_refs,
+        )
+        if earth_refs:
+            project_ids = sorted({_as_text(row.get("project_id")) for row in drafts if _as_text(row.get("project_id"))})
+            obligation_project_id = project_ids[0] if project_ids else (
+                cross_project_context[0]["project_id"] if cross_project_context else "earth"
+            )
+            cross_project_obligations.append(
+                {
+                    "obligation_id": f"obligation-{_slug_id_fragment(recommendation_id)}",
+                    "project_id": obligation_project_id,
+                    "summary": _require_text(merged_row.get("summary"), field_name="merged_recommendations[].summary"),
+                    "evidence_refs": _collect_unique_refs(merged_refs, earth_refs),
+                }
+            )
+            continue
+
+        open_risks.append(
+            {
+                "risk_id": f"risk-{_slug_id_fragment(recommendation_id)}",
+                "summary": _require_text(merged_row.get("summary"), field_name="merged_recommendations[].summary"),
+                "reason_code": "missing_earth_sweep_evidence_refs",
+                "required_evidence_refs": merged_refs,
+            }
+        )
+
+    cross_project_obligations.sort(key=lambda row: row["obligation_id"])
+    open_risks.sort(key=lambda row: row["risk_id"])
+    recommendation_refs = _collect_unique_refs(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        *[row["evidence_refs"] for row in merged_recommendations],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    decision = _recommendation_decision(recommended_actions=merged_recommendations, open_risks=open_risks)
+
+    return {
+        "strategy": REQ_037_STRATEGY,
+        "reasoning_mode": EXECUTION_MODE,
+        "strict_evidence_discipline": True,
+        "heuristic_summarization_only": False,
+        "context_inputs": {
+            "target_project": {
+                "project_root": target_project_root,
+                "evidence_refs": list(target_project_evidence_refs),
+            },
+            "earth_sweep": {
+                "earth_root": earth_root,
+                "evidence_refs": list(earth_sweep_evidence_refs),
+            },
+            "cross_project_context": list(cross_project_context),
+            "recommendation_drafts": list(recommendation_drafts),
+        },
+        "context_usage": {
+            "target_project_context_used": bool(target_project_evidence_refs),
+            "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+            "cross_project_context_used": bool(cross_project_context),
+            "target_project_refs_used": list(target_project_evidence_refs),
+            "earth_sweep_refs_used": list(earth_sweep_evidence_refs),
+            "cross_project_refs_used": cross_project_refs,
+            "cross_project_projects_considered": sorted({row["project_id"] for row in cross_project_context}),
+            "evidence_refs_used": recommendation_refs,
+        },
+        "recommendation": {
+            "decision": decision,
+            "rationale": _recommendation_rationale(decision=decision),
+            "confidence": _recommendation_confidence(evidence_refs=recommendation_refs, open_risks=open_risks),
+            "evidence_refs": recommendation_refs,
+            "merged_recommendations": list(merged_recommendations),
+            "cross_project_obligations": cross_project_obligations,
+            "open_risks": open_risks,
+        },
+        "summary": (
+            "Merged duplicate recommendation drafts with broad-sweep context inputs, deterministic evidence refs, "
+            "and explicit cross-project obligation gating."
+        ),
+    }
 
 
 def _build_call_id(
@@ -525,19 +729,82 @@ def _recommendation_confidence(*, evidence_refs: list[str], open_risks: list[dic
 def build_req_037_recommendation_deduplication_and_merge(
     *,
     recommendation_drafts: Sequence[Mapping[str, Any]] | None,
+    target_project_root: str = DEFAULT_TARGET_PROJECT_ROOT,
+    earth_root: str = DEFAULT_EARTH_ROOT,
+    output_root: str = DEFAULT_OUTPUT_ROOT,
+    revision_identity: str = DEFAULT_REQ_037_REVISION_ID,
+    target_project_evidence_refs: Sequence[Any] | None = None,
+    earth_sweep_evidence_refs: Sequence[Any] | None = None,
+    cross_project_context: Sequence[Mapping[str, Any]] | None = None,
     merged_at: str | None = None,
 ) -> dict[str, Any]:
     """Build the REQ-037 recommendation deduplication and merge surface."""
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_text(revision_identity, field_name="revision_identity")
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
     normalized_drafts = _normalize_req_037_recommendation_drafts(recommendation_drafts)
     normalized_merged_at = _require_text(merged_at if merged_at is not None else utc_now_iso(), field_name="merged_at")
     merged_recommendations = _build_req_037_merged_recommendations(normalized_drafts)
     evidence_refs = _collect_unique_refs(*[row["evidence_refs"] for row in merged_recommendations])
     duplicate_group_count = sum(1 for row in merged_recommendations if int(row["duplicate_count"]) > 1)
+    canonical_input = _canonical_req_037_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+        merged_at=normalized_merged_at,
+    )
+    canonical_input_sha = _canonical_digest(canonical_input)
+    canonical_processing_input = _canonical_req_037_processing_input(
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_project_context,
+        recommendation_drafts=normalized_drafts,
+    )
+    processing_sha = _canonical_digest(canonical_processing_input)
+    processing_behavior = _build_req_037_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_project_context,
+        recommendation_drafts=normalized_drafts,
+        merged_recommendations=merged_recommendations,
+    )
 
     return {
         "requirement_id": REQ_037_REQUIREMENT_ID,
         "surface": "recommendation_deduplication_and_merge",
         "schema_version": REQ_037_SCHEMA_VERSION,
+        "recommendation_deduplication_and_merge_entrypoint": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+            "merged_at": normalized_merged_at,
+        },
+        "processing_behavior": processing_behavior,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": canonical_input_sha,
+            "reproducible_call_id": f"req037-{canonical_input_sha[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_sha,
+            "processing_call_id": f"req037-processing-{processing_sha[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+        },
         "merged_at": normalized_merged_at,
         "deduplication_index": {
             "input_draft_count": len(normalized_drafts),
@@ -1738,6 +2005,9 @@ def validate_req_037_recommendation_deduplication_and_merge(payload: Mapping[str
         "requirement_id",
         "surface",
         "schema_version",
+        "recommendation_deduplication_and_merge_entrypoint",
+        "processing_behavior",
+        "call_metadata",
         "merged_at",
         "deduplication_index",
         "merged_recommendations",
@@ -1762,6 +2032,46 @@ def validate_req_037_recommendation_deduplication_and_merge(payload: Mapping[str
         errors.append("merged_at must be a non-empty string")
     if not _as_text(payload.get("summary")):
         errors.append("summary must be a non-empty string")
+
+    entrypoint = payload.get("recommendation_deduplication_and_merge_entrypoint")
+    if not isinstance(entrypoint, Mapping):
+        errors.append("recommendation_deduplication_and_merge_entrypoint must be an object")
+        entrypoint = {}
+    else:
+        required_entrypoint = {
+            "runtime_mode",
+            "execution_mode",
+            "target_project_root",
+            "earth_root",
+            "output_root",
+            "revision_identity",
+            "merged_at",
+        }
+        entrypoint_keys = set(entrypoint.keys())
+        missing_entrypoint = sorted(required_entrypoint - entrypoint_keys)
+        if missing_entrypoint:
+            errors.append(f"recommendation_deduplication_and_merge_entrypoint missing keys: {missing_entrypoint}")
+        unexpected_entrypoint = sorted(entrypoint_keys - required_entrypoint)
+        if unexpected_entrypoint:
+            errors.append(
+                f"recommendation_deduplication_and_merge_entrypoint unexpected keys: {unexpected_entrypoint}"
+            )
+        if entrypoint.get("runtime_mode") != RUNTIME_MODE:
+            errors.append(f"recommendation_deduplication_and_merge_entrypoint.runtime_mode must be {RUNTIME_MODE}")
+        if entrypoint.get("execution_mode") != EXECUTION_MODE:
+            errors.append(
+                f"recommendation_deduplication_and_merge_entrypoint.execution_mode must be {EXECUTION_MODE}"
+            )
+        for root_field in ("target_project_root", "earth_root", "output_root"):
+            root_value = entrypoint.get(root_field)
+            if not isinstance(root_value, str) or not root_value.strip():
+                errors.append(f"recommendation_deduplication_and_merge_entrypoint.{root_field} must be a non-empty string")
+            elif not root_value.startswith("/"):
+                errors.append(f"recommendation_deduplication_and_merge_entrypoint.{root_field} must be an absolute path")
+        if not _as_text(entrypoint.get("revision_identity")):
+            errors.append("recommendation_deduplication_and_merge_entrypoint.revision_identity must be non-empty")
+        if _as_text(entrypoint.get("merged_at")) != _as_text(payload.get("merged_at")):
+            errors.append("recommendation_deduplication_and_merge_entrypoint.merged_at must match merged_at")
 
     deduplication_index = payload.get("deduplication_index")
     merged_recommendations = payload.get("merged_recommendations")
@@ -1922,6 +2232,293 @@ def validate_req_037_recommendation_deduplication_and_merge(payload: Mapping[str
         errors.append("deduplication_index.recommendation_ids must mirror merged recommendation IDs")
     if deduplication_index.get("semantic_signatures") != sorted_semantic_signatures:
         errors.append("deduplication_index.semantic_signatures must mirror merged semantic signatures")
+
+    processing_behavior = payload.get("processing_behavior")
+    normalized_cross_project_context: list[dict[str, Any]] = []
+    normalized_recommendation_drafts: list[dict[str, Any]] = []
+    target_project_refs_from_context: list[str] = []
+    earth_sweep_refs_from_context: list[str] = []
+    recommendation_refs: list[str] = []
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        processing_behavior = {}
+    else:
+        required_processing = {
+            "strategy",
+            "reasoning_mode",
+            "strict_evidence_discipline",
+            "heuristic_summarization_only",
+            "context_inputs",
+            "context_usage",
+            "recommendation",
+            "summary",
+        }
+        processing_keys = set(processing_behavior.keys())
+        missing_processing = sorted(required_processing - processing_keys)
+        if missing_processing:
+            errors.append(f"processing_behavior missing keys: {missing_processing}")
+        unexpected_processing = sorted(processing_keys - required_processing)
+        if unexpected_processing:
+            errors.append(f"processing_behavior unexpected keys: {unexpected_processing}")
+        if processing_behavior.get("strategy") != REQ_037_STRATEGY:
+            errors.append(f"processing_behavior.strategy must be {REQ_037_STRATEGY}")
+        if processing_behavior.get("reasoning_mode") != EXECUTION_MODE:
+            errors.append(f"processing_behavior.reasoning_mode must be {EXECUTION_MODE}")
+        if processing_behavior.get("strict_evidence_discipline") is not True:
+            errors.append("processing_behavior.strict_evidence_discipline must be true")
+        if processing_behavior.get("heuristic_summarization_only") is not False:
+            errors.append("processing_behavior.heuristic_summarization_only must be false")
+        if not _as_text(processing_behavior.get("summary")):
+            errors.append("processing_behavior.summary must be a non-empty string")
+
+        context_inputs = processing_behavior.get("context_inputs")
+        if not isinstance(context_inputs, Mapping):
+            errors.append("processing_behavior.context_inputs must be an object")
+            context_inputs = {}
+        target_project = context_inputs.get("target_project")
+        if not isinstance(target_project, Mapping):
+            errors.append("processing_behavior.context_inputs.target_project must be an object")
+        else:
+            if target_project.get("project_root") != entrypoint.get("target_project_root"):
+                errors.append(
+                    "processing_behavior.context_inputs.target_project.project_root must match entrypoint.target_project_root"
+                )
+            try:
+                target_project_refs_from_context = _normalize_string_list(
+                    target_project.get("evidence_refs"),
+                    field_name="processing_behavior.context_inputs.target_project.evidence_refs",
+                )
+            except ValueError:
+                errors.append("processing_behavior.context_inputs.target_project.evidence_refs must be a list")
+
+        earth_sweep = context_inputs.get("earth_sweep")
+        if not isinstance(earth_sweep, Mapping):
+            errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+        else:
+            if earth_sweep.get("earth_root") != entrypoint.get("earth_root"):
+                errors.append("processing_behavior.context_inputs.earth_sweep.earth_root must match entrypoint.earth_root")
+            try:
+                earth_sweep_refs_from_context = _normalize_string_list(
+                    earth_sweep.get("evidence_refs"),
+                    field_name="processing_behavior.context_inputs.earth_sweep.evidence_refs",
+                )
+            except ValueError:
+                errors.append("processing_behavior.context_inputs.earth_sweep.evidence_refs must be a list")
+
+        try:
+            normalized_cross_project_context = _normalize_cross_project_context(context_inputs.get("cross_project_context"))
+        except ValueError as exc:
+            errors.append(str(exc).replace("cross_project_context", "processing_behavior.context_inputs.cross_project_context"))
+        try:
+            normalized_recommendation_drafts = _normalize_req_037_recommendation_drafts(
+                context_inputs.get("recommendation_drafts")
+            )
+        except ValueError as exc:
+            errors.append(str(exc).replace("recommendation_drafts", "processing_behavior.context_inputs.recommendation_drafts"))
+
+        context_usage = processing_behavior.get("context_usage")
+        if not isinstance(context_usage, Mapping):
+            errors.append("processing_behavior.context_usage must be an object")
+        else:
+            required_usage = {
+                "target_project_context_used",
+                "earth_sweep_context_used",
+                "cross_project_context_used",
+                "target_project_refs_used",
+                "earth_sweep_refs_used",
+                "cross_project_refs_used",
+                "cross_project_projects_considered",
+                "evidence_refs_used",
+            }
+            usage_keys = set(context_usage.keys())
+            missing_usage = sorted(required_usage - usage_keys)
+            if missing_usage:
+                errors.append(f"processing_behavior.context_usage missing keys: {missing_usage}")
+            unexpected_usage = sorted(usage_keys - required_usage)
+            if unexpected_usage:
+                errors.append(f"processing_behavior.context_usage unexpected keys: {unexpected_usage}")
+            if context_usage.get("target_project_context_used") != bool(target_project_refs_from_context):
+                errors.append("processing_behavior.context_usage.target_project_context_used is inconsistent")
+            if context_usage.get("earth_sweep_context_used") != bool(earth_sweep_refs_from_context):
+                errors.append("processing_behavior.context_usage.earth_sweep_context_used is inconsistent")
+            if context_usage.get("cross_project_context_used") != bool(normalized_cross_project_context):
+                errors.append("processing_behavior.context_usage.cross_project_context_used is inconsistent")
+            if context_usage.get("target_project_refs_used") != target_project_refs_from_context:
+                errors.append("processing_behavior.context_usage.target_project_refs_used must mirror context inputs")
+            if context_usage.get("earth_sweep_refs_used") != earth_sweep_refs_from_context:
+                errors.append("processing_behavior.context_usage.earth_sweep_refs_used must mirror context inputs")
+            expected_cross_project_refs = _collect_unique_refs(
+                *[row["evidence_refs"] for row in normalized_cross_project_context]
+            )
+            if context_usage.get("cross_project_refs_used") != expected_cross_project_refs:
+                errors.append("processing_behavior.context_usage.cross_project_refs_used must mirror context inputs")
+            if context_usage.get("cross_project_projects_considered") != [
+                row["project_id"] for row in normalized_cross_project_context
+            ]:
+                errors.append(
+                    "processing_behavior.context_usage.cross_project_projects_considered must mirror normalized context"
+                )
+
+        recommendation = processing_behavior.get("recommendation")
+        if not isinstance(recommendation, Mapping):
+            errors.append("processing_behavior.recommendation must be an object")
+        else:
+            required_recommendation = {
+                "decision",
+                "rationale",
+                "confidence",
+                "evidence_refs",
+                "merged_recommendations",
+                "cross_project_obligations",
+                "open_risks",
+            }
+            recommendation_keys = set(recommendation.keys())
+            missing_recommendation = sorted(required_recommendation - recommendation_keys)
+            if missing_recommendation:
+                errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+            unexpected_recommendation = sorted(recommendation_keys - required_recommendation)
+            if unexpected_recommendation:
+                errors.append(f"processing_behavior.recommendation unexpected keys: {unexpected_recommendation}")
+            if not _as_text(recommendation.get("decision")):
+                errors.append("processing_behavior.recommendation.decision must be non-empty")
+            if not _as_text(recommendation.get("rationale")):
+                errors.append("processing_behavior.recommendation.rationale must be non-empty")
+            if _as_text(recommendation.get("confidence")) not in {"low", "medium", "high"}:
+                errors.append("processing_behavior.recommendation.confidence must be low|medium|high")
+            recommendation_refs_value = recommendation.get("evidence_refs")
+            if not isinstance(recommendation_refs_value, list) or not recommendation_refs_value:
+                errors.append("processing_behavior.recommendation.evidence_refs must be a non-empty list")
+            else:
+                recommendation_refs = sorted({_as_text(ref) for ref in recommendation_refs_value if _as_text(ref)})
+                if recommendation_refs_value != recommendation_refs:
+                    errors.append("processing_behavior.recommendation.evidence_refs must be sorted and unique")
+            if recommendation.get("merged_recommendations") != merged_recommendations:
+                errors.append("processing_behavior.recommendation.merged_recommendations must mirror top-level merged_recommendations")
+
+            obligations = recommendation.get("cross_project_obligations")
+            if not isinstance(obligations, list):
+                errors.append("processing_behavior.recommendation.cross_project_obligations must be a list")
+                obligations = []
+            for index, row in enumerate(obligations):
+                if not isinstance(row, Mapping):
+                    errors.append(f"processing_behavior.recommendation.cross_project_obligations[{index}] must be an object")
+                    continue
+                evidence_refs = row.get("evidence_refs")
+                if not isinstance(evidence_refs, list) or not evidence_refs:
+                    errors.append(
+                        f"processing_behavior.recommendation.cross_project_obligations[{index}].evidence_refs must be non-empty list"
+                    )
+                    continue
+                if not any(_is_earth_evidence_ref(_as_text(ref)) for ref in evidence_refs):
+                    errors.append(
+                        f"processing_behavior.recommendation.cross_project_obligations[{index}] must include earth_sweep evidence refs"
+                    )
+
+            open_risks = recommendation.get("open_risks")
+            if not isinstance(open_risks, list):
+                errors.append("processing_behavior.recommendation.open_risks must be a list")
+                open_risks = []
+            for index, row in enumerate(open_risks):
+                if not isinstance(row, Mapping):
+                    errors.append(f"processing_behavior.recommendation.open_risks[{index}] must be an object")
+                    continue
+                if not _as_text(row.get("risk_id")):
+                    errors.append(f"processing_behavior.recommendation.open_risks[{index}].risk_id must be non-empty")
+                if not _as_text(row.get("summary")):
+                    errors.append(f"processing_behavior.recommendation.open_risks[{index}].summary must be non-empty")
+                if not _as_text(row.get("reason_code")):
+                    errors.append(f"processing_behavior.recommendation.open_risks[{index}].reason_code must be non-empty")
+                required_evidence_refs = row.get("required_evidence_refs")
+                if not isinstance(required_evidence_refs, list) or not required_evidence_refs:
+                    errors.append(
+                        f"processing_behavior.recommendation.open_risks[{index}].required_evidence_refs must be non-empty list"
+                    )
+
+            expected_recommendation_refs = _collect_unique_refs(
+                target_project_refs_from_context,
+                earth_sweep_refs_from_context,
+                *[row["evidence_refs"] for row in normalized_cross_project_context],
+                *[
+                    row["evidence_refs"]
+                    for row in merged_recommendations
+                    if isinstance(row, Mapping) and isinstance(row.get("evidence_refs"), list)
+                ],
+                *[
+                    row["evidence_refs"]
+                    for row in obligations
+                    if isinstance(row, Mapping) and isinstance(row.get("evidence_refs"), list)
+                ],
+                *[
+                    row["required_evidence_refs"]
+                    for row in open_risks
+                    if isinstance(row, Mapping) and isinstance(row.get("required_evidence_refs"), list)
+                ],
+            )
+            if recommendation_refs and recommendation_refs != expected_recommendation_refs:
+                errors.append("processing_behavior.recommendation.evidence_refs must equal the deterministic evidence union")
+            if isinstance(context_usage, Mapping) and context_usage.get("evidence_refs_used") != recommendation_refs:
+                errors.append("processing_behavior.context_usage.evidence_refs_used must mirror recommendation.evidence_refs")
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        metadata = {}
+    else:
+        required_metadata = {
+            "reproducibility",
+            "canonical_input_sha256",
+            "reproducible_call_id",
+            "canonical_input",
+            "processing_input_sha256",
+            "processing_call_id",
+            "canonical_processing_input",
+        }
+        metadata_keys = set(metadata.keys())
+        missing_metadata = sorted(required_metadata - metadata_keys)
+        if missing_metadata:
+            errors.append(f"call_metadata missing keys: {missing_metadata}")
+        unexpected_metadata = sorted(metadata_keys - required_metadata)
+        if unexpected_metadata:
+            errors.append(f"call_metadata unexpected keys: {unexpected_metadata}")
+        if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+            errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+        canonical_input = metadata.get("canonical_input")
+        if not isinstance(canonical_input, Mapping):
+            errors.append("call_metadata.canonical_input must be an object")
+        else:
+            expected_canonical_input = _canonical_req_037_input(
+                target_project_root=_as_text(entrypoint.get("target_project_root")),
+                earth_root=_as_text(entrypoint.get("earth_root")),
+                output_root=_as_text(entrypoint.get("output_root")),
+                revision_identity=_as_text(entrypoint.get("revision_identity")),
+                merged_at=_as_text(payload.get("merged_at")),
+            )
+            if dict(canonical_input) != expected_canonical_input:
+                errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+            expected_input_sha = _canonical_digest(expected_canonical_input)
+            if metadata.get("canonical_input_sha256") != expected_input_sha:
+                errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+            if metadata.get("reproducible_call_id") != f"req037-{expected_input_sha[:16]}":
+                errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+        canonical_processing_input = metadata.get("canonical_processing_input")
+        if not isinstance(canonical_processing_input, Mapping):
+            errors.append("call_metadata.canonical_processing_input must be an object")
+        else:
+            expected_processing_input = _canonical_req_037_processing_input(
+                target_project_evidence_refs=target_project_refs_from_context,
+                earth_sweep_evidence_refs=earth_sweep_refs_from_context,
+                cross_project_context=normalized_cross_project_context,
+                recommendation_drafts=normalized_recommendation_drafts,
+            )
+            if dict(canonical_processing_input) != expected_processing_input:
+                errors.append("call_metadata.canonical_processing_input must mirror processing inputs")
+            expected_processing_sha = _canonical_digest(expected_processing_input)
+            if metadata.get("processing_input_sha256") != expected_processing_sha:
+                errors.append("call_metadata.processing_input_sha256 does not match processing input")
+            if metadata.get("processing_call_id") != f"req037-processing-{expected_processing_sha[:16]}":
+                errors.append("call_metadata.processing_call_id does not match processing digest")
 
     return errors
 
