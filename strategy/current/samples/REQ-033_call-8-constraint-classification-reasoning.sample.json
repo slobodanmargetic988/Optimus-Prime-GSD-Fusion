@@ -104,7 +104,8 @@
             "reports/earth/sweeps/2026-03-16/shared-observability.json"
           ]
         }
-      ]
+      ],
+      "strategic_claims": []
     },
     "context_usage": {
       "target_project_context_used": true,
@@ -211,6 +212,7 @@
         "classification_is_explicit": true,
         "hard_constraints": [
           {
+            "recommendation_id": "rec-call-8-constraint-no-new-managers",
             "candidate_id": "constraint.no-new-managers",
             "summary": "Do not introduce new managers or orchestration gates while promoting Call-8 strategy output.",
             "planner_implication": "Plan only within existing packet sections, execution surfaces, and deterministic validation paths.",
@@ -223,6 +225,7 @@
             ]
           },
           {
+            "recommendation_id": "rec-call-8-constraint-trace-citations-required",
             "candidate_id": "constraint.trace-citations-required",
             "summary": "Planner-consumable strategy output must preserve citation-complete evidence refs and replay-stable source traces.",
             "planner_implication": "Every planned task that references strategy must keep evidence refs and source output refs attached.",
@@ -238,6 +241,7 @@
         ],
         "soft_preferences": [
           {
+            "recommendation_id": "rec-call-8-preference-fallback-aware-ordering",
             "candidate_id": "preference.fallback-aware-ordering",
             "summary": "Prefer sequencing planner tasks so fallback-backed mitigation lands before escalation-specific follow-up.",
             "planner_implication": "Bias the task graph toward mitigation work before escalation-only branches when both remain valid.",
@@ -252,6 +256,7 @@
         ],
         "speculative_ideas": [
           {
+            "recommendation_id": "rec-call-8-idea-shared-constraint-summary",
             "candidate_id": "idea.shared-constraint-summary",
             "summary": "A shared constraint summary artifact could be published after planner output stabilizes.",
             "planner_implication": "Track as an optional follow-on only after hard constraints and soft preferences are already satisfied.",
@@ -284,8 +289,8 @@
       "strategy_goal": "Classify Call-8 strategy outputs into planner-safe constraints, preferences, and ideas.",
       "call_sequence": 8
     },
-    "processing_input_sha256": "0174de1cc96def84d916df801eaf0e3e4584cb795bbcf07048d0026145ce360a",
-    "processing_call_id": "req033-processing-0174de1cc96def84",
+    "processing_input_sha256": "788383a8b51bcfce219692b4b84d2e2a35a11dd5921c820d8331e67922353514",
+    "processing_call_id": "req033-processing-788383a8b51bcfce",
     "canonical_processing_input": {
       "required_evidence_refs": [
         "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
@@ -372,17 +377,18 @@
             "reports/earth/sweeps/2026-03-16/shared-observability.json"
           ]
         }
-      ]
+      ],
+      "strategic_claims": []
     },
     "llm_call_trace_schema_version": "req-025.llm-call-trace-row.v1",
     "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
-    "llm_call_trace_sha256": "681430153374a88e4823a215fcd22836dbbd497033944df810a4fa3fc63f5471",
+    "llm_call_trace_sha256": "58890fdc12e66e1d88a645520359164cd5b5f91c30580a587bbc45aa0a5042ac",
     "llm_call_trace_rows": [
       {
         "schema_version": "req-025.llm-call-trace-row.v1",
         "requirement_id": "REQ-033",
-        "plan_id": "req033-plan-0174de1cc96def84",
-        "processing_call_id": "req033-processing-0174de1cc96def84",
+        "plan_id": "req033-plan-788383a8b51bcfce",
+        "processing_call_id": "req033-processing-788383a8b51bcfce",
         "call_id": "req033-call-08-b50cbec6c6",
         "sequence": 8,
         "call_objective": "Classify Call-8 strategy outputs into hard constraints, soft preferences, and speculative ideas without conflating planner obligations and suggestions.",
@@ -398,13 +404,13 @@
           "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/fallback_sequence"
         ],
         "output_refs": [
-          "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning",
-          "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_hard_constraints",
-          "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_soft_preferences",
-          "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_speculative_ideas",
-          "req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_planner_contract"
+          "req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning",
+          "req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_hard_constraints",
+          "req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_soft_preferences",
+          "req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_speculative_ideas",
+          "req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_planner_contract"
         ],
-        "handoff_summary": "Call 8 hands off call_8_constraint_classification_reasoning via req033-plan-0174de1cc96def84::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning with explicit bucket outputs for hard constraints, soft preferences, speculative ideas, and planner contract reuse after classifying 2 hard constraint(s), 1 soft preference(s), and 1 speculative idea(s)."
+        "handoff_summary": "Call 8 hands off call_8_constraint_classification_reasoning via req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning with explicit bucket outputs for hard constraints, soft preferences, speculative ideas, and planner contract reuse after classifying 2 hard constraint(s), 1 soft preference(s), and 1 speculative idea(s)."
       }
     ]
   }

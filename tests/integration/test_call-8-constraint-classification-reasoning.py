@@ -80,6 +80,7 @@ def test_req_033_integration_emits_explicit_classification_groups_and_traceable_
     assert len(planner_contract["speculative_ideas"]) == 1
     for key in ("hard_constraints", "soft_preferences", "speculative_ideas"):
         for row in planner_contract[key]:
+            assert row["recommendation_id"].startswith("rec-call-8-")
             assert row["candidate_id"]
             assert row["summary"]
             assert row["planner_implication"]

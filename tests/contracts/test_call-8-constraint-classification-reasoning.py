@@ -49,6 +49,10 @@ def test_req_033_sample_payload_is_valid_and_explicitly_grouped_for_planner() ->
     assert len(recommendation["planner_contract"]["hard_constraints"]) == 2
     assert len(recommendation["planner_contract"]["soft_preferences"]) == 1
     assert len(recommendation["planner_contract"]["speculative_ideas"]) == 1
+    for key in ("hard_constraints", "soft_preferences", "speculative_ideas"):
+        for row in recommendation["planner_contract"][key]:
+            assert row["recommendation_id"].startswith("rec-call-8-")
+            assert row["candidate_id"]
     assert recommendation["open_risks"] == []
     assert sample["call_metadata"]["llm_call_trace_path"] == module.LLM_CALL_TRACE_RELATIVE_PATH
     assert sample["call_metadata"]["llm_call_trace_rows"][0]["call_objective"] == module.REQ_033_TRACE_CALL_OBJECTIVE
@@ -74,6 +78,7 @@ def test_req_033_contract_doc_includes_sample_structure_reference() -> None:
         "hard_constraints",
         "soft_preferences",
         "speculative_ideas",
+        "recommendation_id",
         "open_risks",
         "call_metadata",
         "canonical_input_sha256",

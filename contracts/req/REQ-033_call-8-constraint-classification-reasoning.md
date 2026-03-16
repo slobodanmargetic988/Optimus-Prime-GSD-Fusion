@@ -42,6 +42,7 @@ The builder expects:
   - `target_project_evidence_refs[]`
   - `earth_sweep_evidence_refs[]`
   - `cross_project_context[]`
+  - `strategic_claims[]`
 
 Each `constraint_candidates[]` row must include:
 
@@ -57,6 +58,8 @@ Behavior guarantees:
 
 - Classification is explicit and emitted under separate planner-consumable arrays for `hard_constraints`, `soft_preferences`, and `speculative_ideas`.
 - The same source output ref cannot be cleanly promoted into multiple classification buckets without surfacing an `open_risks[]` collision.
+- Cross-call contradiction between analysis and synthesis outputs must emit deterministic `cross_call_contradiction` reason codes with actionable evidence refs.
+- Uncited strategic claims must emit deterministic `uncited_strategic_claim` reason codes so planner promotion stays citation-disciplined.
 - Evidence refs and source output refs remain attached to every classified row so planner can preserve provenance.
 
 ## Output contract
@@ -98,6 +101,7 @@ Top-level required keys:
 - `earth_sweep`
 - `cross_project_context[]` under key `cross_project_context`
 - `constraint_candidates[]` under key `constraint_candidates`
+- `strategic_claims[]` under key `strategic_claims`
 
 `context_usage` required keys:
 
@@ -147,6 +151,7 @@ Each `classification_reasoning[]` row must include:
 
 Each classified row under `hard_constraints[]`, `soft_preferences[]`, and `speculative_ideas[]` carries:
 
+- `recommendation_id`
 - `candidate_id`
 - `summary`
 - `planner_implication`
