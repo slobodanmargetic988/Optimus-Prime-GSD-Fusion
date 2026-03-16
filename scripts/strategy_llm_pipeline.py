@@ -3308,6 +3308,8 @@ def _req_032_recommendation_decision(
     reason_codes = {_as_text(row.get("reason_code")) for row in open_risks}
     if {"cross_call_contradiction", "uncited_strategic_claim"}.intersection(reason_codes):
         return "resolve-strategy-gaps"
+    if open_risks:
+        return "resolve-context-gaps"
     if fallback_sequence and escalation_triggers:
         return "fallback-then-escalate"
     if escalation_triggers:
@@ -3534,6 +3536,38 @@ def _build_req_032_processing_behavior(
             }
             for fallback in blocker["fallback_paths"]
         ]
+        invalid_escalation_trigger_ids: set[str] = set()
+        for trigger in escalation_triggers:
+            project_context = context_by_project.get(trigger["project_id"])
+            if project_context is None:
+                invalid_escalation_trigger_ids.add(trigger["trigger_id"])
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{blocker['blocker_id']}-{trigger['trigger_id']}-context",
+                        "summary": trigger["summary"],
+                        "reason_code": "missing_escalation_project_context",
+                        "affected_project_ids": [trigger["project_id"]],
+                        "required_evidence_refs": _collect_unique_refs(
+                            blocker["evidence_refs"],
+                            trigger["evidence_refs"],
+                        ),
+                    }
+                )
+                continue
+            if not project_context["evidence_refs"]:
+                invalid_escalation_trigger_ids.add(trigger["trigger_id"])
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{blocker['blocker_id']}-{trigger['trigger_id']}-context-evidence",
+                        "summary": trigger["summary"],
+                        "reason_code": "missing_escalation_project_context_evidence_refs",
+                        "affected_project_ids": [trigger["project_id"]],
+                        "required_evidence_refs": _collect_unique_refs(
+                            blocker["evidence_refs"],
+                            trigger["evidence_refs"],
+                        ),
+                    }
+                )
 
         promoted_trigger_count = 0
         for policy in applicable_policies:
@@ -3559,6 +3593,8 @@ def _build_req_032_processing_behavior(
                     }
             if should_promote_triggers:
                 for trigger in escalation_triggers:
+                    if trigger["trigger_id"] in invalid_escalation_trigger_ids:
+                        continue
                     if trigger["trigger_id"] not in set(policy["escalation_trigger_ids"]):
                         continue
                     key = (blocker["blocker_id"], policy["policy_id"], trigger["trigger_id"])
