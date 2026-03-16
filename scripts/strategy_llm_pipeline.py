@@ -33,6 +33,7 @@ REQ_029_PROCESSING_STRATEGY = "call-4-recommendation-synthesis"
 REQ_029_REASONING_MODE = "deterministic-recommendation-synthesis"
 REQ_029_CALL_ID = "call-4"
 REQ_029_ALLOWED_SOURCE_CALL_IDS = ("call-1", "call-2", "call-3")
+REQ_029_ALLOWED_RECOMMENDATION_SCOPES = {"local", "cross-project"}
 REQ_029_RECOMMENDATION_ID_SCHEMA = "rec-call-4-{source_call_id}-{candidate_id}"
 REQ_029_REQUIRED_DRAFT_FIELDS = [
     "recommendation_id",
@@ -2730,6 +2731,22 @@ def _req_029_normalize_candidate_recommendations(
         if candidate_id in seen_candidate_ids:
             raise Req029Error(f"{field_name}[{index}].candidate_id must be unique within {source_call_id}")
         seen_candidate_ids.add(candidate_id)
+        recommendation_scope = _as_text(row.get("recommendation_scope")).lower() or "local"
+        if recommendation_scope not in REQ_029_ALLOWED_RECOMMENDATION_SCOPES:
+            raise Req029Error(
+                f"{field_name}[{index}].recommendation_scope must be one of "
+                f"{sorted(REQ_029_ALLOWED_RECOMMENDATION_SCOPES)}"
+            )
+        project_id = _as_text(row.get("project_id"))
+        if recommendation_scope == "cross-project":
+            project_id = _require_text(project_id, field_name=f"{field_name}[{index}].project_id")
+        else:
+            project_id = ""
+        requires_earth_evidence = row.get("requires_earth_evidence")
+        if requires_earth_evidence is None:
+            requires_earth_evidence = recommendation_scope == "cross-project"
+        if not isinstance(requires_earth_evidence, bool):
+            raise Req029Error(f"{field_name}[{index}].requires_earth_evidence must be a boolean")
         normalized.append(
             {
                 "recommendation_id": _req_029_build_recommendation_id(
@@ -2743,6 +2760,9 @@ def _req_029_normalize_candidate_recommendations(
                 "rationale": _require_text(row.get("rationale"), field_name=f"{field_name}[{index}].rationale"),
                 "impact": _require_text(row.get("impact"), field_name=f"{field_name}[{index}].impact"),
                 "risk": _require_text(row.get("risk"), field_name=f"{field_name}[{index}].risk"),
+                "recommendation_scope": recommendation_scope,
+                "project_id": project_id,
+                "requires_earth_evidence": requires_earth_evidence,
                 "evidence_refs": _normalize_string_list(
                     row.get("evidence_refs"),
                     field_name=f"{field_name}[{index}].evidence_refs",
@@ -2760,7 +2780,7 @@ def _req_029_normalize_earlier_call_outputs(
     value: Any,
     *,
     field_name: str,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     if value is None:
         raise Req029Error(f"{field_name} must be a non-empty array")
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
@@ -2768,6 +2788,7 @@ def _req_029_normalize_earlier_call_outputs(
 
     normalized_outputs: list[dict[str, Any]] = []
     recommendation_drafts: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
     seen_call_ids: set[str] = set()
     seen_recommendation_ids: set[str] = set()
     for index, raw_row in enumerate(value):
@@ -2793,10 +2814,38 @@ def _req_029_normalize_earlier_call_outputs(
         )
         for draft in candidate_recommendations:
             recommendation_id = str(draft["recommendation_id"])
+            if draft["recommendation_scope"] == "cross-project" and draft["requires_earth_evidence"]:
+                earth_evidence_refs = [ref for ref in draft["evidence_refs"] if _is_earth_evidence_ref(ref)]
+                if not earth_evidence_refs:
+                    open_risks.append(
+                        {
+                            "risk_id": f"risk-{recommendation_id}",
+                            "source_call_id": draft["source_call_id"],
+                            "source_output_ref": draft["source_output_ref"],
+                            "source_candidate_id": draft["source_candidate_id"],
+                            "project_id": draft["project_id"],
+                            "summary": draft["summary"],
+                            "reason_code": "missing_earth_sweep_evidence_refs",
+                            "required_evidence_refs": list(draft["evidence_refs"]),
+                        }
+                    )
+                    continue
             if recommendation_id in seen_recommendation_ids:
                 raise Req029Error(f"{field_name}[{index}] produces duplicate recommendation_id {recommendation_id}")
             seen_recommendation_ids.add(recommendation_id)
-            recommendation_drafts.append(dict(draft))
+            recommendation_drafts.append(
+                {
+                    "recommendation_id": recommendation_id,
+                    "source_call_id": draft["source_call_id"],
+                    "source_output_ref": draft["source_output_ref"],
+                    "source_candidate_id": draft["source_candidate_id"],
+                    "summary": draft["summary"],
+                    "rationale": draft["rationale"],
+                    "impact": draft["impact"],
+                    "risk": draft["risk"],
+                    "evidence_refs": list(draft["evidence_refs"]),
+                }
+            )
         normalized_outputs.append(
             {
                 "call_id": source_call_id,
@@ -2810,7 +2859,8 @@ def _req_029_normalize_earlier_call_outputs(
         raise Req029Error(f"{field_name} must contain at least 1 item(s)")
     normalized_outputs.sort(key=lambda row: row["call_id"])
     recommendation_drafts.sort(key=lambda row: row["recommendation_id"])
-    return normalized_outputs, recommendation_drafts
+    open_risks.sort(key=lambda row: row["risk_id"])
+    return normalized_outputs, recommendation_drafts, open_risks
 
 
 def _req_029_canonical_input(
@@ -2840,6 +2890,9 @@ def _req_029_canonical_input(
                         "rationale": draft["rationale"],
                         "impact": draft["impact"],
                         "risk": draft["risk"],
+                        "recommendation_scope": draft["recommendation_scope"],
+                        "project_id": draft["project_id"],
+                        "requires_earth_evidence": draft["requires_earth_evidence"],
                         "evidence_refs": list(draft["evidence_refs"]),
                     }
                     for draft in row["candidate_recommendations"]
@@ -2859,6 +2912,7 @@ def _build_req_029_llm_call_trace_rows(
     processing_call_id: str,
     earlier_call_outputs: Sequence[Mapping[str, Any]],
     recommendation_drafts: Sequence[Mapping[str, Any]],
+    open_risks: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     input_refs = _collect_unique_refs(
         [row["output_ref"] for row in earlier_call_outputs],
@@ -2866,6 +2920,11 @@ def _build_req_029_llm_call_trace_rows(
             ref
             for row in recommendation_drafts
             for ref in row.get("evidence_refs", [])
+        ],
+        [
+            ref
+            for row in open_risks
+            for ref in row.get("required_evidence_refs", [])
         ],
     )
     output_ref = _req_029_trace_output_ref()
@@ -2905,7 +2964,7 @@ def build_req_029_call_4_recommendation_synthesis(
     project = _require_mapping(target_project, field_name="target_project")
     project_id = _require_text(project.get("project_id"), field_name="target_project.project_id")
     normalized_checked_at_utc = _require_text(checked_at_utc or utc_now_iso(), field_name="checked_at_utc")
-    normalized_outputs, recommendation_drafts = _req_029_normalize_earlier_call_outputs(
+    normalized_outputs, recommendation_drafts, open_risks = _req_029_normalize_earlier_call_outputs(
         earlier_call_outputs,
         field_name="earlier_call_outputs",
     )
@@ -2920,10 +2979,22 @@ def build_req_029_call_4_recommendation_synthesis(
         processing_call_id=processing_call_id,
         earlier_call_outputs=normalized_outputs,
         recommendation_drafts=recommendation_drafts,
+        open_risks=open_risks,
     )
     llm_call_trace_sha = _canonical_digest(llm_call_trace_rows)
     unique_evidence_refs = _collect_unique_refs(
         [ref for draft in recommendation_drafts for ref in draft["evidence_refs"]],
+        [ref for row in open_risks for ref in row["required_evidence_refs"]],
+    )
+    earth_sweep_evidence_refs_used = [ref for ref in unique_evidence_refs if _is_earth_evidence_ref(ref)]
+    target_project_evidence_refs_used = [ref for ref in unique_evidence_refs if not _is_earth_evidence_ref(ref)]
+    cross_project_project_ids_used = sorted(
+        {
+            str(candidate["project_id"])
+            for output in normalized_outputs
+            for candidate in output["candidate_recommendations"]
+            if candidate["recommendation_scope"] == "cross-project" and _as_text(candidate["project_id"])
+        }
     )
 
     return {
@@ -2941,10 +3012,12 @@ def build_req_029_call_4_recommendation_synthesis(
             },
             "source_calls": [row["call_id"] for row in normalized_outputs],
             "recommendation_drafts": recommendation_drafts,
+            "open_risks": open_risks,
             "summary": {
                 "source_call_count": len(normalized_outputs),
-                "candidate_recommendation_count": len(recommendation_drafts),
+                "candidate_recommendation_count": len(recommendation_drafts) + len(open_risks),
                 "draft_count": len(recommendation_drafts),
+                "open_risk_count": len(open_risks),
             },
         },
         "processing_behavior": {
@@ -2954,6 +3027,20 @@ def build_req_029_call_4_recommendation_synthesis(
             "context_inputs": {
                 "earlier_call_outputs": normalized_outputs,
             },
+            "context_usage": {
+                "earlier_call_outputs_used": bool(normalized_outputs),
+                "source_call_ids_used": [row["call_id"] for row in normalized_outputs],
+                "source_output_refs_used": [row["output_ref"] for row in normalized_outputs],
+                "cross_project_context_used": bool(cross_project_project_ids_used),
+                "cross_project_project_ids_used": cross_project_project_ids_used,
+                "earth_sweep_evidence_refs_used": earth_sweep_evidence_refs_used,
+                "target_project_evidence_refs_used": target_project_evidence_refs_used,
+                "evidence_refs_used": unique_evidence_refs,
+                "recommendation_ids_emitted": [
+                    row["recommendation_id"] for row in recommendation_drafts
+                ],
+                "open_risk_ids_emitted": [row["risk_id"] for row in open_risks],
+            },
             "synthesis_rules": {
                 "recommendation_id_schema": REQ_029_RECOMMENDATION_ID_SCHEMA,
                 "required_draft_fields": list(REQ_029_REQUIRED_DRAFT_FIELDS),
@@ -2962,7 +3049,9 @@ def build_req_029_call_4_recommendation_synthesis(
         },
         "source": {
             "earlier_call_output_count": len(normalized_outputs),
-            "candidate_recommendation_count": len(recommendation_drafts),
+            "candidate_recommendation_count": len(recommendation_drafts) + len(open_risks),
+            "draft_count": len(recommendation_drafts),
+            "open_risk_count": len(open_risks),
             "evidence_ref_count": len(unique_evidence_refs),
         },
         "call_metadata": {
@@ -3073,14 +3162,50 @@ def validate_req_029_call_4_recommendation_synthesis(payload: Mapping[str, Any])
                 f"recommendation_synthesis.recommendation_drafts[{index}].evidence_refs must be a non-empty string array"
             )
 
+    open_risks = recommendation_synthesis.get("open_risks")
+    if not isinstance(open_risks, list):
+        errors.append("recommendation_synthesis.open_risks must be an array")
+        open_risks = []
+    seen_risk_ids: set[str] = set()
+    for index, raw_row in enumerate(open_risks):
+        if not isinstance(raw_row, Mapping):
+            errors.append(f"recommendation_synthesis.open_risks[{index}] must be an object")
+            continue
+        risk_id = _as_text(raw_row.get("risk_id"))
+        if not risk_id:
+            errors.append(f"recommendation_synthesis.open_risks[{index}].risk_id is required")
+        elif risk_id in seen_risk_ids:
+            errors.append(f"recommendation_synthesis.open_risks[{index}].risk_id duplicates {risk_id}")
+        else:
+            seen_risk_ids.add(risk_id)
+        if _as_text(raw_row.get("reason_code")) != "missing_earth_sweep_evidence_refs":
+            errors.append(
+                "recommendation_synthesis.open_risks"
+                f"[{index}].reason_code must be missing_earth_sweep_evidence_refs"
+            )
+        for key in ("source_call_id", "source_output_ref", "source_candidate_id", "project_id", "summary"):
+            if not _as_text(raw_row.get(key)):
+                errors.append(f"recommendation_synthesis.open_risks[{index}].{key} is required")
+        required_evidence_refs = raw_row.get("required_evidence_refs")
+        if (
+            not isinstance(required_evidence_refs, list)
+            or not required_evidence_refs
+            or any(not _as_text(item) for item in required_evidence_refs)
+        ):
+            errors.append(
+                "recommendation_synthesis.open_risks"
+                f"[{index}].required_evidence_refs must be a non-empty string array"
+            )
+
     summary = recommendation_synthesis.get("summary")
     if not isinstance(summary, Mapping):
         errors.append("recommendation_synthesis.summary must be an object")
     else:
         expected_counts = {
             "source_call_count": len(source_calls),
-            "candidate_recommendation_count": len(recommendation_drafts),
+            "candidate_recommendation_count": len(recommendation_drafts) + len(open_risks),
             "draft_count": len(recommendation_drafts),
+            "open_risk_count": len(open_risks),
         }
         for key, expected_value in expected_counts.items():
             actual_value = summary.get(key)
@@ -3131,6 +3256,39 @@ def validate_req_029_call_4_recommendation_synthesis(payload: Mapping[str, Any])
                 "must be a non-empty array"
             )
 
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+        context_usage = {}
+    else:
+        if not isinstance(context_usage.get("earlier_call_outputs_used"), bool):
+            errors.append("processing_behavior.context_usage.earlier_call_outputs_used must be a boolean")
+        if not isinstance(context_usage.get("cross_project_context_used"), bool):
+            errors.append("processing_behavior.context_usage.cross_project_context_used must be a boolean")
+        for key in (
+            "source_call_ids_used",
+            "source_output_refs_used",
+            "cross_project_project_ids_used",
+            "earth_sweep_evidence_refs_used",
+            "target_project_evidence_refs_used",
+            "evidence_refs_used",
+            "recommendation_ids_emitted",
+            "open_risk_ids_emitted",
+        ):
+            value = context_usage.get(key)
+            if not isinstance(value, list) or any(not _as_text(item) for item in value):
+                errors.append(f"processing_behavior.context_usage.{key} must be a string array")
+        if context_usage.get("source_call_ids_used") != source_calls:
+            errors.append("processing_behavior.context_usage.source_call_ids_used must match source_calls")
+        if context_usage.get("recommendation_ids_emitted") != [
+            row.get("recommendation_id") for row in recommendation_drafts if isinstance(row, Mapping)
+        ]:
+            errors.append("processing_behavior.context_usage.recommendation_ids_emitted must match recommendation_drafts")
+        if context_usage.get("open_risk_ids_emitted") != [
+            row.get("risk_id") for row in open_risks if isinstance(row, Mapping)
+        ]:
+            errors.append("processing_behavior.context_usage.open_risk_ids_emitted must match open_risks")
+
     synthesis_rules = processing_behavior.get("synthesis_rules")
     if not isinstance(synthesis_rules, Mapping):
         errors.append("processing_behavior.synthesis_rules must be an object")
@@ -3151,8 +3309,12 @@ def validate_req_029_call_4_recommendation_synthesis(payload: Mapping[str, Any])
     else:
         if source.get("earlier_call_output_count") != len(earlier_call_outputs):
             errors.append("source.earlier_call_output_count must match earlier_call_outputs length")
-        if source.get("candidate_recommendation_count") != len(recommendation_drafts):
-            errors.append("source.candidate_recommendation_count must match recommendation_drafts length")
+        if source.get("candidate_recommendation_count") != len(recommendation_drafts) + len(open_risks):
+            errors.append("source.candidate_recommendation_count must match drafts plus open_risks length")
+        if source.get("draft_count") != len(recommendation_drafts):
+            errors.append("source.draft_count must match recommendation_drafts length")
+        if source.get("open_risk_count") != len(open_risks):
+            errors.append("source.open_risk_count must match open_risks length")
         evidence_ref_count = source.get("evidence_ref_count")
         if not isinstance(evidence_ref_count, int) or evidence_ref_count <= 0:
             errors.append("source.evidence_ref_count must be a positive integer")

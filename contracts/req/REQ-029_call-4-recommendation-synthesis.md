@@ -96,6 +96,11 @@ Rules:
   - `impact`
   - `risk`
   - non-empty `evidence_refs[]`
+- Candidate rows may optionally include:
+  - `recommendation_scope` = `local|cross-project` with default `local`
+  - `project_id` required when `recommendation_scope` is `cross-project`
+  - `requires_earth_evidence` with default `true` for `cross-project` rows and `false` otherwise
+- Cross-project candidates without Earth-sweep evidence refs are not emitted as drafts; they are recorded in `open_risks[]` with `reason_code = missing_earth_sweep_evidence_refs`.
 
 ## Output contract
 
@@ -118,10 +123,12 @@ Top-level required keys:
 - `target_project.project_id`
 - `source_calls[]`
 - `recommendation_drafts[]`
+- `open_risks[]`
 - `summary`
   - `source_call_count`
   - `candidate_recommendation_count`
   - `draft_count`
+  - `open_risk_count`
 
 `recommendation_drafts[]` row shape:
 
@@ -147,9 +154,11 @@ Normalization rules:
 - `recommendation_id` is synthesized deterministically as `rec-call-4-{source_call_id}-{candidate_id}`.
 - `recommendation_id` values must be unique.
 - Every emitted draft must retain the required `rationale`, `impact`, and `risk` fields.
+- Cross-project candidates requiring Earth evidence must include at least one `reports/earth/...` ref in `evidence_refs[]` or be emitted as open risks instead of drafts.
 - `summary.source_call_count` must equal `len(source_calls)`.
-- `summary.candidate_recommendation_count` must equal `len(recommendation_drafts)`.
+- `summary.candidate_recommendation_count` must equal `len(recommendation_drafts) + len(open_risks)`.
 - `summary.draft_count` must equal `len(recommendation_drafts)`.
+- `summary.open_risk_count` must equal `len(open_risks)`.
 
 `processing_behavior` required sections:
 
@@ -157,6 +166,14 @@ Normalization rules:
 - `reasoning_mode` = `deterministic-recommendation-synthesis`
 - `strict_evidence_discipline` = `true`
 - `context_inputs.earlier_call_outputs[]`
+- `context_usage`
+  - `cross_project_context_used`
+  - `cross_project_project_ids_used`
+  - `earth_sweep_evidence_refs_used`
+  - `target_project_evidence_refs_used`
+  - `evidence_refs_used`
+  - `recommendation_ids_emitted`
+  - `open_risk_ids_emitted`
 - `synthesis_rules`
   - `recommendation_id_schema` = `rec-call-4-{source_call_id}-{candidate_id}`
   - `required_draft_fields`
@@ -166,4 +183,6 @@ Normalization rules:
 
 - `earlier_call_output_count`
 - `candidate_recommendation_count`
+- `draft_count`
+- `open_risk_count`
 - `evidence_ref_count`

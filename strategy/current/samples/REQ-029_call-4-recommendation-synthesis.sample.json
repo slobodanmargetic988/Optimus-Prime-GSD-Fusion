@@ -74,10 +74,12 @@
         ]
       }
     ],
+    "open_risks": [],
     "summary": {
       "source_call_count": 3,
       "candidate_recommendation_count": 4,
-      "draft_count": 4
+      "draft_count": 4,
+      "open_risk_count": 0
     }
   },
   "processing_behavior": {
@@ -100,6 +102,9 @@
               "rationale": "Call-1 marked unresolved planning and runtime unknowns that later calls depend on.",
               "impact": "Keeps downstream execution choices grounded in refreshed planning and verification evidence.",
               "risk": "Skipping the unknown handoff can freeze later calls around stale branch-head assumptions.",
+              "recommendation_scope": "local",
+              "project_id": "",
+              "requires_earth_evidence": false,
               "evidence_refs": [
                 "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
                 "reports/optimus-prime/planning/VERIFICATION.md"
@@ -121,6 +126,9 @@
               "rationale": "Call-2 confirmed this task is scoped to REQ-029 contract artifacts only.",
               "impact": "Protects delivery velocity by preventing unrelated managers or packet sections from entering the work.",
               "risk": "Scope creep would weaken deterministic validation and make branch-head evidence ambiguous.",
+              "recommendation_scope": "local",
+              "project_id": "",
+              "requires_earth_evidence": false,
               "evidence_refs": [
                 "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
                 "scope.md"
@@ -135,6 +143,9 @@
               "rationale": "Call-2 narrowed the main branch-head question to current verification freshness.",
               "impact": "Prevents recommendation drafts from citing stale runtime outcomes.",
               "risk": "Recommendation promotion may drift from the actual branch state if verification is not rerun.",
+              "recommendation_scope": "local",
+              "project_id": "",
+              "requires_earth_evidence": false,
               "evidence_refs": [
                 "reports/optimus-prime/planning/STATE.json",
                 "reports/optimus-prime/planning/VERIFICATION.md"
@@ -156,6 +167,9 @@
               "rationale": "Call-3 preserved the earlier cross-project runtime dependency while keeping the task implementation local to REQ-029 artifacts.",
               "impact": "Lets the final draft note a concrete coordination dependency without inventing a new manager or gate.",
               "risk": "Shared runtime assumptions can drift if the coordination dependency is omitted from the draft set.",
+              "recommendation_scope": "cross-project",
+              "project_id": "runtime-orchestrator",
+              "requires_earth_evidence": true,
               "evidence_refs": [
                 "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
                 "reports/optimus-prime/planning/VERIFICATION.md"
@@ -164,6 +178,46 @@
           ]
         }
       ]
+    },
+    "context_usage": {
+      "earlier_call_outputs_used": true,
+      "source_call_ids_used": [
+        "call-1",
+        "call-2",
+        "call-3"
+      ],
+      "source_output_refs_used": [
+        "REQ-026::call::call-1::output::situational_analysis",
+        "REQ-027::call::call-2::output::constraint_refinement",
+        "REQ-028::call::call-3::output::execution_alignment"
+      ],
+      "cross_project_context_used": true,
+      "cross_project_project_ids_used": [
+        "runtime-orchestrator"
+      ],
+      "earth_sweep_evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+      ],
+      "target_project_evidence_refs_used": [
+        "reports/optimus-prime/planning/STATE.json",
+        "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "scope.md"
+      ],
+      "evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/STATE.json",
+        "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "scope.md"
+      ],
+      "recommendation_ids_emitted": [
+        "rec-call-4-call-1-unknown-resolution",
+        "rec-call-4-call-2-contract-surface-lock",
+        "rec-call-4-call-2-verification-refresh",
+        "rec-call-4-call-3-runtime-coordination"
+      ],
+      "open_risk_ids_emitted": []
     },
     "synthesis_rules": {
       "recommendation_id_schema": "rec-call-4-{source_call_id}-{candidate_id}",
@@ -188,12 +242,14 @@
   "source": {
     "earlier_call_output_count": 3,
     "candidate_recommendation_count": 4,
+    "draft_count": 4,
+    "open_risk_count": 0,
     "evidence_ref_count": 5
   },
   "call_metadata": {
     "reproducibility": "deterministic-input-fingerprint",
-    "canonical_input_sha256": "12e0b9ef351b5b3e943b8dcb751dc2f87ed01a8c3f531b32bf8aee8ecb467094",
-    "reproducible_call_id": "req029-12e0b9ef351b5b3e",
+    "canonical_input_sha256": "27b30d3375f62b2bfbcc3ab4cd6662f63e5f196e0e3684b02705209b9f14406f",
+    "reproducible_call_id": "req029-27b30d3375f62b2b",
     "canonical_input": {
       "requirement_id": "REQ-029",
       "analysis_type": "call_4_recommendation_synthesis",
@@ -215,6 +271,9 @@
               "rationale": "Call-1 marked unresolved planning and runtime unknowns that later calls depend on.",
               "impact": "Keeps downstream execution choices grounded in refreshed planning and verification evidence.",
               "risk": "Skipping the unknown handoff can freeze later calls around stale branch-head assumptions.",
+              "recommendation_scope": "local",
+              "project_id": "",
+              "requires_earth_evidence": false,
               "evidence_refs": [
                 "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
                 "reports/optimus-prime/planning/VERIFICATION.md"
@@ -234,6 +293,9 @@
               "rationale": "Call-2 confirmed this task is scoped to REQ-029 contract artifacts only.",
               "impact": "Protects delivery velocity by preventing unrelated managers or packet sections from entering the work.",
               "risk": "Scope creep would weaken deterministic validation and make branch-head evidence ambiguous.",
+              "recommendation_scope": "local",
+              "project_id": "",
+              "requires_earth_evidence": false,
               "evidence_refs": [
                 "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
                 "scope.md"
@@ -246,6 +308,9 @@
               "rationale": "Call-2 narrowed the main branch-head question to current verification freshness.",
               "impact": "Prevents recommendation drafts from citing stale runtime outcomes.",
               "risk": "Recommendation promotion may drift from the actual branch state if verification is not rerun.",
+              "recommendation_scope": "local",
+              "project_id": "",
+              "requires_earth_evidence": false,
               "evidence_refs": [
                 "reports/optimus-prime/planning/STATE.json",
                 "reports/optimus-prime/planning/VERIFICATION.md"
@@ -265,6 +330,9 @@
               "rationale": "Call-3 preserved the earlier cross-project runtime dependency while keeping the task implementation local to REQ-029 artifacts.",
               "impact": "Lets the final draft note a concrete coordination dependency without inventing a new manager or gate.",
               "risk": "Shared runtime assumptions can drift if the coordination dependency is omitted from the draft set.",
+              "recommendation_scope": "cross-project",
+              "project_id": "runtime-orchestrator",
+              "requires_earth_evidence": true,
               "evidence_refs": [
                 "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
                 "reports/optimus-prime/planning/VERIFICATION.md"
@@ -274,15 +342,15 @@
         }
       ]
     },
-    "processing_call_id": "req029-processing-12e0b9ef351b5b3e",
+    "processing_call_id": "req029-processing-27b30d3375f62b2b",
     "llm_call_trace_schema_version": "req-029.llm-call-trace-row.v1",
     "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
-    "llm_call_trace_sha256": "f0361192d1353a600b2b42b94da1e71dad0baf144b22d0d53359f1822d527ffb",
+    "llm_call_trace_sha256": "75838f9ac1dde38d437c1b0ddf162d780a5dd4bb394166a2c4c66a26a115a825",
     "llm_call_trace_rows": [
       {
         "schema_version": "req-029.llm-call-trace-row.v1",
         "requirement_id": "REQ-029",
-        "processing_call_id": "req029-processing-12e0b9ef351b5b3e",
+        "processing_call_id": "req029-processing-27b30d3375f62b2b",
         "call_id": "call-4",
         "sequence": 4,
         "call_objective": "Synthesize earlier-call candidate recommendations into deterministic Call-4 recommendation drafts.",

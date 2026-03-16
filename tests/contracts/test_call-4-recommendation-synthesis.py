@@ -46,11 +46,18 @@ def test_req_029_builder_emits_bounded_recommendation_drafts() -> None:
     assert synthesis["summary"]["candidate_recommendation_count"] == anchors["candidate_recommendation_count"]
     assert synthesis["summary"]["source_call_count"] == anchors["source_call_count"]
     assert synthesis["summary"]["draft_count"] == anchors["candidate_recommendation_count"]
+    assert synthesis["summary"]["open_risk_count"] == anchors["open_risk_count"]
+    assert synthesis["open_risks"] == []
 
     processing = payload["processing_behavior"]
     assert processing["strategy"] == anchors["processing_strategy"]
     assert processing["reasoning_mode"] == anchors["reasoning_mode"]
     assert processing["strict_evidence_discipline"] is True
+    usage = processing["context_usage"]
+    assert usage["cross_project_context_used"] is anchors["cross_project_context_used"]
+    assert usage["cross_project_project_ids_used"] == anchors["cross_project_project_ids_used"]
+    assert usage["earth_sweep_evidence_refs_used"] == anchors["earth_sweep_evidence_refs_used"]
+    assert usage["open_risk_ids_emitted"] == []
     assert processing["synthesis_rules"]["recommendation_id_schema"] == anchors["recommendation_id_schema"]
     assert processing["synthesis_rules"]["required_draft_fields"] == anchors["required_draft_fields"]
     assert payload["source"]["evidence_ref_count"] == anchors["evidence_ref_count"]

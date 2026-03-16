@@ -61,6 +61,9 @@
         "candidate_recommendations": [
           {
             "candidate_id": "runtime-coordination",
+            "recommendation_scope": "cross-project",
+            "project_id": "runtime-orchestrator",
+            "requires_earth_evidence": true,
             "summary": "Route shared runtime follow-up through the existing runtime-orchestrator coordination path.",
             "rationale": "Call-3 preserved the earlier cross-project runtime dependency while keeping the task implementation local to REQ-029 artifacts.",
             "impact": "Lets the final draft note a concrete coordination dependency without inventing a new manager or gate.",
@@ -92,9 +95,17 @@
     ],
     "candidate_recommendation_count": 4,
     "source_call_count": 3,
+    "open_risk_count": 0,
     "processing_strategy": "call-4-recommendation-synthesis",
     "reasoning_mode": "deterministic-recommendation-synthesis",
     "recommendation_id_schema": "rec-call-4-{source_call_id}-{candidate_id}",
+    "cross_project_context_used": true,
+    "cross_project_project_ids_used": [
+      "runtime-orchestrator"
+    ],
+    "earth_sweep_evidence_refs_used": [
+      "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+    ],
     "required_draft_fields": [
       "recommendation_id",
       "source_call_id",
