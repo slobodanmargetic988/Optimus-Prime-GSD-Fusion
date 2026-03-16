@@ -1,0 +1,40 @@
+{
+  "schema_version": "strategy-packet.v1",
+  "identity": {
+    "project_id": "prj.myownmint",
+    "run_id": "run.20260317t121000z-s001",
+    "event_id": "event.20260317t121500z-strategy-packet"
+  },
+  "strategy": {
+    "revision_id": "strat.20260317-r2",
+    "summary": "Fail the REQ-063 link-map integrity validator with schema diagnostics.",
+    "link_map_ref": "ecosystem_link_map.req063.invalid-schema.json"
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.link-map-schema",
+      "priority": "high",
+      "summary": "Block malformed ecosystem link-map schema payloads.",
+      "rationale": "Validator consumers need exact source-level schema diagnostics.",
+      "expected_impact": "Reject malformed link-map artifacts deterministically.",
+      "risk_level": "medium"
+    }
+  ],
+  "constraints": {
+    "hard": [
+      "Do not coerce malformed link maps to passing state."
+    ],
+    "soft": []
+  },
+  "kpi_targets": [
+    {
+      "metric": "invalid_link_map_schema_acceptance_ratio",
+      "direction": "decrease",
+      "target": "0"
+    }
+  ],
+  "source": {
+    "repo": "Optimus-Prime-GSD-Fusion",
+    "tool": "op-tools/strategy"
+  }
+}

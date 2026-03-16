@@ -1,0 +1,28 @@
+{
+  "artifact_type": "ecosystem-link-map.v1",
+  "project_id": "prj.myownmint",
+  "discovered_projects": [
+    {
+      "project_id": "prj.myownmint",
+      "repo": "Optimus-Prime-GSD-Fusion",
+      "label": "MyOwnMint"
+    },
+    {
+      "project_id": "prj.peer-alpha",
+      "repo": "Earth/peer-alpha",
+      "label": "Peer Alpha"
+    }
+  ],
+  "links": [
+    {
+      "source_project_id": "prj.myownmint",
+      "target_project_id": "prj.peer-alpha",
+      "relationship": "reuses-planning-signals",
+      "status": "current",
+      "summary": "Current strategy reuses peer planning patterns for dispatch quality decisions.",
+      "evidence_refs": [
+        "Earth/peer-alpha/reports/planning/ROADMAP.md#L9"
+      ]
+    }
+  ]
+}

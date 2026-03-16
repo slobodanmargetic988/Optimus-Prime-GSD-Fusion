@@ -1,0 +1,49 @@
+{
+  "schema_version": "strategy-packet.v1",
+  "identity": {
+    "project_id": "prj.myownmint",
+    "run_id": "run.20260312t201000z-s001",
+    "event_id": "event.20260312t201400z-strategy-packet",
+    "era_id": "era.2026q1-execution",
+    "plan_id": "plan.myownmint-phase2"
+  },
+  "strategy": {
+    "revision_id": "strat.20260312-r1",
+    "summary": "Prioritize dispatch quality and deterministic continuation to unlock reliable autonomous throughput.",
+    "link_map_ref": "strategy/current/ECOSYSTEM_LINK_MAP.json"
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.dispatch-quality-first",
+      "priority": "high",
+      "summary": "Implement watcher-driven cycle release and redispatch-quality controls before broader runtime features.",
+      "rationale": "This directly reduces non-actionable cycles and improves output per token budget.",
+      "expected_impact": "Lower idle loops and better per-cycle productivity under constrained hardware and rate limits.",
+      "risk_level": "medium"
+    }
+  ],
+  "constraints": {
+    "hard": [
+      "Preserve existing OP behavior unless feature flags explicitly enable new cycle-release mode."
+    ],
+    "soft": [
+      "Default to token-conservative mode in low budget environments."
+    ]
+  },
+  "kpi_targets": [
+    {
+      "metric": "non_actionable_cycle_ratio",
+      "direction": "decrease",
+      "target": ">=20% reduction versus baseline"
+    },
+    {
+      "metric": "redispatch_loop_ratio",
+      "direction": "decrease",
+      "target": ">=15% reduction versus baseline"
+    }
+  ],
+  "source": {
+    "repo": "Optimus-Prime-GSD-Fusion",
+    "tool": "op-tools/strategy"
+  }
+}
