@@ -291,6 +291,7 @@ def _collect_projects(payload: dict[str, Any]) -> list[str]:
     target_project_id = _coalesce(
         _as_dict(payload.get("identity")).get("project_id"),
         _as_dict(_as_dict(payload.get("strategy_packet")).get("identity")).get("project_id"),
+        _as_dict(_as_dict(payload.get("strategy_output")).get("identity")).get("project_id"),
         payload.get("project_id"),
     )
     if target_project_id:
@@ -654,6 +655,72 @@ def build_planner_consumability_validator(payload: dict[str, Any]) -> dict[str, 
         and not incomplete_mappings
     )
 
+    evidence_index = _build_evidence_index(payload)
+    recommendation_items = _as_list(
+        _coalesce(
+            _as_dict(strategy_output).get("recommendations"),
+            _as_dict(payload.get("strategy_packet")).get("recommendations"),
+            payload.get("recommendations"),
+        )
+    )
+
+    recommendation_rows: list[dict[str, Any]] = []
+    missing_evidence_ids: list[str] = []
+    missing_fields: dict[str, list[str]] = {}
+    all_evidence_refs: set[str] = set()
+    for index, raw_recommendation in enumerate(recommendation_items, start=1):
+        recommendation = _as_dict(raw_recommendation)
+        recommendation_id = _coalesce_string(
+            recommendation.get("recommendation_id"),
+            recommendation.get("id"),
+        )
+        recommendation_ref = recommendation_id or f"recommendations[{index}]"
+        evidence_refs = _recommendation_evidence_refs(recommendation, evidence_index)
+        required_field_gaps = [
+            field
+            for field in REQUIRED_RECOMMENDATION_FIELDS
+            if not _is_present_value(recommendation.get(field))
+        ]
+        if not evidence_refs:
+            missing_evidence_ids.append(recommendation_ref)
+        if required_field_gaps:
+            missing_fields[recommendation_ref] = required_field_gaps
+
+        all_evidence_refs.update(evidence_refs)
+        recommendation_rows.append(
+            {
+                "recommendation_ref": recommendation_ref,
+                "recommendation_id": recommendation_id,
+                "evidence_refs": evidence_refs,
+                "missing_required_fields": required_field_gaps,
+            }
+        )
+
+    recommendation_rows.sort(key=lambda item: item["recommendation_ref"])
+    recommendations_total = len(recommendation_rows)
+    recommendations_with_evidence = recommendations_total - len(missing_evidence_ids)
+    coverage_ratio = (
+        0.0
+        if recommendations_total == 0
+        else round(recommendations_with_evidence / recommendations_total, 4)
+    )
+    citation_coverage_pass = recommendations_total > 0 and not missing_evidence_ids
+    recommendation_fields_pass = not missing_fields
+
+    target_project_id = _coalesce(
+        _as_dict(payload.get("identity")).get("project_id"),
+        _as_dict(strategy_output.get("identity")).get("project_id"),
+        _as_dict(_as_dict(payload.get("strategy_packet")).get("identity")).get("project_id"),
+        payload.get("project_id"),
+    )
+    project_ids = _collect_projects(payload)
+    if target_project_id and target_project_id not in project_ids:
+        project_ids = sorted(project_ids + [str(target_project_id)])
+    peer_project_ids = [project_id for project_id in project_ids if project_id != target_project_id]
+    used_cross_project_context = bool(peer_project_ids)
+
+    open_risks = _collect_obligation_risks(payload)
+
     blocking_reasons = []
     if not required_files_pass:
         blocking_reasons.append("required_files_check_failed")
@@ -668,6 +735,32 @@ def build_planner_consumability_validator(payload: dict[str, Any]) -> dict[str, 
         "requirement_id": "REQ-065",
         "validator_version": "1.0",
         "planner_targets": ["op-plan", "op-initialize"],
+        "evidence_refs": sorted(all_evidence_refs),
+        "citation_coverage": {
+            "recommendations_total": recommendations_total,
+            "recommendations_with_evidence_refs": recommendations_with_evidence,
+            "coverage_ratio": coverage_ratio,
+            "missing_recommendation_ids": sorted(missing_evidence_ids),
+            "pass": citation_coverage_pass,
+        },
+        "recommendation_field_completeness": {
+            "required_fields": list(REQUIRED_RECOMMENDATION_FIELDS),
+            "complete_recommendations": recommendations_total - len(missing_fields),
+            "incomplete_recommendations": len(missing_fields),
+            "missing_by_recommendation": {key: value for key, value in sorted(missing_fields.items())},
+            "pass": recommendation_fields_pass,
+        },
+        "cross_project_context": {
+            "target_project_id": target_project_id,
+            "project_ids": project_ids,
+            "peer_project_ids": peer_project_ids,
+            "project_count": len(project_ids),
+            "peer_project_count": len(peer_project_ids),
+            "used_in_validator": used_cross_project_context,
+            "pass": used_cross_project_context,
+        },
+        "recommendations": recommendation_rows,
+        "open_risks": open_risks,
         "checks": {
             "required_files": {
                 "required_files": required_files,
