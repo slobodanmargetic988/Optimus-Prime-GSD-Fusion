@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-3",
+  "task_id": "TASK-231",
+  "requirement_ids": [
+    "REQ-063"
+  ],
+  "updated_at": "2026-03-16T23:07:09Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      "python3 -m pytest tests/contracts/test_ecosystem-link-map-integrity-validator.py -q",
+      "python3 -m pytest tests/integration/test_ecosystem-link-map-integrity-validator.py -q",
+      "python3 -m pytest tests/hardening/test_ecosystem-link-map-integrity-validator_hardening.py -q"
+    ],
+    "verify_results": [
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/contracts/test_ecosystem-link-map-integrity-validator.py -q",
+        "passed": true,
+        "summary": "6 passed in 0.05s"
+      },
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/integration/test_ecosystem-link-map-integrity-validator.py -q",
+        "passed": true,
+        "summary": "2 passed in 0.01s"
+      },
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/hardening/test_ecosystem-link-map-integrity-validator_hardening.py -q",
+        "passed": true,
+        "summary": "3 passed in 0.06s"
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/contracts/test_ecosystem-link-map-integrity-validator.py -q",
+        "passed": true,
+        "summary": "6 passed in 0.05s"
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/integration/test_ecosystem-link-map-integrity-validator.py -q",
+        "passed": true,
+        "summary": "2 passed in 0.01s"
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/hardening/test_ecosystem-link-map-integrity-validator_hardening.py -q",
+        "passed": true,
+        "summary": "3 passed in 0.06s"
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "invalid_strategy_packet_schema_row_rejected_with_deterministic_diagnostics",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "duplicate_recommendation_id_collision_flagged_with_diff_details",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "broken_evidence_reference_causes_traceability_gate_failure",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_validators.py",
+      "strategy/current/ECOSYSTEM_LINK_MAP.json",
+      "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+      "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json",
+      "tests/contracts/test_ecosystem-link-map-integrity-validator.py",
+      "tests/integration/test_ecosystem-link-map-integrity-validator.py",
+      "tests/hardening/test_ecosystem-link-map-integrity-validator_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-231/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_063_contract_green_twice",
+      "req_063_integration_green_twice",
+      "req_063_hardening_green_twice",
+      "req_063_strategy_packet_schema_failure_deterministic",
+      "req_063_recommendation_collision_diagnostics_stable",
+      "req_063_traceability_gate_failure_deterministic"
+    ]
+  }
+}

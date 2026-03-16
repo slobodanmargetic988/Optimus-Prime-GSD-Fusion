@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 SEVERITY_ERROR = "error"
 
 REASON_PACKET_PAYLOAD_NOT_OBJECT = "packet_payload_not_object"
@@ -41,6 +42,9 @@ REASON_REQ_057_ESCALATION_TRIGGER_UNEXPECTED_KEYS = "req_057_escalation_trigger_
 REASON_REQ_057_ESCALATION_TRIGGER_TYPE_INVALID = "req_057_escalation_trigger_type_invalid"
 REASON_REQ_057_ESCALATION_TRIGGER_THRESHOLD_INVALID = "req_057_escalation_trigger_threshold_invalid"
 REASON_REQ_057_ESCALATION_TRIGGER_WINDOW_INVALID = "req_057_escalation_trigger_window_invalid"
+REASON_RECOMMENDATION_ID_DUPLICATE = "strategy_recommendation_id_duplicate"
+REASON_TRACEABILITY_REF_INVALID = "strategy_traceability_ref_invalid"
+REASON_TRACEABILITY_REF_MISSING = "strategy_traceability_ref_missing"
 
 _SCHEMA_REASON_CODE_BY_VALIDATOR = {
     "additionalProperties": "schema_additional_property",
@@ -296,6 +300,149 @@ def _validate_escalation_trigger(value: Any, *, field_path: str) -> list[dict[st
     return diagnostics
 
 
+def _resolve_traceability_ref(ref_value: str, *, base_dir: Path) -> Path | None:
+    ref_target = ref_value.split("#", 1)[0].strip()
+    if not ref_target or ref_target.startswith("missing:"):
+        return None
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", ref_target) and not ref_target.startswith("/"):
+        return None
+
+    resolved = Path(ref_target).expanduser()
+    if not resolved.is_absolute():
+        resolved = base_dir / resolved
+    return resolved
+
+
+def _validate_traceability_ref(
+    value: Any,
+    *,
+    field_path: str,
+    base_dir: Path,
+) -> list[dict[str, str]]:
+    if not isinstance(value, str) or not value.strip():
+        return [
+            _diagnostic(
+                field_path=field_path,
+                reason_code=REASON_TRACEABILITY_REF_INVALID,
+                message=f"{field_path} must be a non-empty file reference.",
+            )
+        ]
+
+    ref_value = value.strip()
+    resolved = _resolve_traceability_ref(ref_value, base_dir=base_dir)
+    if resolved is None:
+        return [
+            _diagnostic(
+                field_path=field_path,
+                reason_code=REASON_TRACEABILITY_REF_INVALID,
+                message=(
+                    f"{field_path} must use a repo-relative or absolute file reference; "
+                    f"received '{ref_value}'."
+                ),
+            )
+        ]
+
+    if not resolved.exists():
+        return [
+            _diagnostic(
+                field_path=field_path,
+                reason_code=REASON_TRACEABILITY_REF_MISSING,
+                message=f"{field_path} references missing file '{ref_value}'.",
+            )
+        ]
+
+    return []
+
+
+def _validate_strategy_recommendations(packet: Mapping[str, Any]) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+    recommendations = packet.get("recommendations")
+    if not isinstance(recommendations, list):
+        return diagnostics
+
+    seen_recommendation_ids: dict[str, tuple[str, Mapping[str, Any]]] = {}
+    for index, row in enumerate(recommendations):
+        row_path = f"recommendations[{index}]"
+        if not isinstance(row, Mapping):
+            continue
+
+        recommendation_id = row.get("recommendation_id")
+        if not isinstance(recommendation_id, str) or not recommendation_id.strip():
+            continue
+
+        current_path = f"{row_path}.recommendation_id"
+        normalized_recommendation_id = recommendation_id.strip()
+        if normalized_recommendation_id not in seen_recommendation_ids:
+            seen_recommendation_ids[normalized_recommendation_id] = (current_path, row)
+            continue
+
+        first_path, first_row = seen_recommendation_ids[normalized_recommendation_id]
+        differing_fields = sorted(
+            key
+            for key in (set(first_row.keys()) | set(row.keys()))
+            if key != "recommendation_id" and first_row.get(key) != row.get(key)
+        )
+        diff_details = (
+            f"differing fields: {differing_fields}."
+            if differing_fields
+            else "duplicate row is identical to the first declaration."
+        )
+        diagnostics.append(
+            _diagnostic(
+                field_path=current_path,
+                reason_code=REASON_RECOMMENDATION_ID_DUPLICATE,
+                message=(
+                    f"{current_path} duplicates recommendation_id '{normalized_recommendation_id}' "
+                    f"first declared at {first_path}; {diff_details}"
+                ),
+            )
+        )
+
+    return diagnostics
+
+
+def _validate_strategy_traceability(packet: Mapping[str, Any], *, base_dir: Path) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+
+    strategy = packet.get("strategy")
+    if isinstance(strategy, Mapping) and isinstance(strategy.get("link_map_ref"), str):
+        diagnostics.extend(
+            _validate_traceability_ref(
+                strategy.get("link_map_ref"),
+                field_path="strategy.link_map_ref",
+                base_dir=base_dir,
+            )
+        )
+
+    artifact = packet.get("blocker_handling_policy_artifact")
+    if not isinstance(artifact, Mapping):
+        return diagnostics
+
+    policies = artifact.get("policies")
+    if not isinstance(policies, list):
+        return diagnostics
+
+    for index, row in enumerate(policies):
+        if not isinstance(row, Mapping):
+            continue
+        evidence_refs = row.get("evidence_refs", [])
+        if not isinstance(evidence_refs, list):
+            continue
+        for evidence_index, evidence_ref in enumerate(evidence_refs):
+            diagnostics.extend(
+                _validate_traceability_ref(
+                    evidence_ref,
+                    field_path=(
+                        "blocker_handling_policy_artifact."
+                        f"policies[{index}].evidence_refs[{evidence_index}]"
+                    ),
+                    base_dir=base_dir,
+                )
+            )
+
+    return diagnostics
+
+
 def _validate_req_057_blocker_policy_artifact(packet: Mapping[str, Any]) -> list[dict[str, str]]:
     diagnostics: list[dict[str, str]] = []
     artifact_path = "blocker_handling_policy_artifact"
@@ -482,9 +629,15 @@ def _validate_req_057_blocker_policy_artifact(packet: Mapping[str, Any]) -> list
     return diagnostics
 
 
-def validate_strategy_packet_payload(packet: Mapping[str, Any], schema: Mapping[str, Any]) -> dict[str, Any]:
+def validate_strategy_packet_payload(
+    packet: Mapping[str, Any],
+    schema: Mapping[str, Any],
+    *,
+    base_dir: str | Path | None = None,
+) -> dict[str, Any]:
     diagnostics: list[dict[str, str]] = []
     validator = Draft202012Validator(schema)
+    traceability_base_dir = Path(base_dir).expanduser().resolve() if base_dir is not None else REPO_ROOT
 
     for error in sorted(
         validator.iter_errors(packet),
@@ -502,6 +655,8 @@ def validate_strategy_packet_payload(packet: Mapping[str, Any], schema: Mapping[
             )
         )
 
+    diagnostics.extend(_validate_strategy_recommendations(packet))
+    diagnostics.extend(_validate_strategy_traceability(packet, base_dir=traceability_base_dir))
     diagnostics.extend(_validate_req_057_blocker_policy_artifact(packet))
     return _result(diagnostics)
 
@@ -565,7 +720,7 @@ def validate_strategy_packet_files(input_path: str | Path, schema_path: str | Pa
             schema_path=str(schema_file),
         )
 
-    result = validate_strategy_packet_payload(packet, schema)
+    result = validate_strategy_packet_payload(packet, schema, base_dir=REPO_ROOT)
     result["input_path"] = str(input_file)
     result["schema_path"] = str(schema_file)
     return result
