@@ -508,8 +508,9 @@ def _canonical_req_037_processing_input(
     earth_sweep_evidence_refs: list[str],
     cross_project_context: list[dict[str, Any]],
     recommendation_drafts: list[dict[str, Any]],
+    strategic_claims: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return {
+    processing_input = {
         "target_project_evidence_refs": list(target_project_evidence_refs),
         "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
         "cross_project_context": [
@@ -537,6 +538,33 @@ def _canonical_req_037_processing_input(
             for row in recommendation_drafts
         ],
     }
+    if strategic_claims:
+        processing_input["strategic_claims"] = [
+            {
+                "claim_id": row["claim_id"],
+                "phase": row["phase"],
+                "summary": row["summary"],
+                "position": row["position"],
+                "source_output_ref": row["source_output_ref"],
+                "evidence_refs": list(row["evidence_refs"]),
+            }
+            for row in strategic_claims
+        ]
+    return processing_input
+
+
+def _req_037_recommendation_decision(
+    *,
+    merged_recommendations: Sequence[Mapping[str, Any]],
+    open_risks: Sequence[Mapping[str, Any]],
+) -> str:
+    reason_codes = {_as_text(row.get("reason_code")) for row in open_risks}
+    if {"cross_call_contradiction", "uncited_strategic_claim"}.intersection(reason_codes):
+        return "resolve-strategy-gaps"
+    return _recommendation_decision(
+        recommended_actions=list(merged_recommendations),
+        open_risks=list(open_risks),
+    )
 
 
 def _build_req_037_processing_behavior(
@@ -548,11 +576,66 @@ def _build_req_037_processing_behavior(
     cross_project_context: list[dict[str, Any]],
     recommendation_drafts: list[dict[str, Any]],
     merged_recommendations: list[dict[str, Any]],
+    strategic_claims: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     grouped_drafts = _group_req_037_recommendation_drafts(recommendation_drafts)
     cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
     cross_project_obligations: list[dict[str, Any]] = []
     open_risks: list[dict[str, Any]] = []
+    normalized_strategic_claims = list(strategic_claims or [])
+    available_citation_refs = set(
+        _collect_unique_refs(
+            target_project_evidence_refs,
+            earth_sweep_evidence_refs,
+            cross_project_refs,
+            *[row["evidence_refs"] for row in recommendation_drafts],
+            *[row["evidence_refs"] for row in merged_recommendations],
+        )
+    )
+
+    claim_rows_by_id: dict[str, list[dict[str, Any]]] = {}
+    for claim in normalized_strategic_claims:
+        claim_rows_by_id.setdefault(claim["claim_id"], []).append(claim)
+        citation_refs = list(claim["evidence_refs"])
+        if not citation_refs or not set(citation_refs).issubset(available_citation_refs):
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim['claim_id']}-citation",
+                    "summary": claim["summary"],
+                    "reason_code": "uncited_strategic_claim",
+                    "required_evidence_refs": _collect_unique_refs([claim["source_output_ref"]], citation_refs),
+                }
+            )
+
+    for claim_id, claim_rows in claim_rows_by_id.items():
+        analysis_rows = [row for row in claim_rows if row["phase"] == "analysis"]
+        synthesis_rows = [row for row in claim_rows if row["phase"] == "synthesis"]
+        contradiction_row: dict[str, Any] | None = None
+        for analysis_row in analysis_rows:
+            for synthesis_row in synthesis_rows:
+                if analysis_row["position"] == synthesis_row["position"]:
+                    continue
+                contradiction_row = {
+                    "summary": synthesis_row["summary"],
+                    "required_evidence_refs": _collect_unique_refs(
+                        [analysis_row["source_output_ref"]],
+                        [synthesis_row["source_output_ref"]],
+                        analysis_row["evidence_refs"],
+                        synthesis_row["evidence_refs"],
+                    ),
+                }
+                break
+            if contradiction_row is not None:
+                break
+        if contradiction_row is not None:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim_id}-contradiction",
+                    "summary": contradiction_row["summary"],
+                    "reason_code": "cross_call_contradiction",
+                    "required_evidence_refs": contradiction_row["required_evidence_refs"],
+                }
+            )
 
     for merged_row in merged_recommendations:
         recommendation_id = _require_text(
@@ -607,25 +690,32 @@ def _build_req_037_processing_behavior(
         *[row["evidence_refs"] for row in cross_project_obligations],
         *[row["required_evidence_refs"] for row in open_risks],
     )
-    decision = _recommendation_decision(recommended_actions=merged_recommendations, open_risks=open_risks)
+    decision = _req_037_recommendation_decision(
+        merged_recommendations=merged_recommendations,
+        open_risks=open_risks,
+    )
+
+    context_inputs = {
+        "target_project": {
+            "project_root": target_project_root,
+            "evidence_refs": list(target_project_evidence_refs),
+        },
+        "earth_sweep": {
+            "earth_root": earth_root,
+            "evidence_refs": list(earth_sweep_evidence_refs),
+        },
+        "cross_project_context": list(cross_project_context),
+        "recommendation_drafts": list(recommendation_drafts),
+    }
+    if normalized_strategic_claims:
+        context_inputs["strategic_claims"] = normalized_strategic_claims
 
     return {
         "strategy": REQ_037_STRATEGY,
         "reasoning_mode": EXECUTION_MODE,
         "strict_evidence_discipline": True,
         "heuristic_summarization_only": False,
-        "context_inputs": {
-            "target_project": {
-                "project_root": target_project_root,
-                "evidence_refs": list(target_project_evidence_refs),
-            },
-            "earth_sweep": {
-                "earth_root": earth_root,
-                "evidence_refs": list(earth_sweep_evidence_refs),
-            },
-            "cross_project_context": list(cross_project_context),
-            "recommendation_drafts": list(recommendation_drafts),
-        },
+        "context_inputs": context_inputs,
         "context_usage": {
             "target_project_context_used": bool(target_project_evidence_refs),
             "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
@@ -714,6 +804,7 @@ def _build_req_037_llm_call_trace_rows(
     earth_sweep_evidence_refs: Sequence[str],
     cross_project_context: Sequence[Mapping[str, Any]],
     recommendation_drafts: Sequence[Mapping[str, Any]],
+    strategic_claims: Sequence[Mapping[str, Any]] | None,
     merged_recommendation_count: int,
     recommendation_decision: str,
 ) -> list[dict[str, Any]]:
@@ -722,6 +813,11 @@ def _build_req_037_llm_call_trace_rows(
         target_project_evidence_refs,
         earth_sweep_evidence_refs,
         *[row["evidence_refs"] for row in cross_project_context],
+        *[
+            _collect_unique_refs([row.get("source_output_ref", "")], row.get("evidence_refs", []))
+            for row in strategic_claims or []
+            if isinstance(row, Mapping)
+        ],
     )
     trace_call_specs: list[dict[str, Any]] = []
     output_ref_by_call_id: dict[str, str] = {}
@@ -894,6 +990,7 @@ def _recommendation_confidence(*, evidence_refs: list[str], open_risks: list[dic
 def build_req_037_recommendation_deduplication_and_merge(
     *,
     recommendation_drafts: Sequence[Mapping[str, Any]] | None,
+    strategic_claims: Sequence[Mapping[str, Any]] | None = None,
     target_project_root: str = DEFAULT_TARGET_PROJECT_ROOT,
     earth_root: str = DEFAULT_EARTH_ROOT,
     output_root: str = DEFAULT_OUTPUT_ROOT,
@@ -918,6 +1015,7 @@ def build_req_037_recommendation_deduplication_and_merge(
     )
     normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
     normalized_drafts = _normalize_req_037_recommendation_drafts(recommendation_drafts)
+    normalized_strategic_claims = _normalize_req_028_strategic_claims(strategic_claims)
     normalized_merged_at = _require_text(merged_at if merged_at is not None else utc_now_iso(), field_name="merged_at")
     merged_recommendations = _build_req_037_merged_recommendations(normalized_drafts)
     evidence_refs = _collect_unique_refs(*[row["evidence_refs"] for row in merged_recommendations])
@@ -935,6 +1033,7 @@ def build_req_037_recommendation_deduplication_and_merge(
         earth_sweep_evidence_refs=normalized_earth_refs,
         cross_project_context=normalized_cross_project_context,
         recommendation_drafts=normalized_drafts,
+        strategic_claims=normalized_strategic_claims,
     )
     processing_sha = _canonical_digest(canonical_processing_input)
     processing_behavior = _build_req_037_processing_behavior(
@@ -945,6 +1044,7 @@ def build_req_037_recommendation_deduplication_and_merge(
         cross_project_context=normalized_cross_project_context,
         recommendation_drafts=normalized_drafts,
         merged_recommendations=merged_recommendations,
+        strategic_claims=normalized_strategic_claims,
     )
     llm_call_trace_rows = _build_req_037_llm_call_trace_rows(
         revision_identity=normalized_revision_identity,
@@ -954,6 +1054,7 @@ def build_req_037_recommendation_deduplication_and_merge(
         earth_sweep_evidence_refs=normalized_earth_refs,
         cross_project_context=normalized_cross_project_context,
         recommendation_drafts=normalized_drafts,
+        strategic_claims=normalized_strategic_claims,
         merged_recommendation_count=len(merged_recommendations),
         recommendation_decision=_as_text(processing_behavior["recommendation"]["decision"]),
     )
@@ -2417,6 +2518,7 @@ def validate_req_037_recommendation_deduplication_and_merge(payload: Mapping[str
     processing_behavior = payload.get("processing_behavior")
     normalized_cross_project_context: list[dict[str, Any]] = []
     normalized_recommendation_drafts: list[dict[str, Any]] = []
+    normalized_strategic_claims: list[dict[str, Any]] = []
     target_project_refs_from_context: list[str] = []
     earth_sweep_refs_from_context: list[str] = []
     recommendation_refs: list[str] = []
@@ -2496,6 +2598,10 @@ def validate_req_037_recommendation_deduplication_and_merge(payload: Mapping[str
             )
         except ValueError as exc:
             errors.append(str(exc).replace("recommendation_drafts", "processing_behavior.context_inputs.recommendation_drafts"))
+        try:
+            normalized_strategic_claims = _normalize_req_028_strategic_claims(context_inputs.get("strategic_claims"))
+        except ValueError as exc:
+            errors.append(str(exc).replace("strategic_claims", "processing_behavior.context_inputs.strategic_claims"))
 
         context_usage = processing_behavior.get("context_usage")
         if not isinstance(context_usage, Mapping):
@@ -2696,6 +2802,7 @@ def validate_req_037_recommendation_deduplication_and_merge(payload: Mapping[str
                 earth_sweep_evidence_refs=earth_sweep_refs_from_context,
                 cross_project_context=normalized_cross_project_context,
                 recommendation_drafts=normalized_recommendation_drafts,
+                strategic_claims=normalized_strategic_claims,
             )
             if dict(canonical_processing_input) != expected_processing_input:
                 errors.append("call_metadata.canonical_processing_input must mirror processing inputs")
@@ -2718,6 +2825,7 @@ def validate_req_037_recommendation_deduplication_and_merge(payload: Mapping[str
                 earth_sweep_evidence_refs=earth_sweep_refs_from_context,
                 cross_project_context=normalized_cross_project_context,
                 recommendation_drafts=normalized_recommendation_drafts,
+                strategic_claims=normalized_strategic_claims,
                 merged_recommendation_count=len(merged_recommendations),
                 recommendation_decision=_as_text(
                     processing_behavior.get("recommendation", {}).get("decision")

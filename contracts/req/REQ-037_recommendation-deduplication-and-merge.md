@@ -40,6 +40,7 @@ The builder expects:
   - `target_project_evidence_refs[]`
   - `earth_sweep_evidence_refs[]`
   - `cross_project_context[]`
+  - `strategic_claims[]`
 
 Each `recommendation_drafts[]` row must include:
 
@@ -64,6 +65,8 @@ Behavior guarantees:
 - A stable `recommendation_id` cannot span multiple semantic signatures.
 - A semantic signature cannot span multiple stable `recommendation_id` values.
 - Merged output preserves every source rationale row and the union of all source `evidence_refs`.
+- Strategic claims are optional, but when supplied they must remain citation-complete and contradiction-free before REQ-037 can promote a clean decision.
+- Cross-call contradictions and uncited strategic claims emit deterministic reason codes with replay-stable evidence refs in `processing_behavior.recommendation.open_risks[]`.
 
 ## Output contract
 
