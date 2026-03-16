@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-056 KPI target artifact surface."""
+"""Strategy artifact handoff contract surfaces."""
 
 from __future__ import annotations
 
@@ -17,6 +17,10 @@ REQ_056_ANALYSIS_TYPE = "kpi_target_artifact"
 REQ_056_CALL_ID = "kpi-target-artifact"
 REQ_056_PROCESSING_STRATEGY = "kpi-target-broad-sweep"
 REQ_056_REASONING_MODE = "deterministic-broad-sweep"
+REQ_062_REQUIREMENT_ID = "REQ-062"
+REQ_062_SCHEMA_VERSION = "1.0"
+REQ_062_ANALYSIS_TYPE = "recommendation_id_uniqueness_validator"
+REQ_062_CALL_ID = "recommendation-id-uniqueness-validator"
 
 _EXPECTED_DIRECTIONS = {"increase", "decrease", "maintain"}
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
@@ -1056,6 +1060,569 @@ def validate_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> list[str
 
     if "processing_behavior" in payload:
         errors.extend(_validate_req_056_processing_behavior(payload.get("processing_behavior")))
+
+    return errors
+
+
+def _normalize_req_062_recommendations(value: Any, *, field_name: str) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+
+    normalized: list[dict[str, str]] = []
+    for index, item in enumerate(value):
+        row_path = f"{field_name}[{index}]"
+        row = _require_mapping(item, field_name=row_path)
+        expected_keys = {"recommendation_key", "recommendation_id"}
+        row_keys = set(row.keys())
+        unexpected = sorted(row_keys - expected_keys)
+        if unexpected:
+            raise ValueError(f"{row_path} has unexpected keys: {unexpected}")
+        missing = sorted(expected_keys - row_keys)
+        if missing:
+            raise ValueError(f"{row_path} missing keys: {missing}")
+
+        normalized.append(
+            {
+                "recommendation_key": _require_nonempty_text(
+                    row.get("recommendation_key"),
+                    field_name=f"{row_path}.recommendation_key",
+                ),
+                "recommendation_id": _require_nonempty_text(
+                    row.get("recommendation_id"),
+                    field_name=f"{row_path}.recommendation_id",
+                ),
+            }
+        )
+
+    return sorted(normalized, key=lambda row: (row["recommendation_key"], row["recommendation_id"]))
+
+
+def _normalize_req_062_revision(value: Any, *, field_name: str) -> dict[str, Any]:
+    row = _require_mapping(value, field_name=field_name)
+    expected_keys = {"revision_id", "recommendations"}
+    row_keys = set(row.keys())
+    unexpected = sorted(row_keys - expected_keys)
+    if unexpected:
+        raise ValueError(f"{field_name} has unexpected keys: {unexpected}")
+    missing = sorted(expected_keys - row_keys)
+    if missing:
+        raise ValueError(f"{field_name} missing keys: {missing}")
+
+    return {
+        "revision_id": _require_nonempty_text(row.get("revision_id"), field_name=f"{field_name}.revision_id"),
+        "recommendations": _normalize_req_062_recommendations(
+            row.get("recommendations"),
+            field_name=f"{field_name}.recommendations",
+        ),
+    }
+
+
+def _build_req_062_revision_index(recommendations: list[dict[str, str]]) -> dict[str, Any]:
+    id_to_keys_all: dict[str, list[str]] = {}
+    key_to_ids: dict[str, set[str]] = {}
+    for row in recommendations:
+        recommendation_id = row["recommendation_id"]
+        recommendation_key = row["recommendation_key"]
+        id_to_keys_all.setdefault(recommendation_id, []).append(recommendation_key)
+        key_to_ids.setdefault(recommendation_key, set()).add(recommendation_id)
+
+    id_to_row_count = {recommendation_id: len(keys) for recommendation_id, keys in id_to_keys_all.items()}
+    id_to_keys = {
+        recommendation_id: sorted(set(keys))
+        for recommendation_id, keys in id_to_keys_all.items()
+    }
+    normalized_key_to_ids = {recommendation_key: sorted(ids) for recommendation_key, ids in key_to_ids.items()}
+
+    return {
+        "row_count": len(recommendations),
+        "unique_ids": sorted(id_to_row_count.keys()),
+        "id_to_row_count": id_to_row_count,
+        "id_to_keys": id_to_keys,
+        "key_to_ids": normalized_key_to_ids,
+    }
+
+
+def _build_req_062_id_collisions(*, revision_id: str, index: Mapping[str, Any]) -> list[dict[str, Any]]:
+    collisions: list[dict[str, Any]] = []
+    id_to_row_count = index.get("id_to_row_count", {})
+    id_to_keys = index.get("id_to_keys", {})
+    for recommendation_id in sorted(id_to_row_count.keys()):
+        occurrence_count = int(id_to_row_count[recommendation_id])
+        if occurrence_count < 2:
+            continue
+        recommendation_keys = list(id_to_keys.get(recommendation_id, []))
+        collisions.append(
+            {
+                "diagnostic_id": (
+                    f"collision.{_stable_id_fragment(revision_id, recommendation_id, occurrence_count, recommendation_keys)}"
+                ),
+                "revision_id": revision_id,
+                "recommendation_id": recommendation_id,
+                "occurrence_count": occurrence_count,
+                "recommendation_keys": recommendation_keys,
+            }
+        )
+    return collisions
+
+
+def build_req_062_recommendation_id_uniqueness_validator(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build normalized REQ-062 payload for recommendation ID uniqueness/stability validation."""
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_062_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_062_ANALYSIS_TYPE}")
+
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc") or raw.get("checked_at_utc"), field_name="now_utc")
+    previous_revision = _normalize_req_062_revision(raw.get("previous_revision"), field_name="previous_revision")
+    current_revision = _normalize_req_062_revision(raw.get("current_revision"), field_name="current_revision")
+
+    previous_index = _build_req_062_revision_index(previous_revision["recommendations"])
+    current_index = _build_req_062_revision_index(current_revision["recommendations"])
+
+    id_collisions = _build_req_062_id_collisions(
+        revision_id=previous_revision["revision_id"],
+        index=previous_index,
+    ) + _build_req_062_id_collisions(
+        revision_id=current_revision["revision_id"],
+        index=current_index,
+    )
+
+    id_drift: list[dict[str, Any]] = []
+    previous_key_to_ids = previous_index["key_to_ids"]
+    current_key_to_ids = current_index["key_to_ids"]
+    shared_keys = sorted(set(previous_key_to_ids.keys()).intersection(current_key_to_ids.keys()))
+    for recommendation_key in shared_keys:
+        previous_recommendation_ids = list(previous_key_to_ids[recommendation_key])
+        current_recommendation_ids = list(current_key_to_ids[recommendation_key])
+        if previous_recommendation_ids == current_recommendation_ids:
+            continue
+        id_drift.append(
+            {
+                "diagnostic_id": f"drift.{_stable_id_fragment(recommendation_key, previous_recommendation_ids, current_recommendation_ids)}",
+                "recommendation_key": recommendation_key,
+                "previous_recommendation_ids": previous_recommendation_ids,
+                "current_recommendation_ids": current_recommendation_ids,
+            }
+        )
+
+    previous_unique_ids = set(previous_index["unique_ids"])
+    current_unique_ids = set(current_index["unique_ids"])
+    added_ids = sorted(current_unique_ids - previous_unique_ids)
+    removed_ids = sorted(previous_unique_ids - current_unique_ids)
+
+    is_unique_within_revision = not id_collisions
+    ids_stable_across_revisions = not id_drift
+
+    built: dict[str, Any] = {
+        "ok": True,
+        "schema_version": REQ_062_SCHEMA_VERSION,
+        "requirement_id": REQ_062_REQUIREMENT_ID,
+        "analysis_type": REQ_062_ANALYSIS_TYPE,
+        "call_id": REQ_062_CALL_ID,
+        "checked_at_utc": checked_at_utc,
+        "revision_pair": {
+            "previous_revision_id": previous_revision["revision_id"],
+            "current_revision_id": current_revision["revision_id"],
+        },
+        "revision_snapshots": {
+            "previous": {
+                "revision_id": previous_revision["revision_id"],
+                "recommendation_ids": sorted(previous_unique_ids),
+            },
+            "current": {
+                "revision_id": current_revision["revision_id"],
+                "recommendation_ids": sorted(current_unique_ids),
+            },
+        },
+        "diagnostics": {
+            "id_collisions": id_collisions,
+            "id_drift": id_drift,
+            "added_ids": added_ids,
+            "removed_ids": removed_ids,
+        },
+        "totals": {
+            "previous_recommendation_rows": previous_index["row_count"],
+            "current_recommendation_rows": current_index["row_count"],
+            "previous_unique_recommendation_ids": len(previous_unique_ids),
+            "current_unique_recommendation_ids": len(current_unique_ids),
+            "added_ids": len(added_ids),
+            "removed_ids": len(removed_ids),
+            "id_collisions": len(id_collisions),
+            "id_drift": len(id_drift),
+        },
+        "verdict": {
+            "is_unique_within_revision": is_unique_within_revision,
+            "ids_stable_across_revisions": ids_stable_across_revisions,
+            "passed": is_unique_within_revision and ids_stable_across_revisions,
+        },
+    }
+
+    errors = validate_req_062_recommendation_id_uniqueness_validator(built)
+    if errors:
+        raise ValueError(f"built REQ-062 payload failed validation: {errors}")
+    return built
+
+
+def _validate_req_062_revision_snapshot(*, payload: Any, field_name: str) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    recommendation_ids: list[str] = []
+    if not isinstance(payload, Mapping):
+        return [f"{field_name} must be an object"], recommendation_ids
+
+    expected_keys = {"revision_id", "recommendation_ids"}
+    payload_keys = set(payload.keys())
+    missing = sorted(expected_keys - payload_keys)
+    if missing:
+        errors.append(f"{field_name} missing keys: {missing}")
+    unexpected = sorted(payload_keys - expected_keys)
+    if unexpected:
+        errors.append(f"{field_name} has unexpected keys: {unexpected}")
+
+    revision_id = payload.get("revision_id")
+    if not isinstance(revision_id, str) or not revision_id.strip():
+        errors.append(f"{field_name}.revision_id must be a non-empty string")
+
+    recommendation_errors, recommendation_ids = _validate_nonempty_string_list(
+        value=payload.get("recommendation_ids"),
+        field_name=f"{field_name}.recommendation_ids",
+        min_items=0,
+    )
+    errors.extend(recommendation_errors)
+    return errors, recommendation_ids
+
+
+def _validate_req_062_id_collision_row(*, row: Any, index: int) -> list[str]:
+    errors: list[str] = []
+    row_path = f"diagnostics.id_collisions[{index}]"
+    if not isinstance(row, Mapping):
+        return [f"{row_path} must be an object"]
+
+    expected_keys = {
+        "diagnostic_id",
+        "revision_id",
+        "recommendation_id",
+        "occurrence_count",
+        "recommendation_keys",
+    }
+    row_keys = set(row.keys())
+    missing = sorted(expected_keys - row_keys)
+    if missing:
+        errors.append(f"{row_path} missing keys: {missing}")
+    unexpected = sorted(row_keys - expected_keys)
+    if unexpected:
+        errors.append(f"{row_path} has unexpected keys: {unexpected}")
+
+    for key in ("diagnostic_id", "revision_id", "recommendation_id"):
+        value = row.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{row_path}.{key} must be a non-empty string")
+
+    occurrence_count = row.get("occurrence_count")
+    if not isinstance(occurrence_count, int) or occurrence_count < 2:
+        errors.append(f"{row_path}.occurrence_count must be an integer >= 2")
+
+    recommendation_key_errors, recommendation_keys = _validate_nonempty_string_list(
+        value=row.get("recommendation_keys"),
+        field_name=f"{row_path}.recommendation_keys",
+        min_items=1,
+    )
+    errors.extend(recommendation_key_errors)
+    if isinstance(occurrence_count, int) and isinstance(row.get("recommendation_keys"), list):
+        if occurrence_count < len(recommendation_keys):
+            errors.append(
+                f"{row_path}.occurrence_count must be >= diagnostics.id_collisions[{index}].recommendation_keys size"
+            )
+
+    return errors
+
+
+def _validate_req_062_id_drift_row(*, row: Any, index: int) -> list[str]:
+    errors: list[str] = []
+    row_path = f"diagnostics.id_drift[{index}]"
+    if not isinstance(row, Mapping):
+        return [f"{row_path} must be an object"]
+
+    expected_keys = {
+        "diagnostic_id",
+        "recommendation_key",
+        "previous_recommendation_ids",
+        "current_recommendation_ids",
+    }
+    row_keys = set(row.keys())
+    missing = sorted(expected_keys - row_keys)
+    if missing:
+        errors.append(f"{row_path} missing keys: {missing}")
+    unexpected = sorted(row_keys - expected_keys)
+    if unexpected:
+        errors.append(f"{row_path} has unexpected keys: {unexpected}")
+
+    for key in ("diagnostic_id", "recommendation_key"):
+        value = row.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{row_path}.{key} must be a non-empty string")
+
+    previous_errors, previous_ids = _validate_nonempty_string_list(
+        value=row.get("previous_recommendation_ids"),
+        field_name=f"{row_path}.previous_recommendation_ids",
+        min_items=1,
+    )
+    current_errors, current_ids = _validate_nonempty_string_list(
+        value=row.get("current_recommendation_ids"),
+        field_name=f"{row_path}.current_recommendation_ids",
+        min_items=1,
+    )
+    errors.extend(previous_errors)
+    errors.extend(current_errors)
+
+    if previous_ids == current_ids:
+        errors.append(f"{row_path} must represent differing previous/current recommendation IDs")
+
+    return errors
+
+
+def validate_req_062_recommendation_id_uniqueness_validator(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-062 recommendation ID uniqueness/stability payload shape."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    expected_top = {
+        "ok",
+        "schema_version",
+        "requirement_id",
+        "analysis_type",
+        "call_id",
+        "checked_at_utc",
+        "revision_pair",
+        "revision_snapshots",
+        "diagnostics",
+        "totals",
+        "verdict",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(expected_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - expected_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("ok") is not True:
+        errors.append("ok must be true")
+    if payload.get("schema_version") != REQ_062_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_062_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_062_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_062_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_062_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_062_ANALYSIS_TYPE}")
+    if payload.get("call_id") != REQ_062_CALL_ID:
+        errors.append(f"call_id must be {REQ_062_CALL_ID}")
+    if not isinstance(payload.get("checked_at_utc"), str) or not str(payload.get("checked_at_utc")).strip():
+        errors.append("checked_at_utc must be a non-empty string")
+
+    revision_pair = payload.get("revision_pair")
+    previous_pair_revision_id = ""
+    current_pair_revision_id = ""
+    if not isinstance(revision_pair, Mapping):
+        errors.append("revision_pair must be an object")
+    else:
+        expected_pair_keys = {"previous_revision_id", "current_revision_id"}
+        pair_keys = set(revision_pair.keys())
+        missing_pair = sorted(expected_pair_keys - pair_keys)
+        if missing_pair:
+            errors.append(f"revision_pair missing keys: {missing_pair}")
+        unexpected_pair = sorted(pair_keys - expected_pair_keys)
+        if unexpected_pair:
+            errors.append(f"revision_pair has unexpected keys: {unexpected_pair}")
+        previous_pair_revision_id = str(revision_pair.get("previous_revision_id") or "").strip()
+        current_pair_revision_id = str(revision_pair.get("current_revision_id") or "").strip()
+        if not previous_pair_revision_id:
+            errors.append("revision_pair.previous_revision_id must be a non-empty string")
+        if not current_pair_revision_id:
+            errors.append("revision_pair.current_revision_id must be a non-empty string")
+
+    previous_snapshot_ids: list[str] = []
+    current_snapshot_ids: list[str] = []
+    revision_snapshots = payload.get("revision_snapshots")
+    if not isinstance(revision_snapshots, Mapping):
+        errors.append("revision_snapshots must be an object")
+    else:
+        expected_snapshot_keys = {"previous", "current"}
+        snapshot_keys = set(revision_snapshots.keys())
+        missing_snapshot = sorted(expected_snapshot_keys - snapshot_keys)
+        if missing_snapshot:
+            errors.append(f"revision_snapshots missing keys: {missing_snapshot}")
+        unexpected_snapshot = sorted(snapshot_keys - expected_snapshot_keys)
+        if unexpected_snapshot:
+            errors.append(f"revision_snapshots has unexpected keys: {unexpected_snapshot}")
+
+        previous_errors, previous_snapshot_ids = _validate_req_062_revision_snapshot(
+            payload=revision_snapshots.get("previous"),
+            field_name="revision_snapshots.previous",
+        )
+        current_errors, current_snapshot_ids = _validate_req_062_revision_snapshot(
+            payload=revision_snapshots.get("current"),
+            field_name="revision_snapshots.current",
+        )
+        errors.extend(previous_errors)
+        errors.extend(current_errors)
+
+        previous_snapshot = revision_snapshots.get("previous")
+        if isinstance(previous_snapshot, Mapping) and previous_pair_revision_id:
+            if previous_snapshot.get("revision_id") != previous_pair_revision_id:
+                errors.append("revision_pair.previous_revision_id must match revision_snapshots.previous.revision_id")
+        current_snapshot = revision_snapshots.get("current")
+        if isinstance(current_snapshot, Mapping) and current_pair_revision_id:
+            if current_snapshot.get("revision_id") != current_pair_revision_id:
+                errors.append("revision_pair.current_revision_id must match revision_snapshots.current.revision_id")
+
+    diagnostics = payload.get("diagnostics")
+    id_collisions: list[Any] = []
+    id_drift: list[Any] = []
+    added_ids: list[str] = []
+    removed_ids: list[str] = []
+    if not isinstance(diagnostics, Mapping):
+        errors.append("diagnostics must be an object")
+    else:
+        expected_diag_keys = {"id_collisions", "id_drift", "added_ids", "removed_ids"}
+        diag_keys = set(diagnostics.keys())
+        missing_diag = sorted(expected_diag_keys - diag_keys)
+        if missing_diag:
+            errors.append(f"diagnostics missing keys: {missing_diag}")
+        unexpected_diag = sorted(diag_keys - expected_diag_keys)
+        if unexpected_diag:
+            errors.append(f"diagnostics has unexpected keys: {unexpected_diag}")
+
+        id_collisions_raw = diagnostics.get("id_collisions")
+        if not isinstance(id_collisions_raw, list):
+            errors.append("diagnostics.id_collisions must be a list")
+        else:
+            id_collisions = id_collisions_raw
+            for index, row in enumerate(id_collisions):
+                errors.extend(_validate_req_062_id_collision_row(row=row, index=index))
+
+        id_drift_raw = diagnostics.get("id_drift")
+        if not isinstance(id_drift_raw, list):
+            errors.append("diagnostics.id_drift must be a list")
+        else:
+            id_drift = id_drift_raw
+            for index, row in enumerate(id_drift):
+                errors.extend(_validate_req_062_id_drift_row(row=row, index=index))
+
+        added_errors, added_ids = _validate_nonempty_string_list(
+            value=diagnostics.get("added_ids"),
+            field_name="diagnostics.added_ids",
+            min_items=0,
+        )
+        removed_errors, removed_ids = _validate_nonempty_string_list(
+            value=diagnostics.get("removed_ids"),
+            field_name="diagnostics.removed_ids",
+            min_items=0,
+        )
+        errors.extend(added_errors)
+        errors.extend(removed_errors)
+
+    totals = payload.get("totals")
+    if not isinstance(totals, Mapping):
+        errors.append("totals must be an object")
+    else:
+        expected_total_keys = {
+            "previous_recommendation_rows",
+            "current_recommendation_rows",
+            "previous_unique_recommendation_ids",
+            "current_unique_recommendation_ids",
+            "added_ids",
+            "removed_ids",
+            "id_collisions",
+            "id_drift",
+        }
+        total_keys = set(totals.keys())
+        missing_totals = sorted(expected_total_keys - total_keys)
+        if missing_totals:
+            errors.append(f"totals missing keys: {missing_totals}")
+        unexpected_totals = sorted(total_keys - expected_total_keys)
+        if unexpected_totals:
+            errors.append(f"totals has unexpected keys: {unexpected_totals}")
+
+        for key in expected_total_keys:
+            value = totals.get(key)
+            if not isinstance(value, int) or value < 0:
+                errors.append(f"totals.{key} must be a non-negative integer")
+
+        if totals.get("previous_unique_recommendation_ids") != len(previous_snapshot_ids):
+            errors.append(
+                "totals.previous_unique_recommendation_ids must equal revision_snapshots.previous.recommendation_ids count"
+            )
+        if totals.get("current_unique_recommendation_ids") != len(current_snapshot_ids):
+            errors.append(
+                "totals.current_unique_recommendation_ids must equal revision_snapshots.current.recommendation_ids count"
+            )
+        if totals.get("added_ids") != len(added_ids):
+            errors.append("totals.added_ids must equal diagnostics.added_ids count")
+        if totals.get("removed_ids") != len(removed_ids):
+            errors.append("totals.removed_ids must equal diagnostics.removed_ids count")
+        if totals.get("id_collisions") != len(id_collisions):
+            errors.append("totals.id_collisions must equal diagnostics.id_collisions count")
+        if totals.get("id_drift") != len(id_drift):
+            errors.append("totals.id_drift must equal diagnostics.id_drift count")
+        if totals.get("previous_recommendation_rows", 0) < totals.get("previous_unique_recommendation_ids", 0):
+            errors.append("totals.previous_recommendation_rows must be >= totals.previous_unique_recommendation_ids")
+        if totals.get("current_recommendation_rows", 0) < totals.get("current_unique_recommendation_ids", 0):
+            errors.append("totals.current_recommendation_rows must be >= totals.current_unique_recommendation_ids")
+
+    previous_ids_set = set(previous_snapshot_ids)
+    current_ids_set = set(current_snapshot_ids)
+    if added_ids and added_ids != sorted(current_ids_set - previous_ids_set):
+        errors.append(
+            "diagnostics.added_ids must equal revision_snapshots.current.recommendation_ids minus "
+            "revision_snapshots.previous.recommendation_ids"
+        )
+    if removed_ids and removed_ids != sorted(previous_ids_set - current_ids_set):
+        errors.append(
+            "diagnostics.removed_ids must equal revision_snapshots.previous.recommendation_ids minus "
+            "revision_snapshots.current.recommendation_ids"
+        )
+    if not added_ids and sorted(current_ids_set - previous_ids_set):
+        errors.append(
+            "diagnostics.added_ids must include revision_snapshots.current.recommendation_ids minus "
+            "revision_snapshots.previous.recommendation_ids"
+        )
+    if not removed_ids and sorted(previous_ids_set - current_ids_set):
+        errors.append(
+            "diagnostics.removed_ids must include revision_snapshots.previous.recommendation_ids minus "
+            "revision_snapshots.current.recommendation_ids"
+        )
+
+    verdict = payload.get("verdict")
+    if not isinstance(verdict, Mapping):
+        errors.append("verdict must be an object")
+    else:
+        expected_verdict_keys = {"is_unique_within_revision", "ids_stable_across_revisions", "passed"}
+        verdict_keys = set(verdict.keys())
+        missing_verdict = sorted(expected_verdict_keys - verdict_keys)
+        if missing_verdict:
+            errors.append(f"verdict missing keys: {missing_verdict}")
+        unexpected_verdict = sorted(verdict_keys - expected_verdict_keys)
+        if unexpected_verdict:
+            errors.append(f"verdict has unexpected keys: {unexpected_verdict}")
+
+        expected_unique = not bool(id_collisions)
+        expected_stable = not bool(id_drift)
+        if verdict.get("is_unique_within_revision") not in {True, False}:
+            errors.append("verdict.is_unique_within_revision must be a boolean")
+        elif verdict.get("is_unique_within_revision") != expected_unique:
+            errors.append("verdict.is_unique_within_revision must match diagnostics.id_collisions")
+
+        if verdict.get("ids_stable_across_revisions") not in {True, False}:
+            errors.append("verdict.ids_stable_across_revisions must be a boolean")
+        elif verdict.get("ids_stable_across_revisions") != expected_stable:
+            errors.append("verdict.ids_stable_across_revisions must match diagnostics.id_drift")
+
+        expected_passed = expected_unique and expected_stable
+        if verdict.get("passed") not in {True, False}:
+            errors.append("verdict.passed must be a boolean")
+        elif verdict.get("passed") != expected_passed:
+            errors.append("verdict.passed must equal is_unique_within_revision and ids_stable_across_revisions")
 
     return errors
 

@@ -1,0 +1,79 @@
+{
+  "analysis_type": "recommendation_id_uniqueness_validator",
+  "call_id": "recommendation-id-uniqueness-validator",
+  "checked_at_utc": "2026-03-16T10:30:00Z",
+  "diagnostics": {
+    "added_ids": [
+      "rec.harden-telemetry-freshness-v2",
+      "rec.map-cross-project-obligations"
+    ],
+    "id_collisions": [
+      {
+        "diagnostic_id": "collision.b5e17bd1cd43",
+        "occurrence_count": 2,
+        "recommendation_id": "rec.align-earth-runtime-canary",
+        "recommendation_keys": [
+          "integration-latency-watch",
+          "runtime-canary-alignment"
+        ],
+        "revision_id": "strategy-rev-042"
+      }
+    ],
+    "id_drift": [
+      {
+        "current_recommendation_ids": [
+          "rec.harden-telemetry-freshness-v2"
+        ],
+        "diagnostic_id": "drift.a2249178fdcf",
+        "previous_recommendation_ids": [
+          "rec.harden-telemetry-freshness"
+        ],
+        "recommendation_key": "telemetry-freshness"
+      }
+    ],
+    "removed_ids": [
+      "rec.harden-telemetry-freshness",
+      "rec.review-reuse-contracts"
+    ]
+  },
+  "ok": true,
+  "requirement_id": "REQ-062",
+  "revision_pair": {
+    "current_revision_id": "strategy-rev-042",
+    "previous_revision_id": "strategy-rev-041"
+  },
+  "revision_snapshots": {
+    "current": {
+      "recommendation_ids": [
+        "rec.align-earth-runtime-canary",
+        "rec.harden-telemetry-freshness-v2",
+        "rec.map-cross-project-obligations"
+      ],
+      "revision_id": "strategy-rev-042"
+    },
+    "previous": {
+      "recommendation_ids": [
+        "rec.align-earth-runtime-canary",
+        "rec.harden-telemetry-freshness",
+        "rec.review-reuse-contracts"
+      ],
+      "revision_id": "strategy-rev-041"
+    }
+  },
+  "schema_version": "1.0",
+  "totals": {
+    "added_ids": 2,
+    "current_recommendation_rows": 4,
+    "current_unique_recommendation_ids": 3,
+    "id_collisions": 1,
+    "id_drift": 1,
+    "previous_recommendation_rows": 3,
+    "previous_unique_recommendation_ids": 3,
+    "removed_ids": 2
+  },
+  "verdict": {
+    "ids_stable_across_revisions": false,
+    "is_unique_within_revision": false,
+    "passed": false
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "input": {
+    "analysis_type": "recommendation_id_uniqueness_validator",
+    "now_utc": "2026-03-16T10:30:00Z",
+    "previous_revision": {
+      "revision_id": "strategy-rev-041",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness"
+        },
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "reuse-contract-review",
+          "recommendation_id": "rec.review-reuse-contracts"
+        }
+      ]
+    },
+    "current_revision": {
+      "revision_id": "strategy-rev-042",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness-v2"
+        },
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "integration-latency-watch",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "cross-project-obligation-map",
+          "recommendation_id": "rec.map-cross-project-obligations"
+        }
+      ]
+    }
+  },
+  "stable_unique_input": {
+    "analysis_type": "recommendation_id_uniqueness_validator",
+    "now_utc": "2026-03-16T10:30:00Z",
+    "previous_revision": {
+      "revision_id": "strategy-rev-041",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness"
+        },
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "reuse-contract-review",
+          "recommendation_id": "rec.review-reuse-contracts"
+        }
+      ]
+    },
+    "current_revision": {
+      "revision_id": "strategy-rev-043",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness"
+        },
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "reuse-contract-review",
+          "recommendation_id": "rec.review-reuse-contracts"
+        },
+        {
+          "recommendation_key": "kpi-target-tracking",
+          "recommendation_id": "rec.track-kpi-targets"
+        }
+      ]
+    }
+  },
+  "invalid_missing_previous_revision_input": {
+    "analysis_type": "recommendation_id_uniqueness_validator",
+    "now_utc": "2026-03-16T10:30:00Z",
+    "current_revision": {
+      "revision_id": "strategy-rev-042",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness-v2"
+        }
+      ]
+    }
+  }
+}
