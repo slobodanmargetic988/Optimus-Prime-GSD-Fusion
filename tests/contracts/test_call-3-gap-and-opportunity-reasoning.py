@@ -43,9 +43,14 @@ def test_req_028_sample_payload_is_valid_contract_shape() -> None:
     assert sample["requirement_id"] == module.REQ_028_REQUIREMENT_ID
     assert sample["processing_behavior"]["strategy"] == module.REQ_028_STRATEGY
     assert sample["processing_behavior"]["call_3_reasoning"]["call_sequence"] == module.REQ_028_CALL_SEQUENCE
+    assert sample["processing_behavior"]["context_usage"]["cross_project_context_used"] is True
     gap_reasoning = sample["processing_behavior"]["call_3_reasoning"]["gap_reasoning"]
     assert gap_reasoning[0]["opportunities"][0]["ecosystem_level_benefit"]
     assert gap_reasoning[0]["opportunities"][0]["dependency_effects"]
+    recommendation = sample["processing_behavior"]["recommendation"]
+    assert recommendation["recommended_opportunities"]
+    assert recommendation["cross_project_obligations"]
+    assert recommendation["open_risks"]
 
 
 def test_req_028_contract_doc_includes_sample_structure_reference() -> None:
@@ -63,6 +68,10 @@ def test_req_028_contract_doc_includes_sample_structure_reference() -> None:
         "opportunities",
         "ecosystem_level_benefit",
         "dependency_effects",
+        "recommendation",
+        "recommended_opportunities",
+        "cross_project_obligations",
+        "open_risks",
         "call_metadata",
         "canonical_input_sha256",
         "processing_input_sha256",

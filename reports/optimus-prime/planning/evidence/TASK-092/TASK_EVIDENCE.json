@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-092",
+  "requirement_ids": [
+    "REQ-028"
+  ],
+  "updated_at": "2026-03-16T00:51:46Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contract_call_3_gap_and_opportunity_reasoning",
+        "command": "python3 -m pytest tests/contracts/test_call-3-gap-and-opportunity-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "5 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-092/contract_call-3-gap-and-opportunity-reasoning.output.txt"
+      },
+      {
+        "name": "integration_call_3_gap_and_opportunity_reasoning",
+        "command": "python3 -m pytest tests/integration/test_call-3-gap-and-opportunity-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-092/integration_call-3-gap-and-opportunity-reasoning.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-028",
+        "status": "pass",
+        "details": "Call-3 now consumes broad-sweep cross-project context, emits deterministic recommendation fields with evidence refs, and records unresolved ecosystem ideas as open risks instead of unsupported obligations.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-092/contract_call-3-gap-and-opportunity-reasoning.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-092/integration_call-3-gap-and-opportunity-reasoning.output.txt"
+        ]
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "unresolved_cross_project_ideas_stay_open_risks",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "cross_project_obligations_require_earth_evidence",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "contracts/req/REQ-028_call-3-gap-and-opportunity-reasoning.md",
+      "examples/fixtures/call-3-gap-and-opportunity-reasoning.json",
+      "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json",
+      "tests/contracts/test_call-3-gap-and-opportunity-reasoning.py",
+      "tests/integration/test_call-3-gap-and-opportunity-reasoning.py",
+      "reports/optimus-prime/planning/evidence/TASK-092/contract_call-3-gap-and-opportunity-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-092/integration_call-3-gap-and-opportunity-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-092/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "integration_call_3_gap_and_opportunity_reasoning_acceptance",
+        "command": "python3 -m pytest tests/integration/test_call-3-gap-and-opportunity-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-092/integration_call-3-gap-and-opportunity-reasoning.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-028",
+        "status": "pass",
+        "details": "The targeted integration test verifies evidence refs, recommendation completeness, and explicit cross-project context usage for Call-3 reasoning.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-092/integration_call-3-gap-and-opportunity-reasoning.output.txt"
+        ]
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-028",
+        "passed": true,
+        "notes": "TASK_EVIDENCE contains no unresolved blocker entries and the acceptance integration command exited 0."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-092/integration_call-3-gap-and-opportunity-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-092/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_review",
+    "reason_codes": [
+      "req_028_broad_sweep_context_used",
+      "req_028_recommendation_fields_complete",
+      "req_028_unresolved_ideas_recorded_as_open_risks",
+      "req_028_targeted_integration_green",
+      "task_092_no_unresolved_blockers"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

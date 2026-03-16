@@ -1515,6 +1515,15 @@ def _normalize_req_028_dependency_effects(raw_value: Any, *, field_name: str) ->
     return normalized
 
 
+def _slug_id_fragment(value: Any) -> str:
+    text = _as_text(value).lower()
+    chars = [ch if ch.isalnum() else "-" for ch in text]
+    collapsed = "".join(chars).strip("-")
+    while "--" in collapsed:
+        collapsed = collapsed.replace("--", "-")
+    return collapsed or "unknown"
+
+
 def _normalize_req_028_gap_candidates(raw_value: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
         raise ValueError("gap_candidates must be an array")
@@ -1579,6 +1588,12 @@ def _normalize_req_028_opportunity_candidates(raw_value: Any) -> list[dict[str, 
             item.get("ecosystem_level_benefit"),
             field_name=f"opportunity_candidates[{index}].ecosystem_level_benefit",
         )
+        recommendation_rationale = _require_text(
+            item.get("recommendation_rationale")
+            if item.get("recommendation_rationale") is not None
+            else ecosystem_level_benefit,
+            field_name=f"opportunity_candidates[{index}].recommendation_rationale",
+        )
         dependency_effects = _normalize_req_028_dependency_effects(
             item.get("dependency_effects"),
             field_name=f"opportunity_candidates[{index}].dependency_effects",
@@ -1588,19 +1603,69 @@ def _normalize_req_028_opportunity_candidates(raw_value: Any) -> list[dict[str, 
             field_name=f"opportunity_candidates[{index}].evidence_refs",
             min_items=1,
         )
+        next_step = _require_text(
+            item.get("next_step")
+            if item.get("next_step") is not None
+            else f"Validate cross-project follow-through for {opportunity_id}.",
+            field_name=f"opportunity_candidates[{index}].next_step",
+        )
         normalized.append(
             {
                 "opportunity_id": opportunity_id,
                 "gap_id": gap_id,
                 "summary": summary,
                 "ecosystem_level_benefit": ecosystem_level_benefit,
+                "recommendation_rationale": recommendation_rationale,
                 "dependency_effects": dependency_effects,
                 "evidence_refs": evidence_refs,
+                "next_step": next_step,
             }
         )
     if not normalized:
         raise ValueError("opportunity_candidates must contain at least 1 item(s)")
     normalized.sort(key=lambda row: row["opportunity_id"])
+    return normalized
+
+
+def _normalize_req_028_unresolved_ideas(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError("unresolved_ideas must be an array when provided")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"unresolved_ideas[{index}] must be an object")
+        project_id = _require_text(item.get("project_id"), field_name=f"unresolved_ideas[{index}].project_id")
+        summary = _require_text(item.get("summary"), field_name=f"unresolved_ideas[{index}].summary")
+        idea_id = _require_text(
+            item.get("idea_id") if item.get("idea_id") is not None else f"idea-{index + 1:03d}-{_slug_id_fragment(project_id)}",
+            field_name=f"unresolved_ideas[{index}].idea_id",
+        )
+        related_gap_ids = _normalize_string_list(
+            item.get("related_gap_ids"),
+            field_name=f"unresolved_ideas[{index}].related_gap_ids",
+        )
+        related_opportunity_ids = _normalize_string_list(
+            item.get("related_opportunity_ids"),
+            field_name=f"unresolved_ideas[{index}].related_opportunity_ids",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"unresolved_ideas[{index}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "idea_id": idea_id,
+                "project_id": project_id,
+                "summary": summary,
+                "related_gap_ids": related_gap_ids,
+                "related_opportunity_ids": related_opportunity_ids,
+                "evidence_refs": evidence_refs,
+            }
+        )
+    normalized.sort(key=lambda row: row["idea_id"])
     return normalized
 
 
@@ -1631,6 +1696,8 @@ def _canonical_req_028_processing_input(
     target_project_evidence_refs: list[str],
     earth_sweep_evidence_refs: list[str],
     local_mission_summary: str,
+    cross_project_context: list[dict[str, Any]],
+    unresolved_ideas: list[dict[str, Any]],
     gap_candidates: list[dict[str, Any]],
     opportunity_candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -1639,6 +1706,26 @@ def _canonical_req_028_processing_input(
         "target_project_evidence_refs": list(target_project_evidence_refs),
         "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
         "local_mission_summary": local_mission_summary,
+        "cross_project_context": [
+            {
+                "project_id": row["project_id"],
+                "project_root": row["project_root"],
+                "evidence_refs": list(row["evidence_refs"]),
+                "context_note": row["context_note"],
+            }
+            for row in cross_project_context
+        ],
+        "unresolved_ideas": [
+            {
+                "idea_id": row["idea_id"],
+                "project_id": row["project_id"],
+                "summary": row["summary"],
+                "related_gap_ids": list(row["related_gap_ids"]),
+                "related_opportunity_ids": list(row["related_opportunity_ids"]),
+                "evidence_refs": list(row["evidence_refs"]),
+            }
+            for row in unresolved_ideas
+        ],
         "gap_candidates": [
             {
                 "gap_id": row["gap_id"],
@@ -1655,6 +1742,7 @@ def _canonical_req_028_processing_input(
                 "gap_id": row["gap_id"],
                 "summary": row["summary"],
                 "ecosystem_level_benefit": row["ecosystem_level_benefit"],
+                "recommendation_rationale": row["recommendation_rationale"],
                 "dependency_effects": [
                     {
                         "project_id": dep["project_id"],
@@ -1664,10 +1752,55 @@ def _canonical_req_028_processing_input(
                     for dep in row["dependency_effects"]
                 ],
                 "evidence_refs": list(row["evidence_refs"]),
+                "next_step": row["next_step"],
             }
             for row in opportunity_candidates
         ],
     }
+
+
+def _req_028_recommendation_decision(
+    *,
+    recommended_opportunities: Sequence[Mapping[str, Any]],
+    open_risks: Sequence[Mapping[str, Any]],
+) -> str:
+    if recommended_opportunities and not open_risks:
+        return "proceed"
+    if recommended_opportunities and open_risks:
+        return "proceed-with-open-risks"
+    if open_risks:
+        reason_codes = {_as_text(row.get("reason_code")) for row in open_risks}
+        if reason_codes and reason_codes == {"missing_earth_sweep_evidence_refs"}:
+            return "collect-earth-evidence"
+        return "resolve-context-gaps"
+    return "insufficient-context"
+
+
+def _req_028_recommendation_rationale(*, decision: str) -> str:
+    if decision == "proceed":
+        return "Earth-sweep evidence and cross-project context are sufficient to promote Call-3 opportunities."
+    if decision == "proceed-with-open-risks":
+        return "Some Call-3 opportunities are evidence-backed while unresolved ecosystem ideas remain open risks."
+    if decision == "collect-earth-evidence":
+        return "Cross-project opportunity promotion is blocked until Earth-sweep evidence refs are attached."
+    if decision == "resolve-context-gaps":
+        return "Cross-project context gaps must be resolved before unsupported obligations can be promoted."
+    return "No evidence-backed ecosystem opportunities were strong enough to promote from Call-3."
+
+
+def _req_028_recommendation_confidence(
+    *,
+    evidence_refs: Sequence[str],
+    recommended_opportunities: Sequence[Mapping[str, Any]],
+    open_risks: Sequence[Mapping[str, Any]],
+) -> str:
+    if not evidence_refs:
+        return "low"
+    if recommended_opportunities and not open_risks:
+        return "high"
+    if recommended_opportunities:
+        return "medium"
+    return "low"
 
 
 def _build_req_028_processing_behavior(
@@ -1677,6 +1810,8 @@ def _build_req_028_processing_behavior(
     target_project_evidence_refs: list[str],
     earth_sweep_evidence_refs: list[str],
     local_mission_summary: str,
+    cross_project_context: list[dict[str, Any]],
+    unresolved_ideas: list[dict[str, Any]],
     gap_candidates: list[dict[str, Any]],
     opportunity_candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -1684,8 +1819,13 @@ def _build_req_028_processing_behavior(
         raise ValueError("earth_sweep_evidence_refs must contain at least 1 item(s)")
 
     earth_ref_set = set(earth_sweep_evidence_refs)
+    context_by_project = {row["project_id"]: row for row in cross_project_context}
     gap_rows_by_id = {row["gap_id"]: row for row in gap_candidates}
     opportunities_by_gap_id: dict[str, list[dict[str, Any]]] = {gap_id: [] for gap_id in gap_rows_by_id}
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    recommended_opportunities: list[dict[str, Any]] = []
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
 
     for gap in gap_candidates:
         if not set(gap["evidence_refs"]).intersection(earth_ref_set):
@@ -1718,6 +1858,85 @@ def _build_req_028_processing_behavior(
             }
         )
 
+        dependency_projects = sorted({dep["project_id"] for dep in opportunity["dependency_effects"]})
+        missing_reason_codes: list[str] = []
+        if not set(opportunity["evidence_refs"]).intersection(earth_ref_set):
+            missing_reason_codes.append("missing_earth_sweep_evidence_refs")
+
+        linked_context_projects: list[str] = []
+        linked_context_refs: list[str] = []
+        missing_context_projects: list[str] = []
+        missing_context_evidence_projects: list[str] = []
+        for project_id in dependency_projects:
+            project_context = context_by_project.get(project_id)
+            if project_context is None:
+                missing_context_projects.append(project_id)
+                continue
+            linked_context_projects.append(project_id)
+            project_refs = list(project_context["evidence_refs"])
+            if project_refs:
+                linked_context_refs.extend(project_refs)
+            else:
+                missing_context_evidence_projects.append(project_id)
+
+        if missing_context_projects:
+            missing_reason_codes.append("missing_cross_project_context")
+        if missing_context_evidence_projects:
+            missing_reason_codes.append("missing_cross_project_context_evidence_refs")
+
+        recommendation_row = {
+            "opportunity_id": opportunity["opportunity_id"],
+            "gap_id": opportunity["gap_id"],
+            "summary": opportunity["summary"],
+            "rationale": opportunity["recommendation_rationale"],
+            "ecosystem_level_benefit": opportunity["ecosystem_level_benefit"],
+            "next_step": opportunity["next_step"],
+            "dependency_effects": [
+                {
+                    "project_id": dep["project_id"],
+                    "effect_summary": dep["effect_summary"],
+                    "impact": dep["impact"],
+                }
+                for dep in opportunity["dependency_effects"]
+            ],
+            "linked_context_projects": linked_context_projects,
+            "evidence_refs": _collect_unique_refs(opportunity["evidence_refs"], linked_context_refs),
+        }
+
+        if missing_reason_codes:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{opportunity['opportunity_id']}",
+                    "summary": opportunity["summary"],
+                    "reason_code": missing_reason_codes[0],
+                    "missing_reason_codes": sorted(set(missing_reason_codes)),
+                    "affected_project_ids": dependency_projects,
+                    "required_evidence_refs": _collect_unique_refs(
+                        opportunity["evidence_refs"],
+                        linked_context_refs,
+                    ),
+                }
+            )
+            continue
+
+        recommended_opportunities.append(recommendation_row)
+        for dep in opportunity["dependency_effects"]:
+            dep_project_context = context_by_project[dep["project_id"]]
+            cross_project_obligations.append(
+                {
+                    "obligation_id": f"obligation-{opportunity['opportunity_id']}-{_slug_id_fragment(dep['project_id'])}",
+                    "project_id": dep["project_id"],
+                    "opportunity_id": opportunity["opportunity_id"],
+                    "summary": dep["effect_summary"],
+                    "impact": dep["impact"],
+                    "evidence_refs": _collect_unique_refs(
+                        earth_sweep_evidence_refs,
+                        opportunity["evidence_refs"],
+                        dep_project_context["evidence_refs"],
+                    ),
+                }
+            )
+
     gap_reasoning: list[dict[str, Any]] = []
     for gap in gap_candidates:
         opportunities = opportunities_by_gap_id[gap["gap_id"]]
@@ -1735,11 +1954,39 @@ def _build_req_028_processing_behavior(
             }
         )
 
+    for idea in unresolved_ideas:
+        open_risks.append(
+            {
+                "risk_id": f"risk-{idea['idea_id']}",
+                "summary": idea["summary"],
+                "reason_code": "unresolved_cross_project_idea",
+                "project_id": idea["project_id"],
+                "related_gap_ids": list(idea["related_gap_ids"]),
+                "related_opportunity_ids": list(idea["related_opportunity_ids"]),
+                "required_evidence_refs": list(idea["evidence_refs"]),
+            }
+        )
+
     evidence_refs_used = _collect_unique_refs(
         target_project_evidence_refs,
         earth_sweep_evidence_refs,
+        cross_project_refs,
+        *[row["evidence_refs"] for row in unresolved_ideas],
         *[row["evidence_refs"] for row in gap_candidates],
         *[row["evidence_refs"] for row in opportunity_candidates],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    recommendation_refs = _collect_unique_refs(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        *[row["evidence_refs"] for row in recommended_opportunities],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    recommendation_decision = _req_028_recommendation_decision(
+        recommended_opportunities=recommended_opportunities,
+        open_risks=open_risks,
     )
 
     return {
@@ -1773,6 +2020,7 @@ def _build_req_028_processing_behavior(
                     "gap_id": row["gap_id"],
                     "summary": row["summary"],
                     "ecosystem_level_benefit": row["ecosystem_level_benefit"],
+                    "recommendation_rationale": row["recommendation_rationale"],
                     "dependency_effects": [
                         {
                             "project_id": dep["project_id"],
@@ -1782,15 +2030,42 @@ def _build_req_028_processing_behavior(
                         for dep in row["dependency_effects"]
                     ],
                     "evidence_refs": list(row["evidence_refs"]),
+                    "next_step": row["next_step"],
                 }
                 for row in opportunity_candidates
+            ],
+            "cross_project_context": [
+                {
+                    "project_id": row["project_id"],
+                    "project_root": row["project_root"],
+                    "evidence_refs": list(row["evidence_refs"]),
+                    "context_note": row["context_note"],
+                }
+                for row in cross_project_context
+            ],
+            "unresolved_ideas": [
+                {
+                    "idea_id": row["idea_id"],
+                    "project_id": row["project_id"],
+                    "summary": row["summary"],
+                    "related_gap_ids": list(row["related_gap_ids"]),
+                    "related_opportunity_ids": list(row["related_opportunity_ids"]),
+                    "evidence_refs": list(row["evidence_refs"]),
+                }
+                for row in unresolved_ideas
             ],
         },
         "context_usage": {
             "target_project_context_used": bool(local_mission_summary or target_project_evidence_refs),
             "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+            "cross_project_context_used": bool(cross_project_context),
             "gap_ids_considered": [row["gap_id"] for row in gap_candidates],
             "opportunity_ids_considered": [row["opportunity_id"] for row in opportunity_candidates],
+            "cross_project_projects_considered": [row["project_id"] for row in cross_project_context],
+            "dependency_projects_referenced": sorted(
+                {dep["project_id"] for row in opportunity_candidates for dep in row["dependency_effects"]}
+            ),
+            "cross_project_refs_used": cross_project_refs,
             "evidence_refs_used": evidence_refs_used,
         },
         "call_3_reasoning": {
@@ -1799,6 +2074,27 @@ def _build_req_028_processing_behavior(
             "gap_reasoning": gap_reasoning,
             "gap_count": len(gap_reasoning),
             "opportunity_count": len(opportunity_candidates),
+        },
+        "recommendation": {
+            "decision": recommendation_decision,
+            "rationale": _req_028_recommendation_rationale(
+                decision=recommendation_decision
+            ),
+            "confidence": _req_028_recommendation_confidence(
+                evidence_refs=recommendation_refs,
+                recommended_opportunities=recommended_opportunities,
+                open_risks=open_risks,
+            ),
+            "evidence_refs": recommendation_refs,
+            "recommended_opportunities": sorted(
+                recommended_opportunities,
+                key=lambda row: row["opportunity_id"],
+            ),
+            "cross_project_obligations": sorted(
+                cross_project_obligations,
+                key=lambda row: row["obligation_id"],
+            ),
+            "open_risks": sorted(open_risks, key=lambda row: row["risk_id"]),
         },
         "summary": (
             f"Call 3 reasoned over {len(gap_reasoning)} ecosystem-visible strategic gaps and "
@@ -1819,6 +2115,8 @@ def build_req_028_call_3_gap_and_opportunity_reasoning(
     target_project_evidence_refs: Sequence[Any] | None = None,
     earth_sweep_evidence_refs: Sequence[Any] | None = None,
     local_mission_summary: str,
+    cross_project_context: Sequence[Mapping[str, Any]] | None = None,
+    unresolved_ideas: Sequence[Mapping[str, Any]] | None = None,
     gap_candidates: Sequence[Mapping[str, Any]] | None = None,
     opportunity_candidates: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -1843,6 +2141,8 @@ def build_req_028_call_3_gap_and_opportunity_reasoning(
         if earth_sweep_evidence_refs is not None
         else default_earth_refs
     )
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
+    normalized_unresolved_ideas = _normalize_req_028_unresolved_ideas(unresolved_ideas)
     normalized_gap_candidates = _normalize_req_028_gap_candidates(gap_candidates)
     normalized_opportunity_candidates = _normalize_req_028_opportunity_candidates(opportunity_candidates)
 
@@ -1861,6 +2161,8 @@ def build_req_028_call_3_gap_and_opportunity_reasoning(
         target_project_evidence_refs=normalized_target_project_evidence_refs,
         earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
         local_mission_summary=normalized_local_mission_summary,
+        cross_project_context=normalized_cross_project_context,
+        unresolved_ideas=normalized_unresolved_ideas,
         gap_candidates=normalized_gap_candidates,
         opportunity_candidates=normalized_opportunity_candidates,
     )
@@ -1872,6 +2174,8 @@ def build_req_028_call_3_gap_and_opportunity_reasoning(
         target_project_evidence_refs=normalized_target_project_evidence_refs,
         earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
         local_mission_summary=normalized_local_mission_summary,
+        cross_project_context=normalized_cross_project_context,
+        unresolved_ideas=normalized_unresolved_ideas,
         gap_candidates=normalized_gap_candidates,
         opportunity_candidates=normalized_opportunity_candidates,
     )
@@ -1987,6 +2291,7 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
         "context_inputs",
         "context_usage",
         "call_3_reasoning",
+        "recommendation",
         "summary",
     }
     processing_keys = set(processing_behavior.keys())
@@ -2009,6 +2314,8 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
     normalized_target_project_refs: list[str] = []
     normalized_earth_sweep_refs: list[str] = []
     normalized_local_mission_summary = ""
+    normalized_cross_project_context: list[dict[str, Any]] = []
+    normalized_unresolved_ideas: list[dict[str, Any]] = []
     normalized_gap_candidates: list[dict[str, Any]] = []
     normalized_opportunity_candidates: list[dict[str, Any]] = []
     context_inputs = processing_behavior.get("context_inputs")
@@ -2063,6 +2370,16 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
             )
         except ValueError as exc:
             errors.append(str(exc))
+        try:
+            normalized_cross_project_context = _normalize_cross_project_context(
+                context_inputs.get("cross_project_context")
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+        try:
+            normalized_unresolved_ideas = _normalize_req_028_unresolved_ideas(context_inputs.get("unresolved_ideas"))
+        except ValueError as exc:
+            errors.append(str(exc))
 
     context_usage = processing_behavior.get("context_usage")
     if not isinstance(context_usage, Mapping):
@@ -2071,8 +2388,12 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
         for key in (
             "target_project_context_used",
             "earth_sweep_context_used",
+            "cross_project_context_used",
             "gap_ids_considered",
             "opportunity_ids_considered",
+            "cross_project_projects_considered",
+            "dependency_projects_referenced",
+            "cross_project_refs_used",
             "evidence_refs_used",
         ):
             if key not in context_usage:
@@ -2101,6 +2422,50 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
         if call_3_reasoning.get("reasoning_focus") != REQ_028_REASONING_FOCUS:
             errors.append(f"processing_behavior.call_3_reasoning.reasoning_focus must be {REQ_028_REASONING_FOCUS}")
 
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        required_recommendation = {
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "recommended_opportunities",
+            "cross_project_obligations",
+            "open_risks",
+        }
+        recommendation_keys = set(recommendation.keys())
+        missing_recommendation = sorted(required_recommendation - recommendation_keys)
+        if missing_recommendation:
+            errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+        if not isinstance(recommendation.get("evidence_refs"), list):
+            errors.append("processing_behavior.recommendation.evidence_refs must be a list")
+        if not isinstance(recommendation.get("recommended_opportunities"), list):
+            errors.append("processing_behavior.recommendation.recommended_opportunities must be a list")
+        obligations = recommendation.get("cross_project_obligations")
+        if not isinstance(obligations, list):
+            errors.append("processing_behavior.recommendation.cross_project_obligations must be a list")
+            obligations = []
+        earth_ref_set = {ref for ref in normalized_earth_sweep_refs if _is_earth_evidence_ref(ref)}
+        for index, obligation in enumerate(obligations):
+            if not isinstance(obligation, Mapping):
+                errors.append(f"processing_behavior.recommendation.cross_project_obligations[{index}] must be an object")
+                continue
+            evidence_refs = obligation.get("evidence_refs")
+            if not isinstance(evidence_refs, list) or not evidence_refs:
+                errors.append(
+                    f"processing_behavior.recommendation.cross_project_obligations[{index}].evidence_refs must be non-empty list"
+                )
+                continue
+            obligation_ref_set = {_as_text(ref) for ref in evidence_refs if _as_text(ref)}
+            if earth_ref_set and not obligation_ref_set.intersection(earth_ref_set):
+                errors.append(
+                    f"processing_behavior.recommendation.cross_project_obligations[{index}] must include earth_sweep evidence refs"
+                )
+        if not isinstance(recommendation.get("open_risks"), list):
+            errors.append("processing_behavior.recommendation.open_risks must be a list")
+
     if (
         normalized_local_mission_summary
         and normalized_gap_candidates
@@ -2114,6 +2479,8 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
                 target_project_evidence_refs=normalized_target_project_refs,
                 earth_sweep_evidence_refs=normalized_earth_sweep_refs,
                 local_mission_summary=normalized_local_mission_summary,
+                cross_project_context=normalized_cross_project_context,
+                unresolved_ideas=normalized_unresolved_ideas,
                 gap_candidates=normalized_gap_candidates,
                 opportunity_candidates=normalized_opportunity_candidates,
             )
@@ -2185,6 +2552,8 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
                     _collect_unique_refs(
                         normalized_target_project_refs,
                         normalized_earth_sweep_refs,
+                        *[row["evidence_refs"] for row in normalized_cross_project_context],
+                        *[row["evidence_refs"] for row in normalized_unresolved_ideas],
                         *[row["evidence_refs"] for row in normalized_gap_candidates],
                         *[row["evidence_refs"] for row in normalized_opportunity_candidates],
                     )
@@ -2193,6 +2562,8 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
             target_project_evidence_refs=normalized_target_project_refs,
             earth_sweep_evidence_refs=normalized_earth_sweep_refs,
             local_mission_summary=normalized_local_mission_summary,
+            cross_project_context=normalized_cross_project_context,
+            unresolved_ideas=normalized_unresolved_ideas,
             gap_candidates=normalized_gap_candidates,
             opportunity_candidates=normalized_opportunity_candidates,
         )

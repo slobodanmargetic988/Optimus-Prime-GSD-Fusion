@@ -55,6 +55,7 @@ Top-level required keys:
 - `context_inputs`
 - `context_usage`
 - `call_3_reasoning`
+- `recommendation`
 - `summary`
 
 `context_inputs.target_project` required keys:
@@ -67,6 +68,22 @@ Top-level required keys:
 
 - `earth_root` (must match `earth_root`)
 - `evidence_refs` (must be non-empty)
+
+`context_inputs.cross_project_context[]` required keys:
+
+- `project_id`
+- `project_root`
+- `evidence_refs`
+- `context_note`
+
+`context_inputs.unresolved_ideas[]` required keys:
+
+- `idea_id`
+- `project_id`
+- `summary`
+- `related_gap_ids`
+- `related_opportunity_ids`
+- `evidence_refs`
 
 `context_inputs.gap_candidates[]` required keys:
 
@@ -82,8 +99,10 @@ Top-level required keys:
 - `gap_id` (must reference a declared `gap_id`)
 - `summary`
 - `ecosystem_level_benefit`
+- `recommendation_rationale`
 - `dependency_effects[]`
 - `evidence_refs` (must include Earth-sweep evidence)
+- `next_step`
 
 Each `dependency_effects[]` row must include:
 
@@ -95,8 +114,12 @@ Each `dependency_effects[]` row must include:
 
 - `target_project_context_used`
 - `earth_sweep_context_used`
+- `cross_project_context_used`
 - `gap_ids_considered`
 - `opportunity_ids_considered`
+- `cross_project_projects_considered`
+- `dependency_projects_referenced`
+- `cross_project_refs_used`
 - `evidence_refs_used`
 
 `call_3_reasoning` required keys:
@@ -123,6 +146,39 @@ Each `opportunities[]` row must include:
 - `ecosystem_level_benefit`
 - `dependency_effects` (`dependency_effects[]`)
 - `evidence_refs`
+
+`recommendation` required keys:
+
+- `decision`
+- `rationale`
+- `confidence`
+- `evidence_refs`
+- `recommended_opportunities`
+- `cross_project_obligations`
+- `open_risks`
+
+Each `recommended_opportunities[]` row must include:
+
+- `opportunity_id`
+- `gap_id`
+- `summary`
+- `rationale`
+- `ecosystem_level_benefit`
+- `next_step`
+- `dependency_effects`
+- `linked_context_projects`
+- `evidence_refs`
+
+Each `cross_project_obligations[]` row must include:
+
+- `obligation_id`
+- `project_id`
+- `opportunity_id`
+- `summary`
+- `impact`
+- `evidence_refs` (must include Earth-sweep evidence)
+
+Unresolved ecosystem ideas must be emitted under `recommendation.open_risks[]`; they are never silently promoted into obligations.
 
 `call_metadata` required keys:
 
@@ -160,11 +216,14 @@ Its top-level shape is:
   "processing_behavior": {
     "context_inputs": {
       "gap_candidates": [],
-      "opportunity_candidates": []
+      "opportunity_candidates": [],
+      "cross_project_context": [],
+      "unresolved_ideas": []
     },
     "context_usage": {
       "gap_ids_considered": [],
       "opportunity_ids_considered": [],
+      "cross_project_projects_considered": [],
       "evidence_refs_used": []
     },
     "call_3_reasoning": {
@@ -180,6 +239,11 @@ Its top-level shape is:
           ]
         }
       ]
+    },
+    "recommendation": {
+      "recommended_opportunities": [],
+      "cross_project_obligations": [],
+      "open_risks": []
     }
   },
   "call_metadata": {
