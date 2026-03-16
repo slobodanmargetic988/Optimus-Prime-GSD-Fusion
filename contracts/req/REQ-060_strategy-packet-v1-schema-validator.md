@@ -44,6 +44,11 @@ Rules:
   - `schema_path`
 - When `schema_path` is omitted, the validator loads `contracts/strategy_packet.v1.schema.json`.
 - `strategy_packet` may be supplied inline as any JSON value; non-object roots return `packet_payload_not_object`.
+- `broad_sweep_context` is optional and, when supplied, reuses the normalized Earth-sweep context shape from REQ-054:
+  - `projects_considered`
+  - `earth_sweep_evidence_refs`
+  - `cross_project_obligations[]`
+  - `unresolved_ideas[]`
 - Canonical ID checks are enforced by the packet schema for:
   - `identity.project_id`
   - `identity.run_id`
@@ -64,6 +69,7 @@ REQ-060 output payload contains:
 - `diagnostic_count`
 - `summary`
 - `diagnostics`
+- optional `processing_behavior` when `broad_sweep_context` is provided
 
 Output behavior:
 - `ok = true` means the packet passed schema validation and planner handoff coverage checks.
@@ -78,6 +84,28 @@ Each `diagnostics[]` row includes:
 - `reason_code`
 - `field_path`
 - `message`
+
+When `processing_behavior` is present it contains:
+- `recommendation`
+  - `decision`
+  - `rationale`
+  - `evidence_refs`
+  - `context_project_ids`
+  - `mapped_recommendation_ids`
+  - `mapped_task_intent_handles`
+  - `recommendation_field_completeness[]`
+  - `approved_cross_project_obligations[]`
+  - `open_risks[]`
+- `cross_project_context_usage`
+
+Each `recommendation_field_completeness[]` row includes:
+- `recommendation_id`
+- `required_fields_present`
+- `missing_required_fields`
+- `has_complete_required_fields`
+- `evidence_refs`
+- `has_evidence_refs`
+- `planner_task_intent_handles`
 
 Deterministic reason-code families:
 - Schema validation:
@@ -101,6 +129,8 @@ Handoff behavior:
 - Schema failures surface exact `field_path` values such as `identity.project_id` and preserve the validator message for operator action.
 - `recommendations[].recommendation_id` must remain fully covered by `recommendation_to_planner_mapping_artifact.recommendation_to_task_intent_mappings[]`.
 - Mapping rows must not reference recommendation IDs absent from `recommendations[]`.
+- When `broad_sweep_context` is present, cross-project obligations are approved only when matching Earth-sweep evidence refs exist.
+- Missing-evidence obligations and unresolved ideas are surfaced under `processing_behavior.recommendation.open_risks[]`, not silently promoted.
 
 ## Sample structure
 Deterministic fixture:

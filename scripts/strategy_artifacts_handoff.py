@@ -27,6 +27,14 @@ REQ_054_CALL_ID = "recommendation-to-planner-mapping"
 REQ_060_REQUIREMENT_ID = "REQ-060"
 REQ_060_ANALYSIS_TYPE = "strategy_packet_v1_schema_validator"
 REQ_060_DEFAULT_SCHEMA_PATH = "contracts/strategy_packet.v1.schema.json"
+REQUIRED_RECOMMENDATION_FIELDS = (
+    "recommendation_id",
+    "priority",
+    "summary",
+    "rationale",
+    "expected_impact",
+    "risk_level",
+)
 _REQ_054_REASON_MISSING_EARTH_SWEEP_EVIDENCE = "missing_earth_sweep_evidence_refs"
 _REQ_054_REASON_UNKNOWN_RECOMMENDATIONS = "unknown_recommendation_ids"
 _REQ_054_REASON_EARTH_EVIDENCE_OUTSIDE_CONTEXT = "earth_sweep_evidence_not_in_context"
@@ -156,6 +164,18 @@ def _collect_unique_refs(*ref_groups: list[str]) -> list[str]:
     for group in ref_groups:
         refs.update(group)
     return sorted(refs)
+
+
+def _string_list_from_any(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    values: set[str] = set()
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                values.add(text)
+    return sorted(values)
 
 
 def _normalize_input_mapping_row(raw_value: Any, *, field_name: str) -> dict[str, Any]:
@@ -535,6 +555,164 @@ def _build_req_054_processing_behavior(
     return {
         "recommendation": recommendation,
         "cross_project_context_usage": usage,
+    }
+
+
+def _req_060_packet_mapping_rows(packet: Mapping[str, Any]) -> list[dict[str, Any]]:
+    artifact = packet.get("recommendation_to_planner_mapping_artifact")
+    if not isinstance(artifact, Mapping):
+        return []
+
+    raw_rows = artifact.get("recommendation_to_task_intent_mappings")
+    if not isinstance(raw_rows, list):
+        return []
+
+    normalized_rows: list[dict[str, Any]] = []
+    for row in raw_rows:
+        if not isinstance(row, Mapping):
+            continue
+        recommendation_id = row.get("recommendation_id")
+        planner_task_intent_handle = row.get("planner_task_intent_handle")
+        if not isinstance(recommendation_id, str) or not recommendation_id.strip():
+            continue
+        if not isinstance(planner_task_intent_handle, str) or not planner_task_intent_handle.strip():
+            continue
+        downstream_audit_trail = row.get("downstream_audit_trail")
+        downstream = downstream_audit_trail if isinstance(downstream_audit_trail, Mapping) else {}
+        traceability_refs = _collect_unique_refs(
+            _string_list_from_any(row.get("traceability_refs")),
+            _string_list_from_any(downstream.get("source_call_trace_refs")),
+            _string_list_from_any(downstream.get("source_evidence_refs")),
+            _string_list_from_any(downstream.get("source_packet_refs")),
+        )
+        normalized_rows.append(
+            {
+                "mapping_id": str(row.get("mapping_id") or ""),
+                "recommendation_id": recommendation_id.strip(),
+                "planner_task_intent_handle": planner_task_intent_handle.strip(),
+                "traceability_refs": traceability_refs,
+            }
+        )
+    normalized_rows.sort(
+        key=lambda row: (
+            row["planner_task_intent_handle"],
+            row["recommendation_id"],
+            row["mapping_id"],
+        )
+    )
+    return normalized_rows
+
+
+def _req_060_recommendation_id(raw_row: Any, *, index: int) -> str:
+    if isinstance(raw_row, Mapping):
+        value = raw_row.get("recommendation_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return f"recommendation-{index:03d}"
+
+
+def _req_060_required_field_presence(raw_row: Any) -> tuple[list[str], list[str]]:
+    row = raw_row if isinstance(raw_row, Mapping) else {}
+    present: list[str] = []
+    missing: list[str] = []
+    for field_name in REQUIRED_RECOMMENDATION_FIELDS:
+        value = row.get(field_name)
+        if isinstance(value, str):
+            if value.strip():
+                present.append(field_name)
+            else:
+                missing.append(field_name)
+            continue
+        if value not in (None, "", [], {}):
+            present.append(field_name)
+        else:
+            missing.append(field_name)
+    return present, missing
+
+
+def _build_req_060_processing_behavior(
+    *,
+    validation_output: Mapping[str, Any],
+    packet: Mapping[str, Any],
+    broad_sweep_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    output_rows = _req_060_packet_mapping_rows(packet)
+    mapped_recommendation_ids = sorted({row["recommendation_id"] for row in output_rows})
+    planner_task_intent_handles = sorted({row["planner_task_intent_handle"] for row in output_rows})
+    base_processing = _build_req_054_processing_behavior(
+        output_rows=output_rows,
+        recommendation_ids=mapped_recommendation_ids,
+        planner_task_intent_handles=planner_task_intent_handles,
+        broad_sweep_context=broad_sweep_context,
+    )
+
+    recommendation = dict(base_processing["recommendation"])
+    recommendation_refs_by_id: dict[str, set[str]] = {}
+    planner_handles_by_recommendation_id: dict[str, set[str]] = {}
+
+    for row in output_rows:
+        recommendation_id = row["recommendation_id"]
+        recommendation_refs_by_id.setdefault(recommendation_id, set()).update(row["traceability_refs"])
+        planner_handles_by_recommendation_id.setdefault(recommendation_id, set()).add(row["planner_task_intent_handle"])
+
+    for row in recommendation["approved_cross_project_obligations"]:
+        row_refs = set(row["evidence_refs"])
+        for recommendation_id in row["linked_recommendation_ids"]:
+            recommendation_refs_by_id.setdefault(recommendation_id, set()).update(row_refs)
+
+    for row in recommendation["open_risks"]:
+        row_refs = set(row["required_evidence_refs"]) | set(row["evidence_refs"])
+        for recommendation_id in row["linked_recommendation_ids"]:
+            recommendation_refs_by_id.setdefault(recommendation_id, set()).update(row_refs)
+
+    recommendation_field_completeness: list[dict[str, Any]] = []
+    raw_recommendations = packet.get("recommendations")
+    if isinstance(raw_recommendations, list):
+        for index, raw_row in enumerate(raw_recommendations, start=1):
+            recommendation_id = _req_060_recommendation_id(raw_row, index=index)
+            required_fields_present, missing_required_fields = _req_060_required_field_presence(raw_row)
+            evidence_refs = sorted(recommendation_refs_by_id.get(recommendation_id, set()))
+            recommendation_field_completeness.append(
+                {
+                    "recommendation_id": recommendation_id,
+                    "required_fields_present": required_fields_present,
+                    "missing_required_fields": missing_required_fields,
+                    "has_complete_required_fields": not missing_required_fields,
+                    "evidence_refs": evidence_refs,
+                    "has_evidence_refs": bool(evidence_refs),
+                    "planner_task_intent_handles": sorted(
+                        planner_handles_by_recommendation_id.get(recommendation_id, set())
+                    ),
+                }
+            )
+    recommendation_field_completeness.sort(key=lambda row: row["recommendation_id"])
+
+    complete_recommendation_count = sum(
+        1 for row in recommendation_field_completeness if row["has_complete_required_fields"]
+    )
+    recommendations_with_evidence_count = sum(1 for row in recommendation_field_completeness if row["has_evidence_refs"])
+    if validation_output.get("ok") is not True:
+        decision = "planner_blocked"
+    elif recommendation["open_risks"]:
+        decision = "planner_ready_with_open_risks"
+    else:
+        decision = "planner_ready"
+
+    recommendation["decision"] = decision
+    recommendation["rationale"] = (
+        f"packet_recommendations={len(recommendation_field_completeness)} "
+        f"mapped_recommendations={len(mapped_recommendation_ids)} "
+        f"complete_recommendations={complete_recommendation_count} "
+        f"recommendations_with_evidence={recommendations_with_evidence_count} "
+        f"approved={len(recommendation['approved_cross_project_obligations'])} "
+        f"open_risks={len(recommendation['open_risks'])} "
+        f"diagnostics={int(validation_output.get('diagnostic_count') or 0)}"
+    )
+    recommendation["recommendation_field_completeness"] = recommendation_field_completeness
+
+    return {
+        "recommendation": recommendation,
+        "cross_project_context_usage": base_processing["cross_project_context_usage"],
     }
 
 
@@ -1115,6 +1293,7 @@ def build_req_060_strategy_packet_v1_schema_validator(payload: Mapping[str, Any]
     if analysis_type and analysis_type != REQ_060_ANALYSIS_TYPE:
         raise ValueError(f"analysis_type must be {REQ_060_ANALYSIS_TYPE}")
     checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+    broad_sweep_context = _normalize_broad_sweep_context(raw.get("broad_sweep_context")) if "broad_sweep_context" in raw else None
 
     has_inline_packet = "strategy_packet" in raw
     has_packet_path = "strategy_packet_path" in raw
@@ -1146,6 +1325,15 @@ def build_req_060_strategy_packet_v1_schema_validator(payload: Mapping[str, Any]
 
     output_payload = validate_strategy_packet_payload(strategy_packet, schema)
     output_payload["checked_at_utc"] = checked_at_utc
+    if broad_sweep_context is not None:
+        output_payload["processing_behavior"] = _build_req_060_processing_behavior(
+            validation_output=output_payload,
+            packet=strategy_packet,
+            broad_sweep_context=broad_sweep_context,
+        )
+    errors = validate_req_060_strategy_packet_v1_schema_validator(output_payload)
+    if errors:
+        raise ValueError(f"built REQ-060 payload failed validation: {errors}")
     return output_payload
 
 
@@ -1165,11 +1353,12 @@ def validate_req_060_strategy_packet_v1_schema_validator(payload: Mapping[str, A
         "summary",
         "diagnostics",
     }
+    optional_top = {"processing_behavior"}
     top_keys = set(payload.keys())
     missing_top = sorted(required_top - top_keys)
     if missing_top:
         errors.append(f"missing top-level keys: {missing_top}")
-    unexpected_top = sorted(top_keys - required_top)
+    unexpected_top = sorted(top_keys - required_top - optional_top)
     if unexpected_top:
         errors.append(f"unexpected top-level keys: {unexpected_top}")
 
@@ -1252,6 +1441,274 @@ def validate_req_060_strategy_packet_v1_schema_validator(payload: Mapping[str, A
             errors.append("planner_consumability must be planner_blocked when ok is false")
         if isinstance(diagnostics, list) and not diagnostics:
             errors.append("diagnostics must be non-empty when ok is false")
+
+    processing_behavior = payload.get("processing_behavior")
+    if processing_behavior is not None:
+        if not isinstance(processing_behavior, Mapping):
+            errors.append("processing_behavior must be an object")
+        else:
+            expected_behavior_keys = {"recommendation", "cross_project_context_usage"}
+            behavior_keys = set(processing_behavior.keys())
+            missing_behavior = sorted(expected_behavior_keys - behavior_keys)
+            if missing_behavior:
+                errors.append(f"processing_behavior missing keys: {missing_behavior}")
+            unexpected_behavior = sorted(behavior_keys - expected_behavior_keys)
+            if unexpected_behavior:
+                errors.append(f"processing_behavior has unexpected keys: {unexpected_behavior}")
+
+            recommendation = processing_behavior.get("recommendation")
+            if not isinstance(recommendation, Mapping):
+                errors.append("processing_behavior.recommendation must be an object")
+            else:
+                expected_recommendation_keys = {
+                    "decision",
+                    "rationale",
+                    "evidence_refs",
+                    "context_project_ids",
+                    "mapped_recommendation_ids",
+                    "mapped_task_intent_handles",
+                    "recommendation_field_completeness",
+                    "approved_cross_project_obligations",
+                    "open_risks",
+                }
+                recommendation_keys = set(recommendation.keys())
+                missing_recommendation = sorted(expected_recommendation_keys - recommendation_keys)
+                if missing_recommendation:
+                    errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+                unexpected_recommendation = sorted(recommendation_keys - expected_recommendation_keys)
+                if unexpected_recommendation:
+                    errors.append(f"processing_behavior.recommendation has unexpected keys: {unexpected_recommendation}")
+                for key in ("decision", "rationale"):
+                    value = recommendation.get(key)
+                    if not isinstance(value, str) or not value.strip():
+                        errors.append(f"processing_behavior.recommendation.{key} must be a non-empty string")
+                for key in (
+                    "evidence_refs",
+                    "context_project_ids",
+                    "mapped_recommendation_ids",
+                    "mapped_task_intent_handles",
+                ):
+                    value = recommendation.get(key)
+                    if not isinstance(value, list):
+                        errors.append(f"processing_behavior.recommendation.{key} must be a list")
+
+                completeness = recommendation.get("recommendation_field_completeness")
+                if not isinstance(completeness, list):
+                    errors.append("processing_behavior.recommendation.recommendation_field_completeness must be a list")
+                else:
+                    expected_required_fields = sorted(REQUIRED_RECOMMENDATION_FIELDS)
+                    for index, row in enumerate(completeness):
+                        if not isinstance(row, Mapping):
+                            errors.append(
+                                "processing_behavior.recommendation.recommendation_field_completeness"
+                                f"[{index}] must be an object"
+                            )
+                            continue
+                        expected_row_keys = {
+                            "recommendation_id",
+                            "required_fields_present",
+                            "missing_required_fields",
+                            "has_complete_required_fields",
+                            "evidence_refs",
+                            "has_evidence_refs",
+                            "planner_task_intent_handles",
+                        }
+                        row_keys = set(row.keys())
+                        missing_row = sorted(expected_row_keys - row_keys)
+                        if missing_row:
+                            errors.append(
+                                "processing_behavior.recommendation.recommendation_field_completeness"
+                                f"[{index}] missing keys: {missing_row}"
+                            )
+                        unexpected_row = sorted(row_keys - expected_row_keys)
+                        if unexpected_row:
+                            errors.append(
+                                "processing_behavior.recommendation.recommendation_field_completeness"
+                                f"[{index}] has unexpected keys: {unexpected_row}"
+                            )
+                        recommendation_id = row.get("recommendation_id")
+                        if not isinstance(recommendation_id, str) or not recommendation_id.strip():
+                            errors.append(
+                                "processing_behavior.recommendation.recommendation_field_completeness"
+                                f"[{index}].recommendation_id must be a non-empty string"
+                            )
+                        for key in ("required_fields_present", "missing_required_fields", "evidence_refs", "planner_task_intent_handles"):
+                            value = row.get(key)
+                            if not isinstance(value, list):
+                                errors.append(
+                                    "processing_behavior.recommendation.recommendation_field_completeness"
+                                    f"[{index}].{key} must be a list"
+                                )
+                        for key in ("has_complete_required_fields", "has_evidence_refs"):
+                            value = row.get(key)
+                            if not isinstance(value, bool):
+                                errors.append(
+                                    "processing_behavior.recommendation.recommendation_field_completeness"
+                                    f"[{index}].{key} must be a boolean"
+                                )
+                        required_fields_present = row.get("required_fields_present")
+                        missing_required_fields = row.get("missing_required_fields")
+                        if isinstance(required_fields_present, list) and isinstance(missing_required_fields, list):
+                            normalized_present = sorted(
+                                item for item in required_fields_present if isinstance(item, str) and item.strip()
+                            )
+                            normalized_missing = sorted(
+                                item for item in missing_required_fields if isinstance(item, str) and item.strip()
+                            )
+                            if sorted(normalized_present + normalized_missing) != expected_required_fields:
+                                errors.append(
+                                    "processing_behavior.recommendation.recommendation_field_completeness"
+                                    f"[{index}] must account for all required recommendation fields"
+                                )
+                            has_complete_required_fields = row.get("has_complete_required_fields")
+                            if isinstance(has_complete_required_fields, bool) and has_complete_required_fields != (not normalized_missing):
+                                errors.append(
+                                    "processing_behavior.recommendation.recommendation_field_completeness"
+                                    f"[{index}].has_complete_required_fields must match missing_required_fields emptiness"
+                                )
+                        evidence_refs = row.get("evidence_refs")
+                        has_evidence_refs = row.get("has_evidence_refs")
+                        if isinstance(evidence_refs, list) and isinstance(has_evidence_refs, bool):
+                            if has_evidence_refs != bool(evidence_refs):
+                                errors.append(
+                                    "processing_behavior.recommendation.recommendation_field_completeness"
+                                    f"[{index}].has_evidence_refs must match evidence_refs emptiness"
+                                )
+
+                approved_cross_project_obligations = recommendation.get("approved_cross_project_obligations")
+                if not isinstance(approved_cross_project_obligations, list):
+                    errors.append("processing_behavior.recommendation.approved_cross_project_obligations must be a list")
+                else:
+                    for index, row in enumerate(approved_cross_project_obligations):
+                        if not isinstance(row, Mapping):
+                            errors.append(
+                                "processing_behavior.recommendation.approved_cross_project_obligations"
+                                f"[{index}] must be an object"
+                            )
+                            continue
+                        expected_obligation_keys = {
+                            "obligation_id",
+                            "summary",
+                            "project_ids",
+                            "evidence_refs",
+                            "linked_recommendation_ids",
+                            "linked_planner_task_intent_handles",
+                        }
+                        row_keys = set(row.keys())
+                        missing_row = sorted(expected_obligation_keys - row_keys)
+                        if missing_row:
+                            errors.append(
+                                "processing_behavior.recommendation.approved_cross_project_obligations"
+                                f"[{index}] missing keys: {missing_row}"
+                            )
+                        unexpected_row = sorted(row_keys - expected_obligation_keys)
+                        if unexpected_row:
+                            errors.append(
+                                "processing_behavior.recommendation.approved_cross_project_obligations"
+                                f"[{index}] has unexpected keys: {unexpected_row}"
+                            )
+                        for key in ("obligation_id", "summary"):
+                            value = row.get(key)
+                            if not isinstance(value, str) or not value.strip():
+                                errors.append(
+                                    "processing_behavior.recommendation.approved_cross_project_obligations"
+                                    f"[{index}].{key} must be a non-empty string"
+                                )
+                        for key in ("project_ids", "evidence_refs", "linked_recommendation_ids", "linked_planner_task_intent_handles"):
+                            value = row.get(key)
+                            if not isinstance(value, list):
+                                errors.append(
+                                    "processing_behavior.recommendation.approved_cross_project_obligations"
+                                    f"[{index}].{key} must be a list"
+                                )
+                        evidence_refs = row.get("evidence_refs")
+                        if isinstance(evidence_refs, list) and not evidence_refs:
+                            errors.append(
+                                "processing_behavior.recommendation.approved_cross_project_obligations"
+                                f"[{index}].evidence_refs must be non-empty"
+                            )
+
+                open_risks = recommendation.get("open_risks")
+                if not isinstance(open_risks, list):
+                    errors.append("processing_behavior.recommendation.open_risks must be a list")
+                else:
+                    for index, row in enumerate(open_risks):
+                        if not isinstance(row, Mapping):
+                            errors.append(f"processing_behavior.recommendation.open_risks[{index}] must be an object")
+                            continue
+                        expected_risk_keys = {
+                            "open_risk_id",
+                            "source_type",
+                            "source_id",
+                            "summary",
+                            "reason_code",
+                            "project_ids",
+                            "required_evidence_refs",
+                            "evidence_refs",
+                            "linked_recommendation_ids",
+                            "linked_planner_task_intent_handles",
+                        }
+                        row_keys = set(row.keys())
+                        missing_row = sorted(expected_risk_keys - row_keys)
+                        if missing_row:
+                            errors.append(f"processing_behavior.recommendation.open_risks[{index}] missing keys: {missing_row}")
+                        unexpected_row = sorted(row_keys - expected_risk_keys)
+                        if unexpected_row:
+                            errors.append(f"processing_behavior.recommendation.open_risks[{index}] has unexpected keys: {unexpected_row}")
+                        for key in ("open_risk_id", "source_type", "source_id", "summary", "reason_code"):
+                            value = row.get(key)
+                            if not isinstance(value, str) or not value.strip():
+                                errors.append(
+                                    f"processing_behavior.recommendation.open_risks[{index}].{key} must be a non-empty string"
+                                )
+                        for key in (
+                            "project_ids",
+                            "required_evidence_refs",
+                            "evidence_refs",
+                            "linked_recommendation_ids",
+                            "linked_planner_task_intent_handles",
+                        ):
+                            value = row.get(key)
+                            if not isinstance(value, list):
+                                errors.append(f"processing_behavior.recommendation.open_risks[{index}].{key} must be a list")
+                        required_evidence_refs = row.get("required_evidence_refs")
+                        if isinstance(required_evidence_refs, list) and not required_evidence_refs:
+                            errors.append(
+                                f"processing_behavior.recommendation.open_risks[{index}].required_evidence_refs must be non-empty"
+                            )
+
+            usage = processing_behavior.get("cross_project_context_usage")
+            if not isinstance(usage, Mapping):
+                errors.append("processing_behavior.cross_project_context_usage must be an object")
+            else:
+                expected_usage_keys = {
+                    "cross_project_context_provided",
+                    "cross_project_context_used",
+                    "projects_considered",
+                    "earth_sweep_evidence_refs_considered",
+                    "cross_project_obligation_count",
+                    "unresolved_idea_count",
+                    "recommendation_ids_with_context",
+                }
+                usage_keys = set(usage.keys())
+                missing_usage = sorted(expected_usage_keys - usage_keys)
+                if missing_usage:
+                    errors.append(f"processing_behavior.cross_project_context_usage missing keys: {missing_usage}")
+                unexpected_usage = sorted(usage_keys - expected_usage_keys)
+                if unexpected_usage:
+                    errors.append(f"processing_behavior.cross_project_context_usage has unexpected keys: {unexpected_usage}")
+                for key in ("cross_project_context_provided", "cross_project_context_used"):
+                    value = usage.get(key)
+                    if not isinstance(value, bool):
+                        errors.append(f"processing_behavior.cross_project_context_usage.{key} must be a boolean")
+                for key in ("projects_considered", "earth_sweep_evidence_refs_considered", "recommendation_ids_with_context"):
+                    value = usage.get(key)
+                    if not isinstance(value, list):
+                        errors.append(f"processing_behavior.cross_project_context_usage.{key} must be a list")
+                for key in ("cross_project_obligation_count", "unresolved_idea_count"):
+                    value = usage.get(key)
+                    if not isinstance(value, int) or value < 0:
+                        errors.append(f"processing_behavior.cross_project_context_usage.{key} must be a non-negative integer")
 
     return errors
 
