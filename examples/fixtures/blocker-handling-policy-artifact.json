@@ -1,0 +1,94 @@
+{
+  "input": {
+    "analysis_type": "blocker_handling_policy_artifact",
+    "now_utc": "2026-03-16T11:10:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "blocker_policies": [
+      {
+        "policy_id": "policy.validation-contract-mismatch",
+        "blocker_code": "verification_contract_missing",
+        "escalation_trigger": {
+          "trigger_type": "guardrail_violation",
+          "threshold": 1,
+          "window": "attempts"
+        },
+        "owner_hints": [
+          "planner-worker",
+          "developer-worker"
+        ],
+        "fallback_paths": [
+          "request-contract-refresh",
+          "open-blocker-ticket"
+        ]
+      },
+      {
+        "policy_id": "policy.cross-project-rate-limit",
+        "blocker_code": "all_rate_gates_blocking",
+        "escalation_trigger": {
+          "trigger_type": "attempts_exhausted",
+          "threshold": 3,
+          "window": "cycles"
+        },
+        "owner_hints": [
+          "runtime-coordinator",
+          "boss-manager"
+        ],
+        "fallback_paths": [
+          "reroute-to-lower-rate-profile",
+          "pause-and-retry-window"
+        ]
+      }
+    ]
+  },
+  "invalid_unknown_trigger_input": {
+    "analysis_type": "blocker_handling_policy_artifact",
+    "now_utc": "2026-03-16T11:10:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "blocker_policies": [
+      {
+        "policy_id": "policy.validation-contract-mismatch",
+        "blocker_code": "verification_contract_missing",
+        "escalation_trigger": {
+          "trigger_type": "unknown-trigger",
+          "threshold": 1,
+          "window": "attempts"
+        },
+        "owner_hints": [
+          "developer-worker"
+        ],
+        "fallback_paths": [
+          "open-blocker-ticket"
+        ]
+      }
+    ]
+  },
+  "invalid_missing_fallback_paths_input": {
+    "analysis_type": "blocker_handling_policy_artifact",
+    "now_utc": "2026-03-16T11:10:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "blocker_policies": [
+      {
+        "policy_id": "policy.validation-contract-mismatch",
+        "blocker_code": "verification_contract_missing",
+        "escalation_trigger": {
+          "trigger_type": "guardrail_violation",
+          "threshold": 1,
+          "window": "attempts"
+        },
+        "owner_hints": [
+          "developer-worker"
+        ],
+        "fallback_paths": []
+      }
+    ]
+  }
+}
