@@ -6,6 +6,35 @@
       "project_id": "optimus-prime-gsd-fusion",
       "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
     },
+    "broad_sweep_context": {
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ],
+      "projects_considered": [
+        "earth-core-runtime",
+        "earth-shared-observability"
+      ],
+      "cross_project_obligations": [
+        {
+          "obligation_id": "obligation-align-earth-runtime-gates",
+          "project_id": "earth-core-runtime",
+          "summary": "Align Earth runtime quality gating before planner packet rollout.",
+          "earth_sweep_evidence_refs": [
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+          ]
+        }
+      ],
+      "unresolved_ideas": [
+        {
+          "idea_id": "idea-review-shared-observability-handoff",
+          "summary": "Validate earth-shared-observability ownership before promoting more shared packet routing changes.",
+          "earth_sweep_evidence_refs": [
+            "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          ]
+        }
+      ]
+    },
     "quality_thresholds": {
       "min_rationale_word_count": 12,
       "min_evidence_citations": 2
@@ -56,6 +85,16 @@
     "target_project": {
       "project_id": "optimus-prime-gsd-fusion",
       "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "broad_sweep_context": {
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+      ],
+      "projects_considered": [
+        "earth-core-runtime"
+      ],
+      "cross_project_obligations": [],
+      "unresolved_ideas": []
     },
     "recommendations": [
       {

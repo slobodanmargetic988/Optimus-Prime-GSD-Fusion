@@ -72,6 +72,38 @@ _REQ_061_FAILURE_REASON_ORDER = (
     "low_substance_rationale",
     "insufficient_evidence_citations",
 )
+_REQ_061_PROCESSING_RECOMMENDATION_FIELDS = (
+    "decision",
+    "rationale",
+    "confidence",
+    "evidence_refs",
+    "recommended_actions",
+    "cross_project_obligations",
+    "open_risks",
+)
+_REQ_061_PROCESSING_CONTEXT_USAGE_FIELDS = (
+    "cross_project_context_provided",
+    "cross_project_context_used",
+    "earth_sweep_context_used",
+    "projects_considered",
+    "earth_sweep_evidence_refs_considered",
+    "accepted_recommendation_ids",
+    "blocked_recommendation_ids",
+    "recommendation_mapping",
+    "recommendation_fields_complete",
+    "required_recommendation_fields",
+)
+_REQ_061_PROCESSING_ALLOWED_DECISIONS = {
+    "allow-planner-packet",
+    "allow-planner-packet-with-open-risks",
+    "block-planner-packet",
+}
+_REQ_061_PROCESSING_ALLOWED_CONFIDENCE = {"high", "medium", "low"}
+_REQ_061_PROCESSING_ALLOWED_PLANNER_STATUS = {
+    "promoted",
+    "blocked_by_quality",
+    "blocked_by_missing_earth_sweep_evidence",
+}
 
 
 def _utc_timestamp() -> str:
@@ -1196,6 +1228,184 @@ def _build_req_061_assessment_row(
     }
 
 
+def _build_req_061_processing_behavior(
+    *,
+    assessments: list[dict[str, Any]],
+    broad_sweep_context: dict[str, Any],
+) -> dict[str, Any]:
+    earth_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
+    earth_ref_set = set(earth_refs)
+    obligations_input = list(broad_sweep_context["cross_project_obligations"])
+    unresolved_ideas = list(broad_sweep_context["unresolved_ideas"])
+    projects_considered = sorted(
+        {
+            *broad_sweep_context["projects_considered"],
+            *[str(row["project_id"]) for row in obligations_input],
+        }
+    )
+
+    recommended_actions: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    recommendation_mapping: list[dict[str, str]] = []
+    accepted_recommendation_ids: list[str] = []
+    blocked_recommendation_ids: list[str] = []
+
+    for row in assessments:
+        recommendation_id = str(row["recommendation_id"])
+        packet_kind = str(row["packet_kind"])
+        evidence_refs = list(row["evidence_citations"]["evidence_refs"])
+        is_cross_project = packet_kind == "cross-project"
+        has_earth_sweep_evidence = bool(earth_ref_set.intersection(evidence_refs))
+        planner_status = "blocked_by_quality"
+
+        if row["decision"] == "accepted":
+            accepted_recommendation_ids.append(recommendation_id)
+            if not is_cross_project or has_earth_sweep_evidence:
+                planner_status = "promoted"
+                recommended_actions.append(
+                    {
+                        "action_id": f"recommendation-{recommendation_id}",
+                        "recommendation_id": recommendation_id,
+                        "summary": str(row["summary"]),
+                        "rationale": (
+                            f"Completeness={row['completeness_status']}; "
+                            f"rationale={row['rationale_quality']['status']}; "
+                            f"evidence={row['evidence_citations']['status']}."
+                        ),
+                        "packet_kind": packet_kind,
+                        "lane": str(row["lane"]),
+                        "priority": str(row["priority"]),
+                        "sequence_hint": int(row["sequence_hint"]),
+                        "evidence_refs": evidence_refs,
+                    }
+                )
+            else:
+                planner_status = "blocked_by_missing_earth_sweep_evidence"
+                required_refs = earth_refs or ["missing:earth-sweep-evidence-ref"]
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{recommendation_id}",
+                        "summary": str(row["summary"]),
+                        "reason_code": "missing_earth_sweep_evidence_refs",
+                        "evidence_refs": evidence_refs or required_refs,
+                        "required_evidence_refs": required_refs,
+                    }
+                )
+        else:
+            blocked_recommendation_ids.append(recommendation_id)
+
+        recommendation_mapping.append(
+            {
+                "recommendation_id": recommendation_id,
+                "quality_decision": str(row["decision"]),
+                "planner_status": planner_status,
+                "packet_kind": packet_kind,
+            }
+        )
+
+    cross_project_obligations: list[dict[str, Any]] = []
+    for row in obligations_input:
+        obligation_refs = sorted({*earth_refs, *list(row["evidence_refs"])})
+        if earth_refs:
+            cross_project_obligations.append(
+                {
+                    "obligation_id": str(row["obligation_id"]),
+                    "project_id": str(row["project_id"]),
+                    "summary": str(row["summary"]),
+                    "evidence_refs": obligation_refs,
+                }
+            )
+            continue
+
+        required_refs = list(row["evidence_refs"]) or ["missing:earth-sweep-evidence-ref"]
+        open_risks.append(
+            {
+                "risk_id": f"risk-{row['obligation_id']}",
+                "summary": str(row["summary"]),
+                "reason_code": "missing_earth_sweep_evidence_refs",
+                "evidence_refs": required_refs,
+                "required_evidence_refs": required_refs,
+            }
+        )
+
+    for row in unresolved_ideas:
+        required_refs = list(row["evidence_refs"]) or ["missing:earth-sweep-evidence-ref"]
+        open_risks.append(
+            {
+                "risk_id": f"risk-{row['idea_id']}",
+                "summary": str(row["summary"]),
+                "reason_code": "unresolved_idea_open_risk",
+                "evidence_refs": required_refs,
+                "required_evidence_refs": required_refs,
+            }
+        )
+
+    missing_earth_evidence = any(
+        str(row["reason_code"]) == "missing_earth_sweep_evidence_refs" for row in open_risks
+    )
+    if recommended_actions:
+        decision = "allow-planner-packet-with-open-risks" if open_risks else "allow-planner-packet"
+        confidence = "medium" if open_risks else "high"
+    else:
+        decision = "block-planner-packet"
+        confidence = "low" if (missing_earth_evidence or blocked_recommendation_ids or open_risks) else "medium"
+
+    recommendation_evidence_refs = sorted(
+        {
+            *earth_refs,
+            *[
+                ref
+                for row in assessments
+                for ref in list(row["evidence_citations"]["evidence_refs"])
+            ],
+            *[ref for row in cross_project_obligations for ref in row["evidence_refs"]],
+            *[ref for row in unresolved_ideas for ref in row["evidence_refs"]],
+        }
+    )
+    recommendation = {
+        "decision": decision,
+        "rationale": (
+            f"Promoted {len(recommended_actions)} planner-facing recommendation(s), "
+            f"kept {len(cross_project_obligations)} cross-project obligation(s), "
+            f"and recorded {len(open_risks)} open risk(s) from blocked or unresolved cross-project context."
+        ),
+        "confidence": confidence,
+        "evidence_refs": recommendation_evidence_refs,
+        "recommended_actions": recommended_actions,
+        "cross_project_obligations": cross_project_obligations,
+        "open_risks": sorted(
+            open_risks,
+            key=lambda row: (str(row["reason_code"]), str(row["risk_id"])),
+        ),
+    }
+
+    required_recommendation_fields = list(_REQ_061_PROCESSING_RECOMMENDATION_FIELDS)
+    recommendation_fields_complete = set(recommendation.keys()) == set(required_recommendation_fields)
+    context_usage = {
+        "cross_project_context_provided": bool(
+            earth_refs or broad_sweep_context["projects_considered"] or obligations_input or unresolved_ideas
+        ),
+        "cross_project_context_used": bool(
+            projects_considered
+            or obligations_input
+            or unresolved_ideas
+            or any(str(row["packet_kind"]) == "cross-project" for row in assessments)
+        ),
+        "earth_sweep_context_used": bool(earth_refs),
+        "projects_considered": projects_considered,
+        "earth_sweep_evidence_refs_considered": earth_refs,
+        "accepted_recommendation_ids": accepted_recommendation_ids,
+        "blocked_recommendation_ids": blocked_recommendation_ids,
+        "recommendation_mapping": recommendation_mapping,
+        "recommendation_fields_complete": recommendation_fields_complete,
+        "required_recommendation_fields": required_recommendation_fields,
+    }
+    return {
+        "recommendation": recommendation,
+        "context_usage": context_usage,
+    }
+
+
 def build_req_061_recommendation_quality_validator(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Build normalized REQ-061 payload for recommendation quality validation."""
     raw = _require_mapping(payload, field_name="payload")
@@ -1206,6 +1416,9 @@ def build_req_061_recommendation_quality_validator(payload: Mapping[str, Any]) -
     target_project = _normalize_target_project(raw.get("target_project"))
     thresholds = _normalize_req_061_thresholds(raw.get("quality_thresholds"))
     recommendations = _normalize_req_061_recommendations(raw.get("recommendations"))
+    broad_sweep_context: dict[str, Any] | None = None
+    if raw.get("broad_sweep_context") is not None:
+        broad_sweep_context = _normalize_broad_sweep_context(raw.get("broad_sweep_context"))
 
     assessments = [
         _build_req_061_assessment_row(recommendation=row, thresholds=thresholds)
@@ -1261,10 +1474,263 @@ def build_req_061_recommendation_quality_validator(payload: Mapping[str, Any]) -
             ),
         },
     }
+    if broad_sweep_context is not None:
+        built["processing_behavior"] = _build_req_061_processing_behavior(
+            assessments=assessments,
+            broad_sweep_context=broad_sweep_context,
+        )
     errors = validate_req_061_recommendation_quality_validator(built)
     if errors:
         raise ValueError(f"built REQ-061 payload failed validation: {errors}")
     return built
+
+
+def _validate_req_061_processing_recommended_action_row(row: Any, *, index: int) -> list[str]:
+    errors: list[str] = []
+    path = f"processing_behavior.recommendation.recommended_actions[{index}]"
+    if not isinstance(row, Mapping):
+        return [f"{path} must be an object"]
+
+    expected_keys = {
+        "action_id",
+        "recommendation_id",
+        "summary",
+        "rationale",
+        "packet_kind",
+        "lane",
+        "priority",
+        "sequence_hint",
+        "evidence_refs",
+    }
+    row_keys = set(row.keys())
+    missing = sorted(expected_keys - row_keys)
+    if missing:
+        errors.append(f"{path} missing keys: {missing}")
+    unexpected = sorted(row_keys - expected_keys)
+    if unexpected:
+        errors.append(f"{path} has unexpected keys: {unexpected}")
+
+    for key in ("action_id", "recommendation_id", "summary", "rationale", "packet_kind", "lane", "priority"):
+        value = row.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{path}.{key} must be a non-empty string")
+
+    packet_kind = row.get("packet_kind")
+    if isinstance(packet_kind, str) and packet_kind not in _REQ_061_ALLOWED_PACKET_KINDS:
+        errors.append(f"{path}.packet_kind must be one of: {sorted(_REQ_061_ALLOWED_PACKET_KINDS)}")
+
+    priority = row.get("priority")
+    if isinstance(priority, str) and priority not in _REQ_061_ALLOWED_PRIORITIES:
+        errors.append(f"{path}.priority must be one of: {sorted(_REQ_061_ALLOWED_PRIORITIES)}")
+
+    sequence_hint = row.get("sequence_hint")
+    if not isinstance(sequence_hint, int) or isinstance(sequence_hint, bool) or sequence_hint <= 0:
+        errors.append(f"{path}.sequence_hint must be a positive integer")
+
+    evidence_refs = row.get("evidence_refs")
+    if not isinstance(evidence_refs, list):
+        errors.append(f"{path}.evidence_refs must be a list")
+    else:
+        for evidence_index, item in enumerate(evidence_refs):
+            if not isinstance(item, str) or not item.strip():
+                errors.append(f"{path}.evidence_refs[{evidence_index}] must be a non-empty string")
+
+    recommendation_id = row.get("recommendation_id")
+    action_id = row.get("action_id")
+    if isinstance(recommendation_id, str) and recommendation_id.strip() and action_id != f"recommendation-{recommendation_id}":
+        errors.append(f"{path}.action_id must equal recommendation-<recommendation_id>")
+
+    return errors
+
+
+def _validate_req_061_processing_mapping_row(row: Any, *, index: int) -> tuple[list[str], str]:
+    errors: list[str] = []
+    path = f"processing_behavior.context_usage.recommendation_mapping[{index}]"
+    if not isinstance(row, Mapping):
+        return [f"{path} must be an object"], ""
+
+    expected_keys = {"recommendation_id", "quality_decision", "planner_status", "packet_kind"}
+    row_keys = set(row.keys())
+    missing = sorted(expected_keys - row_keys)
+    if missing:
+        errors.append(f"{path} missing keys: {missing}")
+    unexpected = sorted(row_keys - expected_keys)
+    if unexpected:
+        errors.append(f"{path} has unexpected keys: {unexpected}")
+
+    recommendation_id = ""
+    for key in ("recommendation_id", "quality_decision", "planner_status", "packet_kind"):
+        value = row.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{path}.{key} must be a non-empty string")
+            continue
+        if key == "recommendation_id":
+            recommendation_id = value
+
+    if row.get("quality_decision") not in _REQ_061_ALLOWED_DECISIONS:
+        errors.append(f"{path}.quality_decision must be one of: {sorted(_REQ_061_ALLOWED_DECISIONS)}")
+    if row.get("planner_status") not in _REQ_061_PROCESSING_ALLOWED_PLANNER_STATUS:
+        errors.append(
+            f"{path}.planner_status must be one of: {sorted(_REQ_061_PROCESSING_ALLOWED_PLANNER_STATUS)}"
+        )
+    if row.get("packet_kind") not in _REQ_061_ALLOWED_PACKET_KINDS:
+        errors.append(f"{path}.packet_kind must be one of: {sorted(_REQ_061_ALLOWED_PACKET_KINDS)}")
+
+    return errors, recommendation_id
+
+
+def _validate_req_061_processing_behavior(
+    processing_behavior: Any,
+    *,
+    accepted_ids: list[str],
+    blocked_ids: list[str],
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(processing_behavior, Mapping):
+        return ["processing_behavior must be an object"]
+
+    expected_keys = {"recommendation", "context_usage"}
+    keys = set(processing_behavior.keys())
+    missing = sorted(expected_keys - keys)
+    if missing:
+        errors.append(f"processing_behavior missing keys: {missing}")
+    unexpected = sorted(keys - expected_keys)
+    if unexpected:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected}")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        recommendation_keys = set(recommendation.keys())
+        required_recommendation_keys = set(_REQ_061_PROCESSING_RECOMMENDATION_FIELDS)
+        missing_recommendation = sorted(required_recommendation_keys - recommendation_keys)
+        if missing_recommendation:
+            errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+        unexpected_recommendation = sorted(recommendation_keys - required_recommendation_keys)
+        if unexpected_recommendation:
+            errors.append(
+                f"processing_behavior.recommendation has unexpected keys: {unexpected_recommendation}"
+            )
+
+        for key in ("decision", "rationale", "confidence"):
+            value = recommendation.get(key)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"processing_behavior.recommendation.{key} must be a non-empty string")
+
+        if recommendation.get("decision") not in _REQ_061_PROCESSING_ALLOWED_DECISIONS:
+            errors.append(
+                "processing_behavior.recommendation.decision must be one of: "
+                f"{sorted(_REQ_061_PROCESSING_ALLOWED_DECISIONS)}"
+            )
+        if recommendation.get("confidence") not in _REQ_061_PROCESSING_ALLOWED_CONFIDENCE:
+            errors.append(
+                "processing_behavior.recommendation.confidence must be one of: "
+                f"{sorted(_REQ_061_PROCESSING_ALLOWED_CONFIDENCE)}"
+            )
+
+        evidence_refs = recommendation.get("evidence_refs")
+        if not isinstance(evidence_refs, list):
+            errors.append("processing_behavior.recommendation.evidence_refs must be a list")
+        else:
+            for evidence_index, item in enumerate(evidence_refs):
+                if not isinstance(item, str) or not item.strip():
+                    errors.append(
+                        f"processing_behavior.recommendation.evidence_refs[{evidence_index}] must be a non-empty string"
+                    )
+
+        recommended_actions = recommendation.get("recommended_actions")
+        if not isinstance(recommended_actions, list):
+            errors.append("processing_behavior.recommendation.recommended_actions must be a list")
+        else:
+            for index, row in enumerate(recommended_actions):
+                errors.extend(_validate_req_061_processing_recommended_action_row(row, index=index))
+
+        for key in ("cross_project_obligations", "open_risks"):
+            value = recommendation.get(key)
+            if not isinstance(value, list):
+                errors.append(f"processing_behavior.recommendation.{key} must be a list")
+                continue
+            for index, row in enumerate(value):
+                errors.extend(_validate_req_055_recommendation_row(row, index=index, kind=key))
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        context_keys = set(context_usage.keys())
+        required_context_keys = set(_REQ_061_PROCESSING_CONTEXT_USAGE_FIELDS)
+        missing_context = sorted(required_context_keys - context_keys)
+        if missing_context:
+            errors.append(f"processing_behavior.context_usage missing keys: {missing_context}")
+        unexpected_context = sorted(context_keys - required_context_keys)
+        if unexpected_context:
+            errors.append(f"processing_behavior.context_usage has unexpected keys: {unexpected_context}")
+
+        for key in (
+            "cross_project_context_provided",
+            "cross_project_context_used",
+            "earth_sweep_context_used",
+            "recommendation_fields_complete",
+        ):
+            if not isinstance(context_usage.get(key), bool):
+                errors.append(f"processing_behavior.context_usage.{key} must be a boolean")
+
+        for key in (
+            "projects_considered",
+            "earth_sweep_evidence_refs_considered",
+            "accepted_recommendation_ids",
+            "blocked_recommendation_ids",
+        ):
+            value = context_usage.get(key)
+            if not isinstance(value, list):
+                errors.append(f"processing_behavior.context_usage.{key} must be a list")
+                continue
+            for item_index, item in enumerate(value):
+                if not isinstance(item, str) or not item.strip():
+                    errors.append(
+                        f"processing_behavior.context_usage.{key}[{item_index}] must be a non-empty string"
+                    )
+
+        if context_usage.get("accepted_recommendation_ids") != accepted_ids:
+            errors.append(
+                "processing_behavior.context_usage.accepted_recommendation_ids must match quality accepted IDs"
+            )
+        if context_usage.get("blocked_recommendation_ids") != blocked_ids:
+            errors.append(
+                "processing_behavior.context_usage.blocked_recommendation_ids must match quality blocked IDs"
+            )
+
+        recommendation_mapping = context_usage.get("recommendation_mapping")
+        if not isinstance(recommendation_mapping, list):
+            errors.append("processing_behavior.context_usage.recommendation_mapping must be a list")
+        else:
+            mapped_recommendation_ids: list[str] = []
+            seen_mapped_recommendation_ids: set[str] = set()
+            for index, row in enumerate(recommendation_mapping):
+                row_errors, recommendation_id = _validate_req_061_processing_mapping_row(row, index=index)
+                errors.extend(row_errors)
+                if recommendation_id:
+                    if recommendation_id in seen_mapped_recommendation_ids:
+                        errors.append(
+                            "processing_behavior.context_usage.recommendation_mapping recommendation_ids must be unique"
+                        )
+                    else:
+                        seen_mapped_recommendation_ids.add(recommendation_id)
+                        mapped_recommendation_ids.append(recommendation_id)
+            if sorted(mapped_recommendation_ids) != sorted([*accepted_ids, *blocked_ids]):
+                errors.append(
+                    "processing_behavior.context_usage.recommendation_mapping must cover all quality-assessed recommendation IDs"
+                )
+
+        if context_usage.get("required_recommendation_fields") != list(_REQ_061_PROCESSING_RECOMMENDATION_FIELDS):
+            errors.append(
+                "processing_behavior.context_usage.required_recommendation_fields must match required recommendation keys"
+            )
+        if context_usage.get("recommendation_fields_complete") is not True:
+            errors.append("processing_behavior.context_usage.recommendation_fields_complete must be true")
+
+    return errors
 
 
 def _validate_req_061_assessment_row(
@@ -1480,11 +1946,13 @@ def validate_req_061_recommendation_quality_validator(payload: Mapping[str, Any]
         "quality_validation",
         "totals",
     }
+    optional_top = {"processing_behavior"}
+    expected_top = required_top | optional_top
     top_keys = set(payload.keys())
     missing_top = sorted(required_top - top_keys)
     if missing_top:
         errors.append(f"missing top-level keys: {missing_top}")
-    unexpected_top = sorted(top_keys - required_top)
+    unexpected_top = sorted(top_keys - expected_top)
     if unexpected_top:
         errors.append(f"unexpected top-level keys: {unexpected_top}")
 
@@ -1672,6 +2140,16 @@ def validate_req_061_recommendation_quality_validator(payload: Mapping[str, Any]
                 errors.append(
                     "quality_validation.planner_readiness.decision must be block_planner_packet when all recommendations are blocked"
                 )
+
+    processing_behavior = payload.get("processing_behavior")
+    if processing_behavior is not None:
+        errors.extend(
+            _validate_req_061_processing_behavior(
+                processing_behavior,
+                accepted_ids=accepted_ids,
+                blocked_ids=blocked_ids,
+            )
+        )
 
     totals = payload.get("totals")
     if not isinstance(totals, Mapping):

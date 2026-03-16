@@ -33,6 +33,35 @@ REQ-061 expects:
     "project_id": "optimus-prime-gsd-fusion",
     "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
   },
+  "broad_sweep_context": {
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+    ],
+    "projects_considered": [
+      "earth-core-runtime",
+      "earth-shared-observability"
+    ],
+    "cross_project_obligations": [
+      {
+        "obligation_id": "obligation-align-earth-runtime-gates",
+        "project_id": "earth-core-runtime",
+        "summary": "Align Earth runtime quality gating before planner packet rollout.",
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+        ]
+      }
+    ],
+    "unresolved_ideas": [
+      {
+        "idea_id": "idea-review-shared-observability-handoff",
+        "summary": "Validate earth-shared-observability ownership before promoting more shared packet routing changes.",
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ]
+      }
+    ]
+  },
   "quality_thresholds": {
     "min_rationale_word_count": 12,
     "min_evidence_citations": 2
@@ -58,6 +87,7 @@ REQ-061 expects:
 Rules:
 - `analysis_type` must be `recommendation_quality_validator` when provided.
 - `target_project.project_root` must be an absolute path.
+- `broad_sweep_context` is optional and, when present, uses the same deterministic Earth-sweep input shape as REQ-055 processing behavior.
 - `recommendations[]` must include at least one row.
 - `recommendation_id` is always required and must be unique.
 - Quality-completeness fields are anchored to:
@@ -79,6 +109,7 @@ REQ-061 output payload contains:
 - target anchor: `target_project`
 - quality config: `quality_thresholds`
 - validation result: `quality_validation`
+- optional reasoning surface: `processing_behavior`
 - bounded counts: `totals`
 
 `quality_thresholds` contains:
@@ -90,6 +121,31 @@ REQ-061 output payload contains:
 - `accepted_recommendations[]`
 - `blocked_recommendations[]`
 - `planner_readiness`
+
+When `broad_sweep_context` is provided, `processing_behavior` contains:
+- `recommendation`
+- `context_usage`
+
+`processing_behavior.recommendation` contains:
+- `decision`
+- `rationale`
+- `confidence`
+- `evidence_refs[]`
+- `recommended_actions[]`
+- `cross_project_obligations[]`
+- `open_risks[]`
+
+`processing_behavior.context_usage` contains:
+- `cross_project_context_provided`
+- `cross_project_context_used`
+- `earth_sweep_context_used`
+- `projects_considered[]`
+- `earth_sweep_evidence_refs_considered[]`
+- `accepted_recommendation_ids[]`
+- `blocked_recommendation_ids[]`
+- `recommendation_mapping[]`
+- `recommendation_fields_complete`
+- `required_recommendation_fields[]`
 
 Each recommendation assessment row includes:
 - `recommendation_id`
@@ -124,6 +180,12 @@ Planner-readiness behavior:
 - `allowed_recommendation_ids[]` must exactly match `accepted_recommendations[]`.
 - `blocked_recommendation_ids[]` and `blocking_reason_codes[]` must exactly match blocked assessment output.
 
+Processing-behavior rules:
+- `recommended_actions[]` only includes accepted recommendations that remain planner-facing after broad-sweep context checks.
+- Cross-project obligations must include Earth-sweep evidence refs; when Earth-sweep refs are unavailable, obligations become `open_risks[]` with `reason_code = missing_earth_sweep_evidence_refs`.
+- `broad_sweep_context.unresolved_ideas[]` always become `open_risks[]` with `reason_code = unresolved_idea_open_risk`.
+- `processing_behavior.context_usage.recommendation_fields_complete` must stay `true` and `required_recommendation_fields[]` must match the processing recommendation keys.
+
 ## Deterministic fixtures and samples
 - Input fixture: `examples/fixtures/recommendation-quality-validator.json`
 - Contract tests: `tests/contracts/test_recommendation-quality-validator.py`
@@ -131,8 +193,10 @@ Planner-readiness behavior:
 
 The structure in `strategy/current/samples/REQ-061_recommendation-quality-validator.sample.json`
 is the canonical contract shape for REQ-061 and documents:
+- `broad_sweep_context`
 - `quality_thresholds.required_recommendation_fields`
 - `quality_validation.accepted_recommendations`
 - `quality_validation.blocked_recommendations`
 - `quality_validation.planner_readiness`
+- `processing_behavior`
 - `totals`

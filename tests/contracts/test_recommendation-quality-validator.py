@@ -88,10 +88,12 @@ def test_req_061_contract_doc_references_sample_structure() -> None:
 
     assert "strategy/current/samples/REQ-061_recommendation-quality-validator.sample.json" in contract_text
     for key in (
+        "broad_sweep_context",
         "quality_thresholds.required_recommendation_fields",
         "quality_validation.accepted_recommendations",
         "quality_validation.blocked_recommendations",
         "quality_validation.planner_readiness",
+        "processing_behavior",
         "totals",
     ):
         assert key in contract_text
