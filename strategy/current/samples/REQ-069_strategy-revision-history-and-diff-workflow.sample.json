@@ -1,0 +1,162 @@
+{
+  "analysis_type": "strategy_revision_history_and_diff_workflow",
+  "call_id": "strategy-revision-history-and-diff-workflow",
+  "checked_at_utc": "2026-03-17T09:45:00Z",
+  "ok": true,
+  "requirement_id": "REQ-069",
+  "schema_version": "1.0",
+  "strategy_revision_history_and_diff_workflow": {
+    "diff_artifacts": [
+      {
+        "change_domain": "planning_scope",
+        "changed_anchors": [
+          "planning_scope.task_floor"
+        ],
+        "diff_artifact_id": "diff.strategy-2026-03-14.strategy-2026-03-15.planning_scope",
+        "diff_id": "diff.scope.r14-r15",
+        "direction_change_detected": false,
+        "directional_shift": "maintain",
+        "evidence_refs": [
+          "strategy/history/strategy-2026-03-15/STRATEGY.json#constraints.task_floor"
+        ],
+        "from_revision_id": "strategy-2026-03-14",
+        "governance_review_ref": "",
+        "guardrail_status": "stable_direction",
+        "previous_directional_shift": "",
+        "sequence_position": 1,
+        "summary": "Planning task-floor constraint was retained without directional change.",
+        "to_revision_id": "strategy-2026-03-15"
+      },
+      {
+        "change_domain": "runtime_lane",
+        "changed_anchors": [
+          "runtime_lane.queue_backlog",
+          "runtime_lane.telemetry_staleness"
+        ],
+        "diff_artifact_id": "diff.strategy-2026-03-14.strategy-2026-03-15.runtime_lane",
+        "diff_id": "diff.runtime.r14-r15",
+        "direction_change_detected": false,
+        "directional_shift": "decrease",
+        "evidence_refs": [
+          "reports/runtime/runtime-status-2026-03-15.json#queue_backlog",
+          "reports/runtime/runtime-status-2026-03-15.json#telemetry_staleness"
+        ],
+        "from_revision_id": "strategy-2026-03-14",
+        "governance_review_ref": "",
+        "guardrail_status": "stable_direction",
+        "previous_directional_shift": "",
+        "sequence_position": 2,
+        "summary": "Runtime backlog and telemetry staleness moved downward.",
+        "to_revision_id": "strategy-2026-03-15"
+      },
+      {
+        "change_domain": "planning_scope",
+        "changed_anchors": [
+          "planning_scope.change_budget"
+        ],
+        "diff_artifact_id": "diff.strategy-2026-03-15.strategy-2026-03-16.planning_scope",
+        "diff_id": "diff.scope.r15-r16",
+        "direction_change_detected": true,
+        "directional_shift": "decrease",
+        "evidence_refs": [
+          "strategy/current/STRATEGY.json#constraints.change_budget"
+        ],
+        "from_revision_id": "strategy-2026-03-15",
+        "governance_review_ref": "",
+        "guardrail_status": "blocked_needs_governance_review",
+        "previous_directional_shift": "maintain",
+        "sequence_position": 3,
+        "summary": "Change budget tightened without an attached governance review reference.",
+        "to_revision_id": "strategy-2026-03-16"
+      },
+      {
+        "change_domain": "runtime_lane",
+        "changed_anchors": [
+          "runtime_lane.worker_parallelism"
+        ],
+        "diff_artifact_id": "diff.strategy-2026-03-15.strategy-2026-03-16.runtime_lane",
+        "diff_id": "diff.runtime.r15-r16",
+        "direction_change_detected": true,
+        "directional_shift": "increase",
+        "evidence_refs": [
+          "reports/governance/reviews/GR-204-runtime-lane.md",
+          "reports/runtime/runtime-status-2026-03-16.json#worker_parallelism"
+        ],
+        "from_revision_id": "strategy-2026-03-15",
+        "governance_review_ref": "reports/governance/reviews/GR-204-runtime-lane.md",
+        "guardrail_status": "governance_reviewed",
+        "previous_directional_shift": "decrease",
+        "sequence_position": 4,
+        "summary": "Parallelism increased with an explicit governance review reference.",
+        "to_revision_id": "strategy-2026-03-16"
+      }
+    ],
+    "governance_review": {
+      "approved_diff_ids": [
+        "diff.runtime.r15-r16"
+      ],
+      "blocked_diff_ids": [
+        "diff.scope.r15-r16"
+      ],
+      "decision": "hold",
+      "rationale": "review_required=2 approved=1 blocked=1; directional shifts without governance references are blocked.",
+      "review_required_diff_ids": [
+        "diff.runtime.r15-r16",
+        "diff.scope.r15-r16"
+      ]
+    },
+    "revision_history": [
+      {
+        "evidence_refs": [
+          "reports/runtime/runtime-status-2026-03-14.json",
+          "strategy/history/strategy-2026-03-14/STRATEGY.json"
+        ],
+        "focus_anchors": [
+          "mission_scope",
+          "runtime_lane"
+        ],
+        "recorded_at_utc": "2026-03-14T08:00:00Z",
+        "revision_id": "strategy-2026-03-14",
+        "strategy_summary": "Baseline strategy with stable runtime lane and broad planning scope."
+      },
+      {
+        "evidence_refs": [
+          "reports/runtime/runtime-status-2026-03-15.json",
+          "strategy/history/strategy-2026-03-15/STRATEGY.json"
+        ],
+        "focus_anchors": [
+          "planning_scope",
+          "runtime_lane"
+        ],
+        "recorded_at_utc": "2026-03-15T08:00:00Z",
+        "revision_id": "strategy-2026-03-15",
+        "strategy_summary": "Narrowed planning scope and stronger runtime isolation guardrails."
+      },
+      {
+        "evidence_refs": [
+          "reports/governance/review-log-2026-03-16.md",
+          "reports/runtime/runtime-status-2026-03-16.json",
+          "strategy/current/STRATEGY.json"
+        ],
+        "focus_anchors": [
+          "planning_scope",
+          "throughput"
+        ],
+        "recorded_at_utc": "2026-03-16T08:00:00Z",
+        "revision_id": "strategy-2026-03-16",
+        "strategy_summary": "Expanded execution throughput while preserving traceability for governance review."
+      }
+    ]
+  },
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "totals": {
+    "blocked_directional_shifts": 1,
+    "diff_artifacts": 4,
+    "domains_tracked": 2,
+    "review_required": 2,
+    "revision_snapshots": 3
+  }
+}

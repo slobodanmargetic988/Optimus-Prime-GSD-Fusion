@@ -1,0 +1,162 @@
+{
+  "input": {
+    "analysis_type": "strategy_revision_history_and_diff_workflow",
+    "now_utc": "2026-03-17T09:45:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "revision_snapshots": [
+      {
+        "revision_id": "strategy-2026-03-14",
+        "recorded_at_utc": "2026-03-14T08:00:00Z",
+        "strategy_summary": "Baseline strategy with stable runtime lane and broad planning scope.",
+        "focus_anchors": [
+          "mission_scope",
+          "runtime_lane"
+        ],
+        "evidence_refs": [
+          "strategy/history/strategy-2026-03-14/STRATEGY.json",
+          "reports/runtime/runtime-status-2026-03-14.json"
+        ]
+      },
+      {
+        "revision_id": "strategy-2026-03-15",
+        "recorded_at_utc": "2026-03-15T08:00:00Z",
+        "strategy_summary": "Narrowed planning scope and stronger runtime isolation guardrails.",
+        "focus_anchors": [
+          "planning_scope",
+          "runtime_lane"
+        ],
+        "evidence_refs": [
+          "strategy/history/strategy-2026-03-15/STRATEGY.json",
+          "reports/runtime/runtime-status-2026-03-15.json"
+        ]
+      },
+      {
+        "revision_id": "strategy-2026-03-16",
+        "recorded_at_utc": "2026-03-16T08:00:00Z",
+        "strategy_summary": "Expanded execution throughput while preserving traceability for governance review.",
+        "focus_anchors": [
+          "planning_scope",
+          "throughput"
+        ],
+        "evidence_refs": [
+          "strategy/current/STRATEGY.json",
+          "reports/runtime/runtime-status-2026-03-16.json",
+          "reports/governance/review-log-2026-03-16.md"
+        ]
+      }
+    ],
+    "diff_requests": [
+      {
+        "diff_id": "diff.scope.r14-r15",
+        "from_revision_id": "strategy-2026-03-14",
+        "to_revision_id": "strategy-2026-03-15",
+        "change_domain": "planning_scope",
+        "directional_shift": "maintain",
+        "changed_anchors": [
+          "planning_scope.task_floor"
+        ],
+        "summary": "Planning task-floor constraint was retained without directional change.",
+        "evidence_refs": [
+          "strategy/history/strategy-2026-03-15/STRATEGY.json#constraints.task_floor"
+        ]
+      },
+      {
+        "diff_id": "diff.runtime.r14-r15",
+        "from_revision_id": "strategy-2026-03-14",
+        "to_revision_id": "strategy-2026-03-15",
+        "change_domain": "runtime_lane",
+        "directional_shift": "decrease",
+        "changed_anchors": [
+          "runtime_lane.queue_backlog",
+          "runtime_lane.telemetry_staleness"
+        ],
+        "summary": "Runtime backlog and telemetry staleness moved downward.",
+        "evidence_refs": [
+          "reports/runtime/runtime-status-2026-03-15.json#queue_backlog",
+          "reports/runtime/runtime-status-2026-03-15.json#telemetry_staleness"
+        ]
+      },
+      {
+        "diff_id": "diff.scope.r15-r16",
+        "from_revision_id": "strategy-2026-03-15",
+        "to_revision_id": "strategy-2026-03-16",
+        "change_domain": "planning_scope",
+        "directional_shift": "decrease",
+        "changed_anchors": [
+          "planning_scope.change_budget"
+        ],
+        "summary": "Change budget tightened without an attached governance review reference.",
+        "evidence_refs": [
+          "strategy/current/STRATEGY.json#constraints.change_budget"
+        ]
+      },
+      {
+        "diff_id": "diff.runtime.r15-r16",
+        "from_revision_id": "strategy-2026-03-15",
+        "to_revision_id": "strategy-2026-03-16",
+        "change_domain": "runtime_lane",
+        "directional_shift": "increase",
+        "governance_review_ref": "reports/governance/reviews/GR-204-runtime-lane.md",
+        "changed_anchors": [
+          "runtime_lane.worker_parallelism"
+        ],
+        "summary": "Parallelism increased with an explicit governance review reference.",
+        "evidence_refs": [
+          "reports/governance/reviews/GR-204-runtime-lane.md",
+          "reports/runtime/runtime-status-2026-03-16.json#worker_parallelism"
+        ]
+      }
+    ]
+  },
+  "invalid_unknown_revision_input": {
+    "analysis_type": "strategy_revision_history_and_diff_workflow",
+    "now_utc": "2026-03-17T09:45:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "revision_snapshots": [
+      {
+        "revision_id": "strategy-2026-03-14",
+        "recorded_at_utc": "2026-03-14T08:00:00Z",
+        "strategy_summary": "Baseline strategy.",
+        "focus_anchors": [
+          "runtime_lane"
+        ],
+        "evidence_refs": [
+          "strategy/history/strategy-2026-03-14/STRATEGY.json"
+        ]
+      },
+      {
+        "revision_id": "strategy-2026-03-15",
+        "recorded_at_utc": "2026-03-15T08:00:00Z",
+        "strategy_summary": "Updated strategy.",
+        "focus_anchors": [
+          "planning_scope"
+        ],
+        "evidence_refs": [
+          "strategy/history/strategy-2026-03-15/STRATEGY.json"
+        ]
+      }
+    ],
+    "diff_requests": [
+      {
+        "diff_id": "diff.invalid.unknown-revision",
+        "from_revision_id": "strategy-2026-03-14",
+        "to_revision_id": "strategy-2099-01-01",
+        "change_domain": "runtime_lane",
+        "directional_shift": "decrease",
+        "changed_anchors": [
+          "runtime_lane.queue_backlog"
+        ],
+        "summary": "Invalid target revision id should fail validation.",
+        "evidence_refs": [
+          "reports/runtime/runtime-status-2026-03-15.json#queue_backlog"
+        ]
+      }
+    ]
+  }
+}

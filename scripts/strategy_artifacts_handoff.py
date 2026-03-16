@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-056, REQ-057, and REQ-063 strategy artifact handoff surfaces."""
+"""REQ-056, REQ-057, REQ-063, and REQ-069 strategy artifact handoff surfaces."""
 
 from __future__ import annotations
 
@@ -25,6 +25,11 @@ REQ_063_SCHEMA_VERSION = "1.0"
 REQ_063_ANALYSIS_TYPE = "ecosystem_link_map_integrity_validator"
 REQ_063_CALL_ID = "ecosystem-link-map-integrity-validator"
 
+REQ_069_REQUIREMENT_ID = "REQ-069"
+REQ_069_SCHEMA_VERSION = "1.0"
+REQ_069_ANALYSIS_TYPE = "strategy_revision_history_and_diff_workflow"
+REQ_069_CALL_ID = "strategy-revision-history-and-diff-workflow"
+
 _EXPECTED_DIRECTIONS = {"increase", "decrease", "maintain"}
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
 _ESCALATION_TRIGGER_TYPES = {
@@ -40,6 +45,11 @@ _REQ_063_DIAGNOSTIC_CATEGORIES = {"referential_integrity", "schema_integrity"}
 _REQ_063_SUMMARY_STATUSES = {"passed", "failed"}
 _REQ_063_MISSING_DISCOVERED_PROJECT_REASON = "missing_discovered_project"
 _REQ_063_MISSING_EARTH_SWEEP_REASON = "missing_earth_sweep_evidence_refs"
+_REQ_069_GUARDRAIL_STATUSES = {
+    "stable_direction",
+    "governance_reviewed",
+    "blocked_needs_governance_review",
+}
 
 
 def _utc_timestamp() -> str:
@@ -414,6 +424,229 @@ def _normalize_broad_sweep_context(value: Any) -> dict[str, list[str]]:
             min_items=0,
         ),
     }
+
+
+def _normalize_req_069_revision_snapshots(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("revision_snapshots must be a list")
+    if not value:
+        raise ValueError("revision_snapshots must include at least one row")
+
+    normalized: list[dict[str, Any]] = []
+    seen_revision_ids: set[str] = set()
+    for index, row in enumerate(value):
+        field_prefix = f"revision_snapshots[{index}]"
+        raw = _require_mapping(row, field_name=field_prefix)
+        expected_keys = {
+            "revision_id",
+            "recorded_at_utc",
+            "strategy_summary",
+            "focus_anchors",
+            "evidence_refs",
+        }
+        row_keys = set(raw.keys())
+        unexpected = sorted(row_keys - expected_keys)
+        if unexpected:
+            raise ValueError(f"{field_prefix} has unexpected keys: {unexpected}")
+        missing = sorted(expected_keys - row_keys)
+        if missing:
+            raise ValueError(f"{field_prefix} missing keys: {missing}")
+
+        revision_id = _require_nonempty_text(raw.get("revision_id"), field_name=f"{field_prefix}.revision_id")
+        if revision_id in seen_revision_ids:
+            raise ValueError(f"{field_prefix}.revision_id must be unique")
+        seen_revision_ids.add(revision_id)
+
+        normalized.append(
+            {
+                "revision_id": revision_id,
+                "recorded_at_utc": _require_nonempty_text(
+                    raw.get("recorded_at_utc"),
+                    field_name=f"{field_prefix}.recorded_at_utc",
+                ),
+                "strategy_summary": _require_nonempty_text(
+                    raw.get("strategy_summary"),
+                    field_name=f"{field_prefix}.strategy_summary",
+                ),
+                "focus_anchors": _normalize_text_list(
+                    raw.get("focus_anchors"),
+                    field_name=f"{field_prefix}.focus_anchors",
+                    min_items=1,
+                ),
+                "evidence_refs": _normalize_text_list(
+                    raw.get("evidence_refs"),
+                    field_name=f"{field_prefix}.evidence_refs",
+                    min_items=1,
+                ),
+            }
+        )
+
+    return sorted(normalized, key=lambda row: (row["recorded_at_utc"], row["revision_id"]))
+
+
+def _normalize_req_069_diff_requests(
+    value: Any,
+    *,
+    revision_ids: set[str],
+    revision_order: Mapping[str, int],
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("diff_requests must be a list")
+    if not value:
+        raise ValueError("diff_requests must include at least one row")
+
+    normalized: list[dict[str, Any]] = []
+    seen_diff_ids: set[str] = set()
+    for index, row in enumerate(value):
+        field_prefix = f"diff_requests[{index}]"
+        raw = _require_mapping(row, field_name=field_prefix)
+        required_keys = {
+            "diff_id",
+            "from_revision_id",
+            "to_revision_id",
+            "change_domain",
+            "directional_shift",
+            "changed_anchors",
+            "summary",
+            "evidence_refs",
+        }
+        optional_keys = {"governance_review_ref"}
+        row_keys = set(raw.keys())
+        unexpected = sorted(row_keys - (required_keys | optional_keys))
+        if unexpected:
+            raise ValueError(f"{field_prefix} has unexpected keys: {unexpected}")
+        missing = sorted(required_keys - row_keys)
+        if missing:
+            raise ValueError(f"{field_prefix} missing keys: {missing}")
+
+        diff_id = _require_nonempty_text(raw.get("diff_id"), field_name=f"{field_prefix}.diff_id")
+        if diff_id in seen_diff_ids:
+            raise ValueError(f"{field_prefix}.diff_id must be unique")
+        seen_diff_ids.add(diff_id)
+
+        from_revision_id = _require_nonempty_text(
+            raw.get("from_revision_id"),
+            field_name=f"{field_prefix}.from_revision_id",
+        )
+        to_revision_id = _require_nonempty_text(
+            raw.get("to_revision_id"),
+            field_name=f"{field_prefix}.to_revision_id",
+        )
+        if from_revision_id not in revision_ids:
+            raise ValueError(f"{field_prefix}.from_revision_id must reference revision_snapshots[].revision_id")
+        if to_revision_id not in revision_ids:
+            raise ValueError(f"{field_prefix}.to_revision_id must reference revision_snapshots[].revision_id")
+        if from_revision_id == to_revision_id:
+            raise ValueError(f"{field_prefix}.from_revision_id and to_revision_id must differ")
+        if revision_order[from_revision_id] >= revision_order[to_revision_id]:
+            raise ValueError(
+                f"{field_prefix} must progress forward in revision history ordering"
+            )
+
+        directional_shift = _require_nonempty_text(
+            raw.get("directional_shift"),
+            field_name=f"{field_prefix}.directional_shift",
+        ).lower()
+        if directional_shift not in _EXPECTED_DIRECTIONS:
+            raise ValueError(f"{field_prefix}.directional_shift must be one of: {sorted(_EXPECTED_DIRECTIONS)}")
+
+        governance_review_ref = str(raw.get("governance_review_ref") or "").strip()
+
+        normalized.append(
+            {
+                "diff_id": diff_id,
+                "from_revision_id": from_revision_id,
+                "to_revision_id": to_revision_id,
+                "change_domain": _require_nonempty_text(
+                    raw.get("change_domain"),
+                    field_name=f"{field_prefix}.change_domain",
+                ),
+                "directional_shift": directional_shift,
+                "changed_anchors": _normalize_text_list(
+                    raw.get("changed_anchors"),
+                    field_name=f"{field_prefix}.changed_anchors",
+                    min_items=1,
+                ),
+                "summary": _require_nonempty_text(raw.get("summary"), field_name=f"{field_prefix}.summary"),
+                "evidence_refs": _normalize_text_list(
+                    raw.get("evidence_refs"),
+                    field_name=f"{field_prefix}.evidence_refs",
+                    min_items=1,
+                ),
+                "governance_review_ref": governance_review_ref,
+            }
+        )
+
+    return sorted(
+        normalized,
+        key=lambda row: (
+            revision_order[row["to_revision_id"]],
+            revision_order[row["from_revision_id"]],
+            row["change_domain"],
+            row["diff_id"],
+        ),
+    )
+
+
+def _build_req_069_diff_artifacts(diff_requests: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    diff_artifacts: list[dict[str, Any]] = []
+    domain_last_direction: dict[str, str] = {}
+    review_required_diff_ids: set[str] = set()
+    approved_diff_ids: set[str] = set()
+    blocked_diff_ids: set[str] = set()
+
+    for sequence_position, row in enumerate(diff_requests, start=1):
+        diff_id = row["diff_id"]
+        change_domain = row["change_domain"]
+        directional_shift = row["directional_shift"]
+        previous_directional_shift = domain_last_direction.get(change_domain, "")
+        direction_change_detected = bool(previous_directional_shift and directional_shift != previous_directional_shift)
+        governance_review_ref = row["governance_review_ref"]
+
+        if direction_change_detected:
+            review_required_diff_ids.add(diff_id)
+        if direction_change_detected and governance_review_ref:
+            guardrail_status = "governance_reviewed"
+            approved_diff_ids.add(diff_id)
+        elif direction_change_detected:
+            guardrail_status = "blocked_needs_governance_review"
+            blocked_diff_ids.add(diff_id)
+        else:
+            guardrail_status = "stable_direction"
+
+        diff_artifacts.append(
+            {
+                "sequence_position": sequence_position,
+                "diff_id": diff_id,
+                "diff_artifact_id": (
+                    f"diff.{row['from_revision_id']}.{row['to_revision_id']}.{change_domain}"
+                ),
+                "from_revision_id": row["from_revision_id"],
+                "to_revision_id": row["to_revision_id"],
+                "change_domain": change_domain,
+                "directional_shift": directional_shift,
+                "previous_directional_shift": previous_directional_shift,
+                "direction_change_detected": direction_change_detected,
+                "governance_review_ref": governance_review_ref,
+                "guardrail_status": guardrail_status,
+                "changed_anchors": row["changed_anchors"],
+                "summary": row["summary"],
+                "evidence_refs": row["evidence_refs"],
+            }
+        )
+        domain_last_direction[change_domain] = directional_shift
+
+    governance_review = {
+        "decision": "hold" if blocked_diff_ids else "proceed",
+        "rationale": (
+            f"review_required={len(review_required_diff_ids)} approved={len(approved_diff_ids)} "
+            f"blocked={len(blocked_diff_ids)}; directional shifts without governance references are blocked."
+        ),
+        "review_required_diff_ids": sorted(review_required_diff_ids),
+        "approved_diff_ids": sorted(approved_diff_ids),
+        "blocked_diff_ids": sorted(blocked_diff_ids),
+    }
+    return diff_artifacts, governance_review
 
 
 def _build_req_057_processing_behavior(
@@ -856,6 +1089,54 @@ def _build_req_063_processing_behavior(
     }
 
 
+def build_req_069_strategy_revision_history_and_diff_workflow(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build normalized REQ-069 payload for strategy revision history and diff workflow handoff."""
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_069_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_069_ANALYSIS_TYPE}")
+
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+    target_project = _normalize_target_project(raw.get("target_project"))
+    revision_history = _normalize_req_069_revision_snapshots(raw.get("revision_snapshots"))
+    revision_ids = {row["revision_id"] for row in revision_history}
+    revision_order = {row["revision_id"]: index for index, row in enumerate(revision_history)}
+    diff_requests = _normalize_req_069_diff_requests(
+        raw.get("diff_requests"),
+        revision_ids=revision_ids,
+        revision_order=revision_order,
+    )
+    diff_artifacts, governance_review = _build_req_069_diff_artifacts(diff_requests)
+    domains_tracked = {row["change_domain"] for row in diff_artifacts}
+
+    built = {
+        "ok": True,
+        "schema_version": REQ_069_SCHEMA_VERSION,
+        "requirement_id": REQ_069_REQUIREMENT_ID,
+        "analysis_type": REQ_069_ANALYSIS_TYPE,
+        "call_id": REQ_069_CALL_ID,
+        "checked_at_utc": checked_at_utc,
+        "target_project": target_project,
+        "strategy_revision_history_and_diff_workflow": {
+            "revision_history": revision_history,
+            "diff_artifacts": diff_artifacts,
+            "governance_review": governance_review,
+        },
+        "totals": {
+            "revision_snapshots": len(revision_history),
+            "diff_artifacts": len(diff_artifacts),
+            "domains_tracked": len(domains_tracked),
+            "review_required": len(governance_review["review_required_diff_ids"]),
+            "blocked_directional_shifts": len(governance_review["blocked_diff_ids"]),
+        },
+    }
+
+    errors = validate_req_069_strategy_revision_history_and_diff_workflow(built)
+    if errors:
+        raise ValueError(f"built REQ-069 payload failed validation: {errors}")
+    return built
+
+
 def build_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Build normalized REQ-056 payload for KPI target artifact handoff."""
     raw = _require_mapping(payload, field_name="payload")
@@ -1036,6 +1317,494 @@ def _validate_nonempty_string_list(
             errors.append(f"{field_name} must be sorted")
 
     return errors, unique_sorted
+
+
+def _validate_req_069_revision_row(
+    *,
+    row: Any,
+    index: int,
+    seen_revision_ids: set[str],
+) -> tuple[list[str], str | None]:
+    errors: list[str] = []
+    row_path = f"strategy_revision_history_and_diff_workflow.revision_history[{index}]"
+    revision_id_value: str | None = None
+
+    if not isinstance(row, Mapping):
+        return [f"{row_path} must be an object"], revision_id_value
+
+    expected_keys = {
+        "revision_id",
+        "recorded_at_utc",
+        "strategy_summary",
+        "focus_anchors",
+        "evidence_refs",
+    }
+    row_keys = set(row.keys())
+    missing = sorted(expected_keys - row_keys)
+    if missing:
+        errors.append(f"{row_path} missing keys: {missing}")
+    unexpected = sorted(row_keys - expected_keys)
+    if unexpected:
+        errors.append(f"{row_path} has unexpected keys: {unexpected}")
+
+    revision_id = row.get("revision_id")
+    if not isinstance(revision_id, str) or not revision_id.strip():
+        errors.append(f"{row_path}.revision_id must be a non-empty string")
+    elif revision_id in seen_revision_ids:
+        errors.append(f"{row_path}.revision_id must be unique")
+    else:
+        seen_revision_ids.add(revision_id)
+        revision_id_value = revision_id
+
+    for key in ("recorded_at_utc", "strategy_summary"):
+        value_text = row.get(key)
+        if not isinstance(value_text, str) or not value_text.strip():
+            errors.append(f"{row_path}.{key} must be a non-empty string")
+
+    focus_anchor_errors, _ = _validate_nonempty_string_list(
+        value=row.get("focus_anchors"),
+        field_name=f"{row_path}.focus_anchors",
+        min_items=1,
+    )
+    errors.extend(focus_anchor_errors)
+    evidence_errors, _ = _validate_nonempty_string_list(
+        value=row.get("evidence_refs"),
+        field_name=f"{row_path}.evidence_refs",
+        min_items=1,
+    )
+    errors.extend(evidence_errors)
+
+    return errors, revision_id_value
+
+
+def _validate_req_069_diff_row(
+    *,
+    row: Any,
+    index: int,
+    expected_sequence_position: int,
+    revision_ids: set[str],
+    revision_order: Mapping[str, int],
+) -> tuple[list[str], str | None]:
+    errors: list[str] = []
+    row_path = f"strategy_revision_history_and_diff_workflow.diff_artifacts[{index}]"
+    diff_id_value: str | None = None
+
+    if not isinstance(row, Mapping):
+        return [f"{row_path} must be an object"], diff_id_value
+
+    expected_keys = {
+        "sequence_position",
+        "diff_id",
+        "diff_artifact_id",
+        "from_revision_id",
+        "to_revision_id",
+        "change_domain",
+        "directional_shift",
+        "previous_directional_shift",
+        "direction_change_detected",
+        "governance_review_ref",
+        "guardrail_status",
+        "changed_anchors",
+        "summary",
+        "evidence_refs",
+    }
+    row_keys = set(row.keys())
+    missing = sorted(expected_keys - row_keys)
+    if missing:
+        errors.append(f"{row_path} missing keys: {missing}")
+    unexpected = sorted(row_keys - expected_keys)
+    if unexpected:
+        errors.append(f"{row_path} has unexpected keys: {unexpected}")
+
+    sequence_position = row.get("sequence_position")
+    if not isinstance(sequence_position, int) or sequence_position <= 0:
+        errors.append(f"{row_path}.sequence_position must be a positive integer")
+    elif sequence_position != expected_sequence_position:
+        errors.append(
+            f"{row_path}.sequence_position must equal {expected_sequence_position} to preserve deterministic ordering"
+        )
+
+    diff_id = row.get("diff_id")
+    if not isinstance(diff_id, str) or not diff_id.strip():
+        errors.append(f"{row_path}.diff_id must be a non-empty string")
+    else:
+        diff_id_value = diff_id
+
+    for key in ("from_revision_id", "to_revision_id", "change_domain", "summary"):
+        value_text = row.get(key)
+        if not isinstance(value_text, str) or not value_text.strip():
+            errors.append(f"{row_path}.{key} must be a non-empty string")
+
+    from_revision_id = row.get("from_revision_id")
+    to_revision_id = row.get("to_revision_id")
+    if isinstance(from_revision_id, str) and from_revision_id and from_revision_id not in revision_ids:
+        errors.append(f"{row_path}.from_revision_id must reference revision_history[].revision_id")
+    if isinstance(to_revision_id, str) and to_revision_id and to_revision_id not in revision_ids:
+        errors.append(f"{row_path}.to_revision_id must reference revision_history[].revision_id")
+    if isinstance(from_revision_id, str) and isinstance(to_revision_id, str):
+        if from_revision_id == to_revision_id:
+            errors.append(f"{row_path}.from_revision_id and to_revision_id must differ")
+        elif from_revision_id in revision_order and to_revision_id in revision_order:
+            if revision_order[from_revision_id] >= revision_order[to_revision_id]:
+                errors.append(f"{row_path} must progress forward in revision history ordering")
+
+    diff_artifact_id = row.get("diff_artifact_id")
+    if not isinstance(diff_artifact_id, str) or not diff_artifact_id.strip():
+        errors.append(f"{row_path}.diff_artifact_id must be a non-empty string")
+    elif (
+        isinstance(from_revision_id, str)
+        and isinstance(to_revision_id, str)
+        and isinstance(row.get("change_domain"), str)
+        and row.get("change_domain")
+    ):
+        expected_artifact_id = f"diff.{from_revision_id}.{to_revision_id}.{row['change_domain']}"
+        if diff_artifact_id != expected_artifact_id:
+            errors.append(f"{row_path}.diff_artifact_id must equal '{expected_artifact_id}'")
+
+    directional_shift = row.get("directional_shift")
+    if directional_shift not in _EXPECTED_DIRECTIONS:
+        errors.append(f"{row_path}.directional_shift must be one of: {sorted(_EXPECTED_DIRECTIONS)}")
+
+    previous_directional_shift = row.get("previous_directional_shift")
+    if previous_directional_shift not in ("", *sorted(_EXPECTED_DIRECTIONS)):
+        errors.append(f"{row_path}.previous_directional_shift must be empty or one of: {sorted(_EXPECTED_DIRECTIONS)}")
+
+    if not isinstance(row.get("direction_change_detected"), bool):
+        errors.append(f"{row_path}.direction_change_detected must be a boolean")
+
+    governance_review_ref = row.get("governance_review_ref")
+    if not isinstance(governance_review_ref, str):
+        errors.append(f"{row_path}.governance_review_ref must be a string")
+
+    guardrail_status = row.get("guardrail_status")
+    if guardrail_status not in _REQ_069_GUARDRAIL_STATUSES:
+        errors.append(f"{row_path}.guardrail_status must be one of: {sorted(_REQ_069_GUARDRAIL_STATUSES)}")
+
+    changed_anchor_errors, _ = _validate_nonempty_string_list(
+        value=row.get("changed_anchors"),
+        field_name=f"{row_path}.changed_anchors",
+        min_items=1,
+    )
+    errors.extend(changed_anchor_errors)
+    evidence_errors, _ = _validate_nonempty_string_list(
+        value=row.get("evidence_refs"),
+        field_name=f"{row_path}.evidence_refs",
+        min_items=1,
+    )
+    errors.extend(evidence_errors)
+
+    return errors, diff_id_value
+
+
+def validate_req_069_strategy_revision_history_and_diff_workflow(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-069 strategy revision history and diff workflow payload shape."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    expected_top = {
+        "ok",
+        "schema_version",
+        "requirement_id",
+        "analysis_type",
+        "call_id",
+        "checked_at_utc",
+        "target_project",
+        "strategy_revision_history_and_diff_workflow",
+        "totals",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(expected_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - expected_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("ok") is not True:
+        errors.append("ok must be true")
+    if payload.get("schema_version") != REQ_069_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_069_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_069_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_069_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_069_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_069_ANALYSIS_TYPE}")
+    if payload.get("call_id") != REQ_069_CALL_ID:
+        errors.append(f"call_id must be {REQ_069_CALL_ID}")
+    if not isinstance(payload.get("checked_at_utc"), str) or not str(payload.get("checked_at_utc")).strip():
+        errors.append("checked_at_utc must be a non-empty string")
+
+    target_project = payload.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("target_project must be an object")
+    else:
+        expected_target = {"project_id", "project_root"}
+        target_keys = set(target_project.keys())
+        missing_target = sorted(expected_target - target_keys)
+        if missing_target:
+            errors.append(f"target_project missing keys: {missing_target}")
+        unexpected_target = sorted(target_keys - expected_target)
+        if unexpected_target:
+            errors.append(f"target_project has unexpected keys: {unexpected_target}")
+        project_id = target_project.get("project_id")
+        if not isinstance(project_id, str) or not project_id.strip():
+            errors.append("target_project.project_id must be a non-empty string")
+        project_root = target_project.get("project_root")
+        if not isinstance(project_root, str) or not project_root.strip():
+            errors.append("target_project.project_root must be a non-empty string")
+        elif not str(project_root).startswith("/"):
+            errors.append("target_project.project_root must be an absolute path")
+
+    workflow = payload.get("strategy_revision_history_and_diff_workflow")
+    revision_ids: set[str] = set()
+    revision_order: dict[str, int] = {}
+    derived_review_required: set[str] = set()
+    derived_approved: set[str] = set()
+    derived_blocked: set[str] = set()
+    domains_seen: set[str] = set()
+    diff_count = 0
+    if not isinstance(workflow, Mapping):
+        errors.append("strategy_revision_history_and_diff_workflow must be an object")
+    else:
+        expected_workflow_keys = {"revision_history", "diff_artifacts", "governance_review"}
+        workflow_keys = set(workflow.keys())
+        missing_workflow = sorted(expected_workflow_keys - workflow_keys)
+        if missing_workflow:
+            errors.append(f"strategy_revision_history_and_diff_workflow missing keys: {missing_workflow}")
+        unexpected_workflow = sorted(workflow_keys - expected_workflow_keys)
+        if unexpected_workflow:
+            errors.append(f"strategy_revision_history_and_diff_workflow has unexpected keys: {unexpected_workflow}")
+
+        revision_history = workflow.get("revision_history")
+        revision_sort_markers: list[tuple[str, str]] = []
+        if not isinstance(revision_history, list):
+            errors.append("strategy_revision_history_and_diff_workflow.revision_history must be a list")
+        elif not revision_history:
+            errors.append("strategy_revision_history_and_diff_workflow.revision_history must include at least one row")
+        else:
+            seen_revision_ids: set[str] = set()
+            for index, row in enumerate(revision_history):
+                row_errors, revision_id = _validate_req_069_revision_row(
+                    row=row,
+                    index=index,
+                    seen_revision_ids=seen_revision_ids,
+                )
+                errors.extend(row_errors)
+                if revision_id and isinstance(row, Mapping):
+                    revision_ids.add(revision_id)
+                    revision_order[revision_id] = index
+                    revision_sort_markers.append((str(row.get("recorded_at_utc")), revision_id))
+            if revision_sort_markers and revision_sort_markers != sorted(revision_sort_markers):
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.revision_history must be sorted by "
+                    "recorded_at_utc then revision_id"
+                )
+
+        diff_artifacts = workflow.get("diff_artifacts")
+        if not isinstance(diff_artifacts, list):
+            errors.append("strategy_revision_history_and_diff_workflow.diff_artifacts must be a list")
+        elif not diff_artifacts:
+            errors.append("strategy_revision_history_and_diff_workflow.diff_artifacts must include at least one row")
+        else:
+            diff_count = len(diff_artifacts)
+            seen_diff_ids: set[str] = set()
+            domain_last_direction: dict[str, str] = {}
+            for index, row in enumerate(diff_artifacts):
+                row_errors, diff_id = _validate_req_069_diff_row(
+                    row=row,
+                    index=index,
+                    expected_sequence_position=index + 1,
+                    revision_ids=revision_ids,
+                    revision_order=revision_order,
+                )
+                errors.extend(row_errors)
+
+                if diff_id:
+                    if diff_id in seen_diff_ids:
+                        errors.append(
+                            "strategy_revision_history_and_diff_workflow.diff_artifacts[].diff_id must be unique"
+                        )
+                    else:
+                        seen_diff_ids.add(diff_id)
+
+                if not isinstance(row, Mapping):
+                    continue
+                domain = row.get("change_domain")
+                direction = row.get("directional_shift")
+                previous_direction = row.get("previous_directional_shift")
+                direction_change_detected = row.get("direction_change_detected")
+                governance_review_ref = row.get("governance_review_ref")
+                guardrail_status = row.get("guardrail_status")
+
+                if isinstance(domain, str) and domain.strip():
+                    domains_seen.add(domain)
+                    expected_previous_direction = domain_last_direction.get(domain, "")
+                    if previous_direction != expected_previous_direction:
+                        errors.append(
+                            "strategy_revision_history_and_diff_workflow.diff_artifacts[].previous_directional_shift "
+                            "must equal prior directional_shift for the same change_domain"
+                        )
+                    if direction in _EXPECTED_DIRECTIONS and isinstance(direction_change_detected, bool):
+                        expected_change_detected = bool(
+                            expected_previous_direction and direction != expected_previous_direction
+                        )
+                        if direction_change_detected != expected_change_detected:
+                            errors.append(
+                                "strategy_revision_history_and_diff_workflow.diff_artifacts[]"
+                                ".direction_change_detected must equal derived direction-change state"
+                            )
+                        expected_guardrail_status = "stable_direction"
+                        if expected_change_detected:
+                            if isinstance(diff_id, str):
+                                derived_review_required.add(diff_id)
+                            review_ref_present = isinstance(governance_review_ref, str) and governance_review_ref.strip()
+                            if review_ref_present:
+                                expected_guardrail_status = "governance_reviewed"
+                                if isinstance(diff_id, str):
+                                    derived_approved.add(diff_id)
+                            else:
+                                expected_guardrail_status = "blocked_needs_governance_review"
+                                if isinstance(diff_id, str):
+                                    derived_blocked.add(diff_id)
+                        if guardrail_status in _REQ_069_GUARDRAIL_STATUSES and guardrail_status != expected_guardrail_status:
+                            errors.append(
+                                "strategy_revision_history_and_diff_workflow.diff_artifacts[].guardrail_status "
+                                "must equal derived governance guardrail state"
+                            )
+                        domain_last_direction[domain] = direction
+
+        governance_review = workflow.get("governance_review")
+        if not isinstance(governance_review, Mapping):
+            errors.append("strategy_revision_history_and_diff_workflow.governance_review must be an object")
+        else:
+            expected_governance_keys = {
+                "decision",
+                "rationale",
+                "review_required_diff_ids",
+                "approved_diff_ids",
+                "blocked_diff_ids",
+            }
+            governance_keys = set(governance_review.keys())
+            missing_governance = sorted(expected_governance_keys - governance_keys)
+            if missing_governance:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.governance_review "
+                    f"missing keys: {missing_governance}"
+                )
+            unexpected_governance = sorted(governance_keys - expected_governance_keys)
+            if unexpected_governance:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.governance_review "
+                    f"has unexpected keys: {unexpected_governance}"
+                )
+
+            decision = governance_review.get("decision")
+            if decision not in {"proceed", "hold"}:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.governance_review.decision "
+                    "must be one of: ['hold', 'proceed']"
+                )
+            rationale = governance_review.get("rationale")
+            if not isinstance(rationale, str) or not rationale.strip():
+                errors.append("strategy_revision_history_and_diff_workflow.governance_review.rationale must be a non-empty string")
+
+            review_required_errors, review_required_ids = _validate_nonempty_string_list(
+                value=governance_review.get("review_required_diff_ids"),
+                field_name=(
+                    "strategy_revision_history_and_diff_workflow.governance_review.review_required_diff_ids"
+                ),
+                min_items=0,
+            )
+            errors.extend(review_required_errors)
+            approved_errors, approved_ids = _validate_nonempty_string_list(
+                value=governance_review.get("approved_diff_ids"),
+                field_name="strategy_revision_history_and_diff_workflow.governance_review.approved_diff_ids",
+                min_items=0,
+            )
+            errors.extend(approved_errors)
+            blocked_errors, blocked_ids = _validate_nonempty_string_list(
+                value=governance_review.get("blocked_diff_ids"),
+                field_name="strategy_revision_history_and_diff_workflow.governance_review.blocked_diff_ids",
+                min_items=0,
+            )
+            errors.extend(blocked_errors)
+
+            if set(approved_ids) - set(review_required_ids):
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.governance_review.approved_diff_ids "
+                    "must be a subset of review_required_diff_ids"
+                )
+            if set(blocked_ids) - set(review_required_ids):
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.governance_review.blocked_diff_ids "
+                    "must be a subset of review_required_diff_ids"
+                )
+            if set(approved_ids) & set(blocked_ids):
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.governance_review.approved_diff_ids and "
+                    "blocked_diff_ids must be disjoint"
+                )
+
+            if review_required_ids != sorted(derived_review_required):
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.governance_review.review_required_diff_ids "
+                    "must equal derived directional-shift review set"
+                )
+            if approved_ids != sorted(derived_approved):
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.governance_review.approved_diff_ids "
+                    "must equal derived approved directional-shift set"
+                )
+            if blocked_ids != sorted(derived_blocked):
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.governance_review.blocked_diff_ids "
+                    "must equal derived blocked directional-shift set"
+                )
+            expected_decision = "hold" if derived_blocked else "proceed"
+            if decision in {"proceed", "hold"} and decision != expected_decision:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.governance_review.decision "
+                    "must be 'hold' when blocked_diff_ids is non-empty, otherwise 'proceed'"
+                )
+
+    totals = payload.get("totals")
+    if not isinstance(totals, Mapping):
+        errors.append("totals must be an object")
+    else:
+        expected_totals = {
+            "revision_snapshots",
+            "diff_artifacts",
+            "domains_tracked",
+            "review_required",
+            "blocked_directional_shifts",
+        }
+        total_keys = set(totals.keys())
+        missing_totals = sorted(expected_totals - total_keys)
+        if missing_totals:
+            errors.append(f"totals missing keys: {missing_totals}")
+        unexpected_totals = sorted(total_keys - expected_totals)
+        if unexpected_totals:
+            errors.append(f"totals has unexpected keys: {unexpected_totals}")
+
+        for key in expected_totals:
+            value = totals.get(key)
+            if not isinstance(value, int) or value < 0:
+                errors.append(f"totals.{key} must be a non-negative integer")
+
+        if totals.get("revision_snapshots") != len(revision_ids):
+            errors.append("totals.revision_snapshots must equal revision_history count")
+        if totals.get("diff_artifacts") != diff_count:
+            errors.append("totals.diff_artifacts must equal diff_artifacts count")
+        if totals.get("domains_tracked") != len(domains_seen):
+            errors.append("totals.domains_tracked must equal unique diff change_domain count")
+        if totals.get("review_required") != len(derived_review_required):
+            errors.append("totals.review_required must equal governance_review.review_required_diff_ids count")
+        if totals.get("blocked_directional_shifts") != len(derived_blocked):
+            errors.append(
+                "totals.blocked_directional_shifts must equal governance_review.blocked_diff_ids count"
+            )
+
+    return errors
 
 
 def _validate_kpi_target_row(
@@ -2616,17 +3385,21 @@ def _load_input_payload(path_value: str) -> dict[str, Any]:
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Emit REQ-056/REQ-057/REQ-063 strategy artifact payload.")
+    parser = argparse.ArgumentParser(
+        description="Emit REQ-056/REQ-057/REQ-063/REQ-069 strategy artifact payload."
+    )
     parser.add_argument(
         "--input-json",
         required=True,
-        help="Path to REQ-056/REQ-057/REQ-063 input JSON (or '-' for stdin).",
+        help="Path to REQ-056/REQ-057/REQ-063/REQ-069 input JSON (or '-' for stdin).",
     )
     return parser
 
 
 def _build_strategy_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
     analysis_type = str(payload.get("analysis_type") or "").strip()
+    if analysis_type == REQ_069_ANALYSIS_TYPE:
+        return build_req_069_strategy_revision_history_and_diff_workflow(payload)
     if analysis_type == REQ_056_ANALYSIS_TYPE:
         return build_req_056_kpi_target_artifact(payload)
     if analysis_type == REQ_057_ANALYSIS_TYPE:
@@ -2635,7 +3408,7 @@ def _build_strategy_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
         return build_req_063_ecosystem_link_map_integrity_validator(payload)
     raise ValueError(
         "analysis_type must be one of: "
-        f"{sorted([REQ_056_ANALYSIS_TYPE, REQ_057_ANALYSIS_TYPE, REQ_063_ANALYSIS_TYPE])}"
+        f"{sorted([REQ_056_ANALYSIS_TYPE, REQ_057_ANALYSIS_TYPE, REQ_063_ANALYSIS_TYPE, REQ_069_ANALYSIS_TYPE])}"
     )
 
 
