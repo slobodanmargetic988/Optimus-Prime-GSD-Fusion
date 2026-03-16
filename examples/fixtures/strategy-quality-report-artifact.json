@@ -1,0 +1,80 @@
+{
+  "input": {
+    "analysis_type": "strategy_quality_report_artifact",
+    "now_utc": "2026-03-16T11:00:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "citation_coverage": {
+      "cited_claims": 18,
+      "uncited_claims": 2
+    },
+    "contradiction_status": {
+      "unresolved_contradiction_ids": []
+    },
+    "confidence_distribution": {
+      "high": 6,
+      "medium": 3,
+      "low": 1
+    },
+    "gate_policy": {
+      "min_citation_coverage_ratio": 0.85,
+      "max_unresolved_contradictions": 0,
+      "min_high_confidence_ratio": 0.5
+    }
+  },
+  "input_with_gate_failures": {
+    "analysis_type": "strategy_quality_report_artifact",
+    "now_utc": "2026-03-16T11:05:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "citation_coverage": {
+      "cited_claims": 4,
+      "uncited_claims": 6
+    },
+    "contradiction_status": {
+      "unresolved_contradiction_ids": [
+        "contradiction.scope-vs-recommendation",
+        "contradiction.timeline-vs-dependency"
+      ]
+    },
+    "confidence_distribution": {
+      "high": 1,
+      "medium": 2,
+      "low": 7
+    },
+    "gate_policy": {
+      "min_citation_coverage_ratio": 0.8,
+      "max_unresolved_contradictions": 0,
+      "min_high_confidence_ratio": 0.5
+    }
+  },
+  "invalid_gate_policy_input": {
+    "analysis_type": "strategy_quality_report_artifact",
+    "now_utc": "2026-03-16T11:00:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "citation_coverage": {
+      "cited_claims": 18,
+      "uncited_claims": 2
+    },
+    "contradiction_status": {
+      "unresolved_contradiction_ids": []
+    },
+    "confidence_distribution": {
+      "high": 6,
+      "medium": 3,
+      "low": 1
+    },
+    "gate_policy": {
+      "min_citation_coverage_ratio": 1.2,
+      "max_unresolved_contradictions": 0,
+      "min_high_confidence_ratio": 0.5
+    }
+  }
+}
