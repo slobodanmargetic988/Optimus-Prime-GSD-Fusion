@@ -28,6 +28,7 @@ _ESCALATION_TRIGGER_TYPES = {
     "guardrail_violation",
 }
 _ESCALATION_WINDOWS = {"attempts", "cycles", "minutes"}
+_REQ_057_MISSING_EARTH_SWEEP_REASON = "missing_earth_sweep_evidence_refs"
 
 
 def _utc_timestamp() -> str:
@@ -219,18 +220,19 @@ def _normalize_blocker_policies(value: Any) -> list[dict[str, Any]]:
     for index, row in enumerate(value):
         field_prefix = f"blocker_policies[{index}]"
         raw = _require_mapping(row, field_name=field_prefix)
-        expected_keys = {
+        required_keys = {
             "policy_id",
             "blocker_code",
             "escalation_trigger",
             "owner_hints",
             "fallback_paths",
         }
+        optional_keys = {"project_id", "evidence_refs"}
         row_keys = set(raw.keys())
-        unexpected = sorted(row_keys - expected_keys)
+        unexpected = sorted(row_keys - (required_keys | optional_keys))
         if unexpected:
             raise ValueError(f"{field_prefix} has unexpected keys: {unexpected}")
-        missing = sorted(expected_keys - row_keys)
+        missing = sorted(required_keys - row_keys)
         if missing:
             raise ValueError(f"{field_prefix} missing keys: {missing}")
 
@@ -254,6 +256,12 @@ def _normalize_blocker_policies(value: Any) -> list[dict[str, Any]]:
             field_name=f"{field_prefix}.fallback_paths",
             min_items=1,
         )
+        project_id = str(raw.get("project_id") or "").strip()
+        evidence_refs = _normalize_text_list(
+            raw.get("evidence_refs", []),
+            field_name=f"{field_prefix}.evidence_refs",
+            min_items=0,
+        )
 
         normalized.append(
             {
@@ -262,10 +270,162 @@ def _normalize_blocker_policies(value: Any) -> list[dict[str, Any]]:
                 "escalation_trigger": escalation_trigger,
                 "owner_hints": owner_hints,
                 "fallback_paths": fallback_paths,
+                "project_id": project_id,
+                "evidence_refs": evidence_refs,
             }
         )
 
     return sorted(normalized, key=lambda row: row["policy_id"])
+
+
+def _normalize_broad_sweep_context(value: Any) -> dict[str, list[str]]:
+    if value is None:
+        return {
+            "projects_considered": [],
+            "earth_sweep_evidence_refs": [],
+        }
+
+    raw = _require_mapping(value, field_name="broad_sweep_context")
+    expected_keys = {"projects_considered", "earth_sweep_evidence_refs"}
+    raw_keys = set(raw.keys())
+    unexpected = sorted(raw_keys - expected_keys)
+    if unexpected:
+        raise ValueError(f"broad_sweep_context has unexpected keys: {unexpected}")
+
+    return {
+        "projects_considered": _normalize_text_list(
+            raw.get("projects_considered", []),
+            field_name="broad_sweep_context.projects_considered",
+            min_items=0,
+        ),
+        "earth_sweep_evidence_refs": _normalize_text_list(
+            raw.get("earth_sweep_evidence_refs", []),
+            field_name="broad_sweep_context.earth_sweep_evidence_refs",
+            min_items=0,
+        ),
+    }
+
+
+def _build_req_057_processing_behavior(
+    *,
+    policies: list[dict[str, Any]],
+    broad_sweep_context: dict[str, list[str]],
+) -> dict[str, Any]:
+    earth_sweep_refs = set(broad_sweep_context["earth_sweep_evidence_refs"])
+    projects_considered = set(broad_sweep_context["projects_considered"])
+
+    actions: list[dict[str, Any]] = []
+    obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    policy_ids_with_context: set[str] = set()
+    recommendation_evidence_refs: set[str] = set(earth_sweep_refs)
+
+    for policy in policies:
+        policy_id = policy["policy_id"]
+        blocker_code = policy["blocker_code"]
+        project_id = str(policy.get("project_id") or "").strip()
+        policy_refs = list(policy.get("evidence_refs") or [])
+        policy_ref_set = set(policy_refs)
+
+        recommendation_evidence_refs.update(policy_ref_set)
+        action_scope = "cross-project" if project_id else "local"
+        actions.append(
+            {
+                "action_id": f"action-{policy_id}",
+                "policy_id": policy_id,
+                "action_scope": action_scope,
+                "summary": f"Apply blocker policy '{policy_id}' for blocker '{blocker_code}'.",
+                "rationale": (
+                    "Escalation trigger, owner hints, and fallback paths are emitted in a machine-consumable row "
+                    "for deterministic planner/runtime routing."
+                ),
+                "next_step": (
+                    f"Route escalation when '{policy['escalation_trigger']['trigger_type']}' reaches "
+                    f"{policy['escalation_trigger']['threshold']} {policy['escalation_trigger']['window']}."
+                ),
+                "evidence_refs": sorted(policy_ref_set),
+            }
+        )
+
+        if not project_id:
+            continue
+
+        policy_ids_with_context.add(policy_id)
+        projects_considered.add(project_id)
+        matched_earth_refs = sorted(policy_ref_set & earth_sweep_refs)
+        if matched_earth_refs:
+            obligations.append(
+                {
+                    "obligation_id": f"obligation-{policy_id}",
+                    "policy_id": policy_id,
+                    "project_id": project_id,
+                    "summary": f"Apply policy '{policy_id}' for project '{project_id}'.",
+                    "evidence_refs": matched_earth_refs,
+                }
+            )
+        else:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{policy_id}",
+                    "policy_id": policy_id,
+                    "summary": (
+                        f"Cross-project blocker policy '{policy_id}' cannot emit obligation without Earth-sweep "
+                        "evidence refs."
+                    ),
+                    "reason_code": _REQ_057_MISSING_EARTH_SWEEP_REASON,
+                    "required_evidence_refs": sorted(policy_ref_set) or ["missing:earth-sweep-evidence-ref"],
+                }
+            )
+
+    actions.sort(key=lambda row: str(row["action_id"]))
+    obligations.sort(key=lambda row: str(row["obligation_id"]))
+    open_risks.sort(key=lambda row: str(row["risk_id"]))
+
+    if open_risks and not obligations:
+        recommendation_decision = "collect-earth-evidence"
+        recommendation_confidence = "medium"
+    elif open_risks:
+        recommendation_decision = "proceed-with-open-risks"
+        recommendation_confidence = "medium"
+    else:
+        recommendation_decision = "proceed"
+        recommendation_confidence = "high"
+
+    evidence_refs_used = sorted(recommendation_evidence_refs)
+    usage = {
+        "cross_project_context_provided": bool(
+            broad_sweep_context["projects_considered"] or broad_sweep_context["earth_sweep_evidence_refs"]
+        ),
+        "cross_project_context_used": bool(policy_ids_with_context),
+        "projects_considered": sorted(projects_considered),
+        "earth_sweep_evidence_refs_considered": broad_sweep_context["earth_sweep_evidence_refs"],
+        "policy_ids_with_cross_project_context": sorted(policy_ids_with_context),
+        "cross_project_obligation_count": len(obligations),
+        "open_risk_count": len(open_risks),
+        "evidence_refs_used": evidence_refs_used,
+    }
+
+    recommendation = {
+        "decision": recommendation_decision,
+        "rationale": (
+            "Blocker policy rows remain deterministic while cross-project obligations are only emitted when "
+            "Earth-sweep evidence refs are available."
+        ),
+        "confidence": recommendation_confidence,
+        "evidence_refs": evidence_refs_used,
+        "recommended_actions": actions,
+        "cross_project_obligations": obligations,
+        "open_risks": open_risks,
+    }
+
+    return {
+        "strategy": "blocker-policy-escalation-routing",
+        "context_inputs": {
+            "broad_sweep_context": broad_sweep_context,
+        },
+        "cross_project_context_usage": usage,
+        "recommendation": recommendation,
+    }
 
 
 def build_req_056_kpi_target_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -318,10 +478,23 @@ def build_req_057_blocker_handling_policy_artifact(payload: Mapping[str, Any]) -
     checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
     target_project = _normalize_target_project(raw.get("target_project"))
     policies = _normalize_blocker_policies(raw.get("blocker_policies"))
+    broad_sweep_context = _normalize_broad_sweep_context(raw.get("broad_sweep_context"))
 
     linked_blocker_codes = sorted({row["blocker_code"] for row in policies})
     linked_owner_hints = sorted({owner for row in policies for owner in row["owner_hints"]})
     linked_fallback_paths = sorted({path for row in policies for path in row["fallback_paths"]})
+    linked_evidence_refs = sorted(
+        {
+            evidence_ref
+            for row in policies
+            for evidence_ref in row.get("evidence_refs", [])
+        }
+        | set(broad_sweep_context["earth_sweep_evidence_refs"])
+    )
+    processing_behavior = _build_req_057_processing_behavior(
+        policies=policies,
+        broad_sweep_context=broad_sweep_context,
+    )
 
     built = {
         "ok": True,
@@ -334,11 +507,13 @@ def build_req_057_blocker_handling_policy_artifact(payload: Mapping[str, Any]) -
         "blocker_handling_policy_artifact": {
             "policies": policies,
         },
+        "processing_behavior": processing_behavior,
         "totals": {
             "policies": len(policies),
             "unique_blocker_codes": len(linked_blocker_codes),
             "unique_owner_hints": len(linked_owner_hints),
             "unique_fallback_paths": len(linked_fallback_paths),
+            "unique_evidence_refs": len(linked_evidence_refs),
         },
     }
 
@@ -635,18 +810,19 @@ def _validate_blocker_policy_row(
     if not isinstance(row, Mapping):
         return [f"{row_path} must be an object"], blocker_codes, owner_hints, fallback_paths
 
-    expected_keys = {
+    required_keys = {
         "policy_id",
         "blocker_code",
         "escalation_trigger",
         "owner_hints",
         "fallback_paths",
     }
+    optional_keys = {"project_id", "evidence_refs"}
     row_keys = set(row.keys())
-    missing = sorted(expected_keys - row_keys)
+    missing = sorted(required_keys - row_keys)
     if missing:
         errors.append(f"{row_path} missing keys: {missing}")
-    unexpected = sorted(row_keys - expected_keys)
+    unexpected = sorted(row_keys - (required_keys | optional_keys))
     if unexpected:
         errors.append(f"{row_path} has unexpected keys: {unexpected}")
 
@@ -687,7 +863,327 @@ def _validate_blocker_policy_row(
     errors.extend(fallback_errors)
     fallback_paths.update(fallback_list)
 
+    project_id = row.get("project_id")
+    if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
+        if project_id != "":
+            errors.append(f"{row_path}.project_id must be a string")
+
+    evidence_errors, _ = _validate_nonempty_string_list(
+        value=row.get("evidence_refs", []),
+        field_name=f"{row_path}.evidence_refs",
+        min_items=0,
+    )
+    errors.extend(evidence_errors)
+
     return errors, blocker_codes, owner_hints, fallback_paths
+
+
+def _validate_req_057_processing_behavior(value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return ["processing_behavior must be an object"]
+
+    errors: list[str] = []
+    expected_keys = {
+        "strategy",
+        "context_inputs",
+        "cross_project_context_usage",
+        "recommendation",
+    }
+    value_keys = set(value.keys())
+    missing = sorted(expected_keys - value_keys)
+    if missing:
+        errors.append(f"processing_behavior missing keys: {missing}")
+    unexpected = sorted(value_keys - expected_keys)
+    if unexpected:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected}")
+
+    strategy = value.get("strategy")
+    if not isinstance(strategy, str) or not strategy.strip():
+        errors.append("processing_behavior.strategy must be a non-empty string")
+
+    context_inputs = value.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+    else:
+        expected_context_keys = {"broad_sweep_context"}
+        context_keys = set(context_inputs.keys())
+        context_missing = sorted(expected_context_keys - context_keys)
+        if context_missing:
+            errors.append(f"processing_behavior.context_inputs missing keys: {context_missing}")
+        context_unexpected = sorted(context_keys - expected_context_keys)
+        if context_unexpected:
+            errors.append(f"processing_behavior.context_inputs has unexpected keys: {context_unexpected}")
+
+        broad_sweep_context = context_inputs.get("broad_sweep_context")
+        if not isinstance(broad_sweep_context, Mapping):
+            errors.append("processing_behavior.context_inputs.broad_sweep_context must be an object")
+        else:
+            expected_broad_keys = {"projects_considered", "earth_sweep_evidence_refs"}
+            broad_keys = set(broad_sweep_context.keys())
+            broad_missing = sorted(expected_broad_keys - broad_keys)
+            if broad_missing:
+                errors.append(
+                    "processing_behavior.context_inputs.broad_sweep_context "
+                    f"missing keys: {broad_missing}"
+                )
+            broad_unexpected = sorted(broad_keys - expected_broad_keys)
+            if broad_unexpected:
+                errors.append(
+                    "processing_behavior.context_inputs.broad_sweep_context "
+                    f"has unexpected keys: {broad_unexpected}"
+                )
+            broad_project_errors, _ = _validate_nonempty_string_list(
+                value=broad_sweep_context.get("projects_considered"),
+                field_name="processing_behavior.context_inputs.broad_sweep_context.projects_considered",
+                min_items=0,
+            )
+            errors.extend(broad_project_errors)
+            broad_evidence_errors, _ = _validate_nonempty_string_list(
+                value=broad_sweep_context.get("earth_sweep_evidence_refs"),
+                field_name="processing_behavior.context_inputs.broad_sweep_context.earth_sweep_evidence_refs",
+                min_items=0,
+            )
+            errors.extend(broad_evidence_errors)
+
+    usage = value.get("cross_project_context_usage")
+    usage_evidence_refs: list[str] = []
+    usage_earth_refs: list[str] = []
+    if not isinstance(usage, Mapping):
+        errors.append("processing_behavior.cross_project_context_usage must be an object")
+    else:
+        expected_usage_keys = {
+            "cross_project_context_provided",
+            "cross_project_context_used",
+            "projects_considered",
+            "earth_sweep_evidence_refs_considered",
+            "policy_ids_with_cross_project_context",
+            "cross_project_obligation_count",
+            "open_risk_count",
+            "evidence_refs_used",
+        }
+        usage_keys = set(usage.keys())
+        usage_missing = sorted(expected_usage_keys - usage_keys)
+        if usage_missing:
+            errors.append(f"processing_behavior.cross_project_context_usage missing keys: {usage_missing}")
+        usage_unexpected = sorted(usage_keys - expected_usage_keys)
+        if usage_unexpected:
+            errors.append(f"processing_behavior.cross_project_context_usage has unexpected keys: {usage_unexpected}")
+
+        for bool_key in ("cross_project_context_provided", "cross_project_context_used"):
+            if not isinstance(usage.get(bool_key), bool):
+                errors.append(f"processing_behavior.cross_project_context_usage.{bool_key} must be a boolean")
+
+        for count_key in ("cross_project_obligation_count", "open_risk_count"):
+            count_value = usage.get(count_key)
+            if not isinstance(count_value, int) or count_value < 0:
+                errors.append(
+                    f"processing_behavior.cross_project_context_usage.{count_key} must be a non-negative integer"
+                )
+
+        usage_project_errors, _ = _validate_nonempty_string_list(
+            value=usage.get("projects_considered"),
+            field_name="processing_behavior.cross_project_context_usage.projects_considered",
+            min_items=0,
+        )
+        errors.extend(usage_project_errors)
+        usage_earth_errors, usage_earth_refs = _validate_nonempty_string_list(
+            value=usage.get("earth_sweep_evidence_refs_considered"),
+            field_name="processing_behavior.cross_project_context_usage.earth_sweep_evidence_refs_considered",
+            min_items=0,
+        )
+        errors.extend(usage_earth_errors)
+        usage_policy_errors, _ = _validate_nonempty_string_list(
+            value=usage.get("policy_ids_with_cross_project_context"),
+            field_name="processing_behavior.cross_project_context_usage.policy_ids_with_cross_project_context",
+            min_items=0,
+        )
+        errors.extend(usage_policy_errors)
+        usage_evidence_errors, usage_evidence_refs = _validate_nonempty_string_list(
+            value=usage.get("evidence_refs_used"),
+            field_name="processing_behavior.cross_project_context_usage.evidence_refs_used",
+            min_items=1,
+        )
+        errors.extend(usage_evidence_errors)
+
+    recommendation = value.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        expected_recommendation_keys = {
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "recommended_actions",
+            "cross_project_obligations",
+            "open_risks",
+        }
+        recommendation_keys = set(recommendation.keys())
+        recommendation_missing = sorted(expected_recommendation_keys - recommendation_keys)
+        if recommendation_missing:
+            errors.append(f"processing_behavior.recommendation missing keys: {recommendation_missing}")
+        recommendation_unexpected = sorted(recommendation_keys - expected_recommendation_keys)
+        if recommendation_unexpected:
+            errors.append(f"processing_behavior.recommendation has unexpected keys: {recommendation_unexpected}")
+
+        decision = recommendation.get("decision")
+        if decision not in {"proceed", "proceed-with-open-risks", "collect-earth-evidence"}:
+            errors.append(
+                "processing_behavior.recommendation.decision must be one of: "
+                "['collect-earth-evidence', 'proceed', 'proceed-with-open-risks']"
+            )
+
+        rationale = recommendation.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            errors.append("processing_behavior.recommendation.rationale must be a non-empty string")
+
+        confidence = recommendation.get("confidence")
+        if confidence not in _CONFIDENCE_LEVELS:
+            errors.append(
+                "processing_behavior.recommendation.confidence must be one of: "
+                f"{sorted(_CONFIDENCE_LEVELS)}"
+            )
+
+        recommendation_evidence_errors, recommendation_evidence_refs = _validate_nonempty_string_list(
+            value=recommendation.get("evidence_refs"),
+            field_name="processing_behavior.recommendation.evidence_refs",
+            min_items=1,
+        )
+        errors.extend(recommendation_evidence_errors)
+        if usage_evidence_refs and recommendation_evidence_refs != usage_evidence_refs:
+            errors.append(
+                "processing_behavior.recommendation.evidence_refs must equal "
+                "processing_behavior.cross_project_context_usage.evidence_refs_used"
+            )
+
+        action_rows = recommendation.get("recommended_actions")
+        if not isinstance(action_rows, list):
+            errors.append("processing_behavior.recommendation.recommended_actions must be a list")
+        elif not action_rows:
+            errors.append("processing_behavior.recommendation.recommended_actions must include at least one row")
+        else:
+            action_ids: set[str] = set()
+            for index, row in enumerate(action_rows):
+                row_path = f"processing_behavior.recommendation.recommended_actions[{index}]"
+                if not isinstance(row, Mapping):
+                    errors.append(f"{row_path} must be an object")
+                    continue
+                expected_action_keys = {
+                    "action_id",
+                    "policy_id",
+                    "action_scope",
+                    "summary",
+                    "rationale",
+                    "next_step",
+                    "evidence_refs",
+                }
+                row_keys = set(row.keys())
+                action_missing = sorted(expected_action_keys - row_keys)
+                if action_missing:
+                    errors.append(f"{row_path} missing keys: {action_missing}")
+                action_unexpected = sorted(row_keys - expected_action_keys)
+                if action_unexpected:
+                    errors.append(f"{row_path} has unexpected keys: {action_unexpected}")
+
+                action_id = row.get("action_id")
+                if not isinstance(action_id, str) or not action_id.strip():
+                    errors.append(f"{row_path}.action_id must be a non-empty string")
+                elif action_id in action_ids:
+                    errors.append(f"{row_path}.action_id must be unique")
+                else:
+                    action_ids.add(action_id)
+
+                action_scope = row.get("action_scope")
+                if action_scope not in {"cross-project", "local"}:
+                    errors.append(f"{row_path}.action_scope must be one of: ['cross-project', 'local']")
+
+                for key in ("policy_id", "summary", "rationale", "next_step"):
+                    value_text = row.get(key)
+                    if not isinstance(value_text, str) or not value_text.strip():
+                        errors.append(f"{row_path}.{key} must be a non-empty string")
+
+                action_evidence_errors, _ = _validate_nonempty_string_list(
+                    value=row.get("evidence_refs"),
+                    field_name=f"{row_path}.evidence_refs",
+                    min_items=0,
+                )
+                errors.extend(action_evidence_errors)
+
+        obligation_rows = recommendation.get("cross_project_obligations")
+        if not isinstance(obligation_rows, list):
+            errors.append("processing_behavior.recommendation.cross_project_obligations must be a list")
+            obligation_rows = []
+        for index, row in enumerate(obligation_rows):
+            row_path = f"processing_behavior.recommendation.cross_project_obligations[{index}]"
+            if not isinstance(row, Mapping):
+                errors.append(f"{row_path} must be an object")
+                continue
+            expected_obligation_keys = {"obligation_id", "policy_id", "project_id", "summary", "evidence_refs"}
+            row_keys = set(row.keys())
+            obligation_missing = sorted(expected_obligation_keys - row_keys)
+            if obligation_missing:
+                errors.append(f"{row_path} missing keys: {obligation_missing}")
+            obligation_unexpected = sorted(row_keys - expected_obligation_keys)
+            if obligation_unexpected:
+                errors.append(f"{row_path} has unexpected keys: {obligation_unexpected}")
+            for key in ("obligation_id", "policy_id", "project_id", "summary"):
+                value_text = row.get(key)
+                if not isinstance(value_text, str) or not value_text.strip():
+                    errors.append(f"{row_path}.{key} must be a non-empty string")
+            obligation_evidence_errors, obligation_evidence_refs = _validate_nonempty_string_list(
+                value=row.get("evidence_refs"),
+                field_name=f"{row_path}.evidence_refs",
+                min_items=1,
+            )
+            errors.extend(obligation_evidence_errors)
+            if usage_earth_refs and not set(obligation_evidence_refs).issubset(set(usage_earth_refs)):
+                errors.append(
+                    f"{row_path}.evidence_refs must be a subset of "
+                    "processing_behavior.cross_project_context_usage.earth_sweep_evidence_refs_considered"
+                )
+
+        open_risk_rows = recommendation.get("open_risks")
+        if not isinstance(open_risk_rows, list):
+            errors.append("processing_behavior.recommendation.open_risks must be a list")
+            open_risk_rows = []
+        for index, row in enumerate(open_risk_rows):
+            row_path = f"processing_behavior.recommendation.open_risks[{index}]"
+            if not isinstance(row, Mapping):
+                errors.append(f"{row_path} must be an object")
+                continue
+            expected_risk_keys = {"risk_id", "policy_id", "summary", "reason_code", "required_evidence_refs"}
+            row_keys = set(row.keys())
+            risk_missing = sorted(expected_risk_keys - row_keys)
+            if risk_missing:
+                errors.append(f"{row_path} missing keys: {risk_missing}")
+            risk_unexpected = sorted(row_keys - expected_risk_keys)
+            if risk_unexpected:
+                errors.append(f"{row_path} has unexpected keys: {risk_unexpected}")
+            for key in ("risk_id", "policy_id", "summary", "reason_code"):
+                value_text = row.get(key)
+                if not isinstance(value_text, str) or not value_text.strip():
+                    errors.append(f"{row_path}.{key} must be a non-empty string")
+            required_refs_errors, _ = _validate_nonempty_string_list(
+                value=row.get("required_evidence_refs"),
+                field_name=f"{row_path}.required_evidence_refs",
+                min_items=1,
+            )
+            errors.extend(required_refs_errors)
+
+        if isinstance(usage.get("cross_project_obligation_count"), int) and usage.get(
+            "cross_project_obligation_count"
+        ) != len(obligation_rows):
+            errors.append(
+                "processing_behavior.cross_project_context_usage.cross_project_obligation_count must equal "
+                "processing_behavior.recommendation.cross_project_obligations count"
+            )
+        if isinstance(usage.get("open_risk_count"), int) and usage.get("open_risk_count") != len(open_risk_rows):
+            errors.append(
+                "processing_behavior.cross_project_context_usage.open_risk_count must equal "
+                "processing_behavior.recommendation.open_risks count"
+            )
+
+    return errors
 
 
 def validate_req_057_blocker_handling_policy_artifact(payload: Mapping[str, Any]) -> list[str]:
@@ -696,7 +1192,7 @@ def validate_req_057_blocker_handling_policy_artifact(payload: Mapping[str, Any]
     if not isinstance(payload, Mapping):
         return ["payload must be a JSON object"]
 
-    expected_top = {
+    required_top = {
         "ok",
         "schema_version",
         "requirement_id",
@@ -707,11 +1203,12 @@ def validate_req_057_blocker_handling_policy_artifact(payload: Mapping[str, Any]
         "blocker_handling_policy_artifact",
         "totals",
     }
+    optional_top = {"processing_behavior"}
     top_keys = set(payload.keys())
-    missing_top = sorted(expected_top - top_keys)
+    missing_top = sorted(required_top - top_keys)
     if missing_top:
         errors.append(f"missing top-level keys: {missing_top}")
-    unexpected_top = sorted(top_keys - expected_top)
+    unexpected_top = sorted(top_keys - (required_top | optional_top))
     if unexpected_top:
         errors.append(f"unexpected top-level keys: {unexpected_top}")
 
@@ -786,26 +1283,33 @@ def validate_req_057_blocker_handling_policy_artifact(payload: Mapping[str, Any]
                 linked_owner_hints.update(owner_hints)
                 linked_fallback_paths.update(fallback_paths)
 
+    processing_behavior = payload.get("processing_behavior")
+    if processing_behavior is not None:
+        errors.extend(_validate_req_057_processing_behavior(processing_behavior))
+
     totals = payload.get("totals")
     if not isinstance(totals, Mapping):
         errors.append("totals must be an object")
     else:
-        expected_totals = {
+        required_totals = {
             "policies",
             "unique_blocker_codes",
             "unique_owner_hints",
             "unique_fallback_paths",
         }
+        optional_totals = {"unique_evidence_refs"}
         total_keys = set(totals.keys())
-        missing_totals = sorted(expected_totals - total_keys)
+        missing_totals = sorted(required_totals - total_keys)
         if missing_totals:
             errors.append(f"totals missing keys: {missing_totals}")
-        unexpected_totals = sorted(total_keys - expected_totals)
+        unexpected_totals = sorted(total_keys - (required_totals | optional_totals))
         if unexpected_totals:
             errors.append(f"totals has unexpected keys: {unexpected_totals}")
 
-        for key in expected_totals:
+        for key in (required_totals | optional_totals):
             value = totals.get(key)
+            if value is None:
+                continue
             if not isinstance(value, int) or value < 0:
                 errors.append(f"totals.{key} must be a non-negative integer")
 
@@ -817,6 +1321,27 @@ def validate_req_057_blocker_handling_policy_artifact(payload: Mapping[str, Any]
             errors.append("totals.unique_owner_hints must equal unique owner hint count")
         if totals.get("unique_fallback_paths") != len(linked_fallback_paths):
             errors.append("totals.unique_fallback_paths must equal unique fallback path count")
+        if totals.get("unique_evidence_refs") is not None:
+            policy_rows = payload.get("blocker_handling_policy_artifact")
+            evidence_refs: set[str] = set()
+            if isinstance(policy_rows, Mapping):
+                for row in policy_rows.get("policies", []) if isinstance(policy_rows.get("policies"), list) else []:
+                    if isinstance(row, Mapping):
+                        refs = row.get("evidence_refs")
+                        if isinstance(refs, list):
+                            for ref in refs:
+                                if isinstance(ref, str) and ref.strip():
+                                    evidence_refs.add(ref.strip())
+            if isinstance(processing_behavior, Mapping):
+                usage = processing_behavior.get("cross_project_context_usage")
+                if isinstance(usage, Mapping):
+                    usage_refs = usage.get("earth_sweep_evidence_refs_considered")
+                    if isinstance(usage_refs, list):
+                        for ref in usage_refs:
+                            if isinstance(ref, str) and ref.strip():
+                                evidence_refs.add(ref.strip())
+            if totals.get("unique_evidence_refs") != len(evidence_refs):
+                errors.append("totals.unique_evidence_refs must equal unique policy/context evidence ref count")
 
     return errors
 

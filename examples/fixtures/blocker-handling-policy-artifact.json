@@ -6,6 +6,16 @@
       "project_id": "optimus-prime-gsd-fusion",
       "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
     },
+    "broad_sweep_context": {
+      "projects_considered": [
+        "runtime-orchestrator",
+        "ground-control-hub"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+      ]
+    },
     "blocker_policies": [
       {
         "policy_id": "policy.validation-contract-mismatch",
@@ -22,6 +32,11 @@
         "fallback_paths": [
           "request-contract-refresh",
           "open-blocker-ticket"
+        ],
+        "project_id": "",
+        "evidence_refs": [
+          "contracts/req/REQ-057_blocker-handling-policy-artifact.md",
+          "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
         ]
       },
       {
@@ -39,6 +54,48 @@
         "fallback_paths": [
           "reroute-to-lower-rate-profile",
           "pause-and-retry-window"
+        ],
+        "project_id": "runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
+        ]
+      }
+    ]
+  },
+  "missing_earth_sweep_evidence_input": {
+    "analysis_type": "blocker_handling_policy_artifact",
+    "now_utc": "2026-03-16T11:10:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "broad_sweep_context": {
+      "projects_considered": [
+        "runtime-orchestrator"
+      ],
+      "earth_sweep_evidence_refs": []
+    },
+    "blocker_policies": [
+      {
+        "policy_id": "policy.cross-project-rate-limit",
+        "blocker_code": "all_rate_gates_blocking",
+        "escalation_trigger": {
+          "trigger_type": "attempts_exhausted",
+          "threshold": 3,
+          "window": "cycles"
+        },
+        "owner_hints": [
+          "runtime-coordinator",
+          "boss-manager"
+        ],
+        "fallback_paths": [
+          "reroute-to-lower-rate-profile",
+          "pause-and-retry-window"
+        ],
+        "project_id": "runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
         ]
       }
     ]
@@ -64,6 +121,10 @@
         ],
         "fallback_paths": [
           "open-blocker-ticket"
+        ],
+        "project_id": "",
+        "evidence_refs": [
+          "contracts/req/REQ-057_blocker-handling-policy-artifact.md"
         ]
       }
     ]
@@ -87,7 +148,11 @@
         "owner_hints": [
           "developer-worker"
         ],
-        "fallback_paths": []
+        "fallback_paths": [],
+        "project_id": "",
+        "evidence_refs": [
+          "contracts/req/REQ-057_blocker-handling-policy-artifact.md"
+        ]
       }
     ]
   }
