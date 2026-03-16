@@ -1,0 +1,71 @@
+{
+  "input": {
+    "analysis_type": "constraint_classification_artifact",
+    "now_utc": "2026-03-16T09:05:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "constraints": [
+      {
+        "constraint_id": "guardrail-task-floor",
+        "statement": "Before build starts, planner must output at least 400 tasks.",
+        "classification": "hard",
+        "rationale": "This is a mandatory planning gate and cannot be bypassed.",
+        "evidence_refs": [
+          "scope.md#mandatory-planning-gate",
+          "AGENTS.md#scope-authoring-rule-high-priority"
+        ],
+        "source_refs": [
+          "scope.md#mandatory-planning-gate"
+        ]
+      },
+      {
+        "constraint_id": "guidance-batch-size",
+        "statement": "Prefer batching implementation packets by lane to reduce planner churn.",
+        "classification": "soft",
+        "rationale": "Lane batching is guidance that improves throughput but can be adapted.",
+        "evidence_refs": [
+          "reports/strategy/lane-throughput-2026-03-15.json"
+        ],
+        "source_refs": [
+          "reports/strategy/lane-throughput-2026-03-15.json"
+        ]
+      },
+      {
+        "constraint_id": "speculative-cross-project-sync",
+        "statement": "Consider adding an Earth-wide sync checkpoint if parallel lane drift increases.",
+        "classification": "speculative",
+        "rationale": "The checkpoint is optional and should only be used when drift evidence appears.",
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "source_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ]
+      }
+    ]
+  },
+  "invalid_unknown_classification_input": {
+    "analysis_type": "constraint_classification_artifact",
+    "now_utc": "2026-03-16T09:05:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "constraints": [
+      {
+        "constraint_id": "guardrail-task-floor",
+        "statement": "Before build starts, planner must output at least 400 tasks.",
+        "classification": "rigid",
+        "rationale": "Invalid classification used to verify contract guardrails.",
+        "evidence_refs": [
+          "scope.md#mandatory-planning-gate"
+        ],
+        "source_refs": [
+          "scope.md#mandatory-planning-gate"
+        ]
+      }
+    ]
+  }
+}
