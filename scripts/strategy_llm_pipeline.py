@@ -613,14 +613,12 @@ def _collect_unique_refs(*lists: list[str]) -> list[str]:
 
 
 def _recommendation_decision(*, recommended_actions: list[dict[str, Any]], open_risks: list[dict[str, Any]]) -> str:
-    if recommended_actions and not open_risks:
-        return "proceed"
-    if recommended_actions and open_risks:
-        return "proceed-with-open-risks"
     if open_risks:
         if any(str(row.get("reason_code")) != "missing_earth_sweep_evidence_refs" for row in open_risks):
             return "resolve-context-gaps"
         return "collect-earth-evidence"
+    if recommended_actions:
+        return "resolve-context-gaps"
     return "insufficient-context"
 
 
@@ -698,29 +696,45 @@ def process_req_027_call_2_ecosystem_linkage_reasoning(
             context_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_rows])
             note = next((row["context_note"] for row in cross_rows if row.get("context_note")), "")
             summary = note or f"Broad-sweep cross-project context references peer project '{peer_id}'."
-            existing_links_raw.append(
-                {
-                    "peer_project_id": peer_id,
-                    "link_kind": "cross-project-context",
-                    "direction": "bidirectional",
-                    "summary": summary,
-                    "evidence_refs": _collect_unique_refs(context_refs, earth_sweep_evidence_refs),
-                    "confidence_tag": "high" if context_refs else "medium",
-                    "interaction_obligations": [],
-                }
-            )
+            combined_refs = _collect_unique_refs(context_refs, earth_sweep_evidence_refs)
+            if not combined_refs:
+                open_risks.append(
+                    {
+                        "risk_id": f"risk.{_stable_id_fragment(peer_id, 'uncited-cross-project-context', summary)}",
+                        "summary": summary,
+                        "reason_code": "uncited_strategic_claim",
+                        "required_evidence_refs": [],
+                    }
+                )
+                missing_links_raw.append(
+                    {
+                        "peer_project_id": peer_id,
+                        "link_kind": "cross-project-context",
+                        "direction": "bidirectional",
+                        "summary": f"Cross-project context for '{peer_id}' is present but has no evidence refs; attach citations before promotion.",
+                        "evidence_refs": [],
+                        "confidence_tag": "low",
+                        "interaction_obligations": [],
+                    }
+                )
+            else:
+                existing_links_raw.append(
+                    {
+                        "peer_project_id": peer_id,
+                        "link_kind": "cross-project-context",
+                        "direction": "bidirectional",
+                        "summary": summary,
+                        "evidence_refs": combined_refs,
+                        "confidence_tag": "high" if context_refs else "medium",
+                        "interaction_obligations": [],
+                    }
+                )
 
         if earth_row is not None:
+            invalid_obligation_count = 0
             for obligation_index, obligation in enumerate(earth_row.get("obligations") or []):
                 if not isinstance(obligation, Mapping):
-                    open_risks.append(
-                        {
-                            "risk_id": f"risk.{_stable_id_fragment(peer_id, 'obligation', str(obligation_index))}",
-                            "summary": f"Malformed Earth-sweep obligation entry for '{peer_id}'.",
-                            "reason_code": "invalid_earth_sweep_obligation_shape",
-                            "required_evidence_refs": earth_sweep_evidence_refs,
-                        }
-                    )
+                    invalid_obligation_count += 1
                     continue
 
                 obligation_summary = str(obligation.get("summary") or "").strip() or (
@@ -769,6 +783,16 @@ def process_req_027_call_2_ecosystem_linkage_reasoning(
                                 "evidence_refs": combined_refs,
                             }
                         ],
+                    }
+                )
+
+            if invalid_obligation_count:
+                open_risks.append(
+                    {
+                        "risk_id": f"risk.{_stable_id_fragment(peer_id, 'invalid-earth-sweep-obligations', str(invalid_obligation_count))}",
+                        "summary": f"Malformed Earth-sweep obligation entries for '{peer_id}' (count={invalid_obligation_count}).",
+                        "reason_code": "invalid_earth_sweep_obligation_shape",
+                        "required_evidence_refs": earth_sweep_evidence_refs,
                     }
                 )
 
@@ -844,6 +868,26 @@ def process_req_027_call_2_ecosystem_linkage_reasoning(
                 "action_scope": "cross-project",
                 "next_step": "Attach Earth-sweep evidence refs and re-run linkage reasoning.",
                 "evidence_refs": link.get("evidence_refs") or [],
+            }
+        )
+
+    missing_links_total = int(contract_payload["totals"].get("missing_links") or 0)
+    if missing_links_total:
+        missing_link_ids = sorted(
+            {str(link.get("link_id") or "") for link in contract_payload["linkage_reasoning"]["missing_links"]}
+        )
+        open_risks.append(
+            {
+                "risk_id": f"risk.{_stable_id_fragment('missing-links', json.dumps(missing_link_ids, sort_keys=True))}",
+                "summary": f"Missing ecosystem linkage context detected (missing_links={missing_links_total}); resolve gaps before promotion.",
+                "reason_code": "analysis_synthesis_contradiction_missing_links",
+                "required_evidence_refs": _collect_unique_refs(
+                    earth_sweep_evidence_refs,
+                    *[
+                        _best_effort_extract_string_refs(link.get('evidence_refs'))
+                        for link in contract_payload['linkage_reasoning']['missing_links']
+                    ],
+                ),
             }
         )
 
