@@ -33,6 +33,7 @@ REQ_030_ANALYSIS_TYPE = "call_5_sequencing_and_lane_design_reasoning"
 REQ_030_CALL_ID = "call-5"
 
 REQ_035_SCHEMA_VERSION = "req-035.evidence-citation-discipline-in-reasoning-calls.v1"
+REQ_035_PROCESSING_SCHEMA_VERSION = "req-035.evidence-citation-discipline-in-reasoning-calls-processing.v1"
 REQ_035_REQUIREMENT_ID = "REQ-035"
 REQ_035_ANALYSIS_TYPE = "evidence_citation_discipline_in_reasoning_calls"
 REQ_035_CALL_ID = "reasoning-calls"
@@ -56,6 +57,11 @@ _REQ_030_CALL_5_OBJECTIVE = (
     "Design execution lanes and sequencing order for recommendations under current constraints; "
     "include why-now rationale and expected coordination dependencies; "
     "gate cross-project obligations on Earth-sweep evidence refs and record unresolved ideas as open risks."
+)
+_REQ_035_CALL_OBJECTIVE = (
+    "Enforce evidence citation discipline across reasoning calls; "
+    "flag uncited or unknown-evidence strategic claims; "
+    "exclude flagged claims from promoted recommendations and gate cross-project obligations on Earth-sweep evidence refs."
 )
 
 
@@ -455,6 +461,154 @@ def _record_req_030_call_5_llm_call_trace(
             {"kind": "output_snapshot", "path": _repo_relative_path(output_path), "sha256": output_digest},
         ],
         "handoff_summary": _handoff_summary_for_req_030_call_5(result),
+        "totals": dict(result.get("totals") or {}) if isinstance(result.get("totals"), Mapping) else {},
+    }
+    _append_jsonl_row(trace_file, row)
+    return row
+
+
+def _handoff_summary_for_req_035_reasoning_calls(result: Mapping[str, Any]) -> str:
+    behavior = result.get("processing_behavior") if isinstance(result.get("processing_behavior"), Mapping) else {}
+    recommendation = behavior.get("recommendation") if isinstance(behavior.get("recommendation"), Mapping) else {}
+    decision = str(recommendation.get("decision") or "").strip() or "unknown"
+    confidence = str(recommendation.get("confidence") or "").strip() or "unknown"
+    obligations = recommendation.get("cross_project_obligations") if isinstance(recommendation.get("cross_project_obligations"), list) else []
+    risks = recommendation.get("open_risks") if isinstance(recommendation.get("open_risks"), list) else []
+    totals = result.get("totals") if isinstance(result.get("totals"), Mapping) else {}
+    return (
+        f"{REQ_035_REQUIREMENT_ID} {REQ_035_CALL_ID} handoff: "
+        f"decision={decision} confidence={confidence} "
+        f"reasoning_calls={int(totals.get('reasoning_calls') or 0)} "
+        f"strategic_claims={int(totals.get('strategic_claims') or 0)} "
+        f"flagged_claims={int(totals.get('flagged_claims') or 0)} "
+        f"final_recommendations={int(totals.get('final_recommendations') or 0)} "
+        f"obligations={len(obligations)} open_risks={len(risks)}"
+    )
+
+
+def _req_035_canonical_input(
+    *,
+    checked_at_utc: str,
+    context_provenance_ledger: Mapping[str, Any],
+    reasoning_calls: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "analysis_type": REQ_035_ANALYSIS_TYPE,
+        "call_id": REQ_035_CALL_ID,
+        "checked_at_utc": checked_at_utc,
+        "context_provenance_ledger": _canonicalize(context_provenance_ledger),
+        "reasoning_calls": _canonicalize(reasoning_calls),
+    }
+
+
+def _req_035_canonical_processing_input(
+    *,
+    earth_sweep_evidence_refs: list[str],
+    earth_sweep_projects: list[dict[str, Any]],
+    cross_project_context: list[dict[str, Any]],
+    result: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "earth_sweep_evidence_refs": _canonicalize(earth_sweep_evidence_refs),
+        "earth_sweep_projects": _canonicalize(earth_sweep_projects),
+        "cross_project_context": _canonicalize(cross_project_context),
+        "evidence_citation_discipline": _canonicalize(result.get("evidence_citation_discipline") or {}),
+        "totals": _canonicalize(result.get("totals") or {}),
+        "processing_behavior": _canonicalize(result.get("processing_behavior") or {}),
+    }
+
+
+def _record_req_035_reasoning_calls_llm_call_trace(
+    *,
+    checked_at_utc: str,
+    context_provenance_ledger: Mapping[str, Any],
+    reasoning_calls: list[dict[str, Any]],
+    earth_sweep_evidence_refs: list[str],
+    earth_sweep_projects: list[dict[str, Any]],
+    cross_project_context: list[dict[str, Any]],
+    result: Mapping[str, Any],
+    trace_path: Path | None = None,
+    artifacts_dir: Path | None = None,
+) -> dict[str, Any]:
+    trace_file = trace_path or _default_llm_call_trace_path()
+    artifacts_root = artifacts_dir or _default_llm_call_trace_artifacts_dir()
+
+    input_snapshot = {
+        "schema_version": "optimus-prime.req-035.reasoning-calls-input-snapshot.v1",
+        "checked_at_utc": checked_at_utc,
+        "requirement_id": REQ_035_REQUIREMENT_ID,
+        "analysis_type": REQ_035_ANALYSIS_TYPE,
+        "call_id": REQ_035_CALL_ID,
+        "context_provenance_ledger": dict(context_provenance_ledger),
+        "reasoning_calls": [dict(row) for row in reasoning_calls],
+        "broad_sweep_context": {
+            "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+            "earth_sweep_projects": earth_sweep_projects,
+            "cross_project_context": cross_project_context,
+        },
+    }
+    output_snapshot = {
+        "schema_version": "optimus-prime.req-035.reasoning-calls-output-snapshot.v1",
+        "checked_at_utc": checked_at_utc,
+        "requirement_id": REQ_035_REQUIREMENT_ID,
+        "analysis_type": REQ_035_ANALYSIS_TYPE,
+        "call_id": REQ_035_CALL_ID,
+        "result": dict(result),
+    }
+
+    input_digest = _sha256_hex(input_snapshot)
+    output_digest = _sha256_hex(output_snapshot)
+    bundle_dir = artifacts_root / "req-035" / "reasoning-calls" / input_digest[:16]
+    input_path = bundle_dir / "input.normalized.json"
+    output_path = bundle_dir / "output.normalized.json"
+    _write_json_artifact(input_path, input_snapshot)
+    _write_json_artifact(output_path, output_snapshot)
+
+    trace_input_refs = _trace_input_refs(
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+        earth_sweep_projects=earth_sweep_projects,
+    )
+    input_refs = sorted(
+        set(trace_input_refs)
+        | {
+            str(ref)
+            for ref in (context_provenance_ledger.get("evidence_ids") or [])
+            if isinstance(ref, str) and ref.strip()
+        }
+    )
+    recommendation = {}
+    if isinstance(result.get("processing_behavior"), Mapping):
+        recommendation = result["processing_behavior"].get("recommendation") or {}
+    output_refs = [
+        f"{REQ_035_REQUIREMENT_ID}::call::{REQ_035_CALL_ID}::output::evidence_citation_discipline",
+        f"{REQ_035_REQUIREMENT_ID}::call::{REQ_035_CALL_ID}::output::final_recommendations",
+        f"{REQ_035_REQUIREMENT_ID}::call::{REQ_035_CALL_ID}::output::flagged_claims",
+        _repo_relative_path(output_path),
+    ]
+    if isinstance(recommendation, Mapping) and recommendation.get("cross_project_obligations"):
+        output_refs.append(f"{REQ_035_REQUIREMENT_ID}::call::{REQ_035_CALL_ID}::output::cross_project_obligations")
+    if isinstance(recommendation, Mapping) and recommendation.get("open_risks"):
+        output_refs.append(f"{REQ_035_REQUIREMENT_ID}::call::{REQ_035_CALL_ID}::output::open_risks")
+
+    row = {
+        "schema_version": _LLM_CALL_TRACE_SCHEMA_VERSION,
+        "checked_at_utc": checked_at_utc,
+        "requirement_id": REQ_035_REQUIREMENT_ID,
+        "analysis_type": REQ_035_ANALYSIS_TYPE,
+        "call_id": REQ_035_CALL_ID,
+        "call_objective": _REQ_035_CALL_OBJECTIVE,
+        "target_project_id": "",
+        "peer_project_ids": sorted(
+            {str(row.get("project_id") or "").strip() for row in cross_project_context if row.get("project_id")}
+        ),
+        "input_refs": input_refs,
+        "output_refs": sorted(set(output_refs)),
+        "artifacts": [
+            {"kind": "input_snapshot", "path": _repo_relative_path(input_path), "sha256": input_digest},
+            {"kind": "output_snapshot", "path": _repo_relative_path(output_path), "sha256": output_digest},
+        ],
+        "handoff_summary": _handoff_summary_for_req_035_reasoning_calls(result),
         "totals": dict(result.get("totals") or {}) if isinstance(result.get("totals"), Mapping) else {},
     }
     _append_jsonl_row(trace_file, row)
@@ -1536,6 +1690,38 @@ def process_req_027_call_2_ecosystem_linkage_reasoning(
     return result
 
 
+def _req_035_infer_cross_project_targets(
+    *,
+    text_fields: list[str],
+    peer_project_ids: set[str],
+) -> list[str]:
+    text = "\n".join([field.strip() for field in text_fields if str(field).strip()]).lower()
+    if not text:
+        return []
+
+    matched = [pid for pid in sorted(peer_project_ids) if pid.lower() in text]
+    if matched:
+        return matched
+    cross_tokens = ("cross-project", "cross project", "peer project", "coordination", "coordinate", "sync", "align")
+    if any(token in text for token in cross_tokens):
+        return ["<unspecified>"]
+    return []
+
+
+def _req_035_recommendation_decision(*, promoted_actions: list[dict[str, Any]], open_risks: list[dict[str, Any]]) -> str:
+    if promoted_actions and open_risks:
+        return "proceed-with-open-risks"
+    if promoted_actions:
+        return "proceed"
+    if open_risks:
+        if all(str(row.get("reason_code")) == "missing_earth_sweep_evidence_refs" for row in open_risks):
+            return "collect-earth-evidence"
+        if any("uncited" in str(row.get("reason_code")) for row in open_risks):
+            return "resolve-citation-gaps"
+        return "resolve-context-gaps"
+    return "insufficient-context"
+
+
 def _req_030_infer_cross_project_targets(
     *,
     recommendation: Mapping[str, Any],
@@ -1924,6 +2110,314 @@ def process_req_030_call_5_sequencing_and_lane_design_reasoning(
         "canonical_processing_input": canonical_processing_input,
         "processing_input_sha256": processing_input_sha,
         "processing_call_id": f"req030-processing-{processing_input_sha[:16]}",
+        "llm_call_trace_schema_version": _LLM_CALL_TRACE_SCHEMA_VERSION,
+        "llm_call_trace_path": _LLM_CALL_TRACE_RELATIVE_PATH,
+        "llm_call_trace_sha256": _sha256_hex([trace_row]),
+        "llm_call_trace_rows": [trace_row],
+    }
+    return result
+
+
+def process_req_035_evidence_citation_discipline_in_reasoning_calls(
+    payload: Mapping[str, Any],
+    *,
+    emit: Callable[[str], None] | None = None,
+    trace_path: str | Path | None = None,
+    trace_artifacts_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Implement REQ-035 reasoning/processing behavior using broad-sweep context inputs."""
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_035_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_035_ANALYSIS_TYPE}")
+
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+    context_provenance_ledger = _normalize_req_035_context_provenance_ledger(raw.get("context_provenance_ledger"))
+    if context_provenance_ledger["ledger_requirement_id"] != "REQ-021":
+        raise ValueError("context_provenance_ledger.ledger_requirement_id must be REQ-021")
+    reasoning_calls = _normalize_req_035_reasoning_calls(raw.get("reasoning_calls"))
+
+    earth_sweep_evidence_refs, earth_sweep_projects = _extract_earth_sweep_inputs(raw.get("broad_sweep_context"))
+    broad = raw.get("broad_sweep_context")
+    cross_project_context: list[dict[str, Any]] = []
+    if broad is not None:
+        broad_map = _require_mapping(broad, field_name="broad_sweep_context")
+        cross_project_context = _normalize_cross_project_context(broad_map.get("cross_project_context"))
+    context_by_project = {row["project_id"]: row for row in cross_project_context if row.get("project_id")}
+    peer_project_ids = set(context_by_project.keys())
+
+    if emit is not None:
+        emit(_format_ts_line(f"REQ-035 processing start reasoning_calls={len(reasoning_calls)}", now_utc=checked_at_utc))
+
+    contract_payload = build_req_035_evidence_citation_discipline_in_reasoning_calls(
+        {
+            "analysis_type": REQ_035_ANALYSIS_TYPE,
+            "now_utc": checked_at_utc,
+            "context_provenance_ledger": context_provenance_ledger,
+            "reasoning_calls": reasoning_calls,
+        }
+    )
+    discipline = contract_payload["evidence_citation_discipline"]
+    final_rows = list(discipline["final_recommendations"])
+    flagged_rows = list(discipline["flagged_claims"])
+
+    claim_lookup: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for call in reasoning_calls:
+        call_id = call["call_id"]
+        for claim in call["strategic_claims"]:
+            claim_lookup[(call_id, claim["strategic_claim_id"])] = claim
+
+    promoted_actions: list[dict[str, Any]] = []
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+
+    for row in flagged_rows:
+        recommendation_id = str(row.get("recommendation_id") or "").strip()
+        reason_codes = sorted({str(reason).strip() for reason in row.get("flag_reason_codes") or [] if str(reason).strip()})
+        reason_code = ",".join(reason_codes) if reason_codes else "uncited_strategic_claim"
+        required_refs = _collect_unique_refs(
+            list(row.get("evidence_ids") or []),
+            list(row.get("unknown_evidence_ids") or []),
+        )
+        risk_id = f"risk.{_stable_id_fragment('req-035', recommendation_id, reason_code)}"
+        open_risks.append(
+            {
+                "risk_id": risk_id,
+                "summary": str(row.get("summary") or ""),
+                "reason_code": reason_code,
+                "required_evidence_refs": required_refs,
+            }
+        )
+
+    for recommendation in final_rows:
+        recommendation_id = recommendation["recommendation_id"]
+        call_id = recommendation["call_id"]
+        strategic_claim_id = recommendation["strategic_claim_id"]
+        claim_row = claim_lookup.get((call_id, strategic_claim_id), {})
+        targets = _req_035_infer_cross_project_targets(
+            text_fields=[
+                str(claim_row.get("summary") or ""),
+                str(recommendation.get("summary") or ""),
+                str(recommendation.get("rationale") or ""),
+            ],
+            peer_project_ids=peer_project_ids,
+        )
+        evidence_ids = list(recommendation.get("evidence_ids") or [])
+        action = {
+            "action_id": f"action.{_stable_id_fragment('req-035', call_id, strategic_claim_id, recommendation_id)}",
+            "recommendation_id": recommendation_id,
+            "call_id": call_id,
+            "strategic_claim_id": strategic_claim_id,
+            "summary": recommendation["summary"],
+            "rationale": recommendation["rationale"],
+            "confidence_tag": recommendation["confidence_tag"],
+            "evidence_ids": evidence_ids,
+            "coordination_required": bool(targets),
+            "coordination_projects": sorted(set([project_id for project_id in targets if project_id != "<unspecified>"])),
+        }
+
+        if not targets:
+            promoted_actions.append(action)
+            continue
+
+        if not earth_sweep_evidence_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk.{_stable_id_fragment('req-035', recommendation_id, 'missing-earth-sweep-evidence-refs')}",
+                    "summary": recommendation["summary"],
+                    "reason_code": "missing_earth_sweep_evidence_refs",
+                    "required_evidence_refs": _collect_unique_refs(evidence_ids),
+                }
+            )
+            continue
+
+        if targets == ["<unspecified>"]:
+            open_risks.append(
+                {
+                    "risk_id": f"risk.{_stable_id_fragment('req-035', recommendation_id, 'missing-cross-project-context')}",
+                    "summary": recommendation["summary"],
+                    "reason_code": "missing_cross_project_context",
+                    "required_evidence_refs": _collect_unique_refs(earth_sweep_evidence_refs, evidence_ids),
+                }
+            )
+            continue
+
+        missing_reason_codes: list[str] = []
+        required_refs: list[str] = list(earth_sweep_evidence_refs)
+        candidate_obligations: list[dict[str, Any]] = []
+        for project_id in sorted(set(targets)):
+            context_row = context_by_project.get(project_id)
+            if context_row is None:
+                missing_reason_codes.append("missing_cross_project_context")
+                continue
+            context_refs = list(context_row.get("evidence_refs") or [])
+            if not context_refs:
+                missing_reason_codes.append("missing_cross_project_context_evidence_refs")
+                continue
+            required_refs.extend(context_refs)
+            candidate_obligations.append(
+                {
+                    "obligation_id": f"obl.{_stable_id_fragment('req-035', recommendation_id, project_id)}",
+                    "project_id": project_id,
+                    "recommendation_id": recommendation_id,
+                    "summary": recommendation["summary"],
+                    "evidence_refs": _collect_unique_refs(earth_sweep_evidence_refs, context_refs, evidence_ids),
+                }
+            )
+
+        if missing_reason_codes:
+            open_risks.append(
+                {
+                    "risk_id": f"risk.{_stable_id_fragment('req-035', recommendation_id, ','.join(sorted(set(missing_reason_codes))))}",
+                    "summary": recommendation["summary"],
+                    "reason_code": ",".join(sorted(set(missing_reason_codes))),
+                    "required_evidence_refs": _collect_unique_refs(required_refs, evidence_ids),
+                }
+            )
+            continue
+
+        cross_project_obligations.extend(candidate_obligations)
+        promoted_actions.append(action)
+
+    for project in earth_sweep_projects:
+        project_id = str(project.get("project_id") or "").strip()
+        if not project_id:
+            continue
+        for idx, idea_row in enumerate(project.get("unresolved_ideas") or []):
+            if not isinstance(idea_row, Mapping):
+                continue
+            idea_summary = str(idea_row.get("idea") or idea_row.get("summary") or "").strip()
+            if not idea_summary:
+                continue
+            idea_refs = _normalize_string_list(
+                idea_row.get("earth_sweep_evidence_refs") or idea_row.get("evidence_refs"),
+                field_name=f"broad_sweep_context.earth_sweep.projects[project_id={project_id}].unresolved_ideas[{idx}].evidence_refs",
+            )
+            open_risks.append(
+                {
+                    "risk_id": f"risk.{_stable_id_fragment('req-035', project_id, 'unresolved-idea', idea_summary)}",
+                    "summary": idea_summary,
+                    "reason_code": "unresolved_cross_project_idea",
+                    "required_evidence_refs": _collect_unique_refs(idea_refs),
+                }
+            )
+
+    cross_project_obligations.sort(key=lambda row: (row["project_id"], row["obligation_id"]))
+    promoted_actions.sort(key=lambda row: (row["recommendation_id"], row["action_id"]))
+
+    deduped_open_risks: dict[str, dict[str, Any]] = {}
+    for row in open_risks:
+        deduped_open_risks[row["risk_id"]] = row
+    open_risks = sorted(
+        deduped_open_risks.values(),
+        key=lambda row: (str(row.get("reason_code") or ""), str(row.get("risk_id") or "")),
+    )
+
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    evidence_refs_used = _collect_unique_refs(
+        context_provenance_ledger["evidence_ids"],
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        *[list(row.get("evidence_ids") or []) for row in final_rows],
+        *[list(row.get("evidence_ids") or []) for row in flagged_rows],
+        *[list(row.get("required_evidence_refs") or []) for row in open_risks],
+        *[list(row.get("evidence_refs") or []) for row in cross_project_obligations],
+    )
+
+    decision = _req_035_recommendation_decision(promoted_actions=promoted_actions, open_risks=open_risks)
+    confidence = _recommendation_confidence(evidence_refs=evidence_refs_used, open_risks=open_risks)
+    totals = contract_payload["totals"]
+
+    processing_behavior = {
+        "strategy": "llm-first-broad-sweep",
+        "reasoning_mode": "long-thinking",
+        "heuristic_summarization_only": False,
+        "strict_evidence_discipline": True,
+        "context_inputs": {
+            "context_provenance_ledger": context_provenance_ledger,
+            "reasoning_calls": reasoning_calls,
+            "broad_sweep_context": {
+                "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+                "earth_sweep_projects": earth_sweep_projects,
+                "cross_project_context": cross_project_context,
+            },
+        },
+        "context_usage": {
+            "earth_sweep_context_used": bool(earth_sweep_evidence_refs or earth_sweep_projects),
+            "cross_project_context_used": bool(cross_project_context),
+            "cross_project_projects_considered": sorted({row["project_id"] for row in cross_project_context}),
+            "earth_sweep_refs_used": earth_sweep_evidence_refs,
+            "cross_project_refs_used": cross_project_refs,
+            "ledger_evidence_ids_used": list(context_provenance_ledger["evidence_ids"]),
+            "evidence_refs_used": evidence_refs_used,
+        },
+        "recommendation": {
+            "decision": decision,
+            "rationale": (
+                f"strategic_claims={totals['strategic_claims']} "
+                f"cited={totals['cited_claims']} "
+                f"flagged={totals['flagged_claims']} "
+                f"promoted_actions={len(promoted_actions)} "
+                f"open_risks={len(open_risks)}"
+            ),
+            "confidence": confidence,
+            "evidence_refs": evidence_refs_used,
+            "recommended_actions": promoted_actions,
+            "cross_project_obligations": cross_project_obligations,
+            "open_risks": open_risks,
+        },
+    }
+
+    if emit is not None:
+        emit(_format_ts_line(f"REQ-035 processing decision={decision}", now_utc=checked_at_utc))
+
+    result = {
+        "ok": True,
+        "schema_version": REQ_035_PROCESSING_SCHEMA_VERSION,
+        "requirement_id": REQ_035_REQUIREMENT_ID,
+        "analysis_type": REQ_035_ANALYSIS_TYPE,
+        "call_id": REQ_035_CALL_ID,
+        "checked_at_utc": contract_payload["checked_at_utc"],
+        "context_provenance_ledger": contract_payload["context_provenance_ledger"],
+        "reasoning_calls": contract_payload["reasoning_calls"],
+        "evidence_citation_discipline": contract_payload["evidence_citation_discipline"],
+        "totals": contract_payload["totals"],
+        "processing_behavior": processing_behavior,
+    }
+
+    trace_row = _record_req_035_reasoning_calls_llm_call_trace(
+        checked_at_utc=checked_at_utc,
+        context_provenance_ledger=context_provenance_ledger,
+        reasoning_calls=reasoning_calls,
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        earth_sweep_projects=earth_sweep_projects,
+        cross_project_context=cross_project_context,
+        result=result,
+        trace_path=Path(trace_path) if trace_path is not None else None,
+        artifacts_dir=Path(trace_artifacts_dir) if trace_artifacts_dir is not None else None,
+    )
+
+    canonical_input = _req_035_canonical_input(
+        checked_at_utc=checked_at_utc,
+        context_provenance_ledger=context_provenance_ledger,
+        reasoning_calls=reasoning_calls,
+    )
+    canonical_processing_input = _req_035_canonical_processing_input(
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        earth_sweep_projects=earth_sweep_projects,
+        cross_project_context=cross_project_context,
+        result=result,
+    )
+    canonical_input_sha = _sha256_hex(canonical_input)
+    processing_input_sha = _sha256_hex(canonical_processing_input)
+    result["call_metadata"] = {
+        "reproducibility": "deterministic-input-fingerprint",
+        "canonical_input": canonical_input,
+        "canonical_input_sha256": canonical_input_sha,
+        "reproducible_call_id": f"req035-{canonical_input_sha[:16]}",
+        "canonical_processing_input": canonical_processing_input,
+        "processing_input_sha256": processing_input_sha,
+        "processing_call_id": f"req035-processing-{processing_input_sha[:16]}",
         "llm_call_trace_schema_version": _LLM_CALL_TRACE_SCHEMA_VERSION,
         "llm_call_trace_path": _LLM_CALL_TRACE_RELATIVE_PATH,
         "llm_call_trace_sha256": _sha256_hex([trace_row]),
