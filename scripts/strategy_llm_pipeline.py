@@ -35,6 +35,10 @@ REQ_031_REQUIREMENT_ID = "REQ-031"
 REQ_031_SCHEMA_VERSION = "req-031.call-6-kpi-impact-estimation-reasoning.v1"
 REQ_031_LLM_CALL_TRACE_SCHEMA_VERSION = "req-031.llm-call-trace-row.v1"
 REQ_031_ANALYSIS_TYPE = "call_6_kpi_impact_estimation_reasoning"
+REQ_034_REQUIREMENT_ID = "REQ-034"
+REQ_034_SCHEMA_VERSION = "req-034.cross-call-memory-handoff-contract.v1"
+REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION = "req-034.llm-call-trace-row.v1"
+REQ_034_ANALYSIS_TYPE = "cross_call_memory_handoff_contract"
 REQ_026_PROCESSING_STRATEGY = "call-1-situational-analysis"
 REQ_026_REASONING_MODE = "deterministic-broad-sweep"
 REQ_029_PROCESSING_STRATEGY = "call-4-recommendation-synthesis"
@@ -43,6 +47,8 @@ REQ_030_PROCESSING_STRATEGY = "call-5-sequencing-and-lane-design-reasoning"
 REQ_030_REASONING_MODE = "deterministic-lane-replay-planning"
 REQ_031_PROCESSING_STRATEGY = "call-6-kpi-impact-estimation-reasoning"
 REQ_031_REASONING_MODE = "deterministic-kpi-impact-replay-estimation"
+REQ_034_PROCESSING_STRATEGY = "cross-call-memory-handoff"
+REQ_034_REASONING_MODE = "deterministic-bounded-memory-replay"
 RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 PIPELINE_STRATEGY = "multi-call-strategy-pipeline-planner"
@@ -58,6 +64,9 @@ REQ_029_RECOMMENDATION_ID_RE = re.compile(r"^rec\.[a-z0-9]+(?:-[a-z0-9]+)*$")
 REQ_030_ALLOWED_LANE_SCOPES = {"local", "cross-project"}
 REQ_030_RECOMMENDATION_ID_RE = re.compile(r"^rec\.[a-z0-9]+(?:-[a-z0-9]+)*$")
 REQ_030_LANE_ID_RE = re.compile(r"^lane\.[a-z0-9]+(?:-[a-z0-9]+)*$")
+REQ_034_MEMORY_ID_RE = re.compile(r"^memory\.[a-z0-9]+(?:-[a-z0-9]+)*$")
+REQ_034_ALLOWED_MEMORY_SCOPES = {"local", "cross-project"}
+REQ_034_MAX_MEMORY_ITEMS_PER_CALL = 3
 REQ_031_ALLOWED_ADOPTION_STATUSES = {"planned", "conditional", "pilot"}
 REQ_031_ALLOWED_CONFIDENCE = {"high", "medium", "low"}
 REQ_031_ALLOWED_DIRECTIONS = {"increase", "decrease"}
@@ -112,6 +121,10 @@ class Req030Error(ValueError):
 
 class Req031Error(ValueError):
     """Raised when REQ-031 input is malformed."""
+
+
+class Req034Error(ValueError):
+    """Raised when REQ-034 input is malformed."""
 
 
 def utc_now_iso() -> str:
@@ -2272,6 +2285,867 @@ def validate_req_029_call_4_recommendation_synthesis(payload: Mapping[str, Any])
             synthesis_call_id=_as_text(metadata.get("processing_call_id")),
             call_chain=normalized_call_chain,
             recommendation_ids=[_as_text(row.get("recommendation_id")) for row in recommendation_drafts if isinstance(row, Mapping)],
+        )
+        if llm_call_trace_rows != expected_trace_rows:
+            errors.append("call_metadata.llm_call_trace_rows must mirror deterministic trace rows")
+        if metadata.get("llm_call_trace_sha256") != _canonical_digest(expected_trace_rows):
+            errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
+
+    return errors
+
+
+def _req_034_handoff_ref(*, output_ref: str) -> str:
+    return f"{output_ref}::memory_handoff"
+
+
+def _req_034_contract_output_ref(*, call_id: str) -> str:
+    return f"{REQ_034_REQUIREMENT_ID}::call::{call_id}::output::memory_handoff_contract"
+
+
+def _req_034_normalize_memory_items(
+    value: Any,
+    *,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req034Error(f"{field_name} must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        memory_id = _require_text(row.get("memory_id"), field_name=f"{field_name}[{index}].memory_id")
+        if not REQ_034_MEMORY_ID_RE.match(memory_id):
+            raise Req034Error(
+                f"{field_name}[{index}].memory_id must match {REQ_034_MEMORY_ID_RE.pattern}"
+            )
+        if memory_id in seen_ids:
+            raise Req034Error(f"{field_name}[{index}].memory_id must be unique within a handoff")
+        seen_ids.add(memory_id)
+        project_scope = _require_text(
+            row.get("project_scope"),
+            field_name=f"{field_name}[{index}].project_scope",
+        ).lower()
+        if project_scope not in REQ_034_ALLOWED_MEMORY_SCOPES:
+            raise Req034Error(
+                f"{field_name}[{index}].project_scope must be one of {sorted(REQ_034_ALLOWED_MEMORY_SCOPES)}"
+            )
+        project_id = _as_text(row.get("project_id"))
+        if project_scope == "cross-project":
+            project_id = _require_text(project_id, field_name=f"{field_name}[{index}].project_id")
+        else:
+            project_id = ""
+        normalized.append(
+            {
+                "memory_id": memory_id,
+                "summary": _require_text(row.get("summary"), field_name=f"{field_name}[{index}].summary"),
+                "category": _require_text(row.get("category"), field_name=f"{field_name}[{index}].category"),
+                "position": _require_text(row.get("position"), field_name=f"{field_name}[{index}].position"),
+                "project_scope": project_scope,
+                "project_id": project_id,
+                "citation_refs": _normalize_string_list(
+                    row.get("citation_refs"),
+                    field_name=f"{field_name}[{index}].citation_refs",
+                    min_items=1,
+                ),
+            }
+        )
+    normalized.sort(key=lambda row: (row["memory_id"], row["position"], row["summary"], row["project_id"]))
+    return normalized
+
+
+def _req_034_normalize_prior_call_handoffs(
+    value: Any,
+    *,
+    field_name: str = "prior_call_handoffs",
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req034Error(f"{field_name} must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_sequences: set[int] = set()
+    seen_call_ids: set[str] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        sequence = row.get("sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            raise Req034Error(f"{field_name}[{index}].sequence must be an integer")
+        if sequence < 1:
+            raise Req034Error(f"{field_name}[{index}].sequence must be >= 1")
+        if sequence in seen_sequences:
+            raise Req034Error(f"{field_name}[{index}].sequence must be unique")
+        seen_sequences.add(sequence)
+        call_id = _require_text(row.get("call_id"), field_name=f"{field_name}[{index}].call_id")
+        if call_id in seen_call_ids:
+            raise Req034Error(f"{field_name}[{index}].call_id must be unique")
+        seen_call_ids.add(call_id)
+        normalized.append(
+            {
+                "sequence": sequence,
+                "call_id": call_id,
+                "phase": _require_text(row.get("phase"), field_name=f"{field_name}[{index}].phase"),
+                "output_ref": _require_text(row.get("output_ref"), field_name=f"{field_name}[{index}].output_ref"),
+                "memory_items": _req_034_normalize_memory_items(
+                    row.get("memory_items"),
+                    field_name=f"{field_name}[{index}].memory_items",
+                ),
+            }
+        )
+
+    normalized.sort(key=lambda row: row["sequence"])
+    expected_sequences = list(range(1, len(normalized) + 1))
+    if [row["sequence"] for row in normalized] != expected_sequences:
+        raise Req034Error(f"{field_name}.sequence must be contiguous starting at 1")
+    if len(normalized) < 2:
+        raise Req034Error(f"{field_name} must include at least 2 prior calls")
+    return normalized
+
+
+def _req_034_normalize_candidate_recommendations(
+    value: Any,
+    *,
+    field_name: str = "candidate_recommendations",
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req034Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        recommendation_id = _req_029_recommendation_id_from_candidate(row, index=index)
+        if recommendation_id in seen_ids:
+            raise Req034Error(f"{field_name}[{index}].recommendation_id must be unique")
+        seen_ids.add(recommendation_id)
+        recommendation_scope = _require_text(
+            row.get("recommendation_scope"),
+            field_name=f"{field_name}[{index}].recommendation_scope",
+        ).lower()
+        if recommendation_scope not in REQ_029_ALLOWED_RECOMMENDATION_SCOPES:
+            raise Req034Error(
+                f"{field_name}[{index}].recommendation_scope must be one of {sorted(REQ_029_ALLOWED_RECOMMENDATION_SCOPES)}"
+            )
+        project_id = _as_text(row.get("project_id"))
+        if recommendation_scope == "cross-project":
+            project_id = _require_text(project_id, field_name=f"{field_name}[{index}].project_id")
+        else:
+            project_id = ""
+        requires_earth_evidence = row.get("requires_earth_evidence")
+        if requires_earth_evidence is None:
+            requires_earth_evidence = recommendation_scope == "cross-project"
+        if not isinstance(requires_earth_evidence, bool):
+            raise Req034Error(f"{field_name}[{index}].requires_earth_evidence must be a boolean")
+        synthesized_from_call_sequence = row.get("synthesized_from_call_sequence")
+        if isinstance(synthesized_from_call_sequence, bool) or not isinstance(synthesized_from_call_sequence, int):
+            raise Req034Error(f"{field_name}[{index}].synthesized_from_call_sequence must be an integer")
+        memory_anchor_ids = _normalize_string_list(
+            row.get("memory_anchor_ids"),
+            field_name=f"{field_name}[{index}].memory_anchor_ids",
+            min_items=1,
+        )
+        for memory_id in memory_anchor_ids:
+            if not REQ_034_MEMORY_ID_RE.match(memory_id):
+                raise Req034Error(
+                    f"{field_name}[{index}].memory_anchor_ids entries must match {REQ_034_MEMORY_ID_RE.pattern}"
+                )
+        normalized.append(
+            {
+                "recommendation_id": recommendation_id,
+                "summary": _require_text(row.get("summary"), field_name=f"{field_name}[{index}].summary"),
+                "rationale": _require_text(row.get("rationale"), field_name=f"{field_name}[{index}].rationale"),
+                "recommendation_scope": recommendation_scope,
+                "project_id": project_id,
+                "requires_earth_evidence": requires_earth_evidence,
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                    min_items=1,
+                ),
+                "next_step": _require_text(row.get("next_step"), field_name=f"{field_name}[{index}].next_step"),
+                "synthesized_from_call_sequence": synthesized_from_call_sequence,
+                "memory_anchor_ids": memory_anchor_ids,
+            }
+        )
+    normalized.sort(key=lambda row: row["recommendation_id"])
+    return normalized
+
+
+def _req_034_canonical_input(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_id: str,
+    checked_at_utc: str,
+) -> dict[str, Any]:
+    return {
+        "runtime_mode": RUNTIME_MODE,
+        "execution_mode": EXECUTION_MODE,
+        "target_project_root": target_project_root,
+        "earth_root": earth_root,
+        "output_root": output_root,
+        "revision_identity": revision_identity,
+        "strategy_goal": strategy_goal,
+        "analysis_type": REQ_034_ANALYSIS_TYPE,
+        "call_id": call_id,
+        "checked_at_utc": checked_at_utc,
+    }
+
+
+def _req_034_canonical_processing_input(
+    *,
+    prior_call_handoffs: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[str],
+    earth_sweep_evidence_refs: Sequence[str],
+    cross_project_context: Sequence[Mapping[str, Any]],
+    candidate_recommendations: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "prior_call_handoffs": [dict(row) for row in prior_call_handoffs],
+        "target_project_evidence_refs": list(target_project_evidence_refs),
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "cross_project_context": [dict(row) for row in cross_project_context],
+        "candidate_recommendations": [dict(row) for row in candidate_recommendations],
+    }
+
+
+def _req_034_build_trace_rows(
+    *,
+    processing_call_id: str,
+    call_id: str,
+    prior_call_handoffs: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[str],
+    earth_sweep_evidence_refs: Sequence[str],
+    cross_project_context: Sequence[Mapping[str, Any]],
+    candidate_recommendations: Sequence[Mapping[str, Any]],
+    active_memory_count: int,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    prior_handoff_refs: list[str] = []
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    for row in prior_call_handoffs:
+        output_ref = str(row["output_ref"])
+        handoff_ref = _req_034_handoff_ref(output_ref=output_ref)
+        rows.append(
+            {
+                "schema_version": REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION,
+                "requirement_id": REQ_034_REQUIREMENT_ID,
+                "processing_call_id": processing_call_id,
+                "call_id": str(row["call_id"]),
+                "sequence": int(row["sequence"]),
+                "call_objective": str(row["phase"]),
+                "input_refs": list(prior_handoff_refs),
+                "output_refs": [output_ref, handoff_ref],
+                "handoff_summary": (
+                    f"Call {int(row['sequence'])} hands off "
+                    f"{min(len(row['memory_items']), REQ_034_MAX_MEMORY_ITEMS_PER_CALL)} bounded memory item(s) "
+                    f"via {handoff_ref}."
+                ),
+            }
+        )
+        prior_handoff_refs.append(handoff_ref)
+
+    final_sequence = len(prior_call_handoffs) + 1
+    final_output_ref = _req_034_contract_output_ref(call_id=call_id)
+    final_input_refs = _dedupe_preserving_order(
+        prior_handoff_refs
+        + list(target_project_evidence_refs)
+        + list(earth_sweep_evidence_refs)
+        + list(cross_project_refs)
+        + [ref for row in candidate_recommendations for ref in row["evidence_refs"]]
+    )
+    rows.append(
+        {
+            "schema_version": REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "requirement_id": REQ_034_REQUIREMENT_ID,
+            "processing_call_id": processing_call_id,
+            "call_id": call_id,
+            "sequence": final_sequence,
+            "call_objective": REQ_034_ANALYSIS_TYPE,
+            "input_refs": final_input_refs,
+            "output_refs": [final_output_ref],
+            "handoff_summary": (
+                f"Call {final_sequence} emits memory_handoff_contract with {len(prior_call_handoffs)} "
+                f"prior handoff(s) and {active_memory_count} active memory item(s)."
+            ),
+        }
+    )
+    return rows
+
+
+def build_req_034_cross_call_memory_handoff_contract(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    prior_call_handoffs: Sequence[Mapping[str, Any]],
+    candidate_recommendations: Sequence[Mapping[str, Any]],
+    cross_project_context: Sequence[Mapping[str, Any]] | None = None,
+    target_project_evidence_refs: Sequence[Any] | None = None,
+    earth_sweep_evidence_refs: Sequence[Any] | None = None,
+    call_id: str = "call-memory-handoff",
+    checked_at_utc: str | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_text(revision_identity, field_name="revision_identity")
+    normalized_strategy_goal = _require_text(strategy_goal, field_name="strategy_goal")
+    normalized_call_id = _require_text(call_id, field_name="call_id")
+    normalized_checked_at_utc = _require_text(checked_at_utc or utc_now_iso(), field_name="checked_at_utc")
+    normalized_prior_call_handoffs = _req_034_normalize_prior_call_handoffs(prior_call_handoffs)
+    normalized_candidate_recommendations = _req_034_normalize_candidate_recommendations(candidate_recommendations)
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in normalized_cross_project_context])
+    base_available_refs = set(
+        _collect_unique_refs(
+            normalized_target_refs,
+            normalized_earth_refs,
+            cross_project_refs,
+            [row["output_ref"] for row in normalized_prior_call_handoffs],
+        )
+    )
+    context_by_project = {str(row["project_id"]): row for row in normalized_cross_project_context}
+
+    open_risks: list[dict[str, Any]] = []
+    memory_handoffs: list[dict[str, Any]] = []
+    memory_rows_by_id: dict[str, list[dict[str, Any]]] = {}
+    handoff_refs: list[str] = []
+
+    for row in normalized_prior_call_handoffs:
+        bounded_memory_items = list(row["memory_items"][:REQ_034_MAX_MEMORY_ITEMS_PER_CALL])
+        handoff_ref = _req_034_handoff_ref(output_ref=str(row["output_ref"]))
+        handoff_refs.append(handoff_ref)
+        emitted_memory_items: list[dict[str, Any]] = []
+        handoff_citation_refs = _collect_unique_refs(*[item["citation_refs"] for item in bounded_memory_items])
+        for item in bounded_memory_items:
+            supported = True
+            uncited_refs = sorted(set(item["citation_refs"]) - base_available_refs)
+            if uncited_refs:
+                supported = False
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{item['memory_id']}-citation",
+                        "reason_code": "uncited_memory_claim",
+                        "summary": item["summary"],
+                        "required_evidence_refs": _collect_unique_refs([row["output_ref"]], uncited_refs),
+                    }
+                )
+            if item["project_scope"] == "cross-project":
+                if item["project_id"] not in context_by_project:
+                    supported = False
+                    open_risks.append(
+                        {
+                            "risk_id": f"risk-{item['memory_id']}-context",
+                            "reason_code": "missing_cross_project_context",
+                            "summary": item["summary"],
+                            "required_evidence_refs": _collect_unique_refs([row["output_ref"]], item["citation_refs"]),
+                        }
+                    )
+                if not any(_is_earth_evidence_ref(ref) for ref in item["citation_refs"]):
+                    supported = False
+                    open_risks.append(
+                        {
+                            "risk_id": f"risk-{item['memory_id']}-earth-evidence",
+                            "reason_code": "missing_earth_sweep_evidence_refs",
+                            "summary": item["summary"],
+                            "required_evidence_refs": _collect_unique_refs([row["output_ref"]], item["citation_refs"]),
+                        }
+                    )
+            emitted_memory_items.append(
+                {
+                    "memory_id": item["memory_id"],
+                    "summary": item["summary"],
+                    "category": item["category"],
+                    "position": item["position"],
+                    "project_scope": item["project_scope"],
+                    "project_id": item["project_id"],
+                    "citation_refs": list(item["citation_refs"]),
+                    "supported": supported,
+                }
+            )
+            memory_rows_by_id.setdefault(item["memory_id"], []).append(
+                {
+                    "memory_id": item["memory_id"],
+                    "summary": item["summary"],
+                    "position": item["position"],
+                    "project_scope": item["project_scope"],
+                    "project_id": item["project_id"],
+                    "citation_refs": list(item["citation_refs"]),
+                    "source_call_sequence": int(row["sequence"]),
+                    "source_call_id": str(row["call_id"]),
+                    "source_output_ref": str(row["output_ref"]),
+                    "handoff_ref": handoff_ref,
+                    "supported": supported,
+                }
+            )
+        memory_handoffs.append(
+            {
+                "source_call_sequence": int(row["sequence"]),
+                "source_call_id": str(row["call_id"]),
+                "phase": str(row["phase"]),
+                "source_output_ref": str(row["output_ref"]),
+                "handoff_ref": handoff_ref,
+                "bounded_item_count": len(bounded_memory_items),
+                "truncated_item_count": max(0, len(row["memory_items"]) - len(bounded_memory_items)),
+                "citation_refs": handoff_citation_refs,
+                "memory_items": emitted_memory_items,
+            }
+        )
+
+    suppressed_memory_ids: set[str] = set()
+    active_memory_by_id: dict[str, dict[str, Any]] = {}
+    for memory_id, rows in memory_rows_by_id.items():
+        supported_rows = [row for row in rows if row["supported"]]
+        if not supported_rows:
+            suppressed_memory_ids.add(memory_id)
+            continue
+        supported_rows.sort(key=lambda row: row["source_call_sequence"])
+        if len({str(row["position"]) for row in supported_rows}) > 1:
+            suppressed_memory_ids.add(memory_id)
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{memory_id}-contradiction",
+                    "reason_code": "cross_call_contradiction",
+                    "summary": supported_rows[-1]["summary"],
+                    "required_evidence_refs": _collect_unique_refs(
+                        [row["source_output_ref"] for row in supported_rows],
+                        *[row["citation_refs"] for row in supported_rows],
+                    ),
+                }
+            )
+            continue
+        active_memory_by_id[memory_id] = supported_rows[-1]
+
+    recommended_actions: list[dict[str, Any]] = []
+    cross_project_obligations: list[dict[str, Any]] = []
+    blocked_recommendation_ids: set[str] = set()
+    available_recommendation_refs = set(
+        _collect_unique_refs(
+            normalized_target_refs,
+            normalized_earth_refs,
+            cross_project_refs,
+            [row["output_ref"] for row in normalized_prior_call_handoffs],
+            handoff_refs,
+            *[row["citation_refs"] for row in active_memory_by_id.values()],
+        )
+    )
+    for row in normalized_candidate_recommendations:
+        recommendation_id = str(row["recommendation_id"])
+        blocked_reason_code = ""
+        missing_anchor_ids = [memory_id for memory_id in row["memory_anchor_ids"] if memory_id not in active_memory_by_id]
+        contradicted_anchor_ids = [memory_id for memory_id in row["memory_anchor_ids"] if memory_id in suppressed_memory_ids]
+        anchor_evidence_refs = _collect_unique_refs(
+            *[
+                active_memory_by_id[memory_id]["citation_refs"]
+                for memory_id in row["memory_anchor_ids"]
+                if memory_id in active_memory_by_id
+            ]
+        )
+        anchor_output_refs = _collect_unique_refs(
+            [
+                active_memory_by_id[memory_id]["source_output_ref"]
+                for memory_id in row["memory_anchor_ids"]
+                if memory_id in active_memory_by_id
+            ]
+        )
+        uncited_refs = sorted(set(row["evidence_refs"]) - available_recommendation_refs)
+        if contradicted_anchor_ids:
+            blocked_reason_code = "cross_call_contradiction"
+        elif missing_anchor_ids:
+            blocked_reason_code = "missing_memory_handoff"
+        elif uncited_refs:
+            blocked_reason_code = "uncited_memory_claim"
+        elif row["recommendation_scope"] == "cross-project" and row["requires_earth_evidence"] and not normalized_earth_refs:
+            blocked_reason_code = "missing_earth_sweep_evidence_refs"
+        elif row["recommendation_scope"] == "cross-project" and row["project_id"] not in context_by_project:
+            blocked_reason_code = "missing_cross_project_context"
+
+        if blocked_reason_code:
+            blocked_recommendation_ids.add(recommendation_id)
+            required_refs = _collect_unique_refs(anchor_output_refs, row["evidence_refs"], anchor_evidence_refs)
+            if uncited_refs:
+                required_refs = _collect_unique_refs(anchor_output_refs, uncited_refs)
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{recommendation_id}",
+                    "reason_code": blocked_reason_code,
+                    "summary": row["summary"],
+                    "required_evidence_refs": required_refs,
+                }
+            )
+            continue
+
+        action = {
+            "recommendation_id": recommendation_id,
+            "summary": str(row["summary"]),
+            "rationale": str(row["rationale"]),
+            "next_step": str(row["next_step"]),
+            "memory_anchor_ids": list(row["memory_anchor_ids"]),
+            "source_output_refs": anchor_output_refs,
+            "evidence_refs": _collect_unique_refs(anchor_output_refs, row["evidence_refs"], anchor_evidence_refs),
+        }
+        if row["recommendation_scope"] == "cross-project":
+            project_context = context_by_project[str(row["project_id"])]
+            cross_project_obligations.append(
+                {
+                    "obligation_id": f"obligation-{recommendation_id}",
+                    "project_id": str(row["project_id"]),
+                    **action,
+                    "evidence_refs": _collect_unique_refs(
+                        action["evidence_refs"],
+                        project_context["evidence_refs"],
+                        normalized_earth_refs,
+                    ),
+                }
+            )
+            continue
+        recommended_actions.append(action)
+
+    recommended_actions.sort(key=lambda row: row["recommendation_id"])
+    cross_project_obligations.sort(key=lambda row: row["obligation_id"])
+    memory_handoffs.sort(key=lambda row: (row["source_call_sequence"], row["source_call_id"]))
+    open_risks.sort(key=lambda row: row["risk_id"])
+    active_memory_ids = sorted(active_memory_by_id)
+
+    recommendation_refs = _collect_unique_refs(
+        normalized_target_refs,
+        normalized_earth_refs,
+        cross_project_refs,
+        [row["output_ref"] for row in normalized_prior_call_handoffs],
+        handoff_refs,
+        *[row["citation_refs"] for row in active_memory_by_id.values()],
+        *[row["evidence_refs"] for row in recommended_actions],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    promoted_actions: list[dict[str, Any]] = list(recommended_actions) + list(cross_project_obligations)
+    decision = _recommendation_decision(recommended_actions=promoted_actions, open_risks=open_risks)
+    rationale = (
+        f"handoffs={len(memory_handoffs)} active_memory={len(active_memory_ids)} "
+        f"local={len(recommended_actions)} obligations={len(cross_project_obligations)} "
+        f"open_risks={len(open_risks)}"
+    )
+    confidence = _recommendation_confidence(evidence_refs=recommendation_refs, open_risks=open_risks)
+
+    canonical_input = _req_034_canonical_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+        strategy_goal=normalized_strategy_goal,
+        call_id=normalized_call_id,
+        checked_at_utc=normalized_checked_at_utc,
+    )
+    canonical_processing_input = _req_034_canonical_processing_input(
+        prior_call_handoffs=normalized_prior_call_handoffs,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_project_context,
+        candidate_recommendations=normalized_candidate_recommendations,
+    )
+    processing_sha = _canonical_digest(canonical_processing_input)
+    processing_call_id = f"req034-processing-{processing_sha[:16]}"
+    llm_call_trace_rows = _req_034_build_trace_rows(
+        processing_call_id=processing_call_id,
+        call_id=normalized_call_id,
+        prior_call_handoffs=normalized_prior_call_handoffs,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_project_context,
+        candidate_recommendations=normalized_candidate_recommendations,
+        active_memory_count=len(active_memory_ids),
+    )
+
+    return {
+        "schema_version": REQ_034_SCHEMA_VERSION,
+        "requirement_id": REQ_034_REQUIREMENT_ID,
+        "analysis_type": REQ_034_ANALYSIS_TYPE,
+        "call_id": normalized_call_id,
+        "checked_at_utc": normalized_checked_at_utc,
+        "processing_behavior": {
+            "strategy": REQ_034_PROCESSING_STRATEGY,
+            "reasoning_mode": REQ_034_REASONING_MODE,
+            "bounded_context": True,
+            "context_inputs": {
+                "target_project": {
+                    "project_root": normalized_target_root,
+                    "evidence_refs": list(normalized_target_refs),
+                },
+                "earth_sweep": {
+                    "earth_root": normalized_earth_root,
+                    "evidence_refs": list(normalized_earth_refs),
+                },
+                "prior_call_handoffs": [dict(row) for row in normalized_prior_call_handoffs],
+                "cross_project_context": [dict(row) for row in normalized_cross_project_context],
+                "candidate_recommendations": [dict(row) for row in normalized_candidate_recommendations],
+            },
+            "context_usage": {
+                "prior_call_handoffs_used": bool(normalized_prior_call_handoffs),
+                "bounded_context_used": True,
+                "earth_sweep_context_used": bool(normalized_earth_refs),
+                "cross_project_context_used": bool(normalized_cross_project_context),
+                "prior_call_ids_considered": [str(row["call_id"]) for row in normalized_prior_call_handoffs],
+                "handoff_refs_emitted": list(handoff_refs),
+                "cross_project_projects_considered": sorted(
+                    {str(row["project_id"]) for row in normalized_cross_project_context}
+                ),
+                "candidate_recommendation_ids_considered": [
+                    str(row["recommendation_id"]) for row in normalized_candidate_recommendations
+                ],
+                "active_memory_ids": active_memory_ids,
+                "suppressed_memory_ids": sorted(suppressed_memory_ids),
+                "recommended_action_ids_emitted": [
+                    str(row["recommendation_id"]) for row in recommended_actions
+                ],
+                "cross_project_obligation_ids_emitted": [
+                    str(row["obligation_id"]) for row in cross_project_obligations
+                ],
+                "open_risk_ids_emitted": [str(row["risk_id"]) for row in open_risks],
+                "evidence_refs_used": list(recommendation_refs),
+            },
+            "handoff_contract": {
+                "memory_window_per_call": REQ_034_MAX_MEMORY_ITEMS_PER_CALL,
+                "contract_output_ref": _req_034_contract_output_ref(call_id=normalized_call_id),
+                "active_memory_ids": active_memory_ids,
+                "suppressed_memory_ids": sorted(suppressed_memory_ids),
+                "handoff_count": len(memory_handoffs),
+            },
+            "recommendation": {
+                "decision": decision,
+                "rationale": rationale,
+                "confidence": confidence,
+                "evidence_refs": list(recommendation_refs),
+                "memory_handoffs": memory_handoffs,
+                "recommended_actions": recommended_actions,
+                "cross_project_obligations": cross_project_obligations,
+                "open_risks": open_risks,
+            },
+        },
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input": canonical_input,
+            "canonical_input_sha256": _canonical_digest(canonical_input),
+            "reproducible_call_id": f"req034-{_canonical_digest(canonical_input)[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+            "processing_input_sha256": processing_sha,
+            "processing_call_id": processing_call_id,
+            "llm_call_trace_schema_version": REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": _canonical_digest(llm_call_trace_rows),
+            "llm_call_trace_rows": llm_call_trace_rows,
+        },
+    }
+
+
+def validate_req_034_cross_call_memory_handoff_contract(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    if payload.get("schema_version") != REQ_034_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_034_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_034_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_034_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_034_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_034_ANALYSIS_TYPE}")
+    if not _as_text(payload.get("call_id")):
+        errors.append("call_id is required")
+    if not _as_text(payload.get("checked_at_utc")):
+        errors.append("checked_at_utc is required")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        return errors + ["processing_behavior must be an object"]
+    if processing_behavior.get("strategy") != REQ_034_PROCESSING_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_034_PROCESSING_STRATEGY}")
+    if processing_behavior.get("reasoning_mode") != REQ_034_REASONING_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {REQ_034_REASONING_MODE}")
+    if processing_behavior.get("bounded_context") is not True:
+        errors.append("processing_behavior.bounded_context must be true")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    normalized_prior_call_handoffs: list[dict[str, Any]] = []
+    normalized_target_refs: list[str] = []
+    normalized_earth_refs: list[str] = []
+    normalized_cross_project_context: list[dict[str, Any]] = []
+    normalized_candidate_recommendations: list[dict[str, Any]] = []
+    if not isinstance(context_inputs, Mapping):
+        return errors + ["processing_behavior.context_inputs must be an object"]
+    target_project = context_inputs.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("processing_behavior.context_inputs.target_project must be an object")
+    else:
+        normalized_target_refs = sorted(
+            {_as_text(ref) for ref in target_project.get("evidence_refs", []) if _as_text(ref)}
+        )
+    earth_sweep = context_inputs.get("earth_sweep")
+    if not isinstance(earth_sweep, Mapping):
+        errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+    else:
+        normalized_earth_refs = sorted(
+            {_as_text(ref) for ref in earth_sweep.get("evidence_refs", []) if _as_text(ref)}
+        )
+    try:
+        normalized_prior_call_handoffs = _req_034_normalize_prior_call_handoffs(context_inputs.get("prior_call_handoffs"))
+    except Req034Error as exc:
+        errors.append(str(exc))
+    try:
+        normalized_cross_project_context = _normalize_cross_project_context(context_inputs.get("cross_project_context"))
+    except ValueError as exc:
+        errors.append(str(exc))
+    try:
+        normalized_candidate_recommendations = _req_034_normalize_candidate_recommendations(
+            context_inputs.get("candidate_recommendations")
+        )
+    except Req034Error as exc:
+        errors.append(str(exc))
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        for key in (
+            "prior_call_handoffs_used",
+            "bounded_context_used",
+            "earth_sweep_context_used",
+            "cross_project_context_used",
+        ):
+            if not isinstance(context_usage.get(key), bool):
+                errors.append(f"processing_behavior.context_usage.{key} must be a boolean")
+        for key in (
+            "prior_call_ids_considered",
+            "handoff_refs_emitted",
+            "cross_project_projects_considered",
+            "candidate_recommendation_ids_considered",
+            "active_memory_ids",
+            "suppressed_memory_ids",
+            "recommended_action_ids_emitted",
+            "cross_project_obligation_ids_emitted",
+            "open_risk_ids_emitted",
+            "evidence_refs_used",
+        ):
+            value = context_usage.get(key)
+            if not isinstance(value, list) or any(not _as_text(item) for item in value):
+                errors.append(f"processing_behavior.context_usage.{key} must be a string array")
+
+    handoff_contract = processing_behavior.get("handoff_contract")
+    if not isinstance(handoff_contract, Mapping):
+        errors.append("processing_behavior.handoff_contract must be an object")
+    else:
+        if handoff_contract.get("memory_window_per_call") != REQ_034_MAX_MEMORY_ITEMS_PER_CALL:
+            errors.append(
+                f"processing_behavior.handoff_contract.memory_window_per_call must be {REQ_034_MAX_MEMORY_ITEMS_PER_CALL}"
+            )
+        if not _as_text(handoff_contract.get("contract_output_ref")):
+            errors.append("processing_behavior.handoff_contract.contract_output_ref is required")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        return errors + ["processing_behavior.recommendation must be an object"]
+    required_recommendation_keys = {
+        "decision",
+        "rationale",
+        "confidence",
+        "evidence_refs",
+        "memory_handoffs",
+        "recommended_actions",
+        "cross_project_obligations",
+        "open_risks",
+    }
+    missing_recommendation_keys = sorted(required_recommendation_keys - set(recommendation.keys()))
+    if missing_recommendation_keys:
+        errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation_keys}")
+    if not isinstance(recommendation.get("evidence_refs"), list) or not recommendation.get("evidence_refs"):
+        errors.append("processing_behavior.recommendation.evidence_refs must be a non-empty list")
+    for key in ("memory_handoffs", "recommended_actions", "cross_project_obligations", "open_risks"):
+        if not isinstance(recommendation.get(key), list):
+            errors.append(f"processing_behavior.recommendation.{key} must be a list")
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        return errors + ["call_metadata must be an object"]
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+    else:
+        expected_canonical_input = _req_034_canonical_input(
+            target_project_root=_as_text(target_project.get("project_root")) if isinstance(target_project, Mapping) else "",
+            earth_root=_as_text(earth_sweep.get("earth_root")) if isinstance(earth_sweep, Mapping) else "",
+            output_root=_as_text(canonical_input.get("output_root")),
+            revision_identity=_as_text(canonical_input.get("revision_identity")),
+            strategy_goal=_as_text(canonical_input.get("strategy_goal")),
+            call_id=_as_text(payload.get("call_id")),
+            checked_at_utc=_as_text(payload.get("checked_at_utc")),
+        )
+        if dict(canonical_input) != expected_canonical_input:
+            errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+        expected_input_sha = _canonical_digest(expected_canonical_input)
+        if metadata.get("canonical_input_sha256") != expected_input_sha:
+            errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+        if metadata.get("reproducible_call_id") != f"req034-{expected_input_sha[:16]}":
+            errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+    else:
+        expected_processing_input = _req_034_canonical_processing_input(
+            prior_call_handoffs=normalized_prior_call_handoffs,
+            target_project_evidence_refs=normalized_target_refs,
+            earth_sweep_evidence_refs=normalized_earth_refs,
+            cross_project_context=normalized_cross_project_context,
+            candidate_recommendations=normalized_candidate_recommendations,
+        )
+        if dict(canonical_processing_input) != expected_processing_input:
+            errors.append("call_metadata.canonical_processing_input must mirror normalized handoff inputs")
+        expected_processing_sha = _canonical_digest(expected_processing_input)
+        if metadata.get("processing_input_sha256") != expected_processing_sha:
+            errors.append("call_metadata.processing_input_sha256 does not match processing input")
+        if metadata.get("processing_call_id") != f"req034-processing-{expected_processing_sha[:16]}":
+            errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    if metadata.get("llm_call_trace_schema_version") != REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION:
+        errors.append(
+            f"call_metadata.llm_call_trace_schema_version must be {REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION}"
+        )
+    if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+        errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+    llm_call_trace_rows = metadata.get("llm_call_trace_rows")
+    if not isinstance(llm_call_trace_rows, list):
+        errors.append("call_metadata.llm_call_trace_rows must be a list")
+    else:
+        expected_trace_rows = _req_034_build_trace_rows(
+            processing_call_id=_as_text(metadata.get("processing_call_id")),
+            call_id=_as_text(payload.get("call_id")),
+            prior_call_handoffs=normalized_prior_call_handoffs,
+            target_project_evidence_refs=normalized_target_refs,
+            earth_sweep_evidence_refs=normalized_earth_refs,
+            cross_project_context=normalized_cross_project_context,
+            candidate_recommendations=normalized_candidate_recommendations,
+            active_memory_count=len(context_usage.get("active_memory_ids", []))
+            if isinstance(context_usage, Mapping) and isinstance(context_usage.get("active_memory_ids"), list)
+            else 0,
         )
         if llm_call_trace_rows != expected_trace_rows:
             errors.append("call_metadata.llm_call_trace_rows must mirror deterministic trace rows")
@@ -4973,13 +5847,17 @@ def _detect_requirement(payload: Mapping[str, Any]) -> str:
         return REQ_031_REQUIREMENT_ID
     if payload.get("analysis_type") == REQ_030_ANALYSIS_TYPE or "candidate_lane_designs" in payload:
         return REQ_030_REQUIREMENT_ID
+    if payload.get("analysis_type") == REQ_034_ANALYSIS_TYPE or "prior_call_handoffs" in payload:
+        return REQ_034_REQUIREMENT_ID
     if payload.get("analysis_type") == REQ_029_ANALYSIS_TYPE or "call_chain" in payload:
         return REQ_029_REQUIREMENT_ID
     if "target_project_root" in payload:
         return REQ_025_REQUIREMENT_ID
     if "target_project" in payload or payload.get("analysis_type") == REQ_026_ANALYSIS_TYPE:
         return REQ_026_REQUIREMENT_ID
-    raise ValueError("input payload does not match REQ-025, REQ-026, REQ-029, REQ-030, or REQ-031 contract anchors")
+    raise ValueError(
+        "input payload does not match REQ-025, REQ-026, REQ-029, REQ-030, REQ-031, or REQ-034 contract anchors"
+    )
 
 
 def run(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -5014,6 +5892,21 @@ def run(payload: Mapping[str, Any]) -> dict[str, Any]:
             target_project_evidence_refs=payload.get("target_project_evidence_refs"),
             earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
             call_id=_as_text(payload.get("call_id")) or "call-5",
+            checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
+        )
+    if requirement_id == REQ_034_REQUIREMENT_ID:
+        return build_req_034_cross_call_memory_handoff_contract(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            strategy_goal=payload.get("strategy_goal"),
+            prior_call_handoffs=payload.get("prior_call_handoffs"),
+            candidate_recommendations=payload.get("candidate_recommendations"),
+            cross_project_context=payload.get("cross_project_context"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            call_id=_as_text(payload.get("call_id")) or "call-memory-handoff",
             checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
         )
     if requirement_id == REQ_029_REQUIREMENT_ID:
@@ -5065,6 +5958,8 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
         return validate_req_031_call_6_kpi_impact_estimation_reasoning(payload)
     if requirement_id == REQ_030_REQUIREMENT_ID:
         return validate_req_030_call_5_sequencing_and_lane_design_reasoning(payload)
+    if requirement_id == REQ_034_REQUIREMENT_ID:
+        return validate_req_034_cross_call_memory_handoff_contract(payload)
     if requirement_id == REQ_029_REQUIREMENT_ID:
         return validate_req_029_call_4_recommendation_synthesis(payload)
     if requirement_id == REQ_025_REQUIREMENT_ID:
@@ -5076,7 +5971,7 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Emit REQ-025, REQ-026, REQ-029, REQ-030, or REQ-031 strategy pipeline payloads."
+        description="Emit REQ-025, REQ-026, REQ-029, REQ-030, REQ-031, or REQ-034 strategy pipeline payloads."
     )
     parser.add_argument("--input-json", required=True, help="Input JSON path or '-' for stdin.")
     parser.add_argument("--output-json", default="", help="Optional output JSON path.")
@@ -5093,7 +5988,7 @@ def main(argv: list[str] | None = None) -> int:
         requirement_id = _detect_requirement(input_payload)
         _timestamped_print(f"Starting {requirement_id} pipeline build from input source: {args.input_json}")
         output_payload = run(input_payload)
-    except (Req026Error, Req029Error, Req030Error, Req031Error, ValueError, json.JSONDecodeError) as exc:
+    except (Req026Error, Req029Error, Req030Error, Req031Error, Req034Error, ValueError, json.JSONDecodeError) as exc:
         if isinstance(exc, Req026Error):
             requirement_id = REQ_026_REQUIREMENT_ID
         elif isinstance(exc, Req029Error):
@@ -5102,6 +5997,8 @@ def main(argv: list[str] | None = None) -> int:
             requirement_id = REQ_030_REQUIREMENT_ID
         elif isinstance(exc, Req031Error):
             requirement_id = REQ_031_REQUIREMENT_ID
+        elif isinstance(exc, Req034Error):
+            requirement_id = REQ_034_REQUIREMENT_ID
         else:
             requirement_id = ""
         _timestamped_print(f"Pipeline input processing failed: {exc}")
