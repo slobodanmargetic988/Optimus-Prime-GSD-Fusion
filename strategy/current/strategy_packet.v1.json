@@ -1,0 +1,100 @@
+{
+  "schema_version": "strategy-packet.v1",
+  "identity": {
+    "project_id": "prj.optimus-prime-gsd-fusion",
+    "run_id": "run.20260316t111000z-req057",
+    "event_id": "event.20260316t111500z-strategy-packet",
+    "era_id": "era.2026q1-planning",
+    "plan_id": "plan.optimus-prime-phase2"
+  },
+  "strategy": {
+    "revision_id": "strat.20260316-r57",
+    "summary": "Route blocker escalation policy rows to planner/runtime without narrative parsing.",
+    "link_map_ref": "strategy/current/ECOSYSTEM_LINK_MAP.json"
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.route-cross-project-rate-limits",
+      "priority": "high",
+      "summary": "Escalate sustained all-rate-gates blocking with deterministic owner routing.",
+      "rationale": "Explicit trigger thresholds and owner hints reduce dead cycles and retry churn.",
+      "expected_impact": "Faster blocker triage and fewer stalled cycles under rate pressure.",
+      "risk_level": "medium"
+    },
+    {
+      "recommendation_id": "rec.refresh-validation-contracts",
+      "priority": "medium",
+      "summary": "Escalate contract mismatches early with explicit fallback paths.",
+      "rationale": "Guardrail violations should route to owners immediately when packet checks fail.",
+      "expected_impact": "Lower planner/runtime drift caused by stale validation contracts.",
+      "risk_level": "low"
+    }
+  ],
+  "constraints": {
+    "hard": [
+      "Never bypass validation failure gates when blocker policy artifact is malformed."
+    ],
+    "soft": [
+      "Prefer cross-project evidence-backed escalation for non-local blockers."
+    ]
+  },
+  "kpi_targets": [
+    {
+      "metric": "blocker_triage_cycle_count",
+      "direction": "decrease",
+      "target": ">=20% reduction in retry-only cycles"
+    }
+  ],
+  "blocker_handling_policy_artifact": {
+    "policies": [
+      {
+        "policy_id": "policy.cross-project-rate-limit",
+        "blocker_code": "all_rate_gates_blocking",
+        "escalation_trigger": {
+          "trigger_type": "attempts_exhausted",
+          "threshold": 3,
+          "window": "cycles"
+        },
+        "owner_hints": [
+          "boss-manager",
+          "runtime-coordinator"
+        ],
+        "fallback_paths": [
+          "pause-and-retry-window",
+          "reroute-to-lower-rate-profile"
+        ],
+        "project_id": "runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "policy_id": "policy.validation-contract-mismatch",
+        "blocker_code": "verification_contract_missing",
+        "escalation_trigger": {
+          "trigger_type": "guardrail_violation",
+          "threshold": 1,
+          "window": "attempts"
+        },
+        "owner_hints": [
+          "developer-worker",
+          "planner-worker"
+        ],
+        "fallback_paths": [
+          "open-blocker-ticket",
+          "request-contract-refresh"
+        ],
+        "project_id": "",
+        "evidence_refs": [
+          "contracts/req/REQ-057_blocker-handling-policy-artifact.md",
+          "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
+        ]
+      }
+    ]
+  },
+  "source": {
+    "repo": "Optimus-Prime-GSD-Fusion",
+    "tool": "op-tools/strategy"
+  }
+}
