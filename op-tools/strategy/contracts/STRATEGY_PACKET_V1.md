@@ -42,7 +42,35 @@ Each recommendation entry must include:
 - `expected_impact`
 - `risk_level` (`low` | `medium` | `high` | `critical`)
 
+## Constraint Classification Artifact
+
+`constraints` is the REQ-055 consumability surface for planner/runtime policy logic.
+
+Required sections:
+
+- `constraints.hard_constraints[]`
+- `constraints.soft_constraints[]`
+- `constraints.speculative_constraints[]`
+- `constraints.planner_policy`
+
+Each constraint row must include:
+
+- `constraint_id`
+- `statement`
+- `classification`
+- `rationale`
+- `evidence_refs[]`
+- `source_refs[]`
+- `policy_role`
+
+Planner policy arrays must exactly align with the classified rows:
+
+- `mandatory_guardrail_ids[]` must equal the hard constraint IDs.
+- `optional_guidance_ids[]` must equal the soft plus speculative constraint IDs.
+- No duplicate constraint IDs are allowed across buckets or policy arrays.
+
 ## Validation
 
 - Machine schema: `contracts/strategy_packet.v1.schema.json`
 - Deterministic sample: `examples/strategy_packet.sample.v1.json`
+- CLI gate: `python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json`
