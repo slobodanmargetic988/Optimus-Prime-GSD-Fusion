@@ -19,6 +19,7 @@ REQUIRED_RECOMMENDATION_FIELDS = (
     "expected_impact",
     "risk_level",
 )
+REQUIRED_PLANNER_MAPPING_FIELDS = ("op_plan_ref", "op_initialize_ref")
 PASS_STATUSES = {"resolved", "closed", "cleared", "none"}
 CONFIDENCE_LEVELS = ("high", "medium", "low", "unknown")
 
@@ -57,6 +58,26 @@ def _coalesce(*values: Any) -> Any:
     return None
 
 
+def _is_present_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, dict, set)):
+        return len(value) > 0
+    return True
+
+
+def _coalesce_string(*values: Any) -> str:
+    for value in values:
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
+    return ""
+
+
 def _load_json(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -77,6 +98,54 @@ def _project_id_from_item(item: Any) -> str | None:
     if isinstance(item, str) and item.strip():
         return item.strip()
     return None
+
+
+def _path_tokens(path: str) -> list[str]:
+    if not isinstance(path, str):
+        return []
+    normalized = path.strip()
+    if not normalized:
+        return []
+    tokens: list[str] = []
+    for part in normalized.split("."):
+        segment = part.strip()
+        if not segment:
+            return []
+        while "[" in segment and segment.endswith("]"):
+            prefix, _, suffix = segment.partition("[")
+            if prefix:
+                tokens.append(prefix)
+            index_token = "[" + suffix
+            if not index_token.endswith("]"):
+                return []
+            tokens.append(index_token)
+            segment = ""
+        if segment:
+            tokens.append(segment)
+    return tokens
+
+
+def _resolve_path(payload: Any, path: str) -> tuple[bool, Any]:
+    tokens = _path_tokens(path)
+    if not tokens:
+        return False, None
+    current = payload
+    for token in tokens:
+        if token.startswith("[") and token.endswith("]"):
+            if not isinstance(current, list):
+                return False, None
+            raw_index = token[1:-1]
+            if not raw_index.isdigit():
+                return False, None
+            index = int(raw_index)
+            if index < 0 or index >= len(current):
+                return False, None
+            current = current[index]
+            continue
+        if not isinstance(current, dict) or token not in current:
+            return False, None
+        current = current[token]
+    return True, current
 
 
 def _normalize_recommendations(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -401,6 +470,241 @@ def write_strategy_quality_report(
     output_path: str | Path | None = None,
 ) -> dict[str, Any]:
     report = build_strategy_quality_report(payload)
+    if output_path is not None:
+        _write_json(output_path, report)
+    return report
+
+
+def _normalize_required_files(payload: dict[str, Any]) -> tuple[list[str], list[str]]:
+    required_files = _unique_sorted_strings(
+        _as_list(
+            _coalesce(
+                payload.get("required_files"),
+                _as_dict(payload.get("planner_consumability")).get("required_files"),
+            )
+        )
+    )
+    available_files = _unique_sorted_strings(
+        _as_list(
+            _coalesce(
+                payload.get("available_files"),
+                _as_dict(payload.get("planner_consumability")).get("available_files"),
+                _as_dict(payload.get("artifacts")).get("files"),
+            )
+        )
+    )
+    return required_files, available_files
+
+
+def _normalize_required_keys(payload: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    required_keys = _unique_sorted_strings(
+        _as_list(
+            _coalesce(
+                payload.get("required_keys"),
+                _as_dict(payload.get("planner_consumability")).get("required_keys"),
+            )
+        )
+    )
+    strategy_output = _as_dict(
+        _coalesce(
+            payload.get("strategy_output"),
+            payload.get("strategy_packet"),
+            _as_dict(payload.get("planner_consumability")).get("strategy_output"),
+        )
+    )
+    return required_keys, strategy_output
+
+
+def _extract_recommendation_ids(payload: dict[str, Any]) -> tuple[list[str], list[str]]:
+    recommendations = _as_list(
+        _coalesce(
+            _as_dict(payload.get("strategy_output")).get("recommendations"),
+            _as_dict(payload.get("strategy_packet")).get("recommendations"),
+            payload.get("recommendations"),
+        )
+    )
+    recommendation_ids: set[str] = set()
+    missing_ids: list[str] = []
+
+    for index, item in enumerate(recommendations, start=1):
+        recommendation = _as_dict(item)
+        recommendation_id = _coalesce(
+            recommendation.get("recommendation_id"),
+            recommendation.get("id"),
+        )
+        if recommendation_id:
+            recommendation_ids.add(str(recommendation_id).strip())
+        else:
+            missing_ids.append(f"recommendations[{index}]")
+
+    return sorted(recommendation_ids), missing_ids
+
+
+def _normalize_recommendation_mapping(payload: dict[str, Any]) -> dict[str, dict[str, str]]:
+    raw_mapping = _coalesce(
+        payload.get("recommendation_mapping"),
+        _as_dict(payload.get("planner_consumability")).get("recommendation_mapping"),
+        _as_dict(payload.get("strategy_output")).get("recommendation_mapping"),
+        _as_dict(payload.get("strategy_packet")).get("recommendation_mapping"),
+    )
+    normalized: dict[str, dict[str, str]] = {}
+
+    if isinstance(raw_mapping, dict):
+        iterator = raw_mapping.items()
+        for mapping_id, mapping_payload in iterator:
+            record = _as_dict(mapping_payload)
+            recommendation_id = _coalesce_string(
+                record.get("recommendation_id"),
+                record.get("id"),
+                mapping_id,
+            )
+            if not recommendation_id:
+                continue
+            normalized[recommendation_id] = {
+                "op_plan_ref": _coalesce_string(
+                    record.get("op_plan_ref"),
+                    record.get("op_plan"),
+                    record.get("plan_ref"),
+                ),
+                "op_initialize_ref": _coalesce_string(
+                    record.get("op_initialize_ref"),
+                    record.get("op_initialize"),
+                    record.get("initialize_ref"),
+                ),
+            }
+        return normalized
+
+    for mapping_payload in _as_list(raw_mapping):
+        record = _as_dict(mapping_payload)
+        recommendation_id = _coalesce_string(
+            record.get("recommendation_id"),
+            record.get("id"),
+        )
+        if not recommendation_id:
+            continue
+        normalized[recommendation_id] = {
+            "op_plan_ref": _coalesce_string(
+                record.get("op_plan_ref"),
+                record.get("op_plan"),
+                record.get("plan_ref"),
+            ),
+            "op_initialize_ref": _coalesce_string(
+                record.get("op_initialize_ref"),
+                record.get("op_initialize"),
+                record.get("initialize_ref"),
+            ),
+        }
+    return normalized
+
+
+def build_planner_consumability_validator(payload: dict[str, Any]) -> dict[str, Any]:
+    required_files, available_files = _normalize_required_files(payload)
+    missing_required_files = [
+        path for path in required_files if path not in set(available_files)
+    ]
+    required_files_pass = bool(required_files) and not missing_required_files
+
+    required_keys, strategy_output = _normalize_required_keys(payload)
+    missing_required_keys: list[str] = []
+    empty_required_keys: list[str] = []
+    for key_path in required_keys:
+        found, value = _resolve_path(strategy_output, key_path)
+        if not found:
+            missing_required_keys.append(key_path)
+            continue
+        if not _is_present_value(value):
+            empty_required_keys.append(key_path)
+
+    required_keys_pass = (
+        bool(required_keys)
+        and not missing_required_keys
+        and not empty_required_keys
+    )
+
+    recommendation_ids, recommendations_missing_id = _extract_recommendation_ids(payload)
+    recommendation_mapping = _normalize_recommendation_mapping(payload)
+    mapped_recommendation_ids = sorted(recommendation_mapping)
+    missing_mapping_ids = [
+        recommendation_id
+        for recommendation_id in recommendation_ids
+        if recommendation_id not in recommendation_mapping
+    ]
+    incomplete_mappings = []
+    for recommendation_id in recommendation_ids:
+        mapping = recommendation_mapping.get(recommendation_id)
+        if not mapping:
+            continue
+        missing_fields = [
+            field
+            for field in REQUIRED_PLANNER_MAPPING_FIELDS
+            if not _is_present_value(mapping.get(field))
+        ]
+        if missing_fields:
+            incomplete_mappings.append(
+                {
+                    "recommendation_id": recommendation_id,
+                    "missing_fields": missing_fields,
+                }
+            )
+    incomplete_mappings.sort(key=lambda item: item["recommendation_id"])
+    recommendation_mapping_pass = (
+        bool(recommendation_ids)
+        and not missing_mapping_ids
+        and not recommendations_missing_id
+        and not incomplete_mappings
+    )
+
+    blocking_reasons = []
+    if not required_files_pass:
+        blocking_reasons.append("required_files_check_failed")
+    if not required_keys_pass:
+        blocking_reasons.append("required_keys_check_failed")
+    if not recommendation_mapping_pass:
+        blocking_reasons.append("recommendation_mapping_check_failed")
+
+    verdict = "pass" if not blocking_reasons else "fail"
+    return {
+        "artifact_type": "planner_consumability_validator",
+        "requirement_id": "REQ-065",
+        "validator_version": "1.0",
+        "planner_targets": ["op-plan", "op-initialize"],
+        "checks": {
+            "required_files": {
+                "required_files": required_files,
+                "available_files": available_files,
+                "missing_required_files": missing_required_files,
+                "pass": required_files_pass,
+            },
+            "required_keys": {
+                "required_keys": required_keys,
+                "missing_required_keys": missing_required_keys,
+                "empty_required_keys": empty_required_keys,
+                "pass": required_keys_pass,
+            },
+            "recommendation_mapping": {
+                "recommendation_ids": recommendation_ids,
+                "recommendations_missing_id": recommendations_missing_id,
+                "mapped_recommendation_ids": mapped_recommendation_ids,
+                "missing_mapping_ids": missing_mapping_ids,
+                "incomplete_mappings": incomplete_mappings,
+                "required_mapping_fields": list(REQUIRED_PLANNER_MAPPING_FIELDS),
+                "pass": recommendation_mapping_pass,
+            },
+        },
+        "gate_verdict": {
+            "verdict": verdict,
+            "ready_for_planner_consumption": verdict == "pass",
+            "blocking_reasons": blocking_reasons,
+            "warning_reasons": [],
+        },
+    }
+
+
+def write_planner_consumability_validator(
+    payload: dict[str, Any],
+    output_path: str | Path | None = None,
+) -> dict[str, Any]:
+    report = build_planner_consumability_validator(payload)
     if output_path is not None:
         _write_json(output_path, report)
     return report
