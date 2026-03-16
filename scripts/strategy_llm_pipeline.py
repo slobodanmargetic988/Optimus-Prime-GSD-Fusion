@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-025/REQ-028/REQ-032/REQ-037 contract/data-model surfaces for strategy pipeline artifacts."""
+"""REQ-025/REQ-028/REQ-032/REQ-033/REQ-037 contract/data-model surfaces for strategy pipeline artifacts."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ REQ_025_SCHEMA_VERSION = "req-025.multi-call-strategy-pipeline-planner.v1"
 REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION = "req-025.llm-call-trace-row.v1"
 REQ_032_REQUIREMENT_ID = "REQ-032"
 REQ_032_SCHEMA_VERSION = "req-032.call-7-blocker-and-risk-policy-reasoning.v1"
+REQ_033_REQUIREMENT_ID = "REQ-033"
+REQ_033_SCHEMA_VERSION = "req-033.call-8-constraint-classification-reasoning.v1"
 REQ_028_REQUIREMENT_ID = "REQ-028"
 REQ_028_SCHEMA_VERSION = "req-028.call-3-gap-and-opportunity-reasoning.v1"
 REQ_037_REQUIREMENT_ID = "REQ-037"
@@ -28,6 +30,7 @@ RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 PIPELINE_STRATEGY = "multi-call-strategy-pipeline-planner"
 REQ_032_STRATEGY = "call-7-blocker-and-risk-policy-reasoning"
+REQ_033_STRATEGY = "call-8-constraint-classification-reasoning"
 REQ_028_STRATEGY = "call-3-gap-and-opportunity-reasoning"
 REQ_037_STRATEGY = "recommendation-deduplication-and-merge"
 REQ_032_REASONING_FOCUS = "blocker-escalation-and-risk-policy-resolution"
@@ -36,6 +39,13 @@ REQ_032_TRACE_CALL_OBJECTIVE = (
     "Reason about blocker escalation triggers and fallback sequencing paths before policy promotion."
 )
 REQ_032_TRACE_EXPECTED_OUTPUT = "call_7_blocker_and_risk_policy_reasoning"
+REQ_033_REASONING_FOCUS = "planner-consumable-constraint-classification"
+REQ_033_CALL_SEQUENCE = 8
+REQ_033_TRACE_CALL_OBJECTIVE = (
+    "Classify Call-8 strategy outputs into hard constraints, soft preferences, and speculative ideas "
+    "without conflating planner obligations and suggestions."
+)
+REQ_033_TRACE_EXPECTED_OUTPUT = "call_8_constraint_classification_reasoning"
 REQ_028_REASONING_FOCUS = "strategic-gaps-and-opportunities-beyond-local-mission"
 REQ_028_CALL_SEQUENCE = 3
 REQ_028_TRACE_CALL_OBJECTIVE = "Reason about strategic gaps and opportunities not visible from the local mission alone."
@@ -48,6 +58,7 @@ DEFAULT_TARGET_PROJECT_ROOT = "/workspace/projects/optimus-prime"
 DEFAULT_EARTH_ROOT = "/workspace/projects/Earth"
 DEFAULT_OUTPUT_ROOT = "/workspace/projects/optimus-prime/strategy/out"
 DEFAULT_REQ_032_REVISION_ID = "rev-req032-fixture-r1"
+DEFAULT_REQ_033_REVISION_ID = "rev-req033-fixture-r1"
 DEFAULT_REQ_037_REVISION_ID = "rev-req037-fixture-r1"
 
 DEFAULT_STAGE_BLUEPRINTS = (
@@ -4325,6 +4336,927 @@ def validate_req_032_call_7_blocker_and_risk_policy_reasoning(payload: Mapping[s
             errors.append("call_metadata.llm_call_trace_rows must mirror deterministic Call-7 trace rows")
         if metadata.get("llm_call_trace_sha256") != _canonical_digest(expected_trace_rows):
             errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
+
+    return errors
+
+
+def _normalize_req_033_call_sequence(raw_value: Any) -> int:
+    if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+        raise ValueError("call_sequence must be an integer")
+    if raw_value != REQ_033_CALL_SEQUENCE:
+        raise ValueError(f"call_sequence must be {REQ_033_CALL_SEQUENCE}")
+    return raw_value
+
+
+def _normalize_req_033_classification(value: Any, *, field_name: str) -> str:
+    classification = _require_text(value, field_name=field_name).lower()
+    if classification not in {"hard-constraint", "soft-preference", "speculative-idea"}:
+        raise ValueError(
+            f"{field_name} must be one of: hard-constraint, soft-preference, speculative-idea"
+        )
+    return classification
+
+
+def _normalize_req_033_constraint_candidates(raw_value: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError("constraint_candidates must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_candidate_ids: set[str] = set()
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"constraint_candidates[{index}] must be an object")
+        candidate_id = _require_text(item.get("candidate_id"), field_name=f"constraint_candidates[{index}].candidate_id")
+        if candidate_id in seen_candidate_ids:
+            raise ValueError(f"constraint_candidates[{index}].candidate_id duplicates {candidate_id}")
+        seen_candidate_ids.add(candidate_id)
+        normalized.append(
+            {
+                "candidate_id": candidate_id,
+                "summary": _require_text(item.get("summary"), field_name=f"constraint_candidates[{index}].summary"),
+                "classification": _normalize_req_033_classification(
+                    item.get("classification"),
+                    field_name=f"constraint_candidates[{index}].classification",
+                ),
+                "classification_rationale": _require_text(
+                    item.get("classification_rationale"),
+                    field_name=f"constraint_candidates[{index}].classification_rationale",
+                ),
+                "planner_implication": _require_text(
+                    item.get("planner_implication"),
+                    field_name=f"constraint_candidates[{index}].planner_implication",
+                ),
+                "source_output_refs": _normalize_string_list(
+                    item.get("source_output_refs"),
+                    field_name=f"constraint_candidates[{index}].source_output_refs",
+                    min_items=1,
+                ),
+                "evidence_refs": _normalize_string_list(
+                    item.get("evidence_refs"),
+                    field_name=f"constraint_candidates[{index}].evidence_refs",
+                    min_items=1,
+                ),
+            }
+        )
+
+    if not normalized:
+        raise ValueError("constraint_candidates must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: (row["classification"], row["candidate_id"]))
+    return normalized
+
+
+def _canonical_req_033_input(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_sequence: int,
+) -> dict[str, Any]:
+    return {
+        "runtime_mode": RUNTIME_MODE,
+        "execution_mode": EXECUTION_MODE,
+        "target_project_root": target_project_root,
+        "earth_root": earth_root,
+        "output_root": output_root,
+        "revision_identity": revision_identity,
+        "strategy_goal": strategy_goal,
+        "call_sequence": call_sequence,
+    }
+
+
+def _canonical_req_033_processing_input(
+    *,
+    evidence_refs: list[str],
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    constraint_candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "required_evidence_refs": list(evidence_refs),
+        "target_project_evidence_refs": list(target_project_evidence_refs),
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "cross_project_context": [
+            {
+                "project_id": row["project_id"],
+                "project_root": row["project_root"],
+                "evidence_refs": list(row["evidence_refs"]),
+                "context_note": row["context_note"],
+            }
+            for row in cross_project_context
+        ],
+        "constraint_candidates": [
+            {
+                "candidate_id": row["candidate_id"],
+                "summary": row["summary"],
+                "classification": row["classification"],
+                "classification_rationale": row["classification_rationale"],
+                "planner_implication": row["planner_implication"],
+                "source_output_refs": list(row["source_output_refs"]),
+                "evidence_refs": list(row["evidence_refs"]),
+            }
+            for row in constraint_candidates
+        ],
+    }
+
+
+def _collect_req_033_trace_input_refs(canonical_processing_input: Mapping[str, Any]) -> list[str]:
+    cross_project_context = canonical_processing_input.get("cross_project_context")
+    constraint_candidates = canonical_processing_input.get("constraint_candidates")
+
+    def _rows_to_evidence_refs(rows: Any) -> list[list[str]]:
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
+            return []
+        refs: list[list[str]] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            row_refs = row.get("evidence_refs")
+            if isinstance(row_refs, Sequence) and not isinstance(row_refs, (str, bytes, bytearray)):
+                refs.append([_as_text(ref) for ref in row_refs if _as_text(ref)])
+        return refs
+
+    source_output_refs: list[str] = []
+    if isinstance(constraint_candidates, Sequence) and not isinstance(constraint_candidates, (str, bytes, bytearray)):
+        for row in constraint_candidates:
+            if not isinstance(row, Mapping):
+                continue
+            row_refs = row.get("source_output_refs")
+            if isinstance(row_refs, Sequence) and not isinstance(row_refs, (str, bytes, bytearray)):
+                source_output_refs.extend(_as_text(ref) for ref in row_refs if _as_text(ref))
+
+    required_evidence_refs = canonical_processing_input.get("required_evidence_refs")
+    if not isinstance(required_evidence_refs, Sequence) or isinstance(required_evidence_refs, (str, bytes, bytearray)):
+        required_evidence_refs = []
+
+    return _collect_unique_refs(
+        [_as_text(ref) for ref in required_evidence_refs if _as_text(ref)],
+        source_output_refs,
+        *(_rows_to_evidence_refs(cross_project_context)),
+        *(_rows_to_evidence_refs(constraint_candidates)),
+    )
+
+
+def _build_req_033_llm_call_trace_rows(
+    *,
+    canonical_input_sha: str,
+    processing_input_sha: str,
+    processing_call_id: str,
+    canonical_processing_input: Mapping[str, Any],
+    hard_constraint_count: int,
+    soft_preference_count: int,
+    speculative_idea_count: int,
+) -> list[dict[str, Any]]:
+    plan_id = f"req033-plan-{processing_input_sha[:16]}"
+    call_id = f"req033-call-{REQ_033_CALL_SEQUENCE:02d}-{canonical_input_sha[:10]}"
+    output_ref = _build_call_output_ref(
+        plan_id=plan_id,
+        call_id=call_id,
+        expected_output=REQ_033_TRACE_EXPECTED_OUTPUT,
+    )
+    return [
+        {
+            "schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "requirement_id": REQ_033_REQUIREMENT_ID,
+            "plan_id": plan_id,
+            "processing_call_id": processing_call_id,
+            "call_id": call_id,
+            "sequence": REQ_033_CALL_SEQUENCE,
+            "call_objective": REQ_033_TRACE_CALL_OBJECTIVE,
+            "depends_on": [],
+            "expected_output": REQ_033_TRACE_EXPECTED_OUTPUT,
+            "input_refs": _collect_req_033_trace_input_refs(canonical_processing_input),
+            "output_refs": [output_ref],
+            "handoff_summary": (
+                f"Call {REQ_033_CALL_SEQUENCE} hands off {REQ_033_TRACE_EXPECTED_OUTPUT} via {output_ref} "
+                f"after classifying {hard_constraint_count} hard constraint(s), "
+                f"{soft_preference_count} soft preference(s), and {speculative_idea_count} speculative idea(s)."
+            ),
+        }
+    ]
+
+
+def _req_033_recommendation_decision(
+    *,
+    planner_contract: Mapping[str, Any],
+    open_risks: Sequence[Mapping[str, Any]],
+) -> str:
+    if open_risks:
+        return "resolve-classification-collision"
+    hard_constraints = planner_contract.get("hard_constraints")
+    soft_preferences = planner_contract.get("soft_preferences")
+    speculative_ideas = planner_contract.get("speculative_ideas")
+    if (
+        isinstance(hard_constraints, Sequence)
+        and not isinstance(hard_constraints, (str, bytes, bytearray))
+        and hard_constraints
+    ) or (
+        isinstance(soft_preferences, Sequence)
+        and not isinstance(soft_preferences, (str, bytes, bytearray))
+        and soft_preferences
+    ):
+        return "ready-for-planner"
+    if (
+        isinstance(speculative_ideas, Sequence)
+        and not isinstance(speculative_ideas, (str, bytes, bytearray))
+        and speculative_ideas
+    ):
+        return "ideas-only"
+    return "insufficient-context"
+
+
+def _req_033_recommendation_rationale(*, decision: str) -> str:
+    if decision == "resolve-classification-collision":
+        return "The same source output was classified into multiple buckets and must be disambiguated before planner use."
+    if decision == "ready-for-planner":
+        return "Planner-consumable constraints and preferences are explicit, evidence-backed, and separated from speculation."
+    if decision == "ideas-only":
+        return "Only speculative ideas are available, so planner obligations should not be inferred yet."
+    return "No classified strategy outputs were supplied for planner consumption."
+
+
+def _req_033_recommendation_confidence(
+    *,
+    evidence_refs: Sequence[str],
+    planner_contract: Mapping[str, Any],
+    open_risks: Sequence[Mapping[str, Any]],
+) -> str:
+    if not evidence_refs or open_risks:
+        return "low"
+    if planner_contract.get("hard_constraints") or planner_contract.get("soft_preferences"):
+        return "high"
+    if planner_contract.get("speculative_ideas"):
+        return "medium"
+    return "low"
+
+
+def _build_req_033_processing_behavior(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    strategy_goal: str,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    constraint_candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    classification_reasoning = [
+        {
+            "candidate_id": row["candidate_id"],
+            "summary": row["summary"],
+            "classification": row["classification"],
+            "classification_rationale": row["classification_rationale"],
+            "planner_implication": row["planner_implication"],
+            "source_output_refs": list(row["source_output_refs"]),
+            "evidence_refs": list(row["evidence_refs"]),
+        }
+        for row in constraint_candidates
+    ]
+
+    hard_constraints = [
+        {
+            "candidate_id": row["candidate_id"],
+            "summary": row["summary"],
+            "planner_implication": row["planner_implication"],
+            "classification_rationale": row["classification_rationale"],
+            "source_output_refs": list(row["source_output_refs"]),
+            "evidence_refs": list(row["evidence_refs"]),
+        }
+        for row in classification_reasoning
+        if row["classification"] == "hard-constraint"
+    ]
+    soft_preferences = [
+        {
+            "candidate_id": row["candidate_id"],
+            "summary": row["summary"],
+            "planner_implication": row["planner_implication"],
+            "classification_rationale": row["classification_rationale"],
+            "source_output_refs": list(row["source_output_refs"]),
+            "evidence_refs": list(row["evidence_refs"]),
+        }
+        for row in classification_reasoning
+        if row["classification"] == "soft-preference"
+    ]
+    speculative_ideas = [
+        {
+            "candidate_id": row["candidate_id"],
+            "summary": row["summary"],
+            "planner_implication": row["planner_implication"],
+            "classification_rationale": row["classification_rationale"],
+            "source_output_refs": list(row["source_output_refs"]),
+            "evidence_refs": list(row["evidence_refs"]),
+        }
+        for row in classification_reasoning
+        if row["classification"] == "speculative-idea"
+    ]
+
+    planner_contract = {
+        "classification_is_explicit": True,
+        "hard_constraints": hard_constraints,
+        "soft_preferences": soft_preferences,
+        "speculative_ideas": speculative_ideas,
+    }
+
+    source_ref_map: dict[str, dict[str, Any]] = {}
+    for row in classification_reasoning:
+        for source_output_ref in row["source_output_refs"]:
+            state = source_ref_map.setdefault(
+                source_output_ref,
+                {"candidate_ids": set(), "classifications": set(), "evidence_refs": []},
+            )
+            state["candidate_ids"].add(row["candidate_id"])
+            state["classifications"].add(row["classification"])
+            state["evidence_refs"].extend(row["evidence_refs"])
+
+    open_risks: list[dict[str, Any]] = []
+    for source_output_ref, state in sorted(source_ref_map.items()):
+        classifications = sorted(state["classifications"])
+        if len(classifications) < 2:
+            continue
+        open_risks.append(
+            {
+                "risk_id": f"risk-{_slug_id_fragment(source_output_ref)}",
+                "summary": "A single source output ref was assigned to multiple classification buckets.",
+                "reason_code": "mixed_classification_source_ref",
+                "source_output_ref": source_output_ref,
+                "candidate_ids": sorted(state["candidate_ids"]),
+                "classifications": classifications,
+                "required_evidence_refs": _collect_unique_refs(state["evidence_refs"]),
+            }
+        )
+
+    evidence_refs_used = _collect_unique_refs(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        *[row["evidence_refs"] for row in classification_reasoning],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    recommendation_refs = _collect_unique_refs(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        *[row["evidence_refs"] for row in hard_constraints],
+        *[row["evidence_refs"] for row in soft_preferences],
+        *[row["evidence_refs"] for row in speculative_ideas],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    recommendation_decision = _req_033_recommendation_decision(
+        planner_contract=planner_contract,
+        open_risks=open_risks,
+    )
+
+    return {
+        "strategy": REQ_033_STRATEGY,
+        "reasoning_mode": EXECUTION_MODE,
+        "strict_evidence_discipline": True,
+        "heuristic_summarization_only": False,
+        "context_inputs": {
+            "target_project": {
+                "project_root": target_project_root,
+                "strategy_goal": strategy_goal,
+                "evidence_refs": list(target_project_evidence_refs),
+            },
+            "earth_sweep": {
+                "earth_root": earth_root,
+                "evidence_refs": list(earth_sweep_evidence_refs),
+            },
+            "cross_project_context": [
+                {
+                    "project_id": row["project_id"],
+                    "project_root": row["project_root"],
+                    "evidence_refs": list(row["evidence_refs"]),
+                    "context_note": row["context_note"],
+                }
+                for row in cross_project_context
+            ],
+            "constraint_candidates": [
+                {
+                    "candidate_id": row["candidate_id"],
+                    "summary": row["summary"],
+                    "classification": row["classification"],
+                    "classification_rationale": row["classification_rationale"],
+                    "planner_implication": row["planner_implication"],
+                    "source_output_refs": list(row["source_output_refs"]),
+                    "evidence_refs": list(row["evidence_refs"]),
+                }
+                for row in constraint_candidates
+            ],
+        },
+        "context_usage": {
+            "target_project_context_used": bool(strategy_goal or target_project_evidence_refs),
+            "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+            "cross_project_context_used": bool(cross_project_context),
+            "candidate_ids_considered": [row["candidate_id"] for row in classification_reasoning],
+            "classifications_present": sorted({row["classification"] for row in classification_reasoning}),
+            "cross_project_projects_considered": [row["project_id"] for row in cross_project_context],
+            "cross_project_refs_used": cross_project_refs,
+            "evidence_refs_used": evidence_refs_used,
+        },
+        "call_8_reasoning": {
+            "call_sequence": REQ_033_CALL_SEQUENCE,
+            "reasoning_focus": REQ_033_REASONING_FOCUS,
+            "classification_reasoning": classification_reasoning,
+            "hard_constraint_count": len(hard_constraints),
+            "soft_preference_count": len(soft_preferences),
+            "speculative_idea_count": len(speculative_ideas),
+        },
+        "recommendation": {
+            "decision": recommendation_decision,
+            "rationale": _req_033_recommendation_rationale(decision=recommendation_decision),
+            "confidence": _req_033_recommendation_confidence(
+                evidence_refs=recommendation_refs,
+                planner_contract=planner_contract,
+                open_risks=open_risks,
+            ),
+            "evidence_refs": recommendation_refs,
+            "planner_contract": planner_contract,
+            "open_risks": open_risks,
+        },
+        "summary": (
+            f"Call 8 classified {len(hard_constraints)} hard constraint(s), "
+            f"{len(soft_preferences)} soft preference(s), and "
+            f"{len(speculative_ideas)} speculative idea(s) for planner consumption."
+        ),
+    }
+
+
+def build_req_033_call_8_constraint_classification_reasoning(
+    *,
+    target_project_root: str = DEFAULT_TARGET_PROJECT_ROOT,
+    earth_root: str = DEFAULT_EARTH_ROOT,
+    output_root: str = DEFAULT_OUTPUT_ROOT,
+    revision_identity: str = DEFAULT_REQ_033_REVISION_ID,
+    strategy_goal: str,
+    call_sequence: int = REQ_033_CALL_SEQUENCE,
+    evidence_refs: Sequence[Any] | None = None,
+    target_project_evidence_refs: Sequence[Any] | None = None,
+    earth_sweep_evidence_refs: Sequence[Any] | None = None,
+    cross_project_context: Sequence[Mapping[str, Any]] | None = None,
+    constraint_candidates: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the REQ-033 Call-8 constraint classification reasoning payload."""
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_text(revision_identity, field_name="revision_identity")
+    normalized_strategy_goal = _require_text(strategy_goal, field_name="strategy_goal")
+    normalized_call_sequence = _normalize_req_033_call_sequence(call_sequence)
+    normalized_evidence_refs = _normalize_string_list(evidence_refs, field_name="evidence_refs", min_items=1)
+    default_target_refs = [ref for ref in normalized_evidence_refs if not _is_earth_evidence_ref(ref)]
+    default_earth_refs = [ref for ref in normalized_evidence_refs if _is_earth_evidence_ref(ref)]
+    normalized_target_project_evidence_refs = (
+        _normalize_string_list(target_project_evidence_refs, field_name="target_project_evidence_refs")
+        if target_project_evidence_refs is not None
+        else default_target_refs
+    )
+    normalized_earth_sweep_evidence_refs = (
+        _normalize_string_list(earth_sweep_evidence_refs, field_name="earth_sweep_evidence_refs")
+        if earth_sweep_evidence_refs is not None
+        else default_earth_refs
+    )
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
+    normalized_constraint_candidates = _normalize_req_033_constraint_candidates(constraint_candidates)
+
+    canonical_input = _canonical_req_033_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+        strategy_goal=normalized_strategy_goal,
+        call_sequence=normalized_call_sequence,
+    )
+    canonical_input_sha = _canonical_digest(canonical_input)
+
+    canonical_processing_input = _canonical_req_033_processing_input(
+        evidence_refs=normalized_evidence_refs,
+        target_project_evidence_refs=normalized_target_project_evidence_refs,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
+        constraint_candidates=normalized_constraint_candidates,
+    )
+    processing_sha = _canonical_digest(canonical_processing_input)
+
+    processing_behavior = _build_req_033_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        strategy_goal=normalized_strategy_goal,
+        target_project_evidence_refs=normalized_target_project_evidence_refs,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
+        constraint_candidates=normalized_constraint_candidates,
+    )
+    processing_call_id = f"req033-processing-{processing_sha[:16]}"
+    llm_call_trace_rows = _build_req_033_llm_call_trace_rows(
+        canonical_input_sha=canonical_input_sha,
+        processing_input_sha=processing_sha,
+        processing_call_id=processing_call_id,
+        canonical_processing_input=canonical_processing_input,
+        hard_constraint_count=processing_behavior["call_8_reasoning"]["hard_constraint_count"],
+        soft_preference_count=processing_behavior["call_8_reasoning"]["soft_preference_count"],
+        speculative_idea_count=processing_behavior["call_8_reasoning"]["speculative_idea_count"],
+    )
+    llm_call_trace_sha = _canonical_digest(llm_call_trace_rows)
+
+    return {
+        "schema_version": REQ_033_SCHEMA_VERSION,
+        "requirement_id": REQ_033_REQUIREMENT_ID,
+        "call_8_constraint_classification_reasoning_entrypoint": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+            "strategy_goal": normalized_strategy_goal,
+            "call_sequence": normalized_call_sequence,
+        },
+        "processing_behavior": processing_behavior,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": canonical_input_sha,
+            "reproducible_call_id": f"req033-{canonical_input_sha[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_sha,
+            "processing_call_id": processing_call_id,
+            "canonical_processing_input": canonical_processing_input,
+            "llm_call_trace_schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": llm_call_trace_sha,
+            "llm_call_trace_rows": llm_call_trace_rows,
+        },
+    }
+
+
+def validate_req_033_call_8_constraint_classification_reasoning(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-033 payload shape and deterministic Call-8 classification content."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "call_8_constraint_classification_reasoning_entrypoint",
+        "processing_behavior",
+        "call_metadata",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_033_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_033_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_033_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_033_REQUIREMENT_ID}")
+
+    entrypoint = payload.get("call_8_constraint_classification_reasoning_entrypoint")
+    if not isinstance(entrypoint, Mapping):
+        errors.append("call_8_constraint_classification_reasoning_entrypoint must be an object")
+        return errors
+
+    required_entrypoint = {
+        "runtime_mode",
+        "execution_mode",
+        "target_project_root",
+        "earth_root",
+        "output_root",
+        "revision_identity",
+        "strategy_goal",
+        "call_sequence",
+    }
+    entrypoint_keys = set(entrypoint.keys())
+    missing_entrypoint = sorted(required_entrypoint - entrypoint_keys)
+    if missing_entrypoint:
+        errors.append(f"call_8_constraint_classification_reasoning_entrypoint missing keys: {missing_entrypoint}")
+    unexpected_entrypoint = sorted(entrypoint_keys - required_entrypoint)
+    if unexpected_entrypoint:
+        errors.append(
+            f"call_8_constraint_classification_reasoning_entrypoint unexpected keys: {unexpected_entrypoint}"
+        )
+
+    if entrypoint.get("runtime_mode") != RUNTIME_MODE:
+        errors.append(f"call_8_constraint_classification_reasoning_entrypoint.runtime_mode must be {RUNTIME_MODE}")
+    if entrypoint.get("execution_mode") != EXECUTION_MODE:
+        errors.append(f"call_8_constraint_classification_reasoning_entrypoint.execution_mode must be {EXECUTION_MODE}")
+    for root_field in ("target_project_root", "earth_root", "output_root"):
+        root_value = entrypoint.get(root_field)
+        if not isinstance(root_value, str) or not root_value.strip():
+            errors.append(f"{root_field} must be a non-empty string")
+        elif not root_value.startswith("/"):
+            errors.append(f"{root_field} must be an absolute path")
+
+    revision_identity = entrypoint.get("revision_identity")
+    strategy_goal = entrypoint.get("strategy_goal")
+    if not isinstance(revision_identity, str) or not revision_identity.strip():
+        errors.append("revision_identity must be a non-empty string")
+    if not isinstance(strategy_goal, str) or not strategy_goal.strip():
+        errors.append("strategy_goal must be a non-empty string")
+
+    call_sequence = entrypoint.get("call_sequence")
+    if call_sequence != REQ_033_CALL_SEQUENCE:
+        errors.append(f"call_sequence must be {REQ_033_CALL_SEQUENCE}")
+        call_sequence = REQ_033_CALL_SEQUENCE
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+
+    required_processing = {
+        "strategy",
+        "reasoning_mode",
+        "strict_evidence_discipline",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "call_8_reasoning",
+        "recommendation",
+        "summary",
+    }
+    processing_keys = set(processing_behavior.keys())
+    missing_processing = sorted(required_processing - processing_keys)
+    if missing_processing:
+        errors.append(f"processing_behavior missing keys: {missing_processing}")
+    unexpected_processing = sorted(processing_keys - required_processing)
+    if unexpected_processing:
+        errors.append(f"processing_behavior unexpected keys: {unexpected_processing}")
+
+    if processing_behavior.get("strategy") != REQ_033_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_033_STRATEGY}")
+    if processing_behavior.get("reasoning_mode") != EXECUTION_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("strict_evidence_discipline") is not True:
+        errors.append("processing_behavior.strict_evidence_discipline must be true")
+    if processing_behavior.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    normalized_target_project_refs: list[str] = []
+    normalized_earth_sweep_refs: list[str] = []
+    normalized_cross_project_context: list[dict[str, Any]] = []
+    normalized_constraint_candidates: list[dict[str, Any]] = []
+    expected_processing_behavior: dict[str, Any] | None = None
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+    else:
+        target_project = context_inputs.get("target_project")
+        if not isinstance(target_project, Mapping):
+            errors.append("processing_behavior.context_inputs.target_project must be an object")
+        else:
+            if target_project.get("project_root") != entrypoint.get("target_project_root"):
+                errors.append(
+                    "processing_behavior.context_inputs.target_project.project_root must match entrypoint.target_project_root"
+                )
+            if target_project.get("strategy_goal") != entrypoint.get("strategy_goal"):
+                errors.append(
+                    "processing_behavior.context_inputs.target_project.strategy_goal must match entrypoint.strategy_goal"
+                )
+            try:
+                normalized_target_project_refs = _normalize_string_list(
+                    target_project.get("evidence_refs"),
+                    field_name="processing_behavior.context_inputs.target_project.evidence_refs",
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
+
+        earth_sweep = context_inputs.get("earth_sweep")
+        if not isinstance(earth_sweep, Mapping):
+            errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+        else:
+            if earth_sweep.get("earth_root") != entrypoint.get("earth_root"):
+                errors.append("processing_behavior.context_inputs.earth_sweep.earth_root must match entrypoint.earth_root")
+            try:
+                normalized_earth_sweep_refs = _normalize_string_list(
+                    earth_sweep.get("evidence_refs"),
+                    field_name="processing_behavior.context_inputs.earth_sweep.evidence_refs",
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
+
+        try:
+            normalized_cross_project_context = _normalize_cross_project_context(
+                context_inputs.get("cross_project_context")
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+        try:
+            normalized_constraint_candidates = _normalize_req_033_constraint_candidates(
+                context_inputs.get("constraint_candidates")
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        for key in (
+            "target_project_context_used",
+            "earth_sweep_context_used",
+            "cross_project_context_used",
+            "candidate_ids_considered",
+            "classifications_present",
+            "cross_project_projects_considered",
+            "cross_project_refs_used",
+            "evidence_refs_used",
+        ):
+            if key not in context_usage:
+                errors.append(f"processing_behavior.context_usage missing keys: ['{key}']")
+
+    call_8_reasoning = processing_behavior.get("call_8_reasoning")
+    if not isinstance(call_8_reasoning, Mapping):
+        errors.append("processing_behavior.call_8_reasoning must be an object")
+    else:
+        required_reasoning = {
+            "call_sequence",
+            "reasoning_focus",
+            "classification_reasoning",
+            "hard_constraint_count",
+            "soft_preference_count",
+            "speculative_idea_count",
+        }
+        reasoning_keys = set(call_8_reasoning.keys())
+        missing_reasoning = sorted(required_reasoning - reasoning_keys)
+        if missing_reasoning:
+            errors.append(f"processing_behavior.call_8_reasoning missing keys: {missing_reasoning}")
+        unexpected_reasoning = sorted(reasoning_keys - required_reasoning)
+        if unexpected_reasoning:
+            errors.append(f"processing_behavior.call_8_reasoning unexpected keys: {unexpected_reasoning}")
+        if call_8_reasoning.get("call_sequence") != REQ_033_CALL_SEQUENCE:
+            errors.append(f"processing_behavior.call_8_reasoning.call_sequence must be {REQ_033_CALL_SEQUENCE}")
+        if call_8_reasoning.get("reasoning_focus") != REQ_033_REASONING_FOCUS:
+            errors.append(f"processing_behavior.call_8_reasoning.reasoning_focus must be {REQ_033_REASONING_FOCUS}")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        required_recommendation = {
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "planner_contract",
+            "open_risks",
+        }
+        recommendation_keys = set(recommendation.keys())
+        missing_recommendation = sorted(required_recommendation - recommendation_keys)
+        if missing_recommendation:
+            errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+        if not isinstance(recommendation.get("evidence_refs"), list):
+            errors.append("processing_behavior.recommendation.evidence_refs must be a list")
+        planner_contract = recommendation.get("planner_contract")
+        if not isinstance(planner_contract, Mapping):
+            errors.append("processing_behavior.recommendation.planner_contract must be an object")
+        else:
+            required_planner_contract = {
+                "classification_is_explicit",
+                "hard_constraints",
+                "soft_preferences",
+                "speculative_ideas",
+            }
+            planner_contract_keys = set(planner_contract.keys())
+            missing_planner_contract = sorted(required_planner_contract - planner_contract_keys)
+            if missing_planner_contract:
+                errors.append(
+                    f"processing_behavior.recommendation.planner_contract missing keys: {missing_planner_contract}"
+                )
+            if planner_contract.get("classification_is_explicit") is not True:
+                errors.append(
+                    "processing_behavior.recommendation.planner_contract.classification_is_explicit must be true"
+                )
+            for key in ("hard_constraints", "soft_preferences", "speculative_ideas"):
+                if not isinstance(planner_contract.get(key), list):
+                    errors.append(f"processing_behavior.recommendation.planner_contract.{key} must be a list")
+        if not isinstance(recommendation.get("open_risks"), list):
+            errors.append("processing_behavior.recommendation.open_risks must be a list")
+
+    if normalized_constraint_candidates:
+        try:
+            expected_processing_behavior = _build_req_033_processing_behavior(
+                target_project_root=_as_text(entrypoint.get("target_project_root")),
+                earth_root=_as_text(entrypoint.get("earth_root")),
+                strategy_goal=_as_text(entrypoint.get("strategy_goal")),
+                target_project_evidence_refs=normalized_target_project_refs,
+                earth_sweep_evidence_refs=normalized_earth_sweep_refs,
+                cross_project_context=normalized_cross_project_context,
+                constraint_candidates=normalized_constraint_candidates,
+            )
+        except ValueError as exc:
+            errors.append(f"processing_behavior could not be reconstructed: {exc}")
+        else:
+            if dict(processing_behavior) != expected_processing_behavior:
+                errors.append("processing_behavior must match deterministic Call-8 reasoning output")
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+
+    required_metadata = {
+        "reproducibility",
+        "canonical_input_sha256",
+        "reproducible_call_id",
+        "canonical_input",
+        "processing_input_sha256",
+        "processing_call_id",
+        "canonical_processing_input",
+        "llm_call_trace_schema_version",
+        "llm_call_trace_path",
+        "llm_call_trace_sha256",
+        "llm_call_trace_rows",
+    }
+    metadata_keys = set(metadata.keys())
+    missing_metadata = sorted(required_metadata - metadata_keys)
+    if missing_metadata:
+        errors.append(f"call_metadata missing keys: {missing_metadata}")
+    unexpected_metadata = sorted(metadata_keys - required_metadata)
+    if unexpected_metadata:
+        errors.append(f"call_metadata unexpected keys: {unexpected_metadata}")
+
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+    expected_canonical_input = _canonical_req_033_input(
+        target_project_root=_as_text(entrypoint.get("target_project_root")),
+        earth_root=_as_text(entrypoint.get("earth_root")),
+        output_root=_as_text(entrypoint.get("output_root")),
+        revision_identity=_as_text(entrypoint.get("revision_identity")),
+        strategy_goal=_as_text(entrypoint.get("strategy_goal")),
+        call_sequence=int(call_sequence),
+    )
+    if dict(canonical_input) != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+    expected_input_sha = _canonical_digest(expected_canonical_input)
+    if metadata.get("canonical_input_sha256") != expected_input_sha:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != f"req033-{expected_input_sha[:16]}":
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+        return errors
+
+    if metadata.get("llm_call_trace_schema_version") != REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION:
+        errors.append(
+            f"call_metadata.llm_call_trace_schema_version must be {REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION}"
+        )
+    if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+        errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+
+    if normalized_constraint_candidates:
+        expected_processing_input = _canonical_req_033_processing_input(
+            evidence_refs=sorted(
+                set(
+                    _collect_unique_refs(
+                        normalized_target_project_refs,
+                        normalized_earth_sweep_refs,
+                        *[row["evidence_refs"] for row in normalized_cross_project_context],
+                        *[row["evidence_refs"] for row in normalized_constraint_candidates],
+                    )
+                )
+            ),
+            target_project_evidence_refs=normalized_target_project_refs,
+            earth_sweep_evidence_refs=normalized_earth_sweep_refs,
+            cross_project_context=normalized_cross_project_context,
+            constraint_candidates=normalized_constraint_candidates,
+        )
+        if dict(canonical_processing_input) != expected_processing_input:
+            errors.append("call_metadata.canonical_processing_input must mirror processing inputs")
+        expected_processing_sha = _canonical_digest(expected_processing_input)
+        if metadata.get("processing_input_sha256") != expected_processing_sha:
+            errors.append("call_metadata.processing_input_sha256 does not match processing input")
+        if metadata.get("processing_call_id") != f"req033-processing-{expected_processing_sha[:16]}":
+            errors.append("call_metadata.processing_call_id does not match processing digest")
+
+        if expected_processing_behavior is not None:
+            expected_trace_rows = _build_req_033_llm_call_trace_rows(
+                canonical_input_sha=expected_input_sha,
+                processing_input_sha=expected_processing_sha,
+                processing_call_id=f"req033-processing-{expected_processing_sha[:16]}",
+                canonical_processing_input=expected_processing_input,
+                hard_constraint_count=expected_processing_behavior["call_8_reasoning"]["hard_constraint_count"],
+                soft_preference_count=expected_processing_behavior["call_8_reasoning"]["soft_preference_count"],
+                speculative_idea_count=expected_processing_behavior["call_8_reasoning"]["speculative_idea_count"],
+            )
+            if metadata.get("llm_call_trace_rows") != expected_trace_rows:
+                errors.append("call_metadata.llm_call_trace_rows must mirror deterministic Call-8 trace rows")
+            if metadata.get("llm_call_trace_sha256") != _canonical_digest(expected_trace_rows):
+                errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
 
     return errors
 
