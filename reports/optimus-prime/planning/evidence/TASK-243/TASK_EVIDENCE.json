@@ -1,0 +1,140 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-3",
+  "task_id": "TASK-243",
+  "requirement_ids": [
+    "REQ-066"
+  ],
+  "updated_at": "2026-03-16T23:42:12Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contracts_req066_run1",
+        "command": "python3 -m pytest tests/contracts/test_validator-runner-and-aggregate-verdict.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.12s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-243/TASK_EVIDENCE.json"
+      },
+      {
+        "name": "integration_req066_run1",
+        "command": "python3 -m pytest tests/integration/test_validator-runner-and-aggregate-verdict.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.03s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-243/TASK_EVIDENCE.json"
+      },
+      {
+        "name": "hardening_req066_run1",
+        "command": "python3 -m pytest tests/hardening/test_validator-runner-and-aggregate-verdict_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.04s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-243/TASK_EVIDENCE.json"
+      },
+      {
+        "name": "contracts_req066_run2",
+        "command": "python3 -m pytest tests/contracts/test_validator-runner-and-aggregate-verdict.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.10s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-243/TASK_EVIDENCE.json"
+      },
+      {
+        "name": "integration_req066_run2",
+        "command": "python3 -m pytest tests/integration/test_validator-runner-and-aggregate-verdict.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.03s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-243/TASK_EVIDENCE.json"
+      },
+      {
+        "name": "hardening_req066_run2",
+        "command": "python3 -m pytest tests/hardening/test_validator-runner-and-aggregate-verdict_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.03s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-243/TASK_EVIDENCE.json"
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_validator-runner-and-aggregate-verdict.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_validator-runner-and-aggregate-verdict.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_validator-runner-and-aggregate-verdict_hardening.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_validator-runner-and-aggregate-verdict.py -q",
+        "run": 2,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_validator-runner-and-aggregate-verdict.py -q",
+        "run": 2,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_validator-runner-and-aggregate-verdict_hardening.py -q",
+        "run": 2,
+        "passed": true
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "invalid_strategy_packet_schema_row_rejected_with_deterministic_diagnostics",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "duplicate_recommendation_id_collision_flagged_with_diff_details",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "broken_evidence_reference_causes_traceability_gate_failure",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-243/TASK_EVIDENCE.json",
+      "tests/hardening/test_validator-runner-and-aggregate-verdict_hardening.py"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "req_066_schema_row_failure_hardening_green",
+      "req_066_duplicate_recommendation_collision_hardening_green",
+      "req_066_traceability_gate_failure_hardening_green",
+      "req_066_contract_integration_hardening_green_twice"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}
