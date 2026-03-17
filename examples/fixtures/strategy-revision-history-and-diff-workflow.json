@@ -1,0 +1,122 @@
+{
+  "input": {
+    "analysis_type": "strategy_revision_history_and_diff_workflow",
+    "now_utc": "2026-03-17T08:15:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "workflow_config": {
+      "strictness": "strict",
+      "deterministic_failure_mode": "fail_closed"
+    },
+    "revision_history": {
+      "current_revision_id": "strategy-rev-20260317-081500",
+      "previous_revision_id": "strategy-rev-20260316-190000",
+      "revision_snapshot_refs": [
+        "strategy/history/strategy-rev-20260316-190000/STRATEGY.json",
+        "strategy/current/STRATEGY.json"
+      ],
+      "diff_artifact_refs": [
+        "strategy/current/STRATEGY_DIFF.md",
+        "strategy/current/DIFF_SUMMARY.json"
+      ],
+      "recommendation_ids": [
+        "rec.harden-diff-governance",
+        "rec.preserve-revision-history"
+      ],
+      "constraint_ids": [
+        "guardrail-deterministic-diff-order",
+        "guidance-cross-project-governance"
+      ],
+      "strategy_is_current": true,
+      "semantic_drift_detected": false
+    }
+  },
+  "missing_context_fail_closed_input": {
+    "analysis_type": "strategy_revision_history_and_diff_workflow",
+    "now_utc": "2026-03-17T08:15:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "workflow_config": {
+      "strictness": "strict",
+      "deterministic_failure_mode": "fail_closed"
+    },
+    "revision_history": {
+      "current_revision_id": "strategy-rev-20260317-081500",
+      "previous_revision_id": "strategy-rev-20260316-190000",
+      "revision_snapshot_refs": [
+        "strategy/current/STRATEGY.json"
+      ],
+      "diff_artifact_refs": [],
+      "recommendation_ids": [
+        "rec.harden-diff-governance"
+      ],
+      "constraint_ids": [
+        "guardrail-deterministic-diff-order"
+      ],
+      "strategy_is_current": false,
+      "semantic_drift_detected": false
+    }
+  },
+  "missing_context_fail_open_input": {
+    "analysis_type": "strategy_revision_history_and_diff_workflow",
+    "now_utc": "2026-03-17T08:15:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "workflow_config": {
+      "strictness": "advisory",
+      "deterministic_failure_mode": "fail_open"
+    },
+    "revision_history": {
+      "current_revision_id": "strategy-rev-20260317-081500",
+      "previous_revision_id": "strategy-rev-20260316-190000",
+      "revision_snapshot_refs": [
+        "strategy/current/STRATEGY.json"
+      ],
+      "diff_artifact_refs": [],
+      "recommendation_ids": [
+        "rec.harden-diff-governance"
+      ],
+      "constraint_ids": [
+        "guardrail-deterministic-diff-order"
+      ],
+      "strategy_is_current": false,
+      "semantic_drift_detected": false
+    }
+  },
+  "invalid_strictness_input": {
+    "analysis_type": "strategy_revision_history_and_diff_workflow",
+    "now_utc": "2026-03-17T08:15:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "workflow_config": {
+      "strictness": "rigid",
+      "deterministic_failure_mode": "fail_closed"
+    },
+    "revision_history": {
+      "current_revision_id": "strategy-rev-20260317-081500",
+      "previous_revision_id": "strategy-rev-20260316-190000",
+      "revision_snapshot_refs": [
+        "strategy/current/STRATEGY.json"
+      ],
+      "diff_artifact_refs": [
+        "strategy/current/DIFF_SUMMARY.json"
+      ],
+      "recommendation_ids": [
+        "rec.harden-diff-governance"
+      ],
+      "constraint_ids": [
+        "guardrail-deterministic-diff-order"
+      ],
+      "strategy_is_current": true,
+      "semantic_drift_detected": false
+    }
+  }
+}

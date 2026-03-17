@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strategy artifact handoff surfaces for REQ-055/REQ-061/REQ-067."""
+"""Strategy artifact handoff surfaces for REQ-055/REQ-061/REQ-067/REQ-069."""
 
 from __future__ import annotations
 
@@ -23,6 +23,10 @@ REQ_067_REQUIREMENT_ID = "REQ-067"
 REQ_067_SCHEMA_VERSION = "1.0"
 REQ_067_ANALYSIS_TYPE = "op_initialize_pre_plan_strategy_hook"
 REQ_067_CALL_ID = "op-initialize-pre-plan-strategy-hook"
+REQ_069_REQUIREMENT_ID = "REQ-069"
+REQ_069_SCHEMA_VERSION = "1.0"
+REQ_069_ANALYSIS_TYPE = "strategy_revision_history_and_diff_workflow"
+REQ_069_CALL_ID = "strategy-revision-history-and-diff-workflow"
 
 _CLASSIFICATIONS = {"hard", "soft", "speculative"}
 _CLASSIFICATION_BUCKETS = {
@@ -127,6 +131,22 @@ _REQ_067_PROCESSING_ALLOWED_DECISIONS = {
     "block-op-plan",
 }
 _REQ_067_PROCESSING_ALLOWED_CONFIDENCE = {"high", "medium", "low"}
+_REQ_069_ALLOWED_STRICTNESS = {"strict", "advisory"}
+_REQ_069_ALLOWED_FAILURE_MODES = {"fail_closed", "fail_open"}
+_REQ_069_ALLOWED_FAILURE_STATUS = {"not_triggered", "triggered"}
+_REQ_069_ALLOWED_READINESS_DECISIONS = {
+    "allow_diff_review",
+    "allow_diff_review_with_warning",
+    "block_diff_review",
+}
+_REQ_069_REASON_CODE_MISSING_CONTEXT = "strategy_revision_diff_context_missing"
+_REQ_069_REASON_CODE_MISSING_CONTEXT_SOFT = "strategy_revision_diff_context_missing_soft"
+_REQ_069_PROCESSING_ALLOWED_DECISIONS = {
+    "allow-diff-workflow",
+    "allow-diff-workflow-with-open-risks",
+    "block-diff-workflow",
+}
+_REQ_069_PROCESSING_ALLOWED_CONFIDENCE = {"high", "medium", "low"}
 
 
 def _utc_timestamp() -> str:
@@ -3182,6 +3202,923 @@ def validate_req_067_op_initialize_pre_plan_strategy_hook(payload: Mapping[str, 
     return errors
 
 
+def _normalize_req_069_workflow_config(value: Any) -> dict[str, str]:
+    if value is None:
+        raw: Mapping[str, Any] = {}
+    else:
+        raw = _require_mapping(value, field_name="workflow_config")
+
+    expected_keys = {"strictness", "deterministic_failure_mode"}
+    raw_keys = set(raw.keys())
+    unexpected = sorted(raw_keys - expected_keys)
+    if unexpected:
+        raise ValueError(f"workflow_config has unexpected keys: {unexpected}")
+
+    strictness = _require_nonempty_text(
+        raw.get("strictness", "strict"),
+        field_name="workflow_config.strictness",
+    ).lower()
+    if strictness not in _REQ_069_ALLOWED_STRICTNESS:
+        raise ValueError(f"workflow_config.strictness must be one of: {sorted(_REQ_069_ALLOWED_STRICTNESS)}")
+
+    mode_value = raw.get("deterministic_failure_mode")
+    if mode_value is None:
+        deterministic_failure_mode = "fail_closed" if strictness == "strict" else "fail_open"
+    else:
+        deterministic_failure_mode = _require_nonempty_text(
+            mode_value,
+            field_name="workflow_config.deterministic_failure_mode",
+        ).lower()
+        if deterministic_failure_mode not in _REQ_069_ALLOWED_FAILURE_MODES:
+            raise ValueError(
+                "workflow_config.deterministic_failure_mode must be one of: "
+                f"{sorted(_REQ_069_ALLOWED_FAILURE_MODES)}"
+            )
+
+    return {
+        "strictness": strictness,
+        "deterministic_failure_mode": deterministic_failure_mode,
+    }
+
+
+def _normalize_req_069_revision_history(value: Any) -> dict[str, Any]:
+    raw = _require_mapping(value, field_name="revision_history")
+    expected_keys = {
+        "current_revision_id",
+        "previous_revision_id",
+        "revision_snapshot_refs",
+        "diff_artifact_refs",
+        "recommendation_ids",
+        "constraint_ids",
+        "strategy_is_current",
+        "semantic_drift_detected",
+    }
+    raw_keys = set(raw.keys())
+    unexpected = sorted(raw_keys - expected_keys)
+    if unexpected:
+        raise ValueError(f"revision_history has unexpected keys: {unexpected}")
+
+    required_keys = {"current_revision_id", "revision_snapshot_refs", "diff_artifact_refs"}
+    missing = sorted(required_keys - raw_keys)
+    if missing:
+        raise ValueError(f"revision_history missing keys: {missing}")
+
+    strategy_is_current = raw.get("strategy_is_current", True)
+    if not isinstance(strategy_is_current, bool):
+        raise ValueError("revision_history.strategy_is_current must be a boolean")
+    semantic_drift_detected = raw.get("semantic_drift_detected", False)
+    if not isinstance(semantic_drift_detected, bool):
+        raise ValueError("revision_history.semantic_drift_detected must be a boolean")
+
+    return {
+        "current_revision_id": _require_nonempty_text(
+            raw.get("current_revision_id"),
+            field_name="revision_history.current_revision_id",
+        ),
+        "previous_revision_id": _optional_text(
+            raw.get("previous_revision_id"),
+            field_name="revision_history.previous_revision_id",
+        ),
+        "revision_snapshot_refs": _normalize_text_list(
+            raw.get("revision_snapshot_refs"),
+            field_name="revision_history.revision_snapshot_refs",
+        ),
+        "diff_artifact_refs": _normalize_text_list(
+            raw.get("diff_artifact_refs"),
+            field_name="revision_history.diff_artifact_refs",
+        ),
+        "recommendation_ids": _normalize_text_list(
+            raw.get("recommendation_ids"),
+            field_name="revision_history.recommendation_ids",
+        ),
+        "constraint_ids": _normalize_text_list(
+            raw.get("constraint_ids"),
+            field_name="revision_history.constraint_ids",
+        ),
+        "strategy_is_current": strategy_is_current,
+        "semantic_drift_detected": semantic_drift_detected,
+    }
+
+
+def _build_req_069_strategy_revision_history_and_diff_workflow(
+    *,
+    revision_history: Mapping[str, Any],
+    workflow_config: Mapping[str, str],
+) -> dict[str, Any]:
+    missing_context_fields: list[str] = []
+    if not revision_history["revision_snapshot_refs"]:
+        missing_context_fields.append("revision_snapshot_refs")
+    if not revision_history["diff_artifact_refs"]:
+        missing_context_fields.append("diff_artifact_refs")
+    if revision_history["strategy_is_current"] is not True:
+        missing_context_fields.append("strategy_is_current")
+    if revision_history["semantic_drift_detected"] is True:
+        missing_context_fields.append("semantic_drift_detected")
+
+    context_ready = not missing_context_fields
+    failure_mode = str(workflow_config["deterministic_failure_mode"])
+    if context_ready:
+        decision = "allow_diff_review"
+        failure_status = "not_triggered"
+        reason_code = "none"
+        planner_action = "proceed_to_op_plan"
+        gating_reason_codes: list[str] = []
+    elif failure_mode == "fail_closed":
+        decision = "block_diff_review"
+        failure_status = "triggered"
+        reason_code = _REQ_069_REASON_CODE_MISSING_CONTEXT
+        planner_action = "halt_before_op_plan"
+        gating_reason_codes = [reason_code]
+    else:
+        decision = "allow_diff_review_with_warning"
+        failure_status = "triggered"
+        reason_code = _REQ_069_REASON_CODE_MISSING_CONTEXT_SOFT
+        planner_action = "continue_with_diff_warning"
+        gating_reason_codes = [reason_code]
+
+    return {
+        "hook_stage": "strategy-revision-history:diff-workflow",
+        "strictness": workflow_config["strictness"],
+        "revision_history": dict(revision_history),
+        "deterministic_failure": {
+            "mode": failure_mode,
+            "status": failure_status,
+            "reason_code": reason_code,
+            "planner_action": planner_action,
+        },
+        "planner_readiness": {
+            "hook_applied": True,
+            "context_ready": context_ready,
+            "missing_context_fields": missing_context_fields,
+            "decision": decision,
+            "gating_reason_codes": gating_reason_codes,
+            "next_command": "/op-plan",
+        },
+    }
+
+
+def _req_069_constraint_profile(constraint_id: str) -> tuple[str, str, str]:
+    if constraint_id.startswith("guardrail-"):
+        return "hard", "mandatory_guardrail", "mandatory-guardrail"
+    return "soft", "optional_guidance", "optional-guidance"
+
+
+def _build_req_069_processing_behavior(
+    *,
+    revision_history: Mapping[str, Any],
+    revision_diff_workflow: Mapping[str, Any],
+    broad_sweep_context: dict[str, Any],
+) -> dict[str, Any]:
+    revision_snapshot_refs = list(revision_history["revision_snapshot_refs"])
+    diff_artifact_refs = list(revision_history["diff_artifact_refs"])
+    constraint_ids = list(revision_history["constraint_ids"])
+    earth_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
+    obligations_input = list(broad_sweep_context["cross_project_obligations"])
+    unresolved_ideas = list(broad_sweep_context["unresolved_ideas"])
+    projects_considered = sorted(
+        {
+            *broad_sweep_context["projects_considered"],
+            *[str(row["project_id"]) for row in obligations_input],
+        }
+    )
+    strictness = str(revision_diff_workflow["strictness"])
+    planner_decision = str(revision_diff_workflow["planner_readiness"]["decision"])
+
+    recommended_actions: list[dict[str, Any]] = []
+    recommendation_mapping: list[dict[str, str]] = []
+    for constraint_id in constraint_ids:
+        classification, policy_role, action_scope = _req_069_constraint_profile(constraint_id)
+        action_id = f"constraint-{constraint_id}"
+        recommended_actions.append(
+            {
+                "action_id": action_id,
+                "summary": f"Apply deterministic diff governance guardrail {constraint_id}.",
+                "rationale": (
+                    f"Diff workflow strictness is {strictness} with planner readiness {planner_decision}; "
+                    f"constraint {constraint_id} keeps revision-direction handling deterministic."
+                ),
+                "action_scope": action_scope,
+                "next_step": "Run /op-plan after revision-history diff governance review.",
+                "evidence_refs": sorted({*revision_snapshot_refs, *diff_artifact_refs, *earth_refs}),
+            }
+        )
+        recommendation_mapping.append(
+            {
+                "constraint_id": constraint_id,
+                "action_id": action_id,
+                "classification": classification,
+                "policy_role": policy_role,
+            }
+        )
+
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    for row in obligations_input:
+        obligation_refs = sorted({*earth_refs, *row["evidence_refs"]})
+        if earth_refs:
+            cross_project_obligations.append(
+                {
+                    "obligation_id": row["obligation_id"],
+                    "project_id": row["project_id"],
+                    "summary": row["summary"],
+                    "evidence_refs": obligation_refs,
+                }
+            )
+            continue
+
+        required_refs = list(row["evidence_refs"]) or ["missing:earth-sweep-evidence-ref"]
+        open_risks.append(
+            {
+                "risk_id": f"risk-{row['obligation_id']}",
+                "summary": row["summary"],
+                "reason_code": "missing_earth_sweep_evidence_refs",
+                "evidence_refs": required_refs,
+                "required_evidence_refs": required_refs,
+            }
+        )
+
+    for row in unresolved_ideas:
+        required_refs = list(row["evidence_refs"]) or ["missing:earth-sweep-evidence-ref"]
+        open_risks.append(
+            {
+                "risk_id": f"risk-{row['idea_id']}",
+                "summary": row["summary"],
+                "reason_code": "unresolved_idea_open_risk",
+                "evidence_refs": required_refs,
+                "required_evidence_refs": required_refs,
+            }
+        )
+
+    if not diff_artifact_refs:
+        open_risks.append(
+            {
+                "risk_id": "risk-missing-diff-artifact-refs",
+                "summary": "Revision diff workflow is missing deterministic diff artifact references.",
+                "reason_code": "missing_diff_artifact_refs",
+                "evidence_refs": ["missing:diff-artifact-ref"],
+                "required_evidence_refs": ["missing:diff-artifact-ref"],
+            }
+        )
+    if revision_history["semantic_drift_detected"]:
+        required_refs = diff_artifact_refs or ["missing:diff-artifact-ref"]
+        open_risks.append(
+            {
+                "risk_id": "risk-random-directional-shift",
+                "summary": "Revision diff workflow detected non-deterministic directional drift.",
+                "reason_code": "random_directional_shift_detected",
+                "evidence_refs": required_refs,
+                "required_evidence_refs": required_refs,
+            }
+        )
+
+    missing_earth_evidence = any(
+        str(row["reason_code"]) == "missing_earth_sweep_evidence_refs" for row in open_risks
+    )
+    missing_diff_evidence = any(
+        str(row["reason_code"]) in {"missing_diff_artifact_refs", "random_directional_shift_detected"}
+        for row in open_risks
+    )
+    if planner_decision == "block_diff_review":
+        decision = "block-diff-workflow"
+        confidence = "low"
+    elif open_risks:
+        decision = "allow-diff-workflow-with-open-risks"
+        confidence = "low" if (missing_earth_evidence or missing_diff_evidence) else "medium"
+    else:
+        decision = "allow-diff-workflow"
+        confidence = "high"
+
+    recommendation_evidence_refs = sorted(
+        {
+            *revision_snapshot_refs,
+            *diff_artifact_refs,
+            *earth_refs,
+            *[ref for row in cross_project_obligations for ref in row["evidence_refs"]],
+            *[ref for row in unresolved_ideas for ref in row["evidence_refs"]],
+            *[ref for row in open_risks for ref in row["required_evidence_refs"]],
+        }
+    )
+    recommendation = {
+        "decision": decision,
+        "rationale": (
+            "Revision history diff workflow readiness is "
+            f"{planner_decision} with {len(cross_project_obligations)} evidence-backed cross-project obligation(s) "
+            f"and {len(open_risks)} open risk(s)."
+        ),
+        "confidence": confidence,
+        "evidence_refs": recommendation_evidence_refs,
+        "recommended_actions": recommended_actions,
+        "cross_project_obligations": cross_project_obligations,
+        "open_risks": open_risks,
+    }
+
+    required_recommendation_fields = list(_RECOMMENDATION_REQUIRED_FIELDS)
+    recommendation_fields_complete = set(recommendation.keys()) == set(required_recommendation_fields)
+    context_usage = {
+        "cross_project_context_provided": bool(
+            broad_sweep_context["projects_considered"] or obligations_input or unresolved_ideas or earth_refs
+        ),
+        "cross_project_context_used": bool(projects_considered or obligations_input or unresolved_ideas),
+        "earth_sweep_context_used": bool(earth_refs),
+        "projects_considered": projects_considered,
+        "earth_sweep_evidence_refs_considered": earth_refs,
+        "constraint_ids_used": constraint_ids,
+        "recommendation_mapping": recommendation_mapping,
+        "recommendation_fields_complete": recommendation_fields_complete,
+        "required_recommendation_fields": required_recommendation_fields,
+    }
+    return {
+        "recommendation": recommendation,
+        "context_usage": context_usage,
+    }
+
+
+def _validate_req_069_processing_behavior(
+    processing_behavior: Any,
+    *,
+    constraint_ids: list[str],
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(processing_behavior, Mapping):
+        return ["processing_behavior must be an object"]
+
+    expected_keys = {"recommendation", "context_usage"}
+    keys = set(processing_behavior.keys())
+    missing = sorted(expected_keys - keys)
+    if missing:
+        errors.append(f"processing_behavior missing keys: {missing}")
+    unexpected = sorted(keys - expected_keys)
+    if unexpected:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected}")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        recommendation_keys = set(recommendation.keys())
+        required_recommendation_keys = set(_RECOMMENDATION_REQUIRED_FIELDS)
+        missing_recommendation = sorted(required_recommendation_keys - recommendation_keys)
+        if missing_recommendation:
+            errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+        unexpected_recommendation = sorted(recommendation_keys - required_recommendation_keys)
+        if unexpected_recommendation:
+            errors.append(
+                f"processing_behavior.recommendation has unexpected keys: {unexpected_recommendation}"
+            )
+
+        decision = recommendation.get("decision")
+        if not isinstance(decision, str) or not decision.strip():
+            errors.append("processing_behavior.recommendation.decision must be a non-empty string")
+        elif decision not in _REQ_069_PROCESSING_ALLOWED_DECISIONS:
+            errors.append(
+                "processing_behavior.recommendation.decision must be one of: "
+                f"{sorted(_REQ_069_PROCESSING_ALLOWED_DECISIONS)}"
+            )
+
+        rationale = recommendation.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            errors.append("processing_behavior.recommendation.rationale must be a non-empty string")
+
+        confidence = recommendation.get("confidence")
+        if not isinstance(confidence, str) or not confidence.strip():
+            errors.append("processing_behavior.recommendation.confidence must be a non-empty string")
+        elif confidence not in _REQ_069_PROCESSING_ALLOWED_CONFIDENCE:
+            errors.append(
+                "processing_behavior.recommendation.confidence must be one of: "
+                f"{sorted(_REQ_069_PROCESSING_ALLOWED_CONFIDENCE)}"
+            )
+
+        evidence_refs = recommendation.get("evidence_refs")
+        if not isinstance(evidence_refs, list):
+            errors.append("processing_behavior.recommendation.evidence_refs must be a list")
+        else:
+            for index, item in enumerate(evidence_refs):
+                if not isinstance(item, str) or not item.strip():
+                    errors.append(
+                        f"processing_behavior.recommendation.evidence_refs[{index}] must be a non-empty string"
+                    )
+
+        for key in ("recommended_actions", "cross_project_obligations", "open_risks"):
+            value = recommendation.get(key)
+            if not isinstance(value, list):
+                errors.append(f"processing_behavior.recommendation.{key} must be a list")
+                continue
+            for index, row in enumerate(value):
+                errors.extend(_validate_req_055_recommendation_row(row, index=index, kind=key))
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        context_keys = set(context_usage.keys())
+        required_context_keys = set(_CONTEXT_USAGE_REQUIRED_FIELDS)
+        missing_context = sorted(required_context_keys - context_keys)
+        if missing_context:
+            errors.append(f"processing_behavior.context_usage missing keys: {missing_context}")
+        unexpected_context = sorted(context_keys - required_context_keys)
+        if unexpected_context:
+            errors.append(f"processing_behavior.context_usage has unexpected keys: {unexpected_context}")
+
+        for key in (
+            "cross_project_context_provided",
+            "cross_project_context_used",
+            "earth_sweep_context_used",
+            "recommendation_fields_complete",
+        ):
+            if not isinstance(context_usage.get(key), bool):
+                errors.append(f"processing_behavior.context_usage.{key} must be a boolean")
+
+        for key in ("projects_considered", "earth_sweep_evidence_refs_considered", "constraint_ids_used"):
+            value = context_usage.get(key)
+            if not isinstance(value, list):
+                errors.append(f"processing_behavior.context_usage.{key} must be a list")
+                continue
+            for index, item in enumerate(value):
+                if not isinstance(item, str) or not item.strip():
+                    errors.append(
+                        f"processing_behavior.context_usage.{key}[{index}] must be a non-empty string"
+                    )
+
+        if context_usage.get("constraint_ids_used") != constraint_ids:
+            errors.append("processing_behavior.context_usage.constraint_ids_used must match revision history constraint IDs")
+
+        recommendation_mapping = context_usage.get("recommendation_mapping")
+        if not isinstance(recommendation_mapping, list):
+            errors.append("processing_behavior.context_usage.recommendation_mapping must be a list")
+        else:
+            mapped_constraint_ids: list[str] = []
+            seen_mapped_constraint_ids: set[str] = set()
+            for index, row in enumerate(recommendation_mapping):
+                row_errors, constraint_id = _validate_req_055_recommendation_mapping_row(row, index=index)
+                errors.extend(row_errors)
+                if constraint_id:
+                    if constraint_id in seen_mapped_constraint_ids:
+                        errors.append(
+                            "processing_behavior.context_usage.recommendation_mapping constraint_ids must be unique"
+                        )
+                    else:
+                        seen_mapped_constraint_ids.add(constraint_id)
+                        mapped_constraint_ids.append(constraint_id)
+            if mapped_constraint_ids != constraint_ids:
+                errors.append(
+                    "processing_behavior.context_usage.recommendation_mapping must cover revision history constraint IDs in order"
+                )
+
+        if context_usage.get("required_recommendation_fields") != list(_RECOMMENDATION_REQUIRED_FIELDS):
+            errors.append(
+                "processing_behavior.context_usage.required_recommendation_fields must match required recommendation keys"
+            )
+        if context_usage.get("recommendation_fields_complete") is not True:
+            errors.append("processing_behavior.context_usage.recommendation_fields_complete must be true")
+
+    return errors
+
+
+def build_req_069_strategy_revision_history_and_diff_workflow(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Build normalized REQ-069 payload for strategy revision history and diff workflow."""
+    raw = _require_mapping(payload, field_name="payload")
+    analysis_type = str(raw.get("analysis_type") or "").strip()
+    if analysis_type and analysis_type != REQ_069_ANALYSIS_TYPE:
+        raise ValueError(f"analysis_type must be {REQ_069_ANALYSIS_TYPE}")
+    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
+    target_project = _normalize_target_project(raw.get("target_project"))
+    revision_history = _normalize_req_069_revision_history(raw.get("revision_history"))
+    broad_sweep_context: dict[str, Any] | None = None
+    if raw.get("broad_sweep_context") is not None:
+        broad_sweep_context = _normalize_broad_sweep_context(raw.get("broad_sweep_context"))
+    workflow_config = _normalize_req_069_workflow_config(raw.get("workflow_config"))
+    revision_diff_workflow = _build_req_069_strategy_revision_history_and_diff_workflow(
+        revision_history=revision_history,
+        workflow_config=workflow_config,
+    )
+    missing_context_fields = revision_diff_workflow["planner_readiness"]["missing_context_fields"]
+
+    built = {
+        "ok": True,
+        "schema_version": REQ_069_SCHEMA_VERSION,
+        "requirement_id": REQ_069_REQUIREMENT_ID,
+        "analysis_type": REQ_069_ANALYSIS_TYPE,
+        "call_id": REQ_069_CALL_ID,
+        "checked_at_utc": checked_at_utc,
+        "target_project": target_project,
+        "strategy_revision_history_and_diff_workflow": revision_diff_workflow,
+        "totals": {
+            "revision_snapshot_refs": len(revision_history["revision_snapshot_refs"]),
+            "diff_artifact_refs": len(revision_history["diff_artifact_refs"]),
+            "recommendation_ids": len(revision_history["recommendation_ids"]),
+            "constraint_ids": len(revision_history["constraint_ids"]),
+            "missing_context_fields": len(missing_context_fields),
+        },
+    }
+    if broad_sweep_context is not None:
+        built["processing_behavior"] = _build_req_069_processing_behavior(
+            revision_history=revision_history,
+            revision_diff_workflow=revision_diff_workflow,
+            broad_sweep_context=broad_sweep_context,
+        )
+    errors = validate_req_069_strategy_revision_history_and_diff_workflow(built)
+    if errors:
+        raise ValueError(f"built REQ-069 payload failed validation: {errors}")
+    return built
+
+
+def validate_req_069_strategy_revision_history_and_diff_workflow(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-069 strategy revision history and diff workflow shape."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    required_top = {
+        "ok",
+        "schema_version",
+        "requirement_id",
+        "analysis_type",
+        "call_id",
+        "checked_at_utc",
+        "target_project",
+        "strategy_revision_history_and_diff_workflow",
+        "totals",
+    }
+    optional_top = {"processing_behavior"}
+    expected_top = required_top | optional_top
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - expected_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("ok") is not True:
+        errors.append("ok must be true")
+    if payload.get("schema_version") != REQ_069_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_069_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_069_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_069_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_069_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_069_ANALYSIS_TYPE}")
+    if payload.get("call_id") != REQ_069_CALL_ID:
+        errors.append(f"call_id must be {REQ_069_CALL_ID}")
+    if not isinstance(payload.get("checked_at_utc"), str) or not str(payload.get("checked_at_utc")).strip():
+        errors.append("checked_at_utc must be a non-empty string")
+
+    target_project = payload.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("target_project must be an object")
+    else:
+        expected_target = {"project_id", "project_root"}
+        target_keys = set(target_project.keys())
+        missing_target = sorted(expected_target - target_keys)
+        if missing_target:
+            errors.append(f"target_project missing keys: {missing_target}")
+        unexpected_target = sorted(target_keys - expected_target)
+        if unexpected_target:
+            errors.append(f"target_project has unexpected keys: {unexpected_target}")
+        project_id = target_project.get("project_id")
+        if not isinstance(project_id, str) or not project_id.strip():
+            errors.append("target_project.project_id must be a non-empty string")
+        project_root = target_project.get("project_root")
+        if not isinstance(project_root, str) or not project_root.strip():
+            errors.append("target_project.project_root must be a non-empty string")
+        elif not str(project_root).startswith("/"):
+            errors.append("target_project.project_root must be an absolute path")
+
+    revision_diff_workflow = payload.get("strategy_revision_history_and_diff_workflow")
+    revision_history: Mapping[str, Any] | None = None
+    deterministic_failure: Mapping[str, Any] | None = None
+    planner_readiness: Mapping[str, Any] | None = None
+    if not isinstance(revision_diff_workflow, Mapping):
+        errors.append("strategy_revision_history_and_diff_workflow must be an object")
+    else:
+        expected_hook_keys = {
+            "hook_stage",
+            "strictness",
+            "revision_history",
+            "deterministic_failure",
+            "planner_readiness",
+        }
+        hook_keys = set(revision_diff_workflow.keys())
+        missing_hook = sorted(expected_hook_keys - hook_keys)
+        if missing_hook:
+            errors.append(f"strategy_revision_history_and_diff_workflow missing keys: {missing_hook}")
+        unexpected_hook = sorted(hook_keys - expected_hook_keys)
+        if unexpected_hook:
+            errors.append(f"strategy_revision_history_and_diff_workflow has unexpected keys: {unexpected_hook}")
+
+        if revision_diff_workflow.get("hook_stage") != "strategy-revision-history:diff-workflow":
+            errors.append(
+                "strategy_revision_history_and_diff_workflow.hook_stage must be strategy-revision-history:diff-workflow"
+            )
+
+        strictness = revision_diff_workflow.get("strictness")
+        if strictness not in _REQ_069_ALLOWED_STRICTNESS:
+            errors.append(
+                "strategy_revision_history_and_diff_workflow.strictness must be one of: "
+                f"{sorted(_REQ_069_ALLOWED_STRICTNESS)}"
+            )
+
+        revision_history = revision_diff_workflow.get("revision_history")
+        if not isinstance(revision_history, Mapping):
+            errors.append("strategy_revision_history_and_diff_workflow.revision_history must be an object")
+        else:
+            expected_history_keys = {
+                "current_revision_id",
+                "previous_revision_id",
+                "revision_snapshot_refs",
+                "diff_artifact_refs",
+                "recommendation_ids",
+                "constraint_ids",
+                "strategy_is_current",
+                "semantic_drift_detected",
+            }
+            history_keys = set(revision_history.keys())
+            missing_history = sorted(expected_history_keys - history_keys)
+            if missing_history:
+                errors.append(
+                    f"strategy_revision_history_and_diff_workflow.revision_history missing keys: {missing_history}"
+                )
+            unexpected_history = sorted(history_keys - expected_history_keys)
+            if unexpected_history:
+                errors.append(
+                    f"strategy_revision_history_and_diff_workflow.revision_history has unexpected keys: {unexpected_history}"
+                )
+
+            for key in ("current_revision_id",):
+                value = revision_history.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(
+                        f"strategy_revision_history_and_diff_workflow.revision_history.{key} must be a non-empty string"
+                    )
+            previous_revision_id = revision_history.get("previous_revision_id")
+            if not isinstance(previous_revision_id, str):
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.revision_history.previous_revision_id must be a string"
+                )
+
+            for key in ("revision_snapshot_refs", "diff_artifact_refs", "recommendation_ids", "constraint_ids"):
+                value = revision_history.get(key)
+                if not isinstance(value, list):
+                    errors.append(
+                        f"strategy_revision_history_and_diff_workflow.revision_history.{key} must be a list"
+                    )
+                    continue
+                for index, item in enumerate(value):
+                    if not isinstance(item, str) or not item.strip():
+                        errors.append(
+                            "strategy_revision_history_and_diff_workflow.revision_history."
+                            f"{key}[{index}] must be a non-empty string"
+                        )
+
+            if not isinstance(revision_history.get("strategy_is_current"), bool):
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.revision_history.strategy_is_current must be a boolean"
+                )
+            if not isinstance(revision_history.get("semantic_drift_detected"), bool):
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.revision_history.semantic_drift_detected must be a boolean"
+                )
+
+        deterministic_failure = revision_diff_workflow.get("deterministic_failure")
+        if not isinstance(deterministic_failure, Mapping):
+            errors.append("strategy_revision_history_and_diff_workflow.deterministic_failure must be an object")
+        else:
+            expected_failure_keys = {"mode", "status", "reason_code", "planner_action"}
+            failure_keys = set(deterministic_failure.keys())
+            missing_failure = sorted(expected_failure_keys - failure_keys)
+            if missing_failure:
+                errors.append(
+                    f"strategy_revision_history_and_diff_workflow.deterministic_failure missing keys: {missing_failure}"
+                )
+            unexpected_failure = sorted(failure_keys - expected_failure_keys)
+            if unexpected_failure:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.deterministic_failure has unexpected keys: "
+                    f"{unexpected_failure}"
+                )
+
+            mode = deterministic_failure.get("mode")
+            if mode not in _REQ_069_ALLOWED_FAILURE_MODES:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.deterministic_failure.mode must be one of: "
+                    f"{sorted(_REQ_069_ALLOWED_FAILURE_MODES)}"
+                )
+            status = deterministic_failure.get("status")
+            if status not in _REQ_069_ALLOWED_FAILURE_STATUS:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.deterministic_failure.status must be one of: "
+                    f"{sorted(_REQ_069_ALLOWED_FAILURE_STATUS)}"
+                )
+            for key in ("reason_code", "planner_action"):
+                value = deterministic_failure.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(
+                        f"strategy_revision_history_and_diff_workflow.deterministic_failure.{key} must be a non-empty string"
+                    )
+
+        planner_readiness = revision_diff_workflow.get("planner_readiness")
+        if not isinstance(planner_readiness, Mapping):
+            errors.append("strategy_revision_history_and_diff_workflow.planner_readiness must be an object")
+        else:
+            expected_readiness_keys = {
+                "hook_applied",
+                "context_ready",
+                "missing_context_fields",
+                "decision",
+                "gating_reason_codes",
+                "next_command",
+            }
+            readiness_keys = set(planner_readiness.keys())
+            missing_readiness = sorted(expected_readiness_keys - readiness_keys)
+            if missing_readiness:
+                errors.append(
+                    f"strategy_revision_history_and_diff_workflow.planner_readiness missing keys: {missing_readiness}"
+                )
+            unexpected_readiness = sorted(readiness_keys - expected_readiness_keys)
+            if unexpected_readiness:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.planner_readiness has unexpected keys: "
+                    f"{unexpected_readiness}"
+                )
+
+            if planner_readiness.get("hook_applied") is not True:
+                errors.append("strategy_revision_history_and_diff_workflow.planner_readiness.hook_applied must be true")
+            if not isinstance(planner_readiness.get("context_ready"), bool):
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.planner_readiness.context_ready must be a boolean"
+                )
+            decision = planner_readiness.get("decision")
+            if decision not in _REQ_069_ALLOWED_READINESS_DECISIONS:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.planner_readiness.decision must be one of: "
+                    f"{sorted(_REQ_069_ALLOWED_READINESS_DECISIONS)}"
+                )
+            if planner_readiness.get("next_command") != "/op-plan":
+                errors.append("strategy_revision_history_and_diff_workflow.planner_readiness.next_command must be /op-plan")
+
+            for key in ("missing_context_fields", "gating_reason_codes"):
+                value = planner_readiness.get(key)
+                if not isinstance(value, list):
+                    errors.append(
+                        f"strategy_revision_history_and_diff_workflow.planner_readiness.{key} must be a list"
+                    )
+                    continue
+                for index, item in enumerate(value):
+                    if not isinstance(item, str) or not item.strip():
+                        errors.append(
+                            "strategy_revision_history_and_diff_workflow.planner_readiness."
+                            f"{key}[{index}] must be a non-empty string"
+                        )
+
+    if (
+        isinstance(revision_history, Mapping)
+        and isinstance(deterministic_failure, Mapping)
+        and isinstance(planner_readiness, Mapping)
+        and isinstance(planner_readiness.get("missing_context_fields"), list)
+    ):
+        context_ready = bool(planner_readiness.get("context_ready"))
+        missing_context_fields = list(planner_readiness.get("missing_context_fields"))
+        expected_missing_context_fields: list[str] = []
+        revision_snapshot_refs = revision_history.get("revision_snapshot_refs")
+        if isinstance(revision_snapshot_refs, list) and not revision_snapshot_refs:
+            expected_missing_context_fields.append("revision_snapshot_refs")
+        diff_artifact_refs = revision_history.get("diff_artifact_refs")
+        if isinstance(diff_artifact_refs, list) and not diff_artifact_refs:
+            expected_missing_context_fields.append("diff_artifact_refs")
+        if revision_history.get("strategy_is_current") is not True:
+            expected_missing_context_fields.append("strategy_is_current")
+        if revision_history.get("semantic_drift_detected") is True:
+            expected_missing_context_fields.append("semantic_drift_detected")
+
+        if missing_context_fields != expected_missing_context_fields:
+            errors.append(
+                "strategy_revision_history_and_diff_workflow.planner_readiness.missing_context_fields must match derived revision history gaps"
+            )
+        if context_ready != (len(expected_missing_context_fields) == 0):
+            errors.append(
+                "strategy_revision_history_and_diff_workflow.planner_readiness.context_ready must match derived context readiness"
+            )
+
+        mode = deterministic_failure.get("mode")
+        status = deterministic_failure.get("status")
+        reason_code = deterministic_failure.get("reason_code")
+        planner_action = deterministic_failure.get("planner_action")
+        decision = planner_readiness.get("decision")
+        gating_reason_codes = planner_readiness.get("gating_reason_codes")
+
+        if context_ready:
+            if decision != "allow_diff_review":
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.planner_readiness.decision must be allow_diff_review when context_ready is true"
+                )
+            if status != "not_triggered":
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.deterministic_failure.status must be not_triggered when context_ready is true"
+                )
+            if reason_code != "none":
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.deterministic_failure.reason_code must be none when context_ready is true"
+                )
+            if planner_action != "proceed_to_op_plan":
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.deterministic_failure.planner_action must be proceed_to_op_plan when context_ready is true"
+                )
+            if gating_reason_codes != []:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.planner_readiness.gating_reason_codes must be empty when context_ready is true"
+                )
+        else:
+            expected_reason_code = (
+                _REQ_069_REASON_CODE_MISSING_CONTEXT
+                if mode == "fail_closed"
+                else _REQ_069_REASON_CODE_MISSING_CONTEXT_SOFT
+            )
+            expected_decision = "block_diff_review" if mode == "fail_closed" else "allow_diff_review_with_warning"
+            expected_planner_action = "halt_before_op_plan" if mode == "fail_closed" else "continue_with_diff_warning"
+            if status != "triggered":
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.deterministic_failure.status must be triggered when context_ready is false"
+                )
+            if reason_code != expected_reason_code:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.deterministic_failure.reason_code must match configured deterministic failure mode"
+                )
+            if planner_action != expected_planner_action:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.deterministic_failure.planner_action must match configured deterministic failure mode"
+                )
+            if decision != expected_decision:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.planner_readiness.decision must match configured deterministic failure mode"
+                )
+            if gating_reason_codes != [expected_reason_code]:
+                errors.append(
+                    "strategy_revision_history_and_diff_workflow.planner_readiness.gating_reason_codes must match deterministic failure reason code"
+                )
+
+    totals = payload.get("totals")
+    if not isinstance(totals, Mapping):
+        errors.append("totals must be an object")
+    else:
+        expected_totals = {
+            "revision_snapshot_refs",
+            "diff_artifact_refs",
+            "recommendation_ids",
+            "constraint_ids",
+            "missing_context_fields",
+        }
+        totals_keys = set(totals.keys())
+        missing_totals = sorted(expected_totals - totals_keys)
+        if missing_totals:
+            errors.append(f"totals missing keys: {missing_totals}")
+        unexpected_totals = sorted(totals_keys - expected_totals)
+        if unexpected_totals:
+            errors.append(f"totals has unexpected keys: {unexpected_totals}")
+
+        for key in expected_totals:
+            value = totals.get(key)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                errors.append(f"totals.{key} must be a non-negative integer")
+
+        if isinstance(revision_history, Mapping):
+            expected_counts = {
+                "revision_snapshot_refs": len(revision_history.get("revision_snapshot_refs", []))
+                if isinstance(revision_history.get("revision_snapshot_refs"), list)
+                else 0,
+                "diff_artifact_refs": len(revision_history.get("diff_artifact_refs", []))
+                if isinstance(revision_history.get("diff_artifact_refs"), list)
+                else 0,
+                "recommendation_ids": len(revision_history.get("recommendation_ids", []))
+                if isinstance(revision_history.get("recommendation_ids"), list)
+                else 0,
+                "constraint_ids": len(revision_history.get("constraint_ids", []))
+                if isinstance(revision_history.get("constraint_ids"), list)
+                else 0,
+            }
+            for key, expected_value in expected_counts.items():
+                if totals.get(key) != expected_value:
+                    errors.append(f"totals.{key} must match revision history counts")
+
+        if isinstance(planner_readiness, Mapping) and isinstance(planner_readiness.get("missing_context_fields"), list):
+            if totals.get("missing_context_fields") != len(planner_readiness.get("missing_context_fields", [])):
+                errors.append("totals.missing_context_fields must match planner_readiness.missing_context_fields")
+
+    processing_behavior = payload.get("processing_behavior")
+    if processing_behavior is not None:
+        expected_constraint_ids: list[str] = []
+        if isinstance(revision_history, Mapping):
+            history_constraint_ids = revision_history.get("constraint_ids")
+            if isinstance(history_constraint_ids, list):
+                expected_constraint_ids = [str(item) for item in history_constraint_ids]
+        errors.extend(
+            _validate_req_069_processing_behavior(
+                processing_behavior,
+                constraint_ids=expected_constraint_ids,
+            )
+        )
+
+    return errors
+
+
 def _load_input_payload(path_value: str) -> dict[str, Any]:
     if path_value == "-":
         raw_text = sys.stdin.read()
@@ -3211,6 +4148,8 @@ def _build_artifact_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         return build_req_061_recommendation_quality_validator(payload)
     if analysis_type == REQ_067_ANALYSIS_TYPE:
         return build_req_067_op_initialize_pre_plan_strategy_hook(payload)
+    if analysis_type == REQ_069_ANALYSIS_TYPE:
+        return build_req_069_strategy_revision_history_and_diff_workflow(payload)
     raise ValueError(f"unsupported analysis_type: {analysis_type}")
 
 
