@@ -1,0 +1,119 @@
+{
+  "input": {
+    "risk_signals": [
+      {
+        "signal_source": "blocker",
+        "reason_code": "blocking_issue_detected",
+        "summary": "Worker packet blocked by missing dependency contract.",
+        "severity": "high",
+        "occurrence_count": 2,
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-062/TASK_EVIDENCE.json"
+        ],
+        "first_observed_at_utc": "2026-03-15T01:10:00Z",
+        "last_observed_at_utc": "2026-03-15T01:14:00Z"
+      },
+      {
+        "signal_source": "retry",
+        "reason_code": "retry_exhausted",
+        "summary": "Dispatch retry budget exhausted for TASK-062 worker handoff.",
+        "severity": "medium",
+        "occurrence_count": 3,
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-062/retry-log.json"
+        ],
+        "first_observed_at_utc": "2026-03-15T01:00:00Z",
+        "last_observed_at_utc": "2026-03-15T01:09:00Z"
+      },
+      {
+        "signal_source": "watchdog-exit",
+        "reason_code": "watchdog_timeout",
+        "summary": "Watchdog exited due to stale base branch commit age.",
+        "severity": "critical",
+        "occurrence_count": 1,
+        "evidence_refs": [
+          "reports/optimus-prime/watchdog_exit_signal.json"
+        ],
+        "first_observed_at_utc": "2026-03-15T01:20:00Z",
+        "last_observed_at_utc": "2026-03-15T01:20:00Z"
+      },
+      {
+        "signal_source": "regression",
+        "reason_code": "regression_pattern_detected",
+        "summary": "Regression pattern observed in contract test pass-rate trend.",
+        "severity": "high",
+        "occurrence_count": 2,
+        "evidence_refs": [
+          "reports/optimus-prime/regression/contract-test-trend.json"
+        ],
+        "first_observed_at_utc": "2026-03-15T00:55:00Z",
+        "last_observed_at_utc": "2026-03-15T01:18:00Z"
+      },
+      {
+        "signal_source": "blockers",
+        "reason_code": "task_blocked",
+        "summary": "Worker packet blocked by missing dependency contract.",
+        "severity": "medium",
+        "occurrence_count": 1,
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-062/TASK_BLOCKERS.json"
+        ],
+        "first_observed_at_utc": "2026-03-15T01:15:00Z",
+        "last_observed_at_utc": "2026-03-15T01:16:00Z"
+      }
+    ],
+    "normalized_at_utc": "2026-03-15T01:30:00Z"
+  },
+  "expected_contract_anchors": {
+    "schema_version": "req-020.risk-signal-normalization.v1",
+    "requirement_id": "REQ-020",
+    "normalized_at_utc": "2026-03-15T01:30:00Z",
+    "derived_normalized_at_utc_when_omitted": "2026-03-15T01:20:00Z",
+    "normalized_signal_ids": [
+      "risk-signal.afa5fefa3efb",
+      "risk-signal.950141e95f9e",
+      "risk-signal.0125ca04ad38",
+      "risk-signal.5dfcf255ac50"
+    ],
+    "canonical_reason_codes": [
+      "regression_detected",
+      "retry_limit_reached",
+      "stale_base_branch_commit",
+      "task_blocked"
+    ],
+    "source_counts": {
+      "blocker": 1,
+      "regression_pattern": 1,
+      "retry": 1,
+      "watchdog_exit": 1
+    },
+    "severity_counts": {
+      "critical": 1,
+      "high": 2,
+      "low": 0,
+      "medium": 1
+    },
+    "total_input_signals": 5,
+    "total_normalized_signals": 4,
+    "alias_pairs": [
+      {
+        "source_reason_code": "blocking_issue_detected",
+        "normalized_reason_code": "task_blocked"
+      },
+      {
+        "source_reason_code": "regression_pattern_detected",
+        "normalized_reason_code": "regression_detected"
+      },
+      {
+        "source_reason_code": "retry_exhausted",
+        "normalized_reason_code": "retry_limit_reached"
+      },
+      {
+        "source_reason_code": "watchdog_timeout",
+        "normalized_reason_code": "stale_base_branch_commit"
+      }
+    ],
+    "canonical_input_sha256": "f0d87a544b3350fe3412028e5e2da421418f10608cd4deaa32fc2e6930acc5c4",
+    "reproducible_call_id": "req020-f0d87a544b3350fe"
+  }
+}
