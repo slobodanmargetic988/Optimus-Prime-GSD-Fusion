@@ -1,0 +1,113 @@
+{
+  "active_project_id": "optimus-prime-gsd-fusion",
+  "related_project_ids": [
+    "earth-core-runtime",
+    "shared-observability"
+  ],
+  "broad_sweep_context": {
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
+      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+    ],
+    "project_context": [
+      {
+        "project_id": "earth-core-runtime",
+        "context_note": "Earth sweep shows runtime-signals migration pressure during the same delivery window.",
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json"
+        ]
+      },
+      {
+        "project_id": "shared-observability",
+        "context_note": "Observability budget controls intersect dispatch-safety rollout timing.",
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ]
+      }
+    ],
+    "unresolved_direction_ideas": [
+      {
+        "idea_id": "idea-shared-observability-budget-gate",
+        "project_id": "shared-observability",
+        "summary": "Confirm whether telemetry budget gating should defer dispatch-safety rollout until exporter cost controls land.",
+        "related_conflict_ids": [
+          "conflict-002"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ]
+      }
+    ]
+  },
+  "initiatives": [
+    {
+      "initiative_id": "initiative-runtime-signal-router",
+      "project_id": "optimus-prime-gsd-fusion",
+      "roadmap_direction": "Advance runtime-signal-router rollout for deterministic cycle dispatch.",
+      "direction_signal": "advance",
+      "capability_tags": [
+        "runtime-signals",
+        "dispatch-safety"
+      ],
+      "timeline": {
+        "start_week": 10,
+        "end_week": 18
+      },
+      "evidence_refs": [
+        "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+        "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json"
+      ]
+    },
+    {
+      "initiative_id": "initiative-runtime-signal-sunset",
+      "project_id": "earth-core-runtime",
+      "roadmap_direction": "Sunset legacy runtime-signals path and migrate to consolidated event-stream ingestion.",
+      "direction_signal": "sunset",
+      "capability_tags": [
+        "runtime-signals",
+        "event-stream"
+      ],
+      "timeline": {
+        "start_week": 12,
+        "end_week": 20
+      },
+      "evidence_refs": [
+        "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
+        "strategy/current/samples/REQ-006_runtime-telemetry-artifact-sweep-across-earth.sample.json"
+      ]
+    },
+    {
+      "initiative_id": "initiative-dispatch-safety-hold",
+      "project_id": "shared-observability",
+      "roadmap_direction": "Hold dispatch-safety exporter changes until telemetry budget controls settle.",
+      "direction_signal": "hold",
+      "capability_tags": [
+        "dispatch-safety",
+        "telemetry"
+      ],
+      "timeline": {
+        "start_week": 14,
+        "end_week": 22
+      },
+      "evidence_refs": [
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ]
+    },
+    {
+      "initiative_id": "initiative-telemetry-archival",
+      "project_id": "shared-observability",
+      "roadmap_direction": "Advance telemetry archival migration for long-horizon storage optimization.",
+      "direction_signal": "advance",
+      "capability_tags": [
+        "telemetry-archive"
+      ],
+      "timeline": {
+        "start_week": 30,
+        "end_week": 36
+      },
+      "evidence_refs": [
+        "reports/earth/sweeps/shared-observability/archive-plan-2026-q3.json"
+      ]
+    }
+  ]
+}

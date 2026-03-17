@@ -1,0 +1,630 @@
+{
+  "schema_version": "req-032.call-7-blocker-and-risk-policy-reasoning.v1",
+  "requirement_id": "REQ-032",
+  "call_7_blocker_and_risk_policy_reasoning_entrypoint": {
+    "runtime_mode": "llm-first",
+    "execution_mode": "long-thinking",
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req032-fixture-r1",
+    "strategy_goal": "Reason about Call-7 blockers, escalation triggers, and fallback sequencing.",
+    "call_sequence": 7
+  },
+  "processing_behavior": {
+    "strategy": "call-7-blocker-and-risk-policy-reasoning",
+    "reasoning_mode": "long-thinking",
+    "strict_evidence_discipline": true,
+    "heuristic_summarization_only": false,
+    "context_inputs": {
+      "target_project": {
+        "project_root": "/workspace/projects/optimus-prime",
+        "strategy_goal": "Reason about Call-7 blockers, escalation triggers, and fallback sequencing.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+        ]
+      },
+      "earth_sweep": {
+        "earth_root": "/workspace/projects/Earth",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/earth/sweeps/2026-03-16/shared-observability.json"
+        ]
+      },
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime orchestrator owns lease-heartbeat signals consumed by downstream rollout logic."
+        },
+        {
+          "project_id": "shared-observability",
+          "project_root": "/workspace/projects/Earth/shared-observability",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "context_note": "Shared observability owns the cross-project blocker signal vocabulary used in rollout dashboards."
+        }
+      ],
+      "blocker_candidates": [
+        {
+          "blocker_id": "blocker.runtime-handshake-drift",
+          "summary": "Runtime handshake status can drift from the planner view during canary preparation.",
+          "severity": "critical",
+          "affected_project_ids": [
+            "runtime-orchestrator",
+            "shared-observability"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "escalation_triggers": [
+            {
+              "trigger_id": "trigger.blocker-signal-schema-gap",
+              "project_id": "shared-observability",
+              "summary": "Escalate when blocker signal schema cannot represent the runtime handshake state.",
+              "fire_when": "Shared blocker dashboards cannot encode the runtime handshake failure mode.",
+              "urgency": "high",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            },
+            {
+              "trigger_id": "trigger.runtime-heartbeat-mismatch",
+              "project_id": "runtime-orchestrator",
+              "summary": "Escalate when runtime heartbeat semantics diverge from planner assumptions.",
+              "fire_when": "Heartbeat compatibility notes differ from the rollout packet expectations.",
+              "urgency": "critical",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+              ]
+            }
+          ],
+          "fallback_paths": [
+            {
+              "fallback_id": "fallback.freeze-canary-promotion",
+              "sequence": 1,
+              "summary": "Freeze canary promotion until runtime and dashboard signals agree.",
+              "activates_when": "Runtime handshake drift is detected before promotion is committed.",
+              "next_step": "Pause canary promotion and regenerate the readiness packet with updated runtime evidence.",
+              "evidence_refs": [
+                "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+              ]
+            },
+            {
+              "fallback_id": "fallback.publish-bridge-note",
+              "sequence": 2,
+              "summary": "Publish a bridge note mapping runtime handshake states into the shared blocker vocabulary.",
+              "activates_when": "The blocker schema gap is localized and can be bridged without changing managers or gates.",
+              "next_step": "Ship the bridge note and rerun the planner packet with the updated blocker mapping.",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            }
+          ]
+        },
+        {
+          "blocker_id": "blocker.trace-citation-gap",
+          "summary": "Trace citations for blocker state can be incomplete when policy promotion is replayed.",
+          "severity": "high",
+          "affected_project_ids": [
+            "shared-observability"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "escalation_triggers": [
+            {
+              "trigger_id": "trigger.trace-proof-missing",
+              "project_id": "shared-observability",
+              "summary": "Escalate when blocker state loses replay-stable evidence during handoff.",
+              "fire_when": "A promoted blocker decision lacks a citation-complete replay path.",
+              "urgency": "high",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            }
+          ],
+          "fallback_paths": [
+            {
+              "fallback_id": "fallback-rebuild-trace-index",
+              "sequence": 1,
+              "summary": "Rebuild the trace index before promoting blocker policy output.",
+              "activates_when": "Replay validation fails but the blocker signal itself remains trustworthy.",
+              "next_step": "Regenerate trace citations and rerun the Call-7 policy pass.",
+              "evidence_refs": [
+                "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+              ]
+            }
+          ]
+        }
+      ],
+      "risk_policy_candidates": [
+        {
+          "policy_id": "policy.runtime-handshake-fallback",
+          "blocker_id": "blocker.runtime-handshake-drift",
+          "policy_decision": "fallback-then-escalate",
+          "rationale": "Freeze promotion first, then escalate if the bridge note and refreshed runtime evidence still disagree.",
+          "preferred_fallback_ids": [
+            "fallback.freeze-canary-promotion",
+            "fallback.publish-bridge-note"
+          ],
+          "escalation_trigger_ids": [
+            "trigger.runtime-heartbeat-mismatch"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "policy_id": "policy.trace-citation-escalate",
+          "blocker_id": "blocker.trace-citation-gap",
+          "policy_decision": "escalate-immediately",
+          "rationale": "Citation loss makes the blocker decision non-replayable, so escalation is safer than silent promotion.",
+          "preferred_fallback_ids": [],
+          "escalation_trigger_ids": [
+            "trigger.trace-proof-missing"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        }
+      ],
+      "strategic_claims": []
+    },
+    "context_usage": {
+      "target_project_context_used": true,
+      "earth_sweep_context_used": true,
+      "cross_project_context_used": true,
+      "blocker_ids_considered": [
+        "blocker.runtime-handshake-drift",
+        "blocker.trace-citation-gap"
+      ],
+      "policy_ids_considered": [
+        "policy.runtime-handshake-fallback",
+        "policy.trace-citation-escalate"
+      ],
+      "fallback_ids_considered": [
+        "fallback.freeze-canary-promotion",
+        "fallback.publish-bridge-note",
+        "fallback-rebuild-trace-index"
+      ],
+      "cross_project_projects_considered": [
+        "runtime-orchestrator",
+        "shared-observability"
+      ],
+      "escalation_project_ids": [
+        "runtime-orchestrator",
+        "shared-observability"
+      ],
+      "cross_project_refs_used": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json"
+      ],
+      "evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json",
+        "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+      ]
+    },
+    "call_7_reasoning": {
+      "call_sequence": 7,
+      "reasoning_focus": "blocker-escalation-and-risk-policy-resolution",
+      "blocker_reasoning": [
+        {
+          "blocker_id": "blocker.runtime-handshake-drift",
+          "summary": "Runtime handshake status can drift from the planner view during canary preparation.",
+          "severity": "critical",
+          "affected_project_ids": [
+            "runtime-orchestrator",
+            "shared-observability"
+          ],
+          "linked_context_projects": [
+            "runtime-orchestrator",
+            "shared-observability"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json",
+            "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+          ],
+          "escalation_triggers": [
+            {
+              "trigger_id": "trigger.blocker-signal-schema-gap",
+              "project_id": "shared-observability",
+              "summary": "Escalate when blocker signal schema cannot represent the runtime handshake state.",
+              "fire_when": "Shared blocker dashboards cannot encode the runtime handshake failure mode.",
+              "urgency": "high",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            },
+            {
+              "trigger_id": "trigger.runtime-heartbeat-mismatch",
+              "project_id": "runtime-orchestrator",
+              "summary": "Escalate when runtime heartbeat semantics diverge from planner assumptions.",
+              "fire_when": "Heartbeat compatibility notes differ from the rollout packet expectations.",
+              "urgency": "critical",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+              ]
+            }
+          ],
+          "fallback_paths": [
+            {
+              "fallback_id": "fallback.freeze-canary-promotion",
+              "sequence": 1,
+              "summary": "Freeze canary promotion until runtime and dashboard signals agree.",
+              "activates_when": "Runtime handshake drift is detected before promotion is committed.",
+              "next_step": "Pause canary promotion and regenerate the readiness packet with updated runtime evidence.",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+                "reports/earth/sweeps/2026-03-16/shared-observability.json",
+                "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+              ]
+            },
+            {
+              "fallback_id": "fallback.publish-bridge-note",
+              "sequence": 2,
+              "summary": "Publish a bridge note mapping runtime handshake states into the shared blocker vocabulary.",
+              "activates_when": "The blocker schema gap is localized and can be bridged without changing managers or gates.",
+              "next_step": "Ship the bridge note and rerun the planner packet with the updated blocker mapping.",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            }
+          ],
+          "applicable_policies": [
+            {
+              "policy_id": "policy.runtime-handshake-fallback",
+              "policy_decision": "fallback-then-escalate",
+              "rationale": "Freeze promotion first, then escalate if the bridge note and refreshed runtime evidence still disagree.",
+              "preferred_fallback_ids": [
+                "fallback.freeze-canary-promotion",
+                "fallback.publish-bridge-note"
+              ],
+              "escalation_trigger_ids": [
+                "trigger.runtime-heartbeat-mismatch"
+              ],
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+                "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+              ]
+            }
+          ]
+        },
+        {
+          "blocker_id": "blocker.trace-citation-gap",
+          "summary": "Trace citations for blocker state can be incomplete when policy promotion is replayed.",
+          "severity": "high",
+          "affected_project_ids": [
+            "shared-observability"
+          ],
+          "linked_context_projects": [
+            "shared-observability"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "escalation_triggers": [
+            {
+              "trigger_id": "trigger.trace-proof-missing",
+              "project_id": "shared-observability",
+              "summary": "Escalate when blocker state loses replay-stable evidence during handoff.",
+              "fire_when": "A promoted blocker decision lacks a citation-complete replay path.",
+              "urgency": "high",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            }
+          ],
+          "fallback_paths": [
+            {
+              "fallback_id": "fallback-rebuild-trace-index",
+              "sequence": 1,
+              "summary": "Rebuild the trace index before promoting blocker policy output.",
+              "activates_when": "Replay validation fails but the blocker signal itself remains trustworthy.",
+              "next_step": "Regenerate trace citations and rerun the Call-7 policy pass.",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json",
+                "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+              ]
+            }
+          ],
+          "applicable_policies": [
+            {
+              "policy_id": "policy.trace-citation-escalate",
+              "policy_decision": "escalate-immediately",
+              "rationale": "Citation loss makes the blocker decision non-replayable, so escalation is safer than silent promotion.",
+              "preferred_fallback_ids": [],
+              "escalation_trigger_ids": [
+                "trigger.trace-proof-missing"
+              ],
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            }
+          ]
+        }
+      ],
+      "blocker_count": 2,
+      "policy_count": 2,
+      "escalation_trigger_count": 3,
+      "fallback_path_count": 3
+    },
+    "recommendation": {
+      "decision": "fallback-then-escalate",
+      "rationale": "Risk policies require a bounded fallback sequence before escalation triggers are promoted.",
+      "confidence": "high",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json",
+        "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+      ],
+      "escalation_triggers": [
+        {
+          "trigger_id": "trigger.runtime-heartbeat-mismatch",
+          "blocker_id": "blocker.runtime-handshake-drift",
+          "policy_id": "policy.runtime-handshake-fallback",
+          "project_id": "runtime-orchestrator",
+          "summary": "Escalate when runtime heartbeat semantics diverge from planner assumptions.",
+          "fire_when": "Heartbeat compatibility notes differ from the rollout packet expectations.",
+          "urgency": "critical",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "trigger_id": "trigger.trace-proof-missing",
+          "blocker_id": "blocker.trace-citation-gap",
+          "policy_id": "policy.trace-citation-escalate",
+          "project_id": "shared-observability",
+          "summary": "Escalate when blocker state loses replay-stable evidence during handoff.",
+          "fire_when": "A promoted blocker decision lacks a citation-complete replay path.",
+          "urgency": "high",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        }
+      ],
+      "fallback_sequence": [
+        {
+          "sequence": 1,
+          "fallback_id": "fallback.freeze-canary-promotion",
+          "blocker_id": "blocker.runtime-handshake-drift",
+          "policy_id": "policy.runtime-handshake-fallback",
+          "summary": "Freeze canary promotion until runtime and dashboard signals agree.",
+          "activates_when": "Runtime handshake drift is detected before promotion is committed.",
+          "next_step": "Pause canary promotion and regenerate the readiness packet with updated runtime evidence.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json",
+            "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "sequence": 2,
+          "fallback_id": "fallback.publish-bridge-note",
+          "blocker_id": "blocker.runtime-handshake-drift",
+          "policy_id": "policy.runtime-handshake-fallback",
+          "summary": "Publish a bridge note mapping runtime handshake states into the shared blocker vocabulary.",
+          "activates_when": "The blocker schema gap is localized and can be bridged without changing managers or gates.",
+          "next_step": "Ship the bridge note and rerun the planner packet with the updated blocker mapping.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json",
+            "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "open_risks": []
+    },
+    "summary": "Call 7 reasoned over 2 blocker(s), 2 promoted escalation trigger(s), and 2 fallback sequence step(s)."
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "25aff6ffd6237b50b1c0d1b70540fa92dfc17414f7ee5105962f3f238880d1a8",
+    "reproducible_call_id": "req032-25aff6ffd6237b50",
+    "canonical_input": {
+      "runtime_mode": "llm-first",
+      "execution_mode": "long-thinking",
+      "target_project_root": "/workspace/projects/optimus-prime",
+      "earth_root": "/workspace/projects/Earth",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req032-fixture-r1",
+      "strategy_goal": "Reason about Call-7 blockers, escalation triggers, and fallback sequencing.",
+      "call_sequence": 7
+    },
+    "processing_input_sha256": "8cd133d98ce3b7dffd43471ac114d0ab86880100f42c3d61061d39a99327160f",
+    "processing_call_id": "req032-processing-8cd133d98ce3b7df",
+    "canonical_processing_input": {
+      "required_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json",
+        "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+      ],
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json"
+      ],
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime orchestrator owns lease-heartbeat signals consumed by downstream rollout logic."
+        },
+        {
+          "project_id": "shared-observability",
+          "project_root": "/workspace/projects/Earth/shared-observability",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "context_note": "Shared observability owns the cross-project blocker signal vocabulary used in rollout dashboards."
+        }
+      ],
+      "blocker_candidates": [
+        {
+          "blocker_id": "blocker.runtime-handshake-drift",
+          "summary": "Runtime handshake status can drift from the planner view during canary preparation.",
+          "severity": "critical",
+          "affected_project_ids": [
+            "runtime-orchestrator",
+            "shared-observability"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "escalation_triggers": [
+            {
+              "trigger_id": "trigger.blocker-signal-schema-gap",
+              "project_id": "shared-observability",
+              "summary": "Escalate when blocker signal schema cannot represent the runtime handshake state.",
+              "fire_when": "Shared blocker dashboards cannot encode the runtime handshake failure mode.",
+              "urgency": "high",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            },
+            {
+              "trigger_id": "trigger.runtime-heartbeat-mismatch",
+              "project_id": "runtime-orchestrator",
+              "summary": "Escalate when runtime heartbeat semantics diverge from planner assumptions.",
+              "fire_when": "Heartbeat compatibility notes differ from the rollout packet expectations.",
+              "urgency": "critical",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+              ]
+            }
+          ],
+          "fallback_paths": [
+            {
+              "fallback_id": "fallback.freeze-canary-promotion",
+              "sequence": 1,
+              "summary": "Freeze canary promotion until runtime and dashboard signals agree.",
+              "activates_when": "Runtime handshake drift is detected before promotion is committed.",
+              "next_step": "Pause canary promotion and regenerate the readiness packet with updated runtime evidence.",
+              "evidence_refs": [
+                "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+              ]
+            },
+            {
+              "fallback_id": "fallback.publish-bridge-note",
+              "sequence": 2,
+              "summary": "Publish a bridge note mapping runtime handshake states into the shared blocker vocabulary.",
+              "activates_when": "The blocker schema gap is localized and can be bridged without changing managers or gates.",
+              "next_step": "Ship the bridge note and rerun the planner packet with the updated blocker mapping.",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            }
+          ]
+        },
+        {
+          "blocker_id": "blocker.trace-citation-gap",
+          "summary": "Trace citations for blocker state can be incomplete when policy promotion is replayed.",
+          "severity": "high",
+          "affected_project_ids": [
+            "shared-observability"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "escalation_triggers": [
+            {
+              "trigger_id": "trigger.trace-proof-missing",
+              "project_id": "shared-observability",
+              "summary": "Escalate when blocker state loses replay-stable evidence during handoff.",
+              "fire_when": "A promoted blocker decision lacks a citation-complete replay path.",
+              "urgency": "high",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            }
+          ],
+          "fallback_paths": [
+            {
+              "fallback_id": "fallback-rebuild-trace-index",
+              "sequence": 1,
+              "summary": "Rebuild the trace index before promoting blocker policy output.",
+              "activates_when": "Replay validation fails but the blocker signal itself remains trustworthy.",
+              "next_step": "Regenerate trace citations and rerun the Call-7 policy pass.",
+              "evidence_refs": [
+                "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+              ]
+            }
+          ]
+        }
+      ],
+      "risk_policy_candidates": [
+        {
+          "policy_id": "policy.runtime-handshake-fallback",
+          "blocker_id": "blocker.runtime-handshake-drift",
+          "policy_decision": "fallback-then-escalate",
+          "rationale": "Freeze promotion first, then escalate if the bridge note and refreshed runtime evidence still disagree.",
+          "preferred_fallback_ids": [
+            "fallback.freeze-canary-promotion",
+            "fallback.publish-bridge-note"
+          ],
+          "escalation_trigger_ids": [
+            "trigger.runtime-heartbeat-mismatch"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "policy_id": "policy.trace-citation-escalate",
+          "blocker_id": "blocker.trace-citation-gap",
+          "policy_decision": "escalate-immediately",
+          "rationale": "Citation loss makes the blocker decision non-replayable, so escalation is safer than silent promotion.",
+          "preferred_fallback_ids": [],
+          "escalation_trigger_ids": [
+            "trigger.trace-proof-missing"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        }
+      ]
+    },
+    "llm_call_trace_schema_version": "req-025.llm-call-trace-row.v1",
+    "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
+    "llm_call_trace_sha256": "f05ca5baaef4625a19bd28763ee31eed5f337e4b5c15037a555a729c33bbb1ef",
+    "llm_call_trace_rows": [
+      {
+        "schema_version": "req-025.llm-call-trace-row.v1",
+        "requirement_id": "REQ-032",
+        "plan_id": "req032-plan-8cd133d98ce3b7df",
+        "processing_call_id": "req032-processing-8cd133d98ce3b7df",
+        "call_id": "req032-call-07-25aff6ffd6",
+        "sequence": 7,
+        "call_objective": "Reason about blocker escalation triggers and fallback sequencing paths before policy promotion.",
+        "depends_on": [],
+        "expected_output": "call_7_blocker_and_risk_policy_reasoning",
+        "input_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/earth/sweeps/2026-03-16/shared-observability.json",
+          "reports/optimus-prime/planning/evidence/TASK-107/TASK_EVIDENCE.json"
+        ],
+        "output_refs": [
+          "req032-plan-8cd133d98ce3b7df::call::req032-call-07-25aff6ffd6::output::call_7_blocker_and_risk_policy_reasoning"
+        ],
+        "handoff_summary": "Call 7 hands off call_7_blocker_and_risk_policy_reasoning via req032-plan-8cd133d98ce3b7df::call::req032-call-07-25aff6ffd6::output::call_7_blocker_and_risk_policy_reasoning after reasoning over 2 blockers, 3 escalation triggers, and 3 fallback paths."
+      }
+    ]
+  }
+}

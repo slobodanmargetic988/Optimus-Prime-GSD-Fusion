@@ -1,0 +1,166 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-109",
+  "requirement_ids": [
+    "REQ-032"
+  ],
+  "updated_at": "2026-03-16T05:04:15Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_032_contract_call_7_blocker_and_risk_policy_reasoning",
+        "command": "python3 -m pytest tests/contracts/test_call-7-blocker-and-risk-policy-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-109/contract_call-7-blocker-and-risk-policy-reasoning.output.txt"
+      },
+      {
+        "name": "req_032_integration_call_7_blocker_and_risk_policy_reasoning",
+        "command": "python3 -m pytest tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-109/integration_call-7-blocker-and-risk-policy-reasoning.output.txt"
+      },
+      {
+        "name": "e2e_strategy_llm_pipeline_smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.10s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-109/e2e_strategy_llm_pipeline_smoke.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-032",
+        "status": "pass",
+        "details": "Call-7 branch-head evidence now includes a deterministic trace row and jsonl artifact with call_objective, input_refs, output_refs, and handoff_summary for blocker and risk policy reasoning.",
+        "evidence_refs": [
+          "scripts/strategy_llm_pipeline.py",
+          "tests/contracts/test_call-7-blocker-and-risk-policy-reasoning.py",
+          "tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py",
+          "reports/optimus-prime/planning/evidence/TASK-109/REQ-032_CALL_TRACE_ROW.json",
+          "reports/optimus-prime/planning/evidence/TASK-109/REQ-032_CALL_TRACE.jsonl",
+          "strategy/current/llm_call_trace.jsonl",
+          "reports/optimus-prime/planning/evidence/TASK-109/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "requirement_id": "REQ-032",
+        "status": "pass",
+        "details": "Replay-stable serialization is verified by the smoke test and by the committed REQ-032 trace snapshot copied from the deterministic builder output.",
+        "evidence_refs": [
+          "tests/e2e/test_strategy_llm_pipeline_smoke.py",
+          "reports/optimus-prime/planning/evidence/TASK-109/e2e_strategy_llm_pipeline_smoke.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-109/REQ-032_CALL_TRACE_ROW.json",
+          "reports/optimus-prime/planning/evidence/TASK-109/REQ-032_CALL_TRACE.jsonl",
+          "strategy/current/llm_call_trace.jsonl"
+        ]
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "req_032_trace_rows_must_not_collapse_multiple_calls",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "req_032_trace_rows_must_be_replay_stable",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/contracts/test_call-7-blocker-and-risk-policy-reasoning.py",
+      "tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py",
+      "tests/e2e/test_strategy_llm_pipeline_smoke.py",
+      "reports/optimus-prime/planning/evidence/TASK-109/REQ-032_CALL_TRACE_ROW.json",
+      "reports/optimus-prime/planning/evidence/TASK-109/REQ-032_CALL_TRACE.jsonl",
+      "strategy/current/llm_call_trace.jsonl",
+      "reports/optimus-prime/planning/evidence/TASK-109/contract_call-7-blocker-and-risk-policy-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-109/integration_call-7-blocker-and-risk-policy-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-109/e2e_strategy_llm_pipeline_smoke.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-109/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_032_integration_call_7_blocker_and_risk_policy_reasoning",
+        "command": "python3 -m pytest tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-109/integration_call-7-blocker-and-risk-policy-reasoning.output.txt"
+      },
+      {
+        "name": "e2e_strategy_llm_pipeline_smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.10s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-109/e2e_strategy_llm_pipeline_smoke.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-032",
+        "status": "pass",
+        "details": "The acceptance-targeted integration and smoke commands both exit 0, and TASK-109 evidence links the committed Call-7 trace artifacts needed for audit across reruns.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-109/integration_call-7-blocker-and-risk-policy-reasoning.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-109/e2e_strategy_llm_pipeline_smoke.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-109/REQ-032_CALL_TRACE_ROW.json",
+          "reports/optimus-prime/planning/evidence/TASK-109/REQ-032_CALL_TRACE.jsonl",
+          "strategy/current/llm_call_trace.jsonl",
+          "reports/optimus-prime/planning/evidence/TASK-109/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-032",
+        "passed": true,
+        "notes": "Required smoke and Call-7 integration commands exit 0, and the evidence payload references committed REQ-032 trace row/jsonl artifacts."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-109/REQ-032_CALL_TRACE_ROW.json",
+      "reports/optimus-prime/planning/evidence/TASK-109/REQ-032_CALL_TRACE.jsonl",
+      "strategy/current/llm_call_trace.jsonl",
+      "reports/optimus-prime/planning/evidence/TASK-109/integration_call-7-blocker-and-risk-policy-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-109/e2e_strategy_llm_pipeline_smoke.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-109/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "reports/optimus-prime/planning/evidence/TASK-109/REQ-032_CALL_TRACE_ROW.json",
+      "reports/optimus-prime/planning/evidence/TASK-109/TASK_EVIDENCE.json"
+    ]
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_review",
+    "reason_codes": [
+      "req_032_llm_call_trace_branch_head_evidence_present",
+      "req_032_trace_replay_stable_green",
+      "req_032_acceptance_targeted_checks_green",
+      "task_109_evidence_links_trace_artifacts"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

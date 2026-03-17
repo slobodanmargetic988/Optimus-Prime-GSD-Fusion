@@ -1,0 +1,583 @@
+{
+  "schema_version": "req-028.call-3-gap-and-opportunity-reasoning.v1",
+  "requirement_id": "REQ-028",
+  "call_3_gap_and_opportunity_reasoning_entrypoint": {
+    "runtime_mode": "llm-first",
+    "execution_mode": "long-thinking",
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req028-fixture-r1",
+    "strategy_goal": "Reason about Call-3 strategic gaps and ecosystem opportunities.",
+    "call_sequence": 3
+  },
+  "processing_behavior": {
+    "strategy": "call-3-gap-and-opportunity-reasoning",
+    "reasoning_mode": "long-thinking",
+    "strict_evidence_discipline": true,
+    "heuristic_summarization_only": false,
+    "context_inputs": {
+      "target_project": {
+        "project_root": "/workspace/projects/optimus-prime",
+        "mission_summary": "Deliver deterministic planning and build execution for Optimus Prime.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-091/TASK_EVIDENCE.json"
+        ]
+      },
+      "earth_sweep": {
+        "earth_root": "/workspace/projects/Earth",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/earth/sweeps/2026-03-16/shared-observability.json"
+        ]
+      },
+      "gap_candidates": [
+        {
+          "gap_id": "gap.cross-project-telemetry-contract",
+          "summary": "Local mission does not expose the missing shared telemetry contract for downstream rollouts.",
+          "visibility_rationale": "The telemetry gap appears only when Earth sweep evidence is compared against local planning outputs.",
+          "local_mission_blind_spot": "The local mission focuses on build execution and does not mention cross-project telemetry reuse expectations.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        },
+        {
+          "gap_id": "gap.runtime-dependency-handshake",
+          "summary": "Local mission does not capture runtime handshake obligations needed for coordinated canary dispatch.",
+          "visibility_rationale": "The dependency handshake becomes visible only after including runtime orchestrator sweep evidence.",
+          "local_mission_blind_spot": "The local mission treats dispatch as local control and omits upstream runtime coordination effects.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ],
+      "opportunity_candidates": [
+        {
+          "opportunity_id": "opp.runtime-handshake-bridge",
+          "gap_id": "gap.runtime-dependency-handshake",
+          "summary": "Add a deterministic runtime handshake bridge before call-4 execution commits dependencies.",
+          "ecosystem_level_benefit": "Shared handshake semantics reduce rollout stalls across projects that depend on runtime lease state.",
+          "recommendation_rationale": "Runtime orchestrator evidence confirms the handshake bridge is a reusable ecosystem concern rather than a local-only optimization.",
+          "dependency_effects": [
+            {
+              "project_id": "runtime-orchestrator",
+              "effect_summary": "Needs runtime-orchestrator to expose lease heartbeat compatibility notes for strategy consumers.",
+              "impact": "Explicit handshake coverage lowers cross-project coordination failures during canary runs."
+            }
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "next_step": "Capture the lease-heartbeat compatibility contract before Call-4 chooses final execution sequencing."
+        },
+        {
+          "opportunity_id": "opp.shared-telemetry-contract",
+          "gap_id": "gap.cross-project-telemetry-contract",
+          "summary": "Define a shared telemetry contract for strategy-to-runtime readiness signals.",
+          "ecosystem_level_benefit": "Multiple Earth projects can consume a common readiness signal instead of reimplementing status translation.",
+          "recommendation_rationale": "Shared-observability evidence shows the contract can be promoted without inventing new downstream obligations.",
+          "dependency_effects": [
+            {
+              "project_id": "shared-observability",
+              "effect_summary": "Requires the observability project to publish a stable readiness schema.",
+              "impact": "Schema alignment reduces downstream dashboard drift across Earth projects."
+            }
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "next_step": "Draft the shared readiness contract with shared-observability before Call-4 execution artifacts are finalized."
+        },
+        {
+          "opportunity_id": "opp.telemetry-runtime-link",
+          "gap_id": "gap.runtime-dependency-handshake",
+          "summary": "Link runtime handshake state into the shared telemetry contract so dependency blockers surface earlier.",
+          "ecosystem_level_benefit": "A combined contract lets multiple projects detect dependency blockers before rollout windows close.",
+          "recommendation_rationale": "The combined Earth sweep shows the telemetry and handshake gaps compound unless both projects align on the same blocker surface.",
+          "dependency_effects": [
+            {
+              "project_id": "runtime-orchestrator",
+              "effect_summary": "Handshake status must remain stable enough for external consumers.",
+              "impact": "Stabilized status shapes enable reuse across planners and runtime dashboards."
+            },
+            {
+              "project_id": "shared-observability",
+              "effect_summary": "Observability dashboards need one additional status dimension for handshake blockers.",
+              "impact": "Shared blocker reporting improves escalation quality for ecosystem operators."
+            }
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "next_step": "Define the shared blocker signal mapping jointly across runtime-orchestrator and shared-observability."
+        }
+      ],
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "context_note": "Earth sweep shows runtime lease heartbeat expectations that downstream strategy consumers must honor."
+        },
+        {
+          "project_id": "shared-observability",
+          "project_root": "/workspace/projects/Earth/shared-observability",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "context_note": "Earth sweep confirms shared observability owns the reusable readiness schema consumed by multiple projects."
+        }
+      ],
+      "unresolved_ideas": [
+        {
+          "idea_id": "idea.canary-window-obligation",
+          "project_id": "release-coordination",
+          "summary": "Confirm whether a shared canary-window obligation is needed before Call-4 commits ecosystem dependencies.",
+          "related_gap_ids": [
+            "gap.runtime-dependency-handshake"
+          ],
+          "related_opportunity_ids": [
+            "opp.telemetry-runtime-link"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ]
+    },
+    "context_usage": {
+      "target_project_context_used": true,
+      "earth_sweep_context_used": true,
+      "cross_project_context_used": true,
+      "gap_ids_considered": [
+        "gap.cross-project-telemetry-contract",
+        "gap.runtime-dependency-handshake"
+      ],
+      "opportunity_ids_considered": [
+        "opp.runtime-handshake-bridge",
+        "opp.shared-telemetry-contract",
+        "opp.telemetry-runtime-link"
+      ],
+      "cross_project_projects_considered": [
+        "runtime-orchestrator",
+        "shared-observability"
+      ],
+      "dependency_projects_referenced": [
+        "runtime-orchestrator",
+        "shared-observability"
+      ],
+      "cross_project_refs_used": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json"
+      ],
+      "evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json",
+        "reports/optimus-prime/planning/evidence/TASK-091/TASK_EVIDENCE.json"
+      ]
+    },
+    "call_3_reasoning": {
+      "call_sequence": 3,
+      "reasoning_focus": "strategic-gaps-and-opportunities-beyond-local-mission",
+      "gap_reasoning": [
+        {
+          "gap_id": "gap.cross-project-telemetry-contract",
+          "summary": "Local mission does not expose the missing shared telemetry contract for downstream rollouts.",
+          "visibility_rationale": "The telemetry gap appears only when Earth sweep evidence is compared against local planning outputs.",
+          "local_mission_blind_spot": "The local mission focuses on build execution and does not mention cross-project telemetry reuse expectations.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "opportunities": [
+            {
+              "opportunity_id": "opp.shared-telemetry-contract",
+              "summary": "Define a shared telemetry contract for strategy-to-runtime readiness signals.",
+              "ecosystem_level_benefit": "Multiple Earth projects can consume a common readiness signal instead of reimplementing status translation.",
+              "dependency_effects": [
+                {
+                  "project_id": "shared-observability",
+                  "effect_summary": "Requires the observability project to publish a stable readiness schema.",
+                  "impact": "Schema alignment reduces downstream dashboard drift across Earth projects."
+                }
+              ],
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            }
+          ]
+        },
+        {
+          "gap_id": "gap.runtime-dependency-handshake",
+          "summary": "Local mission does not capture runtime handshake obligations needed for coordinated canary dispatch.",
+          "visibility_rationale": "The dependency handshake becomes visible only after including runtime orchestrator sweep evidence.",
+          "local_mission_blind_spot": "The local mission treats dispatch as local control and omits upstream runtime coordination effects.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "opportunities": [
+            {
+              "opportunity_id": "opp.runtime-handshake-bridge",
+              "summary": "Add a deterministic runtime handshake bridge before call-4 execution commits dependencies.",
+              "ecosystem_level_benefit": "Shared handshake semantics reduce rollout stalls across projects that depend on runtime lease state.",
+              "dependency_effects": [
+                {
+                  "project_id": "runtime-orchestrator",
+                  "effect_summary": "Needs runtime-orchestrator to expose lease heartbeat compatibility notes for strategy consumers.",
+                  "impact": "Explicit handshake coverage lowers cross-project coordination failures during canary runs."
+                }
+              ],
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+              ]
+            },
+            {
+              "opportunity_id": "opp.telemetry-runtime-link",
+              "summary": "Link runtime handshake state into the shared telemetry contract so dependency blockers surface earlier.",
+              "ecosystem_level_benefit": "A combined contract lets multiple projects detect dependency blockers before rollout windows close.",
+              "dependency_effects": [
+                {
+                  "project_id": "runtime-orchestrator",
+                  "effect_summary": "Handshake status must remain stable enough for external consumers.",
+                  "impact": "Stabilized status shapes enable reuse across planners and runtime dashboards."
+                },
+                {
+                  "project_id": "shared-observability",
+                  "effect_summary": "Observability dashboards need one additional status dimension for handshake blockers.",
+                  "impact": "Shared blocker reporting improves escalation quality for ecosystem operators."
+                }
+              ],
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+                "reports/earth/sweeps/2026-03-16/shared-observability.json"
+              ]
+            }
+          ]
+        }
+      ],
+      "gap_count": 2,
+      "opportunity_count": 3
+    },
+    "recommendation": {
+      "decision": "proceed-with-open-risks",
+      "rationale": "Some Call-3 opportunities are evidence-backed while unresolved ecosystem ideas remain open risks.",
+      "confidence": "medium",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json",
+        "reports/optimus-prime/planning/evidence/TASK-091/TASK_EVIDENCE.json"
+      ],
+      "recommended_opportunities": [
+        {
+          "opportunity_id": "opp.runtime-handshake-bridge",
+          "gap_id": "gap.runtime-dependency-handshake",
+          "summary": "Add a deterministic runtime handshake bridge before call-4 execution commits dependencies.",
+          "rationale": "Runtime orchestrator evidence confirms the handshake bridge is a reusable ecosystem concern rather than a local-only optimization.",
+          "ecosystem_level_benefit": "Shared handshake semantics reduce rollout stalls across projects that depend on runtime lease state.",
+          "next_step": "Capture the lease-heartbeat compatibility contract before Call-4 chooses final execution sequencing.",
+          "dependency_effects": [
+            {
+              "project_id": "runtime-orchestrator",
+              "effect_summary": "Needs runtime-orchestrator to expose lease heartbeat compatibility notes for strategy consumers.",
+              "impact": "Explicit handshake coverage lowers cross-project coordination failures during canary runs."
+            }
+          ],
+          "linked_context_projects": [
+            "runtime-orchestrator"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "opportunity_id": "opp.shared-telemetry-contract",
+          "gap_id": "gap.cross-project-telemetry-contract",
+          "summary": "Define a shared telemetry contract for strategy-to-runtime readiness signals.",
+          "rationale": "Shared-observability evidence shows the contract can be promoted without inventing new downstream obligations.",
+          "ecosystem_level_benefit": "Multiple Earth projects can consume a common readiness signal instead of reimplementing status translation.",
+          "next_step": "Draft the shared readiness contract with shared-observability before Call-4 execution artifacts are finalized.",
+          "dependency_effects": [
+            {
+              "project_id": "shared-observability",
+              "effect_summary": "Requires the observability project to publish a stable readiness schema.",
+              "impact": "Schema alignment reduces downstream dashboard drift across Earth projects."
+            }
+          ],
+          "linked_context_projects": [
+            "shared-observability"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        },
+        {
+          "opportunity_id": "opp.telemetry-runtime-link",
+          "gap_id": "gap.runtime-dependency-handshake",
+          "summary": "Link runtime handshake state into the shared telemetry contract so dependency blockers surface earlier.",
+          "rationale": "The combined Earth sweep shows the telemetry and handshake gaps compound unless both projects align on the same blocker surface.",
+          "ecosystem_level_benefit": "A combined contract lets multiple projects detect dependency blockers before rollout windows close.",
+          "next_step": "Define the shared blocker signal mapping jointly across runtime-orchestrator and shared-observability.",
+          "dependency_effects": [
+            {
+              "project_id": "runtime-orchestrator",
+              "effect_summary": "Handshake status must remain stable enough for external consumers.",
+              "impact": "Stabilized status shapes enable reuse across planners and runtime dashboards."
+            },
+            {
+              "project_id": "shared-observability",
+              "effect_summary": "Observability dashboards need one additional status dimension for handshake blockers.",
+              "impact": "Shared blocker reporting improves escalation quality for ecosystem operators."
+            }
+          ],
+          "linked_context_projects": [
+            "runtime-orchestrator",
+            "shared-observability"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        }
+      ],
+      "cross_project_obligations": [
+        {
+          "obligation_id": "obligation-opp.runtime-handshake-bridge-runtime-orchestrator",
+          "project_id": "runtime-orchestrator",
+          "opportunity_id": "opp.runtime-handshake-bridge",
+          "summary": "Needs runtime-orchestrator to expose lease heartbeat compatibility notes for strategy consumers.",
+          "impact": "Explicit handshake coverage lowers cross-project coordination failures during canary runs.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        },
+        {
+          "obligation_id": "obligation-opp.shared-telemetry-contract-shared-observability",
+          "project_id": "shared-observability",
+          "opportunity_id": "opp.shared-telemetry-contract",
+          "summary": "Requires the observability project to publish a stable readiness schema.",
+          "impact": "Schema alignment reduces downstream dashboard drift across Earth projects.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        },
+        {
+          "obligation_id": "obligation-opp.telemetry-runtime-link-runtime-orchestrator",
+          "project_id": "runtime-orchestrator",
+          "opportunity_id": "opp.telemetry-runtime-link",
+          "summary": "Handshake status must remain stable enough for external consumers.",
+          "impact": "Stabilized status shapes enable reuse across planners and runtime dashboards.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        },
+        {
+          "obligation_id": "obligation-opp.telemetry-runtime-link-shared-observability",
+          "project_id": "shared-observability",
+          "opportunity_id": "opp.telemetry-runtime-link",
+          "summary": "Observability dashboards need one additional status dimension for handshake blockers.",
+          "impact": "Shared blocker reporting improves escalation quality for ecosystem operators.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        }
+      ],
+      "open_risks": [
+        {
+          "risk_id": "risk-idea.canary-window-obligation",
+          "summary": "Confirm whether a shared canary-window obligation is needed before Call-4 commits ecosystem dependencies.",
+          "reason_code": "unresolved_cross_project_idea",
+          "project_id": "release-coordination",
+          "related_gap_ids": [
+            "gap.runtime-dependency-handshake"
+          ],
+          "related_opportunity_ids": [
+            "opp.telemetry-runtime-link"
+          ],
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ]
+    },
+    "summary": "Call 3 reasoned over 2 ecosystem-visible strategic gaps and 3 linked opportunities with ecosystem benefits and dependency effects."
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "22fc87512d7c5550df3c95ce54c585ec17d8bef1c19df88ad321dc0178212909",
+    "reproducible_call_id": "req028-22fc87512d7c5550",
+    "canonical_input": {
+      "runtime_mode": "llm-first",
+      "execution_mode": "long-thinking",
+      "target_project_root": "/workspace/projects/optimus-prime",
+      "earth_root": "/workspace/projects/Earth",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req028-fixture-r1",
+      "strategy_goal": "Reason about Call-3 strategic gaps and ecosystem opportunities.",
+      "call_sequence": 3
+    },
+    "processing_input_sha256": "17f2dedef6f1ea772035cef0a4558cfb6fa6347c7cd8e49b8d310c8a00ff289b",
+    "processing_call_id": "req028-processing-17f2dedef6f1ea77",
+    "canonical_processing_input": {
+      "required_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json",
+        "reports/optimus-prime/planning/evidence/TASK-091/TASK_EVIDENCE.json"
+      ],
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-091/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json"
+      ],
+      "local_mission_summary": "Deliver deterministic planning and build execution for Optimus Prime.",
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "context_note": "Earth sweep shows runtime lease heartbeat expectations that downstream strategy consumers must honor."
+        },
+        {
+          "project_id": "shared-observability",
+          "project_root": "/workspace/projects/Earth/shared-observability",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "context_note": "Earth sweep confirms shared observability owns the reusable readiness schema consumed by multiple projects."
+        }
+      ],
+      "unresolved_ideas": [
+        {
+          "idea_id": "idea.canary-window-obligation",
+          "project_id": "release-coordination",
+          "summary": "Confirm whether a shared canary-window obligation is needed before Call-4 commits ecosystem dependencies.",
+          "related_gap_ids": [
+            "gap.runtime-dependency-handshake"
+          ],
+          "related_opportunity_ids": [
+            "opp.telemetry-runtime-link"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ],
+      "gap_candidates": [
+        {
+          "gap_id": "gap.cross-project-telemetry-contract",
+          "summary": "Local mission does not expose the missing shared telemetry contract for downstream rollouts.",
+          "visibility_rationale": "The telemetry gap appears only when Earth sweep evidence is compared against local planning outputs.",
+          "local_mission_blind_spot": "The local mission focuses on build execution and does not mention cross-project telemetry reuse expectations.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        },
+        {
+          "gap_id": "gap.runtime-dependency-handshake",
+          "summary": "Local mission does not capture runtime handshake obligations needed for coordinated canary dispatch.",
+          "visibility_rationale": "The dependency handshake becomes visible only after including runtime orchestrator sweep evidence.",
+          "local_mission_blind_spot": "The local mission treats dispatch as local control and omits upstream runtime coordination effects.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ],
+      "opportunity_candidates": [
+        {
+          "opportunity_id": "opp.runtime-handshake-bridge",
+          "gap_id": "gap.runtime-dependency-handshake",
+          "summary": "Add a deterministic runtime handshake bridge before call-4 execution commits dependencies.",
+          "ecosystem_level_benefit": "Shared handshake semantics reduce rollout stalls across projects that depend on runtime lease state.",
+          "recommendation_rationale": "Runtime orchestrator evidence confirms the handshake bridge is a reusable ecosystem concern rather than a local-only optimization.",
+          "dependency_effects": [
+            {
+              "project_id": "runtime-orchestrator",
+              "effect_summary": "Needs runtime-orchestrator to expose lease heartbeat compatibility notes for strategy consumers.",
+              "impact": "Explicit handshake coverage lowers cross-project coordination failures during canary runs."
+            }
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "next_step": "Capture the lease-heartbeat compatibility contract before Call-4 chooses final execution sequencing."
+        },
+        {
+          "opportunity_id": "opp.shared-telemetry-contract",
+          "gap_id": "gap.cross-project-telemetry-contract",
+          "summary": "Define a shared telemetry contract for strategy-to-runtime readiness signals.",
+          "ecosystem_level_benefit": "Multiple Earth projects can consume a common readiness signal instead of reimplementing status translation.",
+          "recommendation_rationale": "Shared-observability evidence shows the contract can be promoted without inventing new downstream obligations.",
+          "dependency_effects": [
+            {
+              "project_id": "shared-observability",
+              "effect_summary": "Requires the observability project to publish a stable readiness schema.",
+              "impact": "Schema alignment reduces downstream dashboard drift across Earth projects."
+            }
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "next_step": "Draft the shared readiness contract with shared-observability before Call-4 execution artifacts are finalized."
+        },
+        {
+          "opportunity_id": "opp.telemetry-runtime-link",
+          "gap_id": "gap.runtime-dependency-handshake",
+          "summary": "Link runtime handshake state into the shared telemetry contract so dependency blockers surface earlier.",
+          "ecosystem_level_benefit": "A combined contract lets multiple projects detect dependency blockers before rollout windows close.",
+          "recommendation_rationale": "The combined Earth sweep shows the telemetry and handshake gaps compound unless both projects align on the same blocker surface.",
+          "dependency_effects": [
+            {
+              "project_id": "runtime-orchestrator",
+              "effect_summary": "Handshake status must remain stable enough for external consumers.",
+              "impact": "Stabilized status shapes enable reuse across planners and runtime dashboards."
+            },
+            {
+              "project_id": "shared-observability",
+              "effect_summary": "Observability dashboards need one additional status dimension for handshake blockers.",
+              "impact": "Shared blocker reporting improves escalation quality for ecosystem operators."
+            }
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "next_step": "Define the shared blocker signal mapping jointly across runtime-orchestrator and shared-observability."
+        }
+      ]
+    },
+    "llm_call_trace_schema_version": "req-025.llm-call-trace-row.v1",
+    "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
+    "llm_call_trace_sha256": "c7355b55c13fce8ac305dd6cc0c5ae3e6db405bdf07919e8e96450af3e6746ec",
+    "llm_call_trace_rows": [
+      {
+        "schema_version": "req-025.llm-call-trace-row.v1",
+        "requirement_id": "REQ-028",
+        "plan_id": "req028-plan-17f2dedef6f1ea77",
+        "processing_call_id": "req028-processing-17f2dedef6f1ea77",
+        "call_id": "req028-call-03-22fc87512d",
+        "sequence": 3,
+        "call_objective": "Reason about strategic gaps and opportunities not visible from the local mission alone.",
+        "depends_on": [],
+        "expected_output": "call_3_gap_and_opportunity_reasoning",
+        "input_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/earth/sweeps/2026-03-16/shared-observability.json",
+          "reports/optimus-prime/planning/evidence/TASK-091/TASK_EVIDENCE.json"
+        ],
+        "output_refs": [
+          "req028-plan-17f2dedef6f1ea77::call::req028-call-03-22fc87512d::output::call_3_gap_and_opportunity_reasoning"
+        ],
+        "handoff_summary": "Call 3 hands off call_3_gap_and_opportunity_reasoning via req028-plan-17f2dedef6f1ea77::call::req028-call-03-22fc87512d::output::call_3_gap_and_opportunity_reasoning after reasoning over 2 ecosystem-visible gaps and 3 linked opportunities beyond the local mission."
+      }
+    ]
+  }
+}

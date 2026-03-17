@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-1",
+  "task_id": "TASK-093",
+  "requirement_ids": [
+    "REQ-028"
+  ],
+  "updated_at": "2026-03-16T01:07:24Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_028_contract_suite",
+        "command": "python3 -m pytest tests/contracts/test_call-3-gap-and-opportunity-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "5 passed in 0.02s"
+      },
+      {
+        "name": "req_028_integration_suite",
+        "command": "python3 -m pytest tests/integration/test_call-3-gap-and-opportunity-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.01s"
+      },
+      {
+        "name": "req_025_smoke_trace_suite",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.10s"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-028",
+        "status": "pass",
+        "details": "Call-3 metadata now emits a deterministic orchestration trace row with call_objective, input_refs, output_refs, and handoff_summary."
+      },
+      {
+        "requirement_id": "REQ-028",
+        "status": "pass",
+        "details": "Trace input refs remain replay-stable by collecting normalized evidence refs from required inputs, cross-project context, gaps, opportunities, and unresolved ideas."
+      },
+      {
+        "requirement_id": "REQ-028",
+        "status": "pass",
+        "details": "Committed evidence includes REQ-028 trace row JSON and JSONL artifacts so branch-head audit does not depend on transient workspace state."
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-093/REQ-028_CALL_TRACE_ROW.json",
+      "reports/optimus-prime/planning/evidence/TASK-093/REQ-028_CALL_TRACE.jsonl",
+      "strategy/current/llm_call_trace.jsonl"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_025_contract_regression_suite",
+        "command": "python3 -m pytest tests/contracts/test_multi-call-strategy-pipeline-planner.py -q",
+        "exit_code": 0,
+        "summary": "5 passed in 0.01s"
+      },
+      {
+        "name": "req_025_integration_regression_suite",
+        "command": "python3 -m pytest tests/integration/test_multi-call-strategy-pipeline-planner.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-028",
+        "status": "pass",
+        "details": "REQ-025 smoke trace behavior remained replay-stable after adding REQ-028 trace metadata in the shared module."
+      }
+    ],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-093/REQ-028_CALL_TRACE_ROW.json",
+      "reports/optimus-prime/planning/evidence/TASK-093/REQ-028_CALL_TRACE.jsonl"
+    ]
+  },
+  "review": {
+    "status": "completed",
+    "decision": "approved",
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/integration/test_call-3-gap-and-opportunity-reasoning.py",
+      "tests/contracts/test_call-3-gap-and-opportunity-reasoning.py",
+      "reports/optimus-prime/planning/evidence/TASK-093/REQ-028_CALL_TRACE_ROW.json"
+    ]
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": true
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "req_028_trace_row_added",
+      "req_028_trace_replay_stable",
+      "req_028_branch_head_evidence_present",
+      "req_025_smoke_green",
+      "req_025_regression_green"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

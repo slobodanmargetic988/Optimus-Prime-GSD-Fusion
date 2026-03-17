@@ -1,0 +1,417 @@
+{
+  "schema_version": "req-033.call-8-constraint-classification-reasoning.v1",
+  "requirement_id": "REQ-033",
+  "call_8_constraint_classification_reasoning_entrypoint": {
+    "runtime_mode": "llm-first",
+    "execution_mode": "long-thinking",
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req033-fixture-r1",
+    "strategy_goal": "Classify Call-8 strategy outputs into planner-safe constraints, preferences, and ideas.",
+    "call_sequence": 8
+  },
+  "processing_behavior": {
+    "strategy": "call-8-constraint-classification-reasoning",
+    "reasoning_mode": "long-thinking",
+    "strict_evidence_discipline": true,
+    "heuristic_summarization_only": false,
+    "context_inputs": {
+      "target_project": {
+        "project_root": "/workspace/projects/optimus-prime",
+        "strategy_goal": "Classify Call-8 strategy outputs into planner-safe constraints, preferences, and ideas.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+        ]
+      },
+      "earth_sweep": {
+        "earth_root": "/workspace/projects/Earth",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/earth/sweeps/2026-03-16/shared-observability.json"
+        ]
+      },
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime orchestrator evidence defines the fallback and escalation ordering semantics consumed by downstream planning."
+        },
+        {
+          "project_id": "shared-observability",
+          "project_root": "/workspace/projects/Earth/shared-observability",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "context_note": "Shared observability evidence captures the citation and trace discipline expected for planner-facing strategy output."
+        }
+      ],
+      "constraint_candidates": [
+        {
+          "candidate_id": "constraint.no-new-managers",
+          "summary": "Do not introduce new managers or orchestration gates while promoting Call-8 strategy output.",
+          "classification": "hard-constraint",
+          "classification_rationale": "The requirement scope lock explicitly forbids net-new managers and gates, so planner must treat this as non-negotiable.",
+          "planner_implication": "Plan only within existing packet sections, execution surfaces, and deterministic validation paths.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/fallback_sequence"
+          ],
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "candidate_id": "constraint.trace-citations-required",
+          "summary": "Planner-consumable strategy output must preserve citation-complete evidence refs and replay-stable source traces.",
+          "classification": "hard-constraint",
+          "classification_rationale": "Without explicit evidence and source traces, planner cannot safely distinguish obligation from suggestion.",
+          "planner_implication": "Every planned task that references strategy must keep evidence refs and source output refs attached.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json#/call_metadata/llm_call_trace_rows"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json",
+            "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "candidate_id": "preference.fallback-aware-ordering",
+          "summary": "Prefer sequencing planner tasks so fallback-backed mitigation lands before escalation-specific follow-up.",
+          "classification": "soft-preference",
+          "classification_rationale": "Fallback-first ordering improves resilience, but planner can still adapt if stronger evidence changes the sequence.",
+          "planner_implication": "Bias the task graph toward mitigation work before escalation-only branches when both remain valid.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/escalation_triggers"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "candidate_id": "idea.shared-constraint-summary",
+          "summary": "A shared constraint summary artifact could be published after planner output stabilizes.",
+          "classification": "speculative-idea",
+          "classification_rationale": "The idea may improve downstream reuse, but current evidence does not make it a required planner obligation.",
+          "planner_implication": "Track as an optional follow-on only after hard constraints and soft preferences are already satisfied.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json#/processing_behavior/recommendation/recommended_opportunities"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        }
+      ],
+      "strategic_claims": []
+    },
+    "context_usage": {
+      "target_project_context_used": true,
+      "earth_sweep_context_used": true,
+      "cross_project_context_used": true,
+      "candidate_ids_considered": [
+        "constraint.no-new-managers",
+        "constraint.trace-citations-required",
+        "preference.fallback-aware-ordering",
+        "idea.shared-constraint-summary"
+      ],
+      "classifications_present": [
+        "hard-constraint",
+        "soft-preference",
+        "speculative-idea"
+      ],
+      "cross_project_projects_considered": [
+        "runtime-orchestrator",
+        "shared-observability"
+      ],
+      "cross_project_refs_used": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json"
+      ],
+      "evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json",
+        "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+      ]
+    },
+    "call_8_reasoning": {
+      "call_sequence": 8,
+      "reasoning_focus": "planner-consumable-constraint-classification",
+      "classification_reasoning": [
+        {
+          "candidate_id": "constraint.no-new-managers",
+          "summary": "Do not introduce new managers or orchestration gates while promoting Call-8 strategy output.",
+          "classification": "hard-constraint",
+          "classification_rationale": "The requirement scope lock explicitly forbids net-new managers and gates, so planner must treat this as non-negotiable.",
+          "planner_implication": "Plan only within existing packet sections, execution surfaces, and deterministic validation paths.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/fallback_sequence"
+          ],
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "candidate_id": "constraint.trace-citations-required",
+          "summary": "Planner-consumable strategy output must preserve citation-complete evidence refs and replay-stable source traces.",
+          "classification": "hard-constraint",
+          "classification_rationale": "Without explicit evidence and source traces, planner cannot safely distinguish obligation from suggestion.",
+          "planner_implication": "Every planned task that references strategy must keep evidence refs and source output refs attached.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json#/call_metadata/llm_call_trace_rows"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json",
+            "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "candidate_id": "preference.fallback-aware-ordering",
+          "summary": "Prefer sequencing planner tasks so fallback-backed mitigation lands before escalation-specific follow-up.",
+          "classification": "soft-preference",
+          "classification_rationale": "Fallback-first ordering improves resilience, but planner can still adapt if stronger evidence changes the sequence.",
+          "planner_implication": "Bias the task graph toward mitigation work before escalation-only branches when both remain valid.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/escalation_triggers"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "candidate_id": "idea.shared-constraint-summary",
+          "summary": "A shared constraint summary artifact could be published after planner output stabilizes.",
+          "classification": "speculative-idea",
+          "classification_rationale": "The idea may improve downstream reuse, but current evidence does not make it a required planner obligation.",
+          "planner_implication": "Track as an optional follow-on only after hard constraints and soft preferences are already satisfied.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json#/processing_behavior/recommendation/recommended_opportunities"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        }
+      ],
+      "hard_constraint_count": 2,
+      "soft_preference_count": 1,
+      "speculative_idea_count": 1
+    },
+    "recommendation": {
+      "decision": "ready-for-planner",
+      "rationale": "Planner-consumable constraints and preferences are explicit, evidence-backed, and separated from speculation.",
+      "confidence": "high",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json",
+        "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+      ],
+      "planner_contract": {
+        "classification_is_explicit": true,
+        "hard_constraints": [
+          {
+            "recommendation_id": "rec-call-8-constraint-no-new-managers",
+            "candidate_id": "constraint.no-new-managers",
+            "summary": "Do not introduce new managers or orchestration gates while promoting Call-8 strategy output.",
+            "planner_implication": "Plan only within existing packet sections, execution surfaces, and deterministic validation paths.",
+            "classification_rationale": "The requirement scope lock explicitly forbids net-new managers and gates, so planner must treat this as non-negotiable.",
+            "source_output_refs": [
+              "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/fallback_sequence"
+            ],
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+            ]
+          },
+          {
+            "recommendation_id": "rec-call-8-constraint-trace-citations-required",
+            "candidate_id": "constraint.trace-citations-required",
+            "summary": "Planner-consumable strategy output must preserve citation-complete evidence refs and replay-stable source traces.",
+            "planner_implication": "Every planned task that references strategy must keep evidence refs and source output refs attached.",
+            "classification_rationale": "Without explicit evidence and source traces, planner cannot safely distinguish obligation from suggestion.",
+            "source_output_refs": [
+              "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json#/call_metadata/llm_call_trace_rows"
+            ],
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/shared-observability.json",
+              "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+            ]
+          }
+        ],
+        "soft_preferences": [
+          {
+            "recommendation_id": "rec-call-8-preference-fallback-aware-ordering",
+            "candidate_id": "preference.fallback-aware-ordering",
+            "summary": "Prefer sequencing planner tasks so fallback-backed mitigation lands before escalation-specific follow-up.",
+            "planner_implication": "Bias the task graph toward mitigation work before escalation-only branches when both remain valid.",
+            "classification_rationale": "Fallback-first ordering improves resilience, but planner can still adapt if stronger evidence changes the sequence.",
+            "source_output_refs": [
+              "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/escalation_triggers"
+            ],
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+            ]
+          }
+        ],
+        "speculative_ideas": [
+          {
+            "recommendation_id": "rec-call-8-idea-shared-constraint-summary",
+            "candidate_id": "idea.shared-constraint-summary",
+            "summary": "A shared constraint summary artifact could be published after planner output stabilizes.",
+            "planner_implication": "Track as an optional follow-on only after hard constraints and soft preferences are already satisfied.",
+            "classification_rationale": "The idea may improve downstream reuse, but current evidence does not make it a required planner obligation.",
+            "source_output_refs": [
+              "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json#/processing_behavior/recommendation/recommended_opportunities"
+            ],
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+              "reports/earth/sweeps/2026-03-16/shared-observability.json"
+            ]
+          }
+        ]
+      },
+      "open_risks": []
+    },
+    "summary": "Call 8 classified 2 hard constraint(s), 1 soft preference(s), and 1 speculative idea(s) for planner consumption."
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "b50cbec6c6a212641394aeee9334669c058d5f462a5fc3e2d6043fe613e18614",
+    "reproducible_call_id": "req033-b50cbec6c6a21264",
+    "canonical_input": {
+      "runtime_mode": "llm-first",
+      "execution_mode": "long-thinking",
+      "target_project_root": "/workspace/projects/optimus-prime",
+      "earth_root": "/workspace/projects/Earth",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req033-fixture-r1",
+      "strategy_goal": "Classify Call-8 strategy outputs into planner-safe constraints, preferences, and ideas.",
+      "call_sequence": 8
+    },
+    "processing_input_sha256": "788383a8b51bcfce219692b4b84d2e2a35a11dd5921c820d8331e67922353514",
+    "processing_call_id": "req033-processing-788383a8b51bcfce",
+    "canonical_processing_input": {
+      "required_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json",
+        "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+      ],
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json"
+      ],
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime orchestrator evidence defines the fallback and escalation ordering semantics consumed by downstream planning."
+        },
+        {
+          "project_id": "shared-observability",
+          "project_root": "/workspace/projects/Earth/shared-observability",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "context_note": "Shared observability evidence captures the citation and trace discipline expected for planner-facing strategy output."
+        }
+      ],
+      "constraint_candidates": [
+        {
+          "candidate_id": "constraint.no-new-managers",
+          "summary": "Do not introduce new managers or orchestration gates while promoting Call-8 strategy output.",
+          "classification": "hard-constraint",
+          "classification_rationale": "The requirement scope lock explicitly forbids net-new managers and gates, so planner must treat this as non-negotiable.",
+          "planner_implication": "Plan only within existing packet sections, execution surfaces, and deterministic validation paths.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/fallback_sequence"
+          ],
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "candidate_id": "constraint.trace-citations-required",
+          "summary": "Planner-consumable strategy output must preserve citation-complete evidence refs and replay-stable source traces.",
+          "classification": "hard-constraint",
+          "classification_rationale": "Without explicit evidence and source traces, planner cannot safely distinguish obligation from suggestion.",
+          "planner_implication": "Every planned task that references strategy must keep evidence refs and source output refs attached.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json#/call_metadata/llm_call_trace_rows"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json",
+            "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "candidate_id": "preference.fallback-aware-ordering",
+          "summary": "Prefer sequencing planner tasks so fallback-backed mitigation lands before escalation-specific follow-up.",
+          "classification": "soft-preference",
+          "classification_rationale": "Fallback-first ordering improves resilience, but planner can still adapt if stronger evidence changes the sequence.",
+          "planner_implication": "Bias the task graph toward mitigation work before escalation-only branches when both remain valid.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/escalation_triggers"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "candidate_id": "idea.shared-constraint-summary",
+          "summary": "A shared constraint summary artifact could be published after planner output stabilizes.",
+          "classification": "speculative-idea",
+          "classification_rationale": "The idea may improve downstream reuse, but current evidence does not make it a required planner obligation.",
+          "planner_implication": "Track as an optional follow-on only after hard constraints and soft preferences are already satisfied.",
+          "source_output_refs": [
+            "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json#/processing_behavior/recommendation/recommended_opportunities"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ]
+        }
+      ],
+      "strategic_claims": []
+    },
+    "llm_call_trace_schema_version": "req-025.llm-call-trace-row.v1",
+    "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
+    "llm_call_trace_sha256": "58890fdc12e66e1d88a645520359164cd5b5f91c30580a587bbc45aa0a5042ac",
+    "llm_call_trace_rows": [
+      {
+        "schema_version": "req-025.llm-call-trace-row.v1",
+        "requirement_id": "REQ-033",
+        "plan_id": "req033-plan-788383a8b51bcfce",
+        "processing_call_id": "req033-processing-788383a8b51bcfce",
+        "call_id": "req033-call-08-b50cbec6c6",
+        "sequence": 8,
+        "call_objective": "Classify Call-8 strategy outputs into hard constraints, soft preferences, and speculative ideas without conflating planner obligations and suggestions.",
+        "depends_on": [],
+        "expected_output": "call_8_constraint_classification_reasoning",
+        "input_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/earth/sweeps/2026-03-16/shared-observability.json",
+          "reports/optimus-prime/planning/evidence/TASK-111/TASK_EVIDENCE.json",
+          "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json#/call_metadata/llm_call_trace_rows",
+          "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json#/processing_behavior/recommendation/recommended_opportunities",
+          "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/escalation_triggers",
+          "strategy/current/samples/REQ-032_call-7-blocker-and-risk-policy-reasoning.sample.json#/processing_behavior/recommendation/fallback_sequence"
+        ],
+        "output_refs": [
+          "req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning",
+          "req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_hard_constraints",
+          "req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_soft_preferences",
+          "req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_speculative_ideas",
+          "req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_planner_contract"
+        ],
+        "handoff_summary": "Call 8 hands off call_8_constraint_classification_reasoning via req033-plan-788383a8b51bcfce::call::req033-call-08-b50cbec6c6::output::call_8_constraint_classification_reasoning with explicit bucket outputs for hard constraints, soft preferences, speculative ideas, and planner contract reuse after classifying 2 hard constraint(s), 1 soft preference(s), and 1 speculative idea(s)."
+      }
+    ]
+  }
+}

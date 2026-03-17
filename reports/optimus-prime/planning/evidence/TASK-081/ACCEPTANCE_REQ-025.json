@@ -1,0 +1,11 @@
+{
+  "req_id": "REQ-025",
+  "summary": "REQ-025 multi-call strategy planning now emits deterministic per-call orchestration trace rows with call objective, input refs, output refs, dependency continuity, and human-facing handoff summaries, and the CLI materializes the rows to strategy/current/llm_call_trace.jsonl.",
+  "evidence_refs": [
+    "strategy/current/llm_call_trace.jsonl",
+    "reports/optimus-prime/planning/evidence/TASK-081/integration_multi-call-strategy-pipeline-planner.output.txt",
+    "reports/optimus-prime/planning/evidence/TASK-081/e2e_strategy_llm_pipeline_smoke.output.txt"
+  ],
+  "consumability_verdict": "pass",
+  "open_risks": []
+}

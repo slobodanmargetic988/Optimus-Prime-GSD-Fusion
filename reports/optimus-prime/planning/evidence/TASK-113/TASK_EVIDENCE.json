@@ -1,0 +1,174 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-113",
+  "requirement_ids": [
+    "REQ-033"
+  ],
+  "updated_at": "2026-03-16T08:56:59Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_033_contract_call_8_constraint_classification_reasoning",
+        "command": "python3 -m pytest tests/contracts/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-113/contract_call-8-constraint-classification-reasoning.output.txt"
+      },
+      {
+        "name": "req_033_integration_call_8_constraint_classification_reasoning",
+        "command": "python3 -m pytest tests/integration/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-113/integration_call-8-constraint-classification-reasoning.output.txt"
+      },
+      {
+        "name": "req_033_e2e_strategy_llm_pipeline_smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.13s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-113/e2e_strategy_llm_pipeline_smoke.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-033",
+        "status": "pass",
+        "details": "Call-8 trace rows now emit replay-stable bucket output refs for hard constraints, soft preferences, speculative ideas, and planner contract reuse.",
+        "evidence_refs": [
+          "scripts/strategy_llm_pipeline.py",
+          "tests/contracts/test_call-8-constraint-classification-reasoning.py",
+          "tests/integration/test_call-8-constraint-classification-reasoning.py",
+          "reports/optimus-prime/planning/evidence/TASK-113/contract_call-8-constraint-classification-reasoning.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-113/integration_call-8-constraint-classification-reasoning.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-113/REQ-033_call-8_trace.jsonl",
+          "strategy/current/samples/REQ-033_call-8-constraint-classification-reasoning.sample.json",
+          "reports/optimus-prime/planning/evidence/TASK-113/ACCEPTANCE_REQ-033.json"
+        ]
+      },
+      {
+        "requirement_id": "REQ-033",
+        "status": "pass",
+        "details": "REQ-033 trace serialization is explicitly verified as JSONL-stable across reruns and the shared multi-call trace artifact remains readable for replay audits.",
+        "evidence_refs": [
+          "tests/integration/test_call-8-constraint-classification-reasoning.py",
+          "reports/optimus-prime/planning/evidence/TASK-113/e2e_strategy_llm_pipeline_smoke.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-113/REQ-033_call-8_trace.jsonl",
+          "strategy/current/llm_call_trace.jsonl",
+          "reports/optimus-prime/planning/evidence/TASK-113/ACCEPTANCE_REQ-033.json"
+        ]
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "req_033_trace_jsonl_replay_stable",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "req_033_mixed_classification_source_ref",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "contracts/req/REQ-033_call-8-constraint-classification-reasoning.md",
+      "examples/fixtures/call-8-constraint-classification-reasoning.json",
+      "strategy/current/samples/REQ-033_call-8-constraint-classification-reasoning.sample.json",
+      "tests/contracts/test_call-8-constraint-classification-reasoning.py",
+      "tests/integration/test_call-8-constraint-classification-reasoning.py",
+      "reports/optimus-prime/planning/evidence/TASK-113/contract_call-8-constraint-classification-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-113/integration_call-8-constraint-classification-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-113/e2e_strategy_llm_pipeline_smoke.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-113/REQ-033_call-8_trace.jsonl",
+      "strategy/current/samples/REQ-033_call-8-constraint-classification-reasoning.sample.json",
+      "strategy/current/llm_call_trace.jsonl",
+      "reports/optimus-prime/planning/evidence/TASK-113/ACCEPTANCE_REQ-033.json",
+      "reports/optimus-prime/planning/evidence/TASK-113/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_033_acceptance_integration",
+        "command": "python3 -m pytest tests/integration/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-113/integration_call-8-constraint-classification-reasoning.output.txt"
+      },
+      {
+        "name": "req_033_acceptance_e2e_smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.13s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-113/e2e_strategy_llm_pipeline_smoke.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-033",
+        "status": "pass",
+        "details": "The acceptance-targeted integration and smoke commands exit 0 while preserving deterministic Call-8 trace row serialization and shared trace-file replay stability.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-113/integration_call-8-constraint-classification-reasoning.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-113/e2e_strategy_llm_pipeline_smoke.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-113/REQ-033_call-8_trace.jsonl",
+          "strategy/current/samples/REQ-033_call-8-constraint-classification-reasoning.sample.json",
+          "strategy/current/llm_call_trace.jsonl",
+          "reports/optimus-prime/planning/evidence/TASK-113/ACCEPTANCE_REQ-033.json"
+        ]
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-033",
+        "passed": true,
+        "notes": "TASK-113 evidence references both the standalone Call-8 trace artifact and strategy/current/llm_call_trace.jsonl, with no unresolved blocker entries."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-113/integration_call-8-constraint-classification-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-113/e2e_strategy_llm_pipeline_smoke.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-113/REQ-033_call-8_trace.jsonl",
+      "strategy/current/samples/REQ-033_call-8-constraint-classification-reasoning.sample.json",
+      "strategy/current/llm_call_trace.jsonl",
+      "reports/optimus-prime/planning/evidence/TASK-113/ACCEPTANCE_REQ-033.json",
+      "reports/optimus-prime/planning/evidence/TASK-113/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/integration/test_call-8-constraint-classification-reasoning.py",
+      "reports/optimus-prime/planning/evidence/TASK-113/REQ-033_call-8_trace.jsonl",
+      "strategy/current/samples/REQ-033_call-8-constraint-classification-reasoning.sample.json",
+      "strategy/current/llm_call_trace.jsonl",
+      "reports/optimus-prime/planning/evidence/TASK-113/TASK_EVIDENCE.json"
+    ]
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_review",
+    "reason_codes": [
+      "req_033_trace_bucket_output_refs_green",
+      "req_033_trace_jsonl_replay_stable_green",
+      "req_033_acceptance_commands_green",
+      "task_113_trace_artifacts_recorded"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

@@ -1,0 +1,446 @@
+{
+  "requirement_id": "REQ-017",
+  "surface": "overlap_and_conflict_detection",
+  "schema_version": "req-017.overlap-and-conflict-detection.v1",
+  "evaluated_at": "2026-03-15T03:10:00Z",
+  "active_project_id": "optimus-prime-gsd-fusion",
+  "related_project_ids": [
+    "earth-core-runtime",
+    "shared-observability"
+  ],
+  "overlap_index": {
+    "initiative_ids": [
+      "earth-core-runtime::initiative-runtime-signal-sunset",
+      "optimus-prime-gsd-fusion::initiative-runtime-signal-router",
+      "shared-observability::initiative-dispatch-safety-hold",
+      "shared-observability::initiative-telemetry-archival"
+    ],
+    "capability_tags_considered": [
+      "dispatch-safety",
+      "event-stream",
+      "runtime-signals",
+      "telemetry",
+      "telemetry-archive"
+    ]
+  },
+  "overlapping_initiatives": [
+    {
+      "overlap_id": "overlap-001",
+      "initiatives": [
+        {
+          "initiative_id": "initiative-runtime-signal-sunset",
+          "project_id": "earth-core-runtime",
+          "roadmap_direction": "Sunset legacy runtime-signals path and migrate to consolidated event-stream ingestion.",
+          "direction_signal": "sunset"
+        },
+        {
+          "initiative_id": "initiative-runtime-signal-router",
+          "project_id": "optimus-prime-gsd-fusion",
+          "roadmap_direction": "Advance runtime-signal-router rollout for deterministic cycle dispatch.",
+          "direction_signal": "advance"
+        }
+      ],
+      "shared_capability_tags": [
+        "runtime-signals"
+      ],
+      "overlap_window": {
+        "start_week": 12,
+        "end_week": 18
+      },
+      "evidence_refs": [
+        "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+        "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
+        "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json",
+        "strategy/current/samples/REQ-006_runtime-telemetry-artifact-sweep-across-earth.sample.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json"
+      ],
+      "out_of_scope_evidence_refs": [
+        "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+        "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json",
+        "strategy/current/samples/REQ-006_runtime-telemetry-artifact-sweep-across-earth.sample.json"
+      ]
+    },
+    {
+      "overlap_id": "overlap-002",
+      "initiatives": [
+        {
+          "initiative_id": "initiative-runtime-signal-router",
+          "project_id": "optimus-prime-gsd-fusion",
+          "roadmap_direction": "Advance runtime-signal-router rollout for deterministic cycle dispatch.",
+          "direction_signal": "advance"
+        },
+        {
+          "initiative_id": "initiative-dispatch-safety-hold",
+          "project_id": "shared-observability",
+          "roadmap_direction": "Hold dispatch-safety exporter changes until telemetry budget controls settle.",
+          "direction_signal": "hold"
+        }
+      ],
+      "shared_capability_tags": [
+        "dispatch-safety"
+      ],
+      "overlap_window": {
+        "start_week": 14,
+        "end_week": 18
+      },
+      "evidence_refs": [
+        "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json",
+        "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ],
+      "out_of_scope_evidence_refs": [
+        "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+        "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json"
+      ]
+    }
+  ],
+  "conflicting_directions": [
+    {
+      "conflict_id": "conflict-001",
+      "overlap_id": "overlap-001",
+      "initiatives": [
+        {
+          "initiative_id": "initiative-runtime-signal-sunset",
+          "project_id": "earth-core-runtime",
+          "roadmap_direction": "Sunset legacy runtime-signals path and migrate to consolidated event-stream ingestion.",
+          "direction_signal": "sunset"
+        },
+        {
+          "initiative_id": "initiative-runtime-signal-router",
+          "project_id": "optimus-prime-gsd-fusion",
+          "roadmap_direction": "Advance runtime-signal-router rollout for deterministic cycle dispatch.",
+          "direction_signal": "advance"
+        }
+      ],
+      "shared_capability_tags": [
+        "runtime-signals"
+      ],
+      "conflict_reason": "direction_signals_conflict_on_overlapping_capability_window",
+      "risk_level": "high",
+      "resolution_options": [
+        {
+          "option_id": "align_direction_before_commit",
+          "summary": "Align roadmap direction signals across both projects before roadmap lock.",
+          "risk_tradeoff": "Lowers cross-project churn risk but may delay one initiative during direction convergence."
+        },
+        {
+          "option_id": "timebox_dual_track_validation",
+          "summary": "Run a short dual-track validation window before final direction selection.",
+          "risk_tradeoff": "Preserves optionality but increases near-term coordination and validation cost."
+        },
+        {
+          "option_id": "split_interface_boundaries",
+          "summary": "Split capability ownership boundaries and enforce explicit interface contracts.",
+          "risk_tradeoff": "Allows independent progress but increases long-term maintenance and integration overhead."
+        }
+      ],
+      "evidence_refs": [
+        "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+        "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
+        "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json",
+        "strategy/current/samples/REQ-006_runtime-telemetry-artifact-sweep-across-earth.sample.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json"
+      ],
+      "out_of_scope_evidence_refs": [
+        "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+        "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json",
+        "strategy/current/samples/REQ-006_runtime-telemetry-artifact-sweep-across-earth.sample.json"
+      ]
+    },
+    {
+      "conflict_id": "conflict-002",
+      "overlap_id": "overlap-002",
+      "initiatives": [
+        {
+          "initiative_id": "initiative-runtime-signal-router",
+          "project_id": "optimus-prime-gsd-fusion",
+          "roadmap_direction": "Advance runtime-signal-router rollout for deterministic cycle dispatch.",
+          "direction_signal": "advance"
+        },
+        {
+          "initiative_id": "initiative-dispatch-safety-hold",
+          "project_id": "shared-observability",
+          "roadmap_direction": "Hold dispatch-safety exporter changes until telemetry budget controls settle.",
+          "direction_signal": "hold"
+        }
+      ],
+      "shared_capability_tags": [
+        "dispatch-safety"
+      ],
+      "conflict_reason": "direction_signals_conflict_on_overlapping_capability_window",
+      "risk_level": "medium",
+      "resolution_options": [
+        {
+          "option_id": "align_direction_before_commit",
+          "summary": "Align roadmap direction signals across both projects before roadmap lock.",
+          "risk_tradeoff": "Reduces integration ambiguity but can defer near-term throughput while teams realign."
+        },
+        {
+          "option_id": "timebox_dual_track_validation",
+          "summary": "Run a short dual-track validation window before final direction selection.",
+          "risk_tradeoff": "Preserves optionality but increases near-term coordination and validation cost."
+        },
+        {
+          "option_id": "split_interface_boundaries",
+          "summary": "Split capability ownership boundaries and enforce explicit interface contracts.",
+          "risk_tradeoff": "Allows independent progress but increases long-term maintenance and integration overhead."
+        }
+      ],
+      "evidence_refs": [
+        "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json",
+        "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ],
+      "out_of_scope_evidence_refs": [
+        "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+        "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json"
+      ]
+    }
+  ],
+  "cross_project_context": {
+    "cross_project_context_used": true,
+    "earth_sweep_context_used": true,
+    "projects_considered": [
+      "earth-core-runtime",
+      "shared-observability"
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
+      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+    ],
+    "related_project_context": [
+      {
+        "project_id": "earth-core-runtime",
+        "context_note": "Earth sweep shows runtime-signals migration pressure during the same delivery window.",
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json"
+        ],
+        "out_of_scope_evidence_refs": [],
+        "overlap_ids": [
+          "overlap-001"
+        ],
+        "conflict_ids": [
+          "conflict-001"
+        ]
+      },
+      {
+        "project_id": "shared-observability",
+        "context_note": "Observability budget controls intersect dispatch-safety rollout timing.",
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "out_of_scope_evidence_refs": [],
+        "overlap_ids": [
+          "overlap-002"
+        ],
+        "conflict_ids": [
+          "conflict-002"
+        ]
+      }
+    ],
+    "unresolved_direction_ideas": [
+      {
+        "idea_id": "idea-shared-observability-budget-gate",
+        "project_id": "shared-observability",
+        "summary": "Confirm whether telemetry budget gating should defer dispatch-safety rollout until exporter cost controls land.",
+        "related_conflict_ids": [
+          "conflict-002"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "out_of_scope_evidence_refs": []
+      }
+    ]
+  },
+  "evidence_refs": {
+    "overlap_detection": [
+      "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+      "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
+      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json",
+      "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json",
+      "strategy/current/samples/REQ-006_runtime-telemetry-artifact-sweep-across-earth.sample.json"
+    ],
+    "earth_sweep": [
+      "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
+      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+    ],
+    "recommendation": [
+      "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
+      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+    ],
+    "out_of_scope": [
+      "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+      "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json",
+      "strategy/current/samples/REQ-006_runtime-telemetry-artifact-sweep-across-earth.sample.json"
+    ]
+  },
+  "recommendation": {
+    "decision": "planning_with_open_risks",
+    "summary": "2 evidence-backed conflict resolution recommendation(s); 2 cross-project obligation(s); 1 open risk(s).",
+    "conflict_resolution_recommendations": [
+      {
+        "recommendation_id": "resolution-conflict-001",
+        "conflict_id": "conflict-001",
+        "summary": "Resolve conflict-001 across earth-core-runtime, optimus-prime-gsd-fusion for shared capabilities runtime-signals before weeks 12-18 commit.",
+        "project_ids": [
+          "earth-core-runtime",
+          "optimus-prime-gsd-fusion"
+        ],
+        "shared_capability_tags": [
+          "runtime-signals"
+        ],
+        "overlap_window": {
+          "start_week": 12,
+          "end_week": 18
+        },
+        "risk_level": "high",
+        "resolution_options": [
+          {
+            "option_id": "align_direction_before_commit",
+            "summary": "Align roadmap direction signals across both projects before roadmap lock.",
+            "risk_tradeoff": "Lowers cross-project churn risk but may delay one initiative during direction convergence."
+          },
+          {
+            "option_id": "timebox_dual_track_validation",
+            "summary": "Run a short dual-track validation window before final direction selection.",
+            "risk_tradeoff": "Preserves optionality but increases near-term coordination and validation cost."
+          },
+          {
+            "option_id": "split_interface_boundaries",
+            "summary": "Split capability ownership boundaries and enforce explicit interface contracts.",
+            "risk_tradeoff": "Allows independent progress but increases long-term maintenance and integration overhead."
+          }
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json"
+        ],
+        "out_of_scope_evidence_refs": [
+          "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+          "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json",
+          "strategy/current/samples/REQ-006_runtime-telemetry-artifact-sweep-across-earth.sample.json"
+        ]
+      },
+      {
+        "recommendation_id": "resolution-conflict-002",
+        "conflict_id": "conflict-002",
+        "summary": "Resolve conflict-002 across optimus-prime-gsd-fusion, shared-observability for shared capabilities dispatch-safety before weeks 14-18 commit.",
+        "project_ids": [
+          "optimus-prime-gsd-fusion",
+          "shared-observability"
+        ],
+        "shared_capability_tags": [
+          "dispatch-safety"
+        ],
+        "overlap_window": {
+          "start_week": 14,
+          "end_week": 18
+        },
+        "risk_level": "medium",
+        "resolution_options": [
+          {
+            "option_id": "align_direction_before_commit",
+            "summary": "Align roadmap direction signals across both projects before roadmap lock.",
+            "risk_tradeoff": "Reduces integration ambiguity but can defer near-term throughput while teams realign."
+          },
+          {
+            "option_id": "timebox_dual_track_validation",
+            "summary": "Run a short dual-track validation window before final direction selection.",
+            "risk_tradeoff": "Preserves optionality but increases near-term coordination and validation cost."
+          },
+          {
+            "option_id": "split_interface_boundaries",
+            "summary": "Split capability ownership boundaries and enforce explicit interface contracts.",
+            "risk_tradeoff": "Allows independent progress but increases long-term maintenance and integration overhead."
+          }
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "out_of_scope_evidence_refs": [
+          "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
+          "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json"
+        ]
+      }
+    ],
+    "cross_project_obligations": [
+      {
+        "obligation_id": "obligation-conflict-001",
+        "conflict_id": "conflict-001",
+        "project_ids": [
+          "earth-core-runtime",
+          "optimus-prime-gsd-fusion"
+        ],
+        "summary": "Resolve conflict-001 across earth-core-runtime, optimus-prime-gsd-fusion for shared capabilities runtime-signals before weeks 12-18 commit.",
+        "risk_level": "high",
+        "resolution_option_ids": [
+          "align_direction_before_commit",
+          "timebox_dual_track_validation",
+          "split_interface_boundaries"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json"
+        ]
+      },
+      {
+        "obligation_id": "obligation-conflict-002",
+        "conflict_id": "conflict-002",
+        "project_ids": [
+          "optimus-prime-gsd-fusion",
+          "shared-observability"
+        ],
+        "summary": "Resolve conflict-002 across optimus-prime-gsd-fusion, shared-observability for shared capabilities dispatch-safety before weeks 14-18 commit.",
+        "risk_level": "medium",
+        "resolution_option_ids": [
+          "align_direction_before_commit",
+          "timebox_dual_track_validation",
+          "split_interface_boundaries"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ]
+      }
+    ],
+    "open_risks": [
+      {
+        "risk_id": "risk-idea-shared-observability-budget-gate",
+        "reason": "unresolved_direction_idea_open_risk",
+        "reason_code": "unresolved_direction_idea_open_risk",
+        "project_id": "shared-observability",
+        "summary": "Confirm whether telemetry budget gating should defer dispatch-safety rollout until exporter cost controls land.",
+        "related_conflict_ids": [
+          "conflict-002"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "out_of_scope_evidence_refs": []
+      }
+    ],
+    "evidence_refs": [
+      "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
+      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+    ]
+  },
+  "decision": "conflicts_detected",
+  "summary": "2 overlap(s) detected; 2 conflict(s); 1 open risk(s)."
+}

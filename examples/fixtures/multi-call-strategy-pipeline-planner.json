@@ -139,7 +139,8 @@
             ],
             "next_step": "Maintain canonical processing input coverage in integration checks."
           }
-        ]
+        ],
+        "strategic_claims": []
       },
       "context_usage": {
         "target_project_context_used": true,
@@ -165,7 +166,7 @@
         ]
       },
       "pipeline_plan": {
-        "plan_id": "req025-plan-aca92a93fc6ae4f6",
+        "plan_id": "req025-plan-826fbe87704c0dde",
         "planner_mode": "multi-call-reasoning-chain",
         "total_calls": 4,
         "required_evidence_refs": [
@@ -300,8 +301,8 @@
         "strategy_goal": "Plan a multi-call reasoning chain for REQ-025 anchored delivery.",
         "call_depth": 4
       },
-      "processing_input_sha256": "aca92a93fc6ae4f62d11eac83659e3f7e4c1712e586d775722651a0f32ff1d2a",
-      "processing_call_id": "req025-processing-aca92a93fc6ae4f6",
+      "processing_input_sha256": "826fbe87704c0dde038de76e77216f50f4976433521ab1f29f0295e4805069cd",
+      "processing_call_id": "req025-processing-826fbe87704c0dde",
       "canonical_processing_input": {
         "call_depth": 4,
         "required_evidence_refs": [
@@ -351,6 +352,7 @@
             "next_step": "Maintain canonical processing input coverage in integration checks."
           }
         ],
+        "strategic_claims": [],
         "stage_blueprints": [
           {
             "purpose": "Frame REQ-025 scope and evidence anchors.",
@@ -372,13 +374,13 @@
       },
       "llm_call_trace_schema_version": "req-025.llm-call-trace-row.v1",
       "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
-      "llm_call_trace_sha256": "3b2bde72246fbfcfd2972fd5a3cc8b0da7d2a8c5b10ac42e9e7e61f6a095626b",
+      "llm_call_trace_sha256": "fede698990c7147a72032ed19a4e92e28c2bacb9d84249584dc2d164525fa92d",
       "llm_call_trace_rows": [
         {
           "schema_version": "req-025.llm-call-trace-row.v1",
           "requirement_id": "REQ-025",
-          "plan_id": "req025-plan-aca92a93fc6ae4f6",
-          "processing_call_id": "req025-processing-aca92a93fc6ae4f6",
+          "plan_id": "req025-plan-826fbe87704c0dde",
+          "processing_call_id": "req025-processing-826fbe87704c0dde",
           "call_id": "req025-call-01-8171b95589",
           "sequence": 1,
           "call_objective": "Frame REQ-025 scope and evidence anchors.",
@@ -389,15 +391,15 @@
             "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
           ],
           "output_refs": [
-            "req025-plan-aca92a93fc6ae4f6::call::req025-call-01-8171b95589::output::scope_frame"
+            "req025-plan-826fbe87704c0dde::call::req025-call-01-8171b95589::output::scope_frame"
           ],
-          "handoff_summary": "Call 1 hands off scope_frame via req025-plan-aca92a93fc6ae4f6::call::req025-call-01-8171b95589::output::scope_frame to req025-call-02-68e82b4d99 after consuming 2 input refs."
+          "handoff_summary": "Call 1 hands off scope_frame via req025-plan-826fbe87704c0dde::call::req025-call-01-8171b95589::output::scope_frame to req025-call-02-68e82b4d99 after consuming 2 input refs."
         },
         {
           "schema_version": "req-025.llm-call-trace-row.v1",
           "requirement_id": "REQ-025",
-          "plan_id": "req025-plan-aca92a93fc6ae4f6",
-          "processing_call_id": "req025-processing-aca92a93fc6ae4f6",
+          "plan_id": "req025-plan-826fbe87704c0dde",
+          "processing_call_id": "req025-processing-826fbe87704c0dde",
           "call_id": "req025-call-02-68e82b4d99",
           "sequence": 2,
           "call_objective": "Expand multi-call strategy options for heavy-thinking execution.",
@@ -408,18 +410,18 @@
           "input_refs": [
             "reports/earth/sweeps/2026-03-15/portfolio.json",
             "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json",
-            "req025-plan-aca92a93fc6ae4f6::call::req025-call-01-8171b95589::output::scope_frame"
+            "req025-plan-826fbe87704c0dde::call::req025-call-01-8171b95589::output::scope_frame"
           ],
           "output_refs": [
-            "req025-plan-aca92a93fc6ae4f6::call::req025-call-02-68e82b4d99::output::option_set"
+            "req025-plan-826fbe87704c0dde::call::req025-call-02-68e82b4d99::output::option_set"
           ],
-          "handoff_summary": "Call 2 hands off option_set via req025-plan-aca92a93fc6ae4f6::call::req025-call-02-68e82b4d99::output::option_set to req025-call-03-26c1ba1b8d after consuming 3 input refs."
+          "handoff_summary": "Call 2 hands off option_set via req025-plan-826fbe87704c0dde::call::req025-call-02-68e82b4d99::output::option_set to req025-call-03-26c1ba1b8d after consuming 3 input refs."
         },
         {
           "schema_version": "req-025.llm-call-trace-row.v1",
           "requirement_id": "REQ-025",
-          "plan_id": "req025-plan-aca92a93fc6ae4f6",
-          "processing_call_id": "req025-processing-aca92a93fc6ae4f6",
+          "plan_id": "req025-plan-826fbe87704c0dde",
+          "processing_call_id": "req025-processing-826fbe87704c0dde",
           "call_id": "req025-call-03-26c1ba1b8d",
           "sequence": 3,
           "call_objective": "Resolve dependency ordering and evidence sufficiency per call.",
@@ -430,18 +432,18 @@
           "input_refs": [
             "reports/earth/sweeps/2026-03-15/portfolio.json",
             "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json",
-            "req025-plan-aca92a93fc6ae4f6::call::req025-call-02-68e82b4d99::output::option_set"
+            "req025-plan-826fbe87704c0dde::call::req025-call-02-68e82b4d99::output::option_set"
           ],
           "output_refs": [
-            "req025-plan-aca92a93fc6ae4f6::call::req025-call-03-26c1ba1b8d::output::dependency_validated_pipeline"
+            "req025-plan-826fbe87704c0dde::call::req025-call-03-26c1ba1b8d::output::dependency_validated_pipeline"
           ],
-          "handoff_summary": "Call 3 hands off dependency_validated_pipeline via req025-plan-aca92a93fc6ae4f6::call::req025-call-03-26c1ba1b8d::output::dependency_validated_pipeline to req025-call-04-76d5d88f1a after consuming 3 input refs."
+          "handoff_summary": "Call 3 hands off dependency_validated_pipeline via req025-plan-826fbe87704c0dde::call::req025-call-03-26c1ba1b8d::output::dependency_validated_pipeline to req025-call-04-76d5d88f1a after consuming 3 input refs."
         },
         {
           "schema_version": "req-025.llm-call-trace-row.v1",
           "requirement_id": "REQ-025",
-          "plan_id": "req025-plan-aca92a93fc6ae4f6",
-          "processing_call_id": "req025-processing-aca92a93fc6ae4f6",
+          "plan_id": "req025-plan-826fbe87704c0dde",
+          "processing_call_id": "req025-processing-826fbe87704c0dde",
           "call_id": "req025-call-04-76d5d88f1a",
           "sequence": 4,
           "call_objective": "Finalize executable pipeline summary with explicit outputs.",
@@ -452,12 +454,12 @@
           "input_refs": [
             "reports/earth/sweeps/2026-03-15/portfolio.json",
             "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json",
-            "req025-plan-aca92a93fc6ae4f6::call::req025-call-03-26c1ba1b8d::output::dependency_validated_pipeline"
+            "req025-plan-826fbe87704c0dde::call::req025-call-03-26c1ba1b8d::output::dependency_validated_pipeline"
           ],
           "output_refs": [
-            "req025-plan-aca92a93fc6ae4f6::call::req025-call-04-76d5d88f1a::output::final_pipeline_plan"
+            "req025-plan-826fbe87704c0dde::call::req025-call-04-76d5d88f1a::output::final_pipeline_plan"
           ],
-          "handoff_summary": "Call 4 hands off final_pipeline_plan via req025-plan-aca92a93fc6ae4f6::call::req025-call-04-76d5d88f1a::output::final_pipeline_plan as the terminal planner output with recommendation decision proceed."
+          "handoff_summary": "Call 4 hands off final_pipeline_plan via req025-plan-826fbe87704c0dde::call::req025-call-04-76d5d88f1a::output::final_pipeline_plan as the terminal planner output with recommendation decision proceed."
         }
       ]
     }

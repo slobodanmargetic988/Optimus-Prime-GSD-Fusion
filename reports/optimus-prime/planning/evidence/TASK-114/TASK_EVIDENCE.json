@@ -1,0 +1,205 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-114",
+  "requirement_ids": [
+    "REQ-033"
+  ],
+  "updated_at": "2026-03-16T09:19:41Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_033_contract_call_8_constraint_classification_reasoning_run1",
+        "command": "python3 -m pytest tests/contracts/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-114/contract_call-8-constraint-classification-reasoning_run1.output.txt"
+      },
+      {
+        "name": "req_033_integration_call_8_constraint_classification_reasoning_run1",
+        "command": "python3 -m pytest tests/integration/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-114/integration_call-8-constraint-classification-reasoning_run1.output.txt"
+      },
+      {
+        "name": "req_033_hardening_call_8_constraint_classification_reasoning_run1",
+        "command": "python3 -m pytest tests/hardening/test_call-8-constraint-classification-reasoning_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-114/hardening_call-8-constraint-classification-reasoning_run1.output.txt"
+      },
+      {
+        "name": "req_033_contract_call_8_constraint_classification_reasoning_run2",
+        "command": "python3 -m pytest tests/contracts/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-114/contract_call-8-constraint-classification-reasoning_run2.output.txt"
+      },
+      {
+        "name": "req_033_integration_call_8_constraint_classification_reasoning_run2",
+        "command": "python3 -m pytest tests/integration/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-114/integration_call-8-constraint-classification-reasoning_run2.output.txt"
+      },
+      {
+        "name": "req_033_hardening_call_8_constraint_classification_reasoning_run2",
+        "command": "python3 -m pytest tests/hardening/test_call-8-constraint-classification-reasoning_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-114/hardening_call-8-constraint-classification-reasoning_run2.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-033",
+        "status": "pass",
+        "details": "REQ-033 now emits deterministic cross_call_contradiction and uncited_strategic_claim open-risk rows with actionable evidence refs for replay diagnostics.",
+        "evidence_refs": [
+          "scripts/strategy_llm_pipeline.py",
+          "tests/hardening/test_call-8-constraint-classification-reasoning_hardening.py",
+          "reports/optimus-prime/planning/evidence/TASK-114/hardening_call-8-constraint-classification-reasoning_run1.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-114/hardening_call-8-constraint-classification-reasoning_run2.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-114/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "requirement_id": "REQ-033",
+        "status": "pass",
+        "details": "Call-8 planner-contract rows now carry replay-stable recommendation_id values and deterministic ordering across reordered input replays.",
+        "evidence_refs": [
+          "scripts/strategy_llm_pipeline.py",
+          "tests/contracts/test_call-8-constraint-classification-reasoning.py",
+          "tests/integration/test_call-8-constraint-classification-reasoning.py",
+          "tests/hardening/test_call-8-constraint-classification-reasoning_hardening.py",
+          "strategy/current/samples/REQ-033_call-8-constraint-classification-reasoning.sample.json",
+          "examples/fixtures/call-8-constraint-classification-reasoning.json",
+          "reports/optimus-prime/planning/evidence/TASK-114/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "cross_call_contradiction_between_analysis_and_synthesis_outputs",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "uncited_strategic_claim_blocked_by_citation_discipline",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "call_chain_replay_stable_recommendation_ids_and_ordering",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "contracts/req/REQ-033_call-8-constraint-classification-reasoning.md",
+      "examples/fixtures/call-8-constraint-classification-reasoning.json",
+      "strategy/current/samples/REQ-033_call-8-constraint-classification-reasoning.sample.json",
+      "tests/contracts/test_call-8-constraint-classification-reasoning.py",
+      "tests/integration/test_call-8-constraint-classification-reasoning.py",
+      "tests/hardening/test_call-8-constraint-classification-reasoning_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-114/contract_call-8-constraint-classification-reasoning_run1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/integration_call-8-constraint-classification-reasoning_run1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/hardening_call-8-constraint-classification-reasoning_run1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/contract_call-8-constraint-classification-reasoning_run2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/integration_call-8-constraint-classification-reasoning_run2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/hardening_call-8-constraint-classification-reasoning_run2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_033_contract_run_pair",
+        "command": "python3 -m pytest tests/contracts/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "run1=4 passed in 0.01s; run2=4 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-114/contract_call-8-constraint-classification-reasoning_run2.output.txt"
+      },
+      {
+        "name": "req_033_integration_run_pair",
+        "command": "python3 -m pytest tests/integration/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "run1=3 passed in 0.01s; run2=3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-114/integration_call-8-constraint-classification-reasoning_run2.output.txt"
+      },
+      {
+        "name": "req_033_hardening_run_pair",
+        "command": "python3 -m pytest tests/hardening/test_call-8-constraint-classification-reasoning_hardening.py -q",
+        "exit_code": 0,
+        "summary": "run1=3 passed in 0.01s; run2=3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-114/hardening_call-8-constraint-classification-reasoning_run2.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-033",
+        "status": "pass",
+        "details": "All contract, integration, and hardening suites exited 0 in consecutive runs and each run-pair produced identical output file digests.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-114/contract_call-8-constraint-classification-reasoning_run1.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-114/contract_call-8-constraint-classification-reasoning_run2.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-114/integration_call-8-constraint-classification-reasoning_run1.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-114/integration_call-8-constraint-classification-reasoning_run2.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-114/hardening_call-8-constraint-classification-reasoning_run1.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-114/hardening_call-8-constraint-classification-reasoning_run2.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-114/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-033",
+        "passed": true,
+        "notes": "TASK-114 records empty unresolved_blockers arrays for contradiction, citation-discipline, and replay-ordering edge cases."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-114/contract_call-8-constraint-classification-reasoning_run1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/contract_call-8-constraint-classification-reasoning_run2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/integration_call-8-constraint-classification-reasoning_run1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/integration_call-8-constraint-classification-reasoning_run2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/hardening_call-8-constraint-classification-reasoning_run1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/hardening_call-8-constraint-classification-reasoning_run2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-114/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/contracts/test_call-8-constraint-classification-reasoning.py",
+      "tests/integration/test_call-8-constraint-classification-reasoning.py",
+      "tests/hardening/test_call-8-constraint-classification-reasoning_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-114/TASK_EVIDENCE.json"
+    ]
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_review",
+    "reason_codes": [
+      "req_033_cross_call_contradiction_reason_code_green",
+      "req_033_uncited_strategic_claim_reason_code_green",
+      "req_033_replay_stable_recommendation_ids_green",
+      "task_114_double_run_checks_green"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}
