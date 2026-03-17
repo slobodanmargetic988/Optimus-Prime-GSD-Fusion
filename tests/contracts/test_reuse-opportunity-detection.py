@@ -29,6 +29,7 @@ def test_req_016_detects_reuse_opportunities_with_adoption_and_constraints() -> 
         "reuse_index",
         "reuse_recommendations",
         "no_reuse_detected",
+        "open_risks",
         "evidence_refs",
         "decision",
         "summary",
@@ -38,6 +39,7 @@ def test_req_016_detects_reuse_opportunities_with_adoption_and_constraints() -> 
     assert output["schema_version"] == "req-016.reuse-opportunity-detection.v1"
     assert output["evaluated_at"] == "2026-03-15T01:30:00Z"
     assert output["decision"] == "partial_reuse_recommended"
+    assert output["open_risks"] == []
 
     recommendations = output["reuse_recommendations"]
     assert len(recommendations) == 1
@@ -60,6 +62,7 @@ def test_req_016_detects_reuse_opportunities_with_adoption_and_constraints() -> 
             "reason": "no_compatible_existing_functionality",
         }
     ]
+    assert output["summary"] == "1 capability reuse recommendation(s); 1 capability gap(s); 0 open risk(s)."
 
 
 def test_req_016_sample_matches_detection_output_for_fixture() -> None:
@@ -81,6 +84,7 @@ def test_req_016_contract_doc_includes_sample_structure_reference() -> None:
         "reuse_index",
         "reuse_recommendations",
         "no_reuse_detected",
+        "open_risks",
         "evidence_refs",
         "decision",
         "summary",

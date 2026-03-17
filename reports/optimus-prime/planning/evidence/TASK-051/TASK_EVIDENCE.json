@@ -1,0 +1,147 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-canary-001",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-051",
+  "requirement_ids": [
+    "REQ-016"
+  ],
+  "updated_at": "2026-03-15T23:17:55Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contract_reuse_opportunity_detection_run_1",
+        "command": "python3 -m pytest tests/contracts/test_reuse-opportunity-detection.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_1.json"
+      },
+      {
+        "name": "integration_reuse_opportunity_detection_run_1",
+        "command": "python3 -m pytest tests/integration/test_reuse-opportunity-detection.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_1.json"
+      },
+      {
+        "name": "hardening_reuse_opportunity_detection_run_1",
+        "command": "python3 -m pytest tests/hardening/test_reuse-opportunity-detection_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_1.json"
+      },
+      {
+        "name": "contract_reuse_opportunity_detection_run_2",
+        "command": "python3 -m pytest tests/contracts/test_reuse-opportunity-detection.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.01s"
+        ,
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_2.json"
+      },
+      {
+        "name": "integration_reuse_opportunity_detection_run_2",
+        "command": "python3 -m pytest tests/integration/test_reuse-opportunity-detection.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_2.json"
+      },
+      {
+        "name": "hardening_reuse_opportunity_detection_run_2",
+        "command": "python3 -m pytest tests/hardening/test_reuse-opportunity-detection_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_2.json"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-016",
+        "status": "pass",
+        "details": "Reuse detection still recommends adoption paths and compatibility constraints before reimplementation, with empty open_risks on the canonical fixture across consecutive deterministic check runs.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_1.json",
+          "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_2.json"
+        ]
+      },
+      {
+        "requirement_id": "REQ-016",
+        "edge_case": "stale_earth_sweep_source_artifact",
+        "status": "pass",
+        "details": "Stale Earth sweep source artifacts emit deterministic reason_code 'stale_earth_sweep_source_artifact' with stable required_evidence_refs.",
+        "evidence_refs": [
+          "tests/hardening/test_reuse-opportunity-detection_hardening.py",
+          "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_1.json",
+          "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_2.json"
+        ]
+      },
+      {
+        "requirement_id": "REQ-016",
+        "edge_case": "missing_mission_scope_or_peer_project_doc",
+        "status": "pass",
+        "details": "Missing mission, scope, and peer-project documents emit explicit deterministic reason codes and actionable required_evidence_refs.",
+        "evidence_refs": [
+          "tests/hardening/test_reuse-opportunity-detection_hardening.py",
+          "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_1.json",
+          "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_2.json"
+        ]
+      },
+      {
+        "requirement_id": "REQ-016",
+        "edge_case": "context_bundle_replay_stability",
+        "status": "pass",
+        "details": "REQ-016 context bundle serialization is replay-stable across repeated runs with reordered duplicate-prone inputs.",
+        "evidence_refs": [
+          "tests/hardening/test_reuse-opportunity-detection_hardening.py",
+          "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_1.json",
+          "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_2.json"
+        ]
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "contracts/req/REQ-016_reuse-opportunity-detection.md",
+      "scripts/strategy_context_sweep.py",
+      "scripts/strategy_context_workers/w07.py",
+      "strategy/current/samples/REQ-016_reuse-opportunity-detection.sample.json",
+      "tests/contracts/test_reuse-opportunity-detection.py",
+      "tests/hardening/test_reuse-opportunity-detection_hardening.py",
+      "tests/integration/test_reuse-opportunity-detection.py",
+      "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_1.json",
+      "reports/optimus-prime/planning/evidence/TASK-051/check_bundle_run_2.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_016_contract_green_twice",
+      "req_016_integration_green_twice",
+      "req_016_hardening_green_twice",
+      "req_016_reason_codes_deterministic",
+      "req_016_context_bundle_serialization_replay_stable"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

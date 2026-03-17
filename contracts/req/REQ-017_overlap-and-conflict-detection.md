@@ -1,83 +1,98 @@
 # REQ-017 Overlap and Conflict Detection
 
 ## Requirement intent
-- Strategy detects overlapping initiatives across the active project and related projects.
-- Strategy detects conflicting roadmap directions for overlaps that share capability scope and execution window.
-- Conflict output includes recommended resolution options with explicit risk tradeoffs.
-- Scope is limited to overlap/conflict detection fields tied to these anchors.
+- Strategy detects overlapping initiatives across related projects (shared domains + overlapping time window).
+- Strategy detects conflicting roadmap direction signals across related projects (same topic + differing stances).
+- Each detected conflict includes recommended `resolution_options` with explicit risk tradeoffs.
+- Scope is limited to these anchors; no net-new packet sections, managers, or orchestration gates are introduced.
+
+## Interface surface
+Implementation file:
+- `scripts/strategy_context_sweep.py`
+
+Builder:
+- `build_req_017_overlap_and_conflict_detection(...) -> dict`
+
+Validator:
+- `validate_req_017_overlap_and_conflict_detection(payload) -> list[str]`
+
+Deterministic bundle serializer (for `source.context_bundle_sha256`):
+- `serialize_req_017_overlap_and_conflict_bundle(payload) -> str`
 
 ## Input contract
-`scripts/strategy_context_sweep.py::detect_overlap_and_conflicts` accepts one object with:
-- `active_project_id` (string, required)
-- `related_project_ids` (non-empty array of strings, required)
-- `initiatives` (non-empty array, required)
+The builder accepts:
+- `target_project` (object, required)
+  - `project_id` (string, required)
+  - `project_name` (string, optional)
+- `initiatives[]` (array, optional)
+  - `project_id` (string, required)
+  - `initiative_id` (string, required, unique per `project_id`)
+  - `title` (string, required)
+  - `summary` (string, optional)
+  - `domains[]` (array of strings, optional)
+  - `start_date` (string `YYYY-MM-DD`, optional)
+  - `end_date` (string `YYYY-MM-DD`, optional)
+  - `evidence_refs[]` (array of strings, optional)
+- `direction_signals[]` (array, optional)
+  - `project_id` (string, required)
+  - `signal_id` (string, optional; defaulted deterministically)
+  - `topic` (string, required)
+  - `stance` (string, required)
+  - `statement` (string, required)
+  - `confidence` (number between 0 and 1, optional; defaults to `0.5`)
+  - `evidence_refs[]` (array of strings, optional)
+- `research_event_id` (string, optional; copied into per-row provenance)
+- `normalized_at_utc` (string, optional ISO-8601 timestamp; recorded under `source.normalized_at_utc`)
 
-Each `initiatives[]` row must include:
-- `initiative_id` (string, required)
-- `project_id` (string, required, must be `active_project_id` or one of `related_project_ids`)
-- `roadmap_direction` (string, required)
-- `direction_signal` (string, optional, defaults to `advance`, allowed: `advance`, `hold`, `sunset`)
-- `capability_tags` (non-empty array of strings, required)
-- `timeline` (object, required)
-  - `start_week` (non-negative integer, required)
-  - `end_week` (non-negative integer, required, must be `>= start_week`)
-- `evidence_refs` (array of strings, optional)
+Overlap detection rule (bounded to this requirement):
+- An `overlaps[]` row is emitted only when two initiatives from different projects share at least one `domains[]` value and their `start_date`/`end_date` windows overlap.
 
-Optional broad-sweep context:
-- `broad_sweep_context.earth_sweep_evidence_refs` (array of strings, optional)
-- `broad_sweep_context.earth_sweep_source_artifacts[]` (array, optional)
-  - `artifact_ref` (string, required)
-  - `status` (string, optional; `fresh` or `stale`, defaults to `fresh`)
-  - `evidence_refs` (array of strings, optional)
-- `broad_sweep_context.project_context[]` (array, optional)
-  - `project_id` (string, required, must be one of `related_project_ids`)
-  - `context_note` (string, optional)
-  - `evidence_refs` (array of strings, optional)
-- `broad_sweep_context.required_context_documents[]` (array, optional)
-  - `doc_kind` (string, required; one of `mission`, `scope`, `peer-project`)
-  - `doc_ref` (string, required)
-  - `status` (string, optional; `present` or `missing`, defaults to `present`)
-  - `project_id` (string, required for `peer-project`; must be one of `related_project_ids`)
-  - `evidence_refs` (array of strings, optional)
-- `broad_sweep_context.unresolved_direction_ideas[]` (array, optional)
-  - `idea_id` (string, optional; deterministic id derived when omitted)
-  - `project_id` (string, required, must be one of `related_project_ids`)
-  - `summary` (string, required)
-  - `related_conflict_ids` (array of strings, optional)
-  - `evidence_refs` (array of strings, optional)
+Conflict detection rule (bounded to this requirement):
+- A `conflicts[]` row is emitted only when at least two `direction_signals[]` share the same `topic` while having different `stance` values across projects.
 
 ## Output contract
-The detection output is a canonical REQ-017 surface with:
-- `requirement_id`: `REQ-017`
-- `surface`: `overlap_and_conflict_detection`
-- `schema_version`: `req-017.overlap-and-conflict-detection.v1`
-- `evaluated_at`: evaluation timestamp
-- `active_project_id`: active project ID
-- `related_project_ids`: normalized related project IDs
-- `overlap_index`: deterministic initiative/capability index
-- `overlapping_initiatives`: overlaps across related projects on shared capability tags and overlapping timeline windows
-- `conflicting_directions`: overlap rows with incompatible `direction_signal` values
-- `cross_project_context`: normalized broad-sweep context usage
-- `evidence_refs`: deterministic evidence partitions for overlap detection, Earth sweep, recommendation support, and out-of-scope refs
-- `recommendation`: evidence-backed conflict resolution recommendations, cross-project obligations, and open risks
-- `decision`: `conflicts_detected`, `overlap_detected_no_direction_conflict`, or `no_overlap_or_conflict_detected`
-- `summary`: deterministic count summary
+Top-level required keys:
+- `schema_version` (must be `req-017.overlap-and-conflict-detection.v1`)
+- `requirement_id` (must be `REQ-017`)
+- `target_project`
+- `projects_considered` (sorted unique project IDs)
+- `overlaps`
+- `conflicts`
+- `evidence_refs` (sorted unique evidence refs across overlaps + conflicts)
+- `decision` (`conflicts_detected`, `overlaps_detected`, or `no_overlaps_or_conflicts_detected`)
+- `summary`
+- `source`
 
-Conflict row guarantees:
-- Every `conflicting_directions[]` row includes `risk_level` and `resolution_options`.
-- Every `resolution_options[]` row includes `option_id`, `summary`, and `risk_tradeoff`.
-- Every overlap/conflict row includes `earth_sweep_evidence_refs` and `out_of_scope_evidence_refs`.
+Each `overlaps[]` row includes:
+- `overlap_id`
+- `shared_domains[]`
+- `overlap_window.start_date`
+- `overlap_window.end_date`
+- `initiatives.left` and `initiatives.right` (initiative reference objects)
+- `overlap_summary`
+- `evidence_refs[]`
+- `provenance.source_fields[]`
+- `provenance.research_event_id`
 
-Recommendation guardrails:
-- `recommendation.conflict_resolution_recommendations[]` rows include `recommendation_id`, `summary`, `risk_level`, `resolution_options`, and Earth-sweep-backed `evidence_refs`.
-- `recommendation.cross_project_obligations[]` must only be emitted when `evidence_refs` intersect `broad_sweep_context.earth_sweep_evidence_refs`.
-- Unresolved ideas from broad-sweep context must be emitted under `recommendation.open_risks[]`; they are never silently promoted into obligations.
+Each `conflicts[]` row includes:
+- `conflict_id`
+- `topic`
+- `stance_variants[]` (one row per stance, including per-project `signals[]`)
+- `conflict_summary`
+- `resolution_options[]` (each option includes `risk_level` and `tradeoffs[]`)
+- `evidence_refs[]`
+- `provenance.source_fields[]`
+- `provenance.research_event_id`
+
+`source` includes:
+- `normalized_at_utc`
+- `tool`
+- `tool_version`
+- `context_bundle_sha256`
 
 ## Executable artifacts
 - Fixture input: `examples/fixtures/overlap-and-conflict-detection.json`
 - Contract test: `tests/contracts/test_overlap-and-conflict-detection.py`
-- Integration test: `tests/integration/test_overlap-and-conflict-detection.py`
-- Hardening test: `tests/hardening/test_overlap-and-conflict-detection_hardening.py`
 - Canonical sample output: `strategy/current/samples/REQ-017_overlap-and-conflict-detection.sample.json`
 
 ## Sample structure
@@ -89,19 +104,16 @@ Its top-level shape is:
 
 ```json
 {
-  "requirement_id": "REQ-017",
-  "surface": "overlap_and_conflict_detection",
   "schema_version": "req-017.overlap-and-conflict-detection.v1",
-  "evaluated_at": "2026-03-15T03:10:00Z",
-  "active_project_id": "optimus-prime-gsd-fusion",
-  "related_project_ids": [],
-  "overlap_index": {},
-  "overlapping_initiatives": [],
-  "conflicting_directions": [],
-  "cross_project_context": {},
-  "evidence_refs": {},
-  "recommendation": {},
-  "decision": "conflicts_detected",
-  "summary": ""
+  "requirement_id": "REQ-017",
+  "target_project": {},
+  "projects_considered": [],
+  "overlaps": [],
+  "conflicts": [],
+  "evidence_refs": [],
+  "decision": "no_overlaps_or_conflicts_detected",
+  "summary": {},
+  "source": {}
 }
 ```
+

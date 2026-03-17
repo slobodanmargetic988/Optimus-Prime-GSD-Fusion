@@ -19,7 +19,9 @@ try:
     from scripts.strategy_context_workers import w05 as _worker_w05
     from scripts.strategy_context_workers import w06 as _worker_w06
     from scripts.strategy_context_workers import w07 as _worker_w07
+    from scripts.strategy_context_workers import w07_req016_bundle as _worker_w07_req016
     from scripts.strategy_context_workers import w08 as _worker_w08
+    from scripts import strategy_context_sweep_req021 as _req021
 except ModuleNotFoundError:
     _repo_root = Path(__file__).resolve().parents[1]
     if str(_repo_root) not in sys.path:
@@ -30,7 +32,9 @@ except ModuleNotFoundError:
     from scripts.strategy_context_workers import w05 as _worker_w05
     from scripts.strategy_context_workers import w06 as _worker_w06
     from scripts.strategy_context_workers import w07 as _worker_w07
+    from scripts.strategy_context_workers import w07_req016_bundle as _worker_w07_req016
     from scripts.strategy_context_workers import w08 as _worker_w08
+    from scripts import strategy_context_sweep_req021 as _req021
 
 SCHEMA_VERSION = "req-001.llm-first-strategy-runtime-entrypoint.v1"
 REQUIREMENT_ID = "REQ-001"
@@ -44,6 +48,10 @@ REQ_013_SCHEMA_VERSION = "req-013.capability-catalog-extraction.v1"
 REQ_013_REQUIREMENT_ID = "REQ-013"
 REQ_019_SCHEMA_VERSION = "req-019.execution-resource-context-ingestion.v1"
 REQ_019_REQUIREMENT_ID = "REQ-019"
+REQ_021_SCHEMA_VERSION = _req021.REQ_021_SCHEMA_VERSION
+REQ_021_REQUIREMENT_ID = _req021.REQ_021_REQUIREMENT_ID
+REQ_021_LEDGER_SCOPE = _req021.REQ_021_LEDGER_SCOPE
+REQ_021_CLAIM_ID_PATTERN = _req021.REQ_021_CLAIM_ID_PATTERN
 REQ_023_SCHEMA_VERSION = "req-023.context-compaction-for-llm-call-budget.v1"
 REQ_023_REQUIREMENT_ID = "REQ-023"
 REQ_023_DEFAULT_LLM_CALL_BUDGET = {
@@ -6090,7 +6098,8 @@ ingest_ground_graph_snapshot = _worker_w07.ingest_ground_graph_snapshot
 process_ground_graph_snapshot = _worker_w07.process_ground_graph_snapshot
 detect_integration_opportunities = _worker_w07.detect_integration_opportunities
 serialize_integration_opportunity_context_bundle = _worker_w07.serialize_integration_opportunity_context_bundle
-detect_reuse_opportunities = _worker_w07.detect_reuse_opportunities
+detect_reuse_opportunities = _worker_w07_req016.detect_reuse_opportunities
+serialize_reuse_opportunity_context_bundle = _worker_w07_req016.serialize_reuse_opportunity_context_bundle
 serialize_ground_graph_context_bundle = _worker_w07.serialize_ground_graph_context_bundle
 serialize_req_008_context_bundle = _worker_w08.serialize_req_008_context_bundle
 build_req_008_research_packet_ingestion_and_normalization = (
@@ -6102,6 +6111,11 @@ validate_req_008_research_packet_ingestion_and_normalization = (
 serialize_req_015_integration_opportunity_bundle = _worker_w08.serialize_req_015_integration_opportunity_bundle
 build_req_015_integration_opportunity_detection = _worker_w08.build_req_015_integration_opportunity_detection
 validate_req_015_integration_opportunity_detection = _worker_w08.validate_req_015_integration_opportunity_detection
+serialize_req_017_overlap_and_conflict_bundle = _worker_w08.serialize_req_017_overlap_and_conflict_bundle
+build_req_017_overlap_and_conflict_detection = _worker_w08.build_req_017_overlap_and_conflict_detection
+validate_req_017_overlap_and_conflict_detection = _worker_w08.validate_req_017_overlap_and_conflict_detection
+build_req_021_evidence_provenance_ledger_for_context = _req021.build_req_021_evidence_provenance_ledger_for_context
+validate_req_021_evidence_provenance_ledger_for_context = _req021.validate_req_021_evidence_provenance_ledger_for_context
 ALLOWED_RISK_LEVELS = _worker_w08.ALLOWED_RISK_LEVELS
 REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT = _worker_w08.REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT
 REASON_CODE_CONTEXT_DOC_MISSING = _worker_w08.REASON_CODE_CONTEXT_DOC_MISSING

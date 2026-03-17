@@ -1,113 +1,119 @@
 {
-  "active_project_id": "optimus-prime-gsd-fusion",
-  "related_project_ids": [
-    "earth-core-runtime",
-    "shared-observability"
-  ],
-  "broad_sweep_context": {
-    "earth_sweep_evidence_refs": [
-      "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
-      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
-    ],
-    "project_context": [
+  "input": {
+    "target_project": {
+      "project_id": "prj.optimus-prime-gsd-fusion",
+      "project_name": "Optimus Prime GSD Fusion"
+    },
+    "initiatives": [
       {
-        "project_id": "earth-core-runtime",
-        "context_note": "Earth sweep shows runtime-signals migration pressure during the same delivery window.",
+        "project_id": "prj.optimus-prime-gsd-fusion",
+        "initiative_id": "init.dispatch-safety-lane",
+        "title": "Budget-aware dispatch safety lane",
+        "summary": "Reserve deterministic execution lanes during tight quota windows.",
+        "domains": ["dispatch", "rate-limits"],
+        "start_date": "2026-03-01",
+        "end_date": "2026-04-15",
         "evidence_refs": [
-          "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json"
+          "reports/optimus-prime/planning/evidence/TASK-052/initiative.dispatch-safety-lane.json"
         ]
       },
       {
-        "project_id": "shared-observability",
-        "context_note": "Observability budget controls intersect dispatch-safety rollout timing.",
+        "project_id": "prj.runtime-core",
+        "initiative_id": "init.dispatch-fair-queue",
+        "title": "Fair-queue dispatch policy refactor",
+        "summary": "Refactor queueing to prioritize FIFO fairness under mixed workloads.",
+        "domains": ["dispatch", "rate-limits"],
+        "start_date": "2026-03-20",
+        "end_date": "2026-05-01",
         "evidence_refs": [
-          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          "reports/earth/sweeps/2026-03-15/runtime-core/initiative.dispatch-fair-queue.json"
+        ]
+      },
+      {
+        "project_id": "prj.analytics-hub",
+        "initiative_id": "init.dashboard-refresh",
+        "title": "Dashboard refresh",
+        "summary": "Update UX and reporting pages.",
+        "domains": ["ui"],
+        "start_date": "2026-06-01",
+        "end_date": "2026-06-30",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/analytics-hub/initiative.dashboard-refresh.json"
         ]
       }
     ],
-    "unresolved_direction_ideas": [
+    "direction_signals": [
       {
-        "idea_id": "idea-shared-observability-budget-gate",
-        "project_id": "shared-observability",
-        "summary": "Confirm whether telemetry budget gating should defer dispatch-safety rollout until exporter cost controls land.",
-        "related_conflict_ids": [
-          "conflict-002"
-        ],
+        "project_id": "prj.optimus-prime-gsd-fusion",
+        "signal_id": "sig.dispatch-policy-budget-aware",
+        "topic": "dispatch_policy",
+        "stance": "budget-aware-safety-lane",
+        "statement": "Prefer budget-aware safety lanes so high-impact work is never starved during quota pressure.",
+        "confidence": 0.8,
         "evidence_refs": [
-          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          "reports/optimus-prime/planning/evidence/TASK-052/dispatch-policy-signal.json"
+        ]
+      },
+      {
+        "project_id": "prj.runtime-core",
+        "signal_id": "sig.dispatch-policy-fifo",
+        "topic": "dispatch_policy",
+        "stance": "fifo",
+        "statement": "Prefer FIFO fairness so dispatch ordering remains simple and predictable under load.",
+        "confidence": 0.7,
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-core/dispatch-policy-signal.json"
+        ]
+      },
+      {
+        "project_id": "prj.optimus-prime-gsd-fusion",
+        "signal_id": "sig.telemetry-canonical-json",
+        "topic": "telemetry_storage",
+        "stance": "canonical-json-ledger",
+        "statement": "Prefer canonical JSON ledger artifacts for deterministic replay and audit trails.",
+        "confidence": 0.6,
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-052/telemetry-storage-signal.json"
+        ]
+      },
+      {
+        "project_id": "prj.runtime-core",
+        "signal_id": "sig.telemetry-canonical-json",
+        "topic": "telemetry_storage",
+        "stance": "canonical-json-ledger",
+        "statement": "Prefer canonical JSON ledger artifacts for replayable runtime telemetry exports.",
+        "confidence": 0.6,
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-core/telemetry-storage-signal.json"
         ]
       }
-    ]
+    ],
+    "research_event_id": "event.20260315t090000z-req-017",
+    "normalized_at_utc": "2026-03-15T09:00:00Z"
   },
-  "initiatives": [
-    {
-      "initiative_id": "initiative-runtime-signal-router",
-      "project_id": "optimus-prime-gsd-fusion",
-      "roadmap_direction": "Advance runtime-signal-router rollout for deterministic cycle dispatch.",
-      "direction_signal": "advance",
-      "capability_tags": [
-        "runtime-signals",
-        "dispatch-safety"
-      ],
-      "timeline": {
-        "start_week": 10,
-        "end_week": 18
-      },
-      "evidence_refs": [
-        "contracts/req/REQ-006_runtime-telemetry-artifact-sweep-across-earth.md",
-        "reports/optimus-prime/planning/evidence/TASK-052/runtime-signal-router.json"
-      ]
-    },
-    {
-      "initiative_id": "initiative-runtime-signal-sunset",
-      "project_id": "earth-core-runtime",
-      "roadmap_direction": "Sunset legacy runtime-signals path and migrate to consolidated event-stream ingestion.",
-      "direction_signal": "sunset",
-      "capability_tags": [
-        "runtime-signals",
-        "event-stream"
-      ],
-      "timeline": {
-        "start_week": 12,
-        "end_week": 20
-      },
-      "evidence_refs": [
-        "reports/earth/sweeps/earth-core-runtime/roadmap-2026-q2.json",
-        "strategy/current/samples/REQ-006_runtime-telemetry-artifact-sweep-across-earth.sample.json"
-      ]
-    },
-    {
-      "initiative_id": "initiative-dispatch-safety-hold",
-      "project_id": "shared-observability",
-      "roadmap_direction": "Hold dispatch-safety exporter changes until telemetry budget controls settle.",
-      "direction_signal": "hold",
-      "capability_tags": [
-        "dispatch-safety",
-        "telemetry"
-      ],
-      "timeline": {
-        "start_week": 14,
-        "end_week": 22
-      },
-      "evidence_refs": [
-        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
-      ]
-    },
-    {
-      "initiative_id": "initiative-telemetry-archival",
-      "project_id": "shared-observability",
-      "roadmap_direction": "Advance telemetry archival migration for long-horizon storage optimization.",
-      "direction_signal": "advance",
-      "capability_tags": [
-        "telemetry-archive"
-      ],
-      "timeline": {
-        "start_week": 30,
-        "end_week": 36
-      },
-      "evidence_refs": [
-        "reports/earth/sweeps/shared-observability/archive-plan-2026-q3.json"
-      ]
-    }
-  ]
+  "expected_contract_anchors": {
+    "schema_version": "req-017.overlap-and-conflict-detection.v1",
+    "requirement_id": "REQ-017",
+    "target_project_id": "prj.optimus-prime-gsd-fusion",
+    "normalized_at_utc": "2026-03-15T09:00:00Z",
+    "conflict_topics": [
+      "dispatch_policy"
+    ],
+    "overlap_ids": [
+      "overlap-25e4daa1ea8e"
+    ],
+    "conflict_ids": [
+      "conflict-ac5700dd8782"
+    ],
+    "expected_decision": "conflicts_detected",
+    "context_bundle_sha256": "e183ce3d9a8e8ecda69b4db8aaf065c40e3d0df7fd6fd4cf16a8af963d23a342",
+    "required_resolution_option_fields": [
+      "option_id",
+      "title",
+      "description",
+      "risk_level",
+      "tradeoffs",
+      "recommended"
+    ]
+  }
 }

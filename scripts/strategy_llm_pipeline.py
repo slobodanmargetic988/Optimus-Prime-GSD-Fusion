@@ -13,6 +13,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+try:
+    from scripts import strategy_llm_pipeline_req027_035 as _req27_35
+except ModuleNotFoundError:
+    _repo_root = Path(__file__).resolve().parents[1]
+    if str(_repo_root) not in sys.path:
+        sys.path.insert(0, str(_repo_root))
+    from scripts import strategy_llm_pipeline_req027_035 as _req27_35
+
 TOOL = "strategy-llm-pipeline"
 TOOL_VERSION = "1.0.0"
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +59,16 @@ REQ_046_REQUIREMENT_ID = "REQ-046"
 REQ_046_SCHEMA_VERSION = "req-046.final-strategy-synthesis-composer.v1"
 REQ_046_ANALYSIS_TYPE = "final_strategy_synthesis_composer"
 REQ_046_CALL_ID = "final-strategy-synthesis"
+REQ_027_SCHEMA_VERSION = _req27_35.REQ_027_SCHEMA_VERSION
+REQ_027_PROCESSING_SCHEMA_VERSION = _req27_35.REQ_027_PROCESSING_SCHEMA_VERSION
+REQ_027_REQUIREMENT_ID = _req27_35.REQ_027_REQUIREMENT_ID
+REQ_027_ANALYSIS_TYPE = _req27_35.REQ_027_ANALYSIS_TYPE
+REQ_027_CALL_ID = _req27_35.REQ_027_CALL_ID
+REQ_035_SCHEMA_VERSION = _req27_35.REQ_035_SCHEMA_VERSION
+REQ_035_PROCESSING_SCHEMA_VERSION = _req27_35.REQ_035_PROCESSING_SCHEMA_VERSION
+REQ_035_REQUIREMENT_ID = _req27_35.REQ_035_REQUIREMENT_ID
+REQ_035_ANALYSIS_TYPE = _req27_35.REQ_035_ANALYSIS_TYPE
+REQ_035_CALL_ID = _req27_35.REQ_035_CALL_ID
 REQ_026_PROCESSING_STRATEGY = "call-1-situational-analysis"
 REQ_026_REASONING_MODE = "deterministic-broad-sweep"
 REQ_029_PROCESSING_STRATEGY = "call-4-recommendation-synthesis"
@@ -171,6 +189,19 @@ LOG_PATH = LOG_ROOT / "strategy_llm_pipeline.log"
 LOG_BUDGET_CHECK_STAMP = LOG_ROOT / ".log_budget_check.strategy_llm_pipeline"
 LOG_BUDGET_CHECK_INTERVAL_SECONDS = 15 * 60
 LOG_BUDGET_MAX_BYTES = 3 * 1024 * 1024 * 1024
+
+process_req_027_call_2_ecosystem_linkage_reasoning = _req27_35.process_req_027_call_2_ecosystem_linkage_reasoning
+build_req_027_call_2_ecosystem_linkage_reasoning = _req27_35.build_req_027_call_2_ecosystem_linkage_reasoning
+validate_req_027_call_2_ecosystem_linkage_reasoning = _req27_35.validate_req_027_call_2_ecosystem_linkage_reasoning
+process_req_035_evidence_citation_discipline_in_reasoning_calls = (
+    _req27_35.process_req_035_evidence_citation_discipline_in_reasoning_calls
+)
+build_req_035_evidence_citation_discipline_in_reasoning_calls = (
+    _req27_35.build_req_035_evidence_citation_discipline_in_reasoning_calls
+)
+validate_req_035_evidence_citation_discipline_in_reasoning_calls = (
+    _req27_35.validate_req_035_evidence_citation_discipline_in_reasoning_calls
+)
 
 
 class Req026Error(ValueError):
@@ -13398,6 +13429,8 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
 def _detect_requirement(payload: Mapping[str, Any]) -> str:
     if payload.get("analysis_type") == REQ_046_ANALYSIS_TYPE or "validated_call_outputs" in payload:
         return REQ_046_REQUIREMENT_ID
+    if payload.get("analysis_type") == REQ_035_ANALYSIS_TYPE:
+        return REQ_035_REQUIREMENT_ID
     if "recommendation_drafts" in payload:
         return REQ_037_REQUIREMENT_ID
     if "constraint_candidates" in payload:
@@ -13413,6 +13446,8 @@ def _detect_requirement(payload: Mapping[str, Any]) -> str:
         return REQ_028_REQUIREMENT_ID
     if payload.get("analysis_type") == REQ_031_ANALYSIS_TYPE or "impact_assumptions" in payload:
         return REQ_031_REQUIREMENT_ID
+    if payload.get("analysis_type") == REQ_027_ANALYSIS_TYPE:
+        return REQ_027_REQUIREMENT_ID
     if payload.get("analysis_type") == REQ_030_ANALYSIS_TYPE or "candidate_lane_designs" in payload:
         return REQ_030_REQUIREMENT_ID
     if payload.get("analysis_type") == REQ_034_ANALYSIS_TYPE or "prior_call_handoffs" in payload:
@@ -13424,7 +13459,7 @@ def _detect_requirement(payload: Mapping[str, Any]) -> str:
     if "target_project" in payload or payload.get("analysis_type") == REQ_026_ANALYSIS_TYPE:
         return REQ_026_REQUIREMENT_ID
     raise ValueError(
-        "input payload does not match REQ-025, REQ-026, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-033, REQ-034, or REQ-037 contract anchors"
+        "input payload does not match REQ-025, REQ-026, REQ-027, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-033, REQ-034, REQ-035, REQ-037, or REQ-046 contract anchors"
     )
 
 
@@ -13432,6 +13467,8 @@ def run(payload: Mapping[str, Any]) -> dict[str, Any]:
     requirement_id = _detect_requirement(payload)
     if requirement_id == REQ_046_REQUIREMENT_ID:
         return build_req_046_final_strategy_synthesis_composer(payload)
+    if requirement_id == REQ_035_REQUIREMENT_ID:
+        return build_req_035_evidence_citation_discipline_in_reasoning_calls(dict(payload))
     if requirement_id == REQ_037_REQUIREMENT_ID:
         return build_req_037_recommendation_deduplication_and_merge(
             recommendation_drafts=payload.get("recommendation_drafts"),
@@ -13510,6 +13547,8 @@ def run(payload: Mapping[str, Any]) -> dict[str, Any]:
             call_id=_as_text(payload.get("call_id")) or "call-6",
             checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
         )
+    if requirement_id == REQ_027_REQUIREMENT_ID:
+        return build_req_027_call_2_ecosystem_linkage_reasoning(dict(payload))
     if requirement_id == REQ_030_REQUIREMENT_ID:
         return build_req_030_call_5_sequencing_and_lane_design_reasoning(
             target_project_root=payload.get("target_project_root"),
@@ -13607,6 +13646,8 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
     requirement_id = _as_text(payload.get("requirement_id"))
     if requirement_id == REQ_046_REQUIREMENT_ID:
         return validate_req_046_final_strategy_synthesis_composer(payload)
+    if requirement_id == REQ_035_REQUIREMENT_ID:
+        return validate_req_035_evidence_citation_discipline_in_reasoning_calls(payload)
     if requirement_id == REQ_037_REQUIREMENT_ID:
         return validate_req_037_recommendation_deduplication_and_merge(payload)
     if requirement_id == REQ_033_REQUIREMENT_ID:
@@ -13617,6 +13658,8 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
         return validate_req_028_call_3_gap_and_opportunity_reasoning(payload)
     if requirement_id == REQ_031_REQUIREMENT_ID:
         return validate_req_031_call_6_kpi_impact_estimation_reasoning(payload)
+    if requirement_id == REQ_027_REQUIREMENT_ID:
+        return validate_req_027_call_2_ecosystem_linkage_reasoning(payload)
     if requirement_id == REQ_030_REQUIREMENT_ID:
         return validate_req_030_call_5_sequencing_and_lane_design_reasoning(payload)
     if requirement_id == REQ_034_REQUIREMENT_ID:
@@ -13632,7 +13675,7 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Emit REQ-025, REQ-026, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-033, REQ-034, REQ-037, or REQ-046 strategy pipeline payloads."
+        description="Emit REQ-025, REQ-026, REQ-027, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-033, REQ-034, REQ-035, REQ-037, or REQ-046 strategy pipeline payloads."
     )
     parser.add_argument("--input-json", required=True, help="Input JSON path or '-' for stdin.")
     parser.add_argument("--output-json", default="", help="Optional output JSON path.")
