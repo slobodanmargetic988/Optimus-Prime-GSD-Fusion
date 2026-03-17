@@ -6,6 +6,16 @@
       "project_id": "optimus-prime-gsd-fusion",
       "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
     },
+    "broad_sweep_context": {
+      "projects_considered": [
+        "ground-control-hub",
+        "runtime-orchestrator"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+      ]
+    },
     "revision_snapshots": [
       {
         "revision_id": "strategy-2026-03-14",

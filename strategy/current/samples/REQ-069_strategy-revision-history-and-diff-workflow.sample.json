@@ -3,6 +3,141 @@
   "call_id": "strategy-revision-history-and-diff-workflow",
   "checked_at_utc": "2026-03-17T09:45:00Z",
   "ok": true,
+  "processing_behavior": {
+    "context_inputs": {
+      "broad_sweep_context": {
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/ground-control-hub.json",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+        ],
+        "projects_considered": [
+          "ground-control-hub",
+          "runtime-orchestrator"
+        ]
+      }
+    },
+    "cross_project_context_usage": {
+      "cross_project_context_provided": true,
+      "cross_project_context_used": true,
+      "cross_project_obligation_count": 1,
+      "diff_ids_with_cross_project_context": [
+        "diff.runtime.r15-r16",
+        "diff.scope.r15-r16"
+      ],
+      "earth_sweep_evidence_refs_considered": [
+        "reports/earth/sweeps/2026-03-16/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+      ],
+      "evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-16/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/governance/reviews/GR-204-runtime-lane.md",
+        "reports/runtime/runtime-status-2026-03-15.json#queue_backlog",
+        "reports/runtime/runtime-status-2026-03-15.json#telemetry_staleness",
+        "reports/runtime/runtime-status-2026-03-16.json#worker_parallelism",
+        "strategy/current/STRATEGY.json#constraints.change_budget",
+        "strategy/history/strategy-2026-03-15/STRATEGY.json#constraints.task_floor"
+      ],
+      "open_risk_count": 1,
+      "projects_considered": [
+        "ground-control-hub",
+        "runtime-orchestrator"
+      ]
+    },
+    "recommendation": {
+      "confidence": "medium",
+      "cross_project_obligations": [
+        {
+          "diff_id": "diff.runtime.r15-r16",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "obligation_id": "obligation.diff.runtime.r15-r16.ground-control-hub",
+          "project_id": "ground-control-hub",
+          "summary": "Apply reviewed directional shift 'diff.runtime.r15-r16' using broad-sweep context for project 'ground-control-hub'."
+        }
+      ],
+      "decision": "proceed-with-open-risks",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/governance/reviews/GR-204-runtime-lane.md",
+        "reports/runtime/runtime-status-2026-03-15.json#queue_backlog",
+        "reports/runtime/runtime-status-2026-03-15.json#telemetry_staleness",
+        "reports/runtime/runtime-status-2026-03-16.json#worker_parallelism",
+        "strategy/current/STRATEGY.json#constraints.change_budget",
+        "strategy/history/strategy-2026-03-15/STRATEGY.json#constraints.task_floor"
+      ],
+      "open_risks": [
+        {
+          "diff_id": "diff.scope.r15-r16",
+          "reason_code": "blocked_needs_governance_review",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "strategy/current/STRATEGY.json#constraints.change_budget"
+          ],
+          "risk_id": "risk.diff.scope.r15-r16.governance-review",
+          "summary": "Directional shift for diff 'diff.scope.r15-r16' is blocked until governance review evidence is attached."
+        }
+      ],
+      "rationale": "diffs=4 review_required=2 obligations=1 open_risks=1",
+      "recommended_actions": [
+        {
+          "action_id": "action.diff.runtime.r14-r15",
+          "action_scope": "local",
+          "diff_id": "diff.runtime.r14-r15",
+          "evidence_refs": [
+            "reports/runtime/runtime-status-2026-03-15.json#queue_backlog",
+            "reports/runtime/runtime-status-2026-03-15.json#telemetry_staleness"
+          ],
+          "next_step": "Use 'diff.strategy-2026-03-14.strategy-2026-03-15.runtime_lane' to route planner/runtime updates from strategy-2026-03-14 to strategy-2026-03-15.",
+          "rationale": "Diff rows are emitted with deterministic sequence and governance states to keep revision changes auditable.",
+          "summary": "Apply revision diff 'diff.runtime.r14-r15' for domain 'runtime_lane' with direction 'decrease'."
+        },
+        {
+          "action_id": "action.diff.runtime.r15-r16",
+          "action_scope": "cross-project",
+          "diff_id": "diff.runtime.r15-r16",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/governance/reviews/GR-204-runtime-lane.md",
+            "reports/runtime/runtime-status-2026-03-16.json#worker_parallelism"
+          ],
+          "next_step": "Use 'diff.strategy-2026-03-15.strategy-2026-03-16.runtime_lane' to route planner/runtime updates from strategy-2026-03-15 to strategy-2026-03-16.",
+          "rationale": "Diff rows are emitted with deterministic sequence and governance states to keep revision changes auditable.",
+          "summary": "Apply revision diff 'diff.runtime.r15-r16' for domain 'runtime_lane' with direction 'increase'."
+        },
+        {
+          "action_id": "action.diff.scope.r14-r15",
+          "action_scope": "local",
+          "diff_id": "diff.scope.r14-r15",
+          "evidence_refs": [
+            "strategy/history/strategy-2026-03-15/STRATEGY.json#constraints.task_floor"
+          ],
+          "next_step": "Use 'diff.strategy-2026-03-14.strategy-2026-03-15.planning_scope' to route planner/runtime updates from strategy-2026-03-14 to strategy-2026-03-15.",
+          "rationale": "Diff rows are emitted with deterministic sequence and governance states to keep revision changes auditable.",
+          "summary": "Apply revision diff 'diff.scope.r14-r15' for domain 'planning_scope' with direction 'maintain'."
+        },
+        {
+          "action_id": "action.diff.scope.r15-r16",
+          "action_scope": "cross-project",
+          "diff_id": "diff.scope.r15-r16",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "strategy/current/STRATEGY.json#constraints.change_budget"
+          ],
+          "next_step": "Use 'diff.strategy-2026-03-15.strategy-2026-03-16.planning_scope' to route planner/runtime updates from strategy-2026-03-15 to strategy-2026-03-16.",
+          "rationale": "Diff rows are emitted with deterministic sequence and governance states to keep revision changes auditable.",
+          "summary": "Apply revision diff 'diff.scope.r15-r16' for domain 'planning_scope' with direction 'decrease'."
+        }
+      ]
+    },
+    "strategy": "revision-history-diff-governance-routing"
+  },
   "requirement_id": "REQ-069",
   "schema_version": "1.0",
   "strategy_revision_history_and_diff_workflow": {

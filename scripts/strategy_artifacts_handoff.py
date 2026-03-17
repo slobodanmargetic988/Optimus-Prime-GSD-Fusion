@@ -50,6 +50,8 @@ _REQ_069_GUARDRAIL_STATUSES = {
     "governance_reviewed",
     "blocked_needs_governance_review",
 }
+_REQ_069_MISSING_EARTH_SWEEP_REASON = "missing_earth_sweep_evidence_refs"
+_REQ_069_BLOCKED_GOVERNANCE_REVIEW_REASON = "blocked_needs_governance_review"
 
 
 def _utc_timestamp() -> str:
@@ -649,6 +651,155 @@ def _build_req_069_diff_artifacts(diff_requests: list[dict[str, Any]]) -> tuple[
     return diff_artifacts, governance_review
 
 
+def _build_req_069_processing_behavior(
+    *,
+    diff_artifacts: list[dict[str, Any]],
+    governance_review: Mapping[str, Any],
+    broad_sweep_context: dict[str, list[str]],
+) -> dict[str, Any]:
+    earth_sweep_refs = set(broad_sweep_context["earth_sweep_evidence_refs"])
+    projects_considered = sorted(set(broad_sweep_context["projects_considered"]))
+
+    actions: list[dict[str, Any]] = []
+    obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    diff_ids_with_cross_project_context: set[str] = set()
+    recommendation_evidence_refs: set[str] = set(earth_sweep_refs)
+
+    for row in diff_artifacts:
+        diff_id = str(row["diff_id"])
+        direction_change_detected = bool(row["direction_change_detected"])
+        guardrail_status = str(row["guardrail_status"])
+        governance_review_ref = str(row.get("governance_review_ref") or "").strip()
+        action_evidence_refs = set(row["evidence_refs"])
+        if governance_review_ref:
+            action_evidence_refs.add(governance_review_ref)
+
+        uses_cross_project_context = bool(direction_change_detected and projects_considered)
+        if uses_cross_project_context:
+            diff_ids_with_cross_project_context.add(diff_id)
+            action_evidence_refs.update(earth_sweep_refs)
+
+        recommendation_evidence_refs.update(action_evidence_refs)
+        action_scope = "cross-project" if uses_cross_project_context else "local"
+        actions.append(
+            {
+                "action_id": f"action.{diff_id}",
+                "diff_id": diff_id,
+                "action_scope": action_scope,
+                "summary": (
+                    f"Apply revision diff '{diff_id}' for domain '{row['change_domain']}' with "
+                    f"direction '{row['directional_shift']}'."
+                ),
+                "rationale": (
+                    "Diff rows are emitted with deterministic sequence and governance states to keep revision "
+                    "changes auditable."
+                ),
+                "next_step": (
+                    f"Use '{row['diff_artifact_id']}' to route planner/runtime updates from "
+                    f"{row['from_revision_id']} to {row['to_revision_id']}."
+                ),
+                "evidence_refs": sorted(action_evidence_refs),
+            }
+        )
+
+        if guardrail_status == "blocked_needs_governance_review":
+            required_refs = sorted(action_evidence_refs) or ["missing:governance-review-ref"]
+            open_risks.append(
+                {
+                    "risk_id": f"risk.{diff_id}.governance-review",
+                    "diff_id": diff_id,
+                    "summary": (
+                        f"Directional shift for diff '{diff_id}' is blocked until governance review evidence is attached."
+                    ),
+                    "reason_code": _REQ_069_BLOCKED_GOVERNANCE_REVIEW_REASON,
+                    "required_evidence_refs": required_refs,
+                }
+            )
+            continue
+
+        if uses_cross_project_context and not earth_sweep_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk.{diff_id}.earth-sweep-evidence",
+                    "diff_id": diff_id,
+                    "summary": (
+                        f"Cross-project directional shift '{diff_id}' cannot emit obligations without Earth-sweep "
+                        "evidence refs."
+                    ),
+                    "reason_code": _REQ_069_MISSING_EARTH_SWEEP_REASON,
+                    "required_evidence_refs": sorted(action_evidence_refs) or ["missing:earth-sweep-evidence-ref"],
+                }
+            )
+            continue
+
+        if uses_cross_project_context:
+            project_id = projects_considered[len(obligations) % len(projects_considered)]
+            obligations.append(
+                {
+                    "obligation_id": f"obligation.{diff_id}.{project_id}",
+                    "diff_id": diff_id,
+                    "project_id": project_id,
+                    "summary": (
+                        f"Apply reviewed directional shift '{diff_id}' using broad-sweep context for project "
+                        f"'{project_id}'."
+                    ),
+                    "evidence_refs": sorted(earth_sweep_refs),
+                }
+            )
+
+    actions.sort(key=lambda row: str(row["action_id"]))
+    obligations.sort(key=lambda row: str(row["obligation_id"]))
+    open_risks.sort(key=lambda row: str(row["risk_id"]))
+    evidence_refs_used = sorted(recommendation_evidence_refs)
+    review_required_count = len(governance_review.get("review_required_diff_ids", []))
+
+    if open_risks and not obligations and any(
+        row["reason_code"] == _REQ_069_MISSING_EARTH_SWEEP_REASON for row in open_risks
+    ):
+        recommendation_decision = "collect-earth-evidence"
+        recommendation_confidence = "medium"
+    elif open_risks:
+        recommendation_decision = "proceed-with-open-risks"
+        recommendation_confidence = "medium"
+    else:
+        recommendation_decision = "proceed"
+        recommendation_confidence = "high"
+
+    usage = {
+        "cross_project_context_provided": bool(
+            broad_sweep_context["projects_considered"] or broad_sweep_context["earth_sweep_evidence_refs"]
+        ),
+        "cross_project_context_used": bool(diff_ids_with_cross_project_context),
+        "projects_considered": projects_considered,
+        "earth_sweep_evidence_refs_considered": broad_sweep_context["earth_sweep_evidence_refs"],
+        "diff_ids_with_cross_project_context": sorted(diff_ids_with_cross_project_context),
+        "cross_project_obligation_count": len(obligations),
+        "open_risk_count": len(open_risks),
+        "evidence_refs_used": evidence_refs_used,
+    }
+    recommendation = {
+        "decision": recommendation_decision,
+        "rationale": (
+            f"diffs={len(diff_artifacts)} review_required={review_required_count} "
+            f"obligations={len(obligations)} open_risks={len(open_risks)}"
+        ),
+        "confidence": recommendation_confidence,
+        "evidence_refs": evidence_refs_used,
+        "recommended_actions": actions,
+        "cross_project_obligations": obligations,
+        "open_risks": open_risks,
+    }
+    return {
+        "strategy": "revision-history-diff-governance-routing",
+        "context_inputs": {
+            "broad_sweep_context": broad_sweep_context,
+        },
+        "cross_project_context_usage": usage,
+        "recommendation": recommendation,
+    }
+
+
 def _build_req_057_processing_behavior(
     *,
     policies: list[dict[str, Any]],
@@ -1098,6 +1249,7 @@ def build_req_069_strategy_revision_history_and_diff_workflow(payload: Mapping[s
 
     checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
     target_project = _normalize_target_project(raw.get("target_project"))
+    broad_sweep_context = _normalize_broad_sweep_context(raw.get("broad_sweep_context"))
     revision_history = _normalize_req_069_revision_snapshots(raw.get("revision_snapshots"))
     revision_ids = {row["revision_id"] for row in revision_history}
     revision_order = {row["revision_id"]: index for index, row in enumerate(revision_history)}
@@ -1108,6 +1260,11 @@ def build_req_069_strategy_revision_history_and_diff_workflow(payload: Mapping[s
     )
     diff_artifacts, governance_review = _build_req_069_diff_artifacts(diff_requests)
     domains_tracked = {row["change_domain"] for row in diff_artifacts}
+    processing_behavior = _build_req_069_processing_behavior(
+        diff_artifacts=diff_artifacts,
+        governance_review=governance_review,
+        broad_sweep_context=broad_sweep_context,
+    )
 
     built = {
         "ok": True,
@@ -1122,6 +1279,7 @@ def build_req_069_strategy_revision_history_and_diff_workflow(payload: Mapping[s
             "diff_artifacts": diff_artifacts,
             "governance_review": governance_review,
         },
+        "processing_behavior": processing_behavior,
         "totals": {
             "revision_snapshots": len(revision_history),
             "diff_artifacts": len(diff_artifacts),
@@ -1496,6 +1654,386 @@ def _validate_req_069_diff_row(
     return errors, diff_id_value
 
 
+def _validate_req_069_processing_behavior(
+    value: Any,
+    *,
+    diff_ids: set[str],
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return ["processing_behavior must be an object"]
+
+    errors: list[str] = []
+    expected_keys = {
+        "strategy",
+        "context_inputs",
+        "cross_project_context_usage",
+        "recommendation",
+    }
+    value_keys = set(value.keys())
+    missing = sorted(expected_keys - value_keys)
+    if missing:
+        errors.append(f"processing_behavior missing keys: {missing}")
+    unexpected = sorted(value_keys - expected_keys)
+    if unexpected:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected}")
+
+    strategy = value.get("strategy")
+    if not isinstance(strategy, str) or not strategy.strip():
+        errors.append("processing_behavior.strategy must be a non-empty string")
+
+    context_projects: list[str] = []
+    context_earth_refs: list[str] = []
+    context_inputs = value.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+    else:
+        expected_context_keys = {"broad_sweep_context"}
+        context_keys = set(context_inputs.keys())
+        context_missing = sorted(expected_context_keys - context_keys)
+        if context_missing:
+            errors.append(f"processing_behavior.context_inputs missing keys: {context_missing}")
+        context_unexpected = sorted(context_keys - expected_context_keys)
+        if context_unexpected:
+            errors.append(f"processing_behavior.context_inputs has unexpected keys: {context_unexpected}")
+
+        broad_sweep_context = context_inputs.get("broad_sweep_context")
+        if not isinstance(broad_sweep_context, Mapping):
+            errors.append("processing_behavior.context_inputs.broad_sweep_context must be an object")
+        else:
+            expected_broad_keys = {"projects_considered", "earth_sweep_evidence_refs"}
+            broad_keys = set(broad_sweep_context.keys())
+            broad_missing = sorted(expected_broad_keys - broad_keys)
+            if broad_missing:
+                errors.append(
+                    "processing_behavior.context_inputs.broad_sweep_context "
+                    f"missing keys: {broad_missing}"
+                )
+            broad_unexpected = sorted(broad_keys - expected_broad_keys)
+            if broad_unexpected:
+                errors.append(
+                    "processing_behavior.context_inputs.broad_sweep_context "
+                    f"has unexpected keys: {broad_unexpected}"
+                )
+            broad_project_errors, context_projects = _validate_nonempty_string_list(
+                value=broad_sweep_context.get("projects_considered"),
+                field_name="processing_behavior.context_inputs.broad_sweep_context.projects_considered",
+                min_items=0,
+            )
+            errors.extend(broad_project_errors)
+            broad_evidence_errors, context_earth_refs = _validate_nonempty_string_list(
+                value=broad_sweep_context.get("earth_sweep_evidence_refs"),
+                field_name="processing_behavior.context_inputs.broad_sweep_context.earth_sweep_evidence_refs",
+                min_items=0,
+            )
+            errors.extend(broad_evidence_errors)
+
+    usage = value.get("cross_project_context_usage")
+    usage_projects: list[str] = []
+    usage_earth_refs: list[str] = []
+    usage_diff_ids: list[str] = []
+    usage_evidence_refs: list[str] = []
+    if not isinstance(usage, Mapping):
+        errors.append("processing_behavior.cross_project_context_usage must be an object")
+    else:
+        expected_usage_keys = {
+            "cross_project_context_provided",
+            "cross_project_context_used",
+            "projects_considered",
+            "earth_sweep_evidence_refs_considered",
+            "diff_ids_with_cross_project_context",
+            "cross_project_obligation_count",
+            "open_risk_count",
+            "evidence_refs_used",
+        }
+        usage_keys = set(usage.keys())
+        usage_missing = sorted(expected_usage_keys - usage_keys)
+        if usage_missing:
+            errors.append(f"processing_behavior.cross_project_context_usage missing keys: {usage_missing}")
+        usage_unexpected = sorted(usage_keys - expected_usage_keys)
+        if usage_unexpected:
+            errors.append(f"processing_behavior.cross_project_context_usage has unexpected keys: {usage_unexpected}")
+
+        for bool_key in ("cross_project_context_provided", "cross_project_context_used"):
+            if not isinstance(usage.get(bool_key), bool):
+                errors.append(f"processing_behavior.cross_project_context_usage.{bool_key} must be a boolean")
+
+        for count_key in ("cross_project_obligation_count", "open_risk_count"):
+            count_value = usage.get(count_key)
+            if not isinstance(count_value, int) or count_value < 0:
+                errors.append(
+                    f"processing_behavior.cross_project_context_usage.{count_key} must be a non-negative integer"
+                )
+
+        usage_project_errors, usage_projects = _validate_nonempty_string_list(
+            value=usage.get("projects_considered"),
+            field_name="processing_behavior.cross_project_context_usage.projects_considered",
+            min_items=0,
+        )
+        errors.extend(usage_project_errors)
+        usage_earth_errors, usage_earth_refs = _validate_nonempty_string_list(
+            value=usage.get("earth_sweep_evidence_refs_considered"),
+            field_name="processing_behavior.cross_project_context_usage.earth_sweep_evidence_refs_considered",
+            min_items=0,
+        )
+        errors.extend(usage_earth_errors)
+        usage_diff_errors, usage_diff_ids = _validate_nonempty_string_list(
+            value=usage.get("diff_ids_with_cross_project_context"),
+            field_name="processing_behavior.cross_project_context_usage.diff_ids_with_cross_project_context",
+            min_items=0,
+        )
+        errors.extend(usage_diff_errors)
+        for diff_id in usage_diff_ids:
+            if diff_id not in diff_ids:
+                errors.append(
+                    "processing_behavior.cross_project_context_usage.diff_ids_with_cross_project_context "
+                    "must reference strategy_revision_history_and_diff_workflow.diff_artifacts[].diff_id"
+                )
+        usage_evidence_errors, usage_evidence_refs = _validate_nonempty_string_list(
+            value=usage.get("evidence_refs_used"),
+            field_name="processing_behavior.cross_project_context_usage.evidence_refs_used",
+            min_items=1,
+        )
+        errors.extend(usage_evidence_errors)
+
+        expected_context_provided = bool(context_projects or context_earth_refs)
+        if isinstance(usage.get("cross_project_context_provided"), bool):
+            if usage.get("cross_project_context_provided") != expected_context_provided:
+                errors.append(
+                    "processing_behavior.cross_project_context_usage.cross_project_context_provided "
+                    "must equal derived broad_sweep_context availability"
+                )
+
+        expected_context_used = bool(usage_diff_ids)
+        if isinstance(usage.get("cross_project_context_used"), bool):
+            if usage.get("cross_project_context_used") != expected_context_used:
+                errors.append(
+                    "processing_behavior.cross_project_context_usage.cross_project_context_used "
+                    "must equal bool(diff_ids_with_cross_project_context)"
+                )
+
+        if context_projects and usage_projects != context_projects:
+            errors.append(
+                "processing_behavior.cross_project_context_usage.projects_considered must equal "
+                "processing_behavior.context_inputs.broad_sweep_context.projects_considered"
+            )
+        if context_earth_refs and usage_earth_refs != context_earth_refs:
+            errors.append(
+                "processing_behavior.cross_project_context_usage.earth_sweep_evidence_refs_considered must equal "
+                "processing_behavior.context_inputs.broad_sweep_context.earth_sweep_evidence_refs"
+            )
+
+    recommendation = value.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        expected_recommendation_keys = {
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "recommended_actions",
+            "cross_project_obligations",
+            "open_risks",
+        }
+        recommendation_keys = set(recommendation.keys())
+        recommendation_missing = sorted(expected_recommendation_keys - recommendation_keys)
+        if recommendation_missing:
+            errors.append(f"processing_behavior.recommendation missing keys: {recommendation_missing}")
+        recommendation_unexpected = sorted(recommendation_keys - expected_recommendation_keys)
+        if recommendation_unexpected:
+            errors.append(f"processing_behavior.recommendation has unexpected keys: {recommendation_unexpected}")
+
+        decision = recommendation.get("decision")
+        if decision not in {"proceed", "proceed-with-open-risks", "collect-earth-evidence"}:
+            errors.append(
+                "processing_behavior.recommendation.decision must be one of: "
+                "['collect-earth-evidence', 'proceed', 'proceed-with-open-risks']"
+            )
+        rationale = recommendation.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            errors.append("processing_behavior.recommendation.rationale must be a non-empty string")
+        confidence = recommendation.get("confidence")
+        if confidence not in _CONFIDENCE_LEVELS:
+            errors.append(
+                "processing_behavior.recommendation.confidence must be one of: "
+                f"{sorted(_CONFIDENCE_LEVELS)}"
+            )
+
+        recommendation_evidence_errors, recommendation_evidence_refs = _validate_nonempty_string_list(
+            value=recommendation.get("evidence_refs"),
+            field_name="processing_behavior.recommendation.evidence_refs",
+            min_items=1,
+        )
+        errors.extend(recommendation_evidence_errors)
+        if usage_evidence_refs and recommendation_evidence_refs != usage_evidence_refs:
+            errors.append(
+                "processing_behavior.recommendation.evidence_refs must equal "
+                "processing_behavior.cross_project_context_usage.evidence_refs_used"
+            )
+
+        action_rows = recommendation.get("recommended_actions")
+        if not isinstance(action_rows, list):
+            errors.append("processing_behavior.recommendation.recommended_actions must be a list")
+        elif not action_rows:
+            errors.append("processing_behavior.recommendation.recommended_actions must include at least one row")
+        else:
+            action_ids: set[str] = set()
+            for index, row in enumerate(action_rows):
+                row_path = f"processing_behavior.recommendation.recommended_actions[{index}]"
+                if not isinstance(row, Mapping):
+                    errors.append(f"{row_path} must be an object")
+                    continue
+                expected_action_keys = {
+                    "action_id",
+                    "diff_id",
+                    "action_scope",
+                    "summary",
+                    "rationale",
+                    "next_step",
+                    "evidence_refs",
+                }
+                row_keys = set(row.keys())
+                action_missing = sorted(expected_action_keys - row_keys)
+                if action_missing:
+                    errors.append(f"{row_path} missing keys: {action_missing}")
+                action_unexpected = sorted(row_keys - expected_action_keys)
+                if action_unexpected:
+                    errors.append(f"{row_path} has unexpected keys: {action_unexpected}")
+
+                action_id = row.get("action_id")
+                if not isinstance(action_id, str) or not action_id.strip():
+                    errors.append(f"{row_path}.action_id must be a non-empty string")
+                elif action_id in action_ids:
+                    errors.append(f"{row_path}.action_id must be unique")
+                else:
+                    action_ids.add(action_id)
+
+                diff_id = row.get("diff_id")
+                if not isinstance(diff_id, str) or not diff_id.strip():
+                    errors.append(f"{row_path}.diff_id must be a non-empty string")
+                elif diff_id not in diff_ids:
+                    errors.append(
+                        f"{row_path}.diff_id must reference strategy_revision_history_and_diff_workflow.diff_artifacts[]"
+                    )
+                action_scope = row.get("action_scope")
+                if action_scope not in {"cross-project", "local"}:
+                    errors.append(f"{row_path}.action_scope must be one of: ['cross-project', 'local']")
+                for key in ("summary", "rationale", "next_step"):
+                    value_text = row.get(key)
+                    if not isinstance(value_text, str) or not value_text.strip():
+                        errors.append(f"{row_path}.{key} must be a non-empty string")
+                action_evidence_errors, _ = _validate_nonempty_string_list(
+                    value=row.get("evidence_refs"),
+                    field_name=f"{row_path}.evidence_refs",
+                    min_items=1,
+                )
+                errors.extend(action_evidence_errors)
+
+        obligation_rows = recommendation.get("cross_project_obligations")
+        if not isinstance(obligation_rows, list):
+            errors.append("processing_behavior.recommendation.cross_project_obligations must be a list")
+            obligation_rows = []
+        for index, row in enumerate(obligation_rows):
+            row_path = f"processing_behavior.recommendation.cross_project_obligations[{index}]"
+            if not isinstance(row, Mapping):
+                errors.append(f"{row_path} must be an object")
+                continue
+            expected_obligation_keys = {"obligation_id", "diff_id", "project_id", "summary", "evidence_refs"}
+            row_keys = set(row.keys())
+            obligation_missing = sorted(expected_obligation_keys - row_keys)
+            if obligation_missing:
+                errors.append(f"{row_path} missing keys: {obligation_missing}")
+            obligation_unexpected = sorted(row_keys - expected_obligation_keys)
+            if obligation_unexpected:
+                errors.append(f"{row_path} has unexpected keys: {obligation_unexpected}")
+            for key in ("obligation_id", "diff_id", "project_id", "summary"):
+                value_text = row.get(key)
+                if not isinstance(value_text, str) or not value_text.strip():
+                    errors.append(f"{row_path}.{key} must be a non-empty string")
+            if isinstance(row.get("diff_id"), str) and row.get("diff_id") not in diff_ids:
+                errors.append(
+                    f"{row_path}.diff_id must reference strategy_revision_history_and_diff_workflow.diff_artifacts[]"
+                )
+            if usage_projects and isinstance(row.get("project_id"), str) and row.get("project_id") not in usage_projects:
+                errors.append(
+                    f"{row_path}.project_id must reference "
+                    "processing_behavior.cross_project_context_usage.projects_considered"
+                )
+            obligation_evidence_errors, obligation_evidence_refs = _validate_nonempty_string_list(
+                value=row.get("evidence_refs"),
+                field_name=f"{row_path}.evidence_refs",
+                min_items=1,
+            )
+            errors.extend(obligation_evidence_errors)
+            if usage_earth_refs and not set(obligation_evidence_refs).issubset(set(usage_earth_refs)):
+                errors.append(
+                    f"{row_path}.evidence_refs must be a subset of "
+                    "processing_behavior.cross_project_context_usage.earth_sweep_evidence_refs_considered"
+                )
+
+        open_risk_rows = recommendation.get("open_risks")
+        if not isinstance(open_risk_rows, list):
+            errors.append("processing_behavior.recommendation.open_risks must be a list")
+            open_risk_rows = []
+        for index, row in enumerate(open_risk_rows):
+            row_path = f"processing_behavior.recommendation.open_risks[{index}]"
+            if not isinstance(row, Mapping):
+                errors.append(f"{row_path} must be an object")
+                continue
+            expected_risk_keys = {"risk_id", "diff_id", "summary", "reason_code", "required_evidence_refs"}
+            row_keys = set(row.keys())
+            risk_missing = sorted(expected_risk_keys - row_keys)
+            if risk_missing:
+                errors.append(f"{row_path} missing keys: {risk_missing}")
+            risk_unexpected = sorted(row_keys - expected_risk_keys)
+            if risk_unexpected:
+                errors.append(f"{row_path} has unexpected keys: {risk_unexpected}")
+            for key in ("risk_id", "diff_id", "summary", "reason_code"):
+                value_text = row.get(key)
+                if not isinstance(value_text, str) or not value_text.strip():
+                    errors.append(f"{row_path}.{key} must be a non-empty string")
+            if isinstance(row.get("diff_id"), str) and row.get("diff_id") not in diff_ids:
+                errors.append(
+                    f"{row_path}.diff_id must reference strategy_revision_history_and_diff_workflow.diff_artifacts[]"
+                )
+            reason_code = row.get("reason_code")
+            if reason_code not in {
+                _REQ_069_MISSING_EARTH_SWEEP_REASON,
+                _REQ_069_BLOCKED_GOVERNANCE_REVIEW_REASON,
+            }:
+                errors.append(
+                    f"{row_path}.reason_code must be one of: "
+                    f"{sorted({_REQ_069_MISSING_EARTH_SWEEP_REASON, _REQ_069_BLOCKED_GOVERNANCE_REVIEW_REASON})}"
+                )
+            required_refs_errors, _ = _validate_nonempty_string_list(
+                value=row.get("required_evidence_refs"),
+                field_name=f"{row_path}.required_evidence_refs",
+                min_items=1,
+                require_sorted_unique=False,
+            )
+            errors.extend(required_refs_errors)
+
+        if isinstance(usage.get("cross_project_obligation_count"), int) and usage.get(
+            "cross_project_obligation_count"
+        ) != len(obligation_rows):
+            errors.append(
+                "processing_behavior.cross_project_context_usage.cross_project_obligation_count must equal "
+                "processing_behavior.recommendation.cross_project_obligations count"
+            )
+        if isinstance(usage.get("open_risk_count"), int) and usage.get("open_risk_count") != len(open_risk_rows):
+            errors.append(
+                "processing_behavior.cross_project_context_usage.open_risk_count must equal "
+                "processing_behavior.recommendation.open_risks count"
+            )
+        if not usage_earth_refs and obligation_rows:
+            errors.append(
+                "processing_behavior.recommendation.cross_project_obligations must be empty when "
+                "earth_sweep_evidence_refs_considered is empty"
+            )
+
+    return errors
+
+
 def validate_req_069_strategy_revision_history_and_diff_workflow(payload: Mapping[str, Any]) -> list[str]:
     """Validate REQ-069 strategy revision history and diff workflow payload shape."""
     errors: list[str] = []
@@ -1513,11 +2051,12 @@ def validate_req_069_strategy_revision_history_and_diff_workflow(payload: Mappin
         "strategy_revision_history_and_diff_workflow",
         "totals",
     }
+    optional_top = {"processing_behavior"}
     top_keys = set(payload.keys())
     missing_top = sorted(expected_top - top_keys)
     if missing_top:
         errors.append(f"missing top-level keys: {missing_top}")
-    unexpected_top = sorted(top_keys - expected_top)
+    unexpected_top = sorted(top_keys - (expected_top | optional_top))
     if unexpected_top:
         errors.append(f"unexpected top-level keys: {unexpected_top}")
 
@@ -1562,6 +2101,7 @@ def validate_req_069_strategy_revision_history_and_diff_workflow(payload: Mappin
     derived_approved: set[str] = set()
     derived_blocked: set[str] = set()
     domains_seen: set[str] = set()
+    seen_diff_ids: set[str] = set()
     diff_count = 0
     if not isinstance(workflow, Mapping):
         errors.append("strategy_revision_history_and_diff_workflow must be an object")
@@ -1607,7 +2147,6 @@ def validate_req_069_strategy_revision_history_and_diff_workflow(payload: Mappin
             errors.append("strategy_revision_history_and_diff_workflow.diff_artifacts must include at least one row")
         else:
             diff_count = len(diff_artifacts)
-            seen_diff_ids: set[str] = set()
             domain_last_direction: dict[str, str] = {}
             for index, row in enumerate(diff_artifacts):
                 row_errors, diff_id = _validate_req_069_diff_row(
@@ -1766,6 +2305,15 @@ def validate_req_069_strategy_revision_history_and_diff_workflow(payload: Mappin
                     "strategy_revision_history_and_diff_workflow.governance_review.decision "
                     "must be 'hold' when blocked_diff_ids is non-empty, otherwise 'proceed'"
                 )
+
+    processing_behavior = payload.get("processing_behavior")
+    if processing_behavior is not None:
+        errors.extend(
+            _validate_req_069_processing_behavior(
+                processing_behavior,
+                diff_ids=seen_diff_ids,
+            )
+        )
 
     totals = payload.get("totals")
     if not isinstance(totals, Mapping):

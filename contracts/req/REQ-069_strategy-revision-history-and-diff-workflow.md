@@ -33,6 +33,10 @@ REQ-069 expects:
     "project_id": "optimus-prime-gsd-fusion",
     "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
   },
+  "broad_sweep_context": {
+    "projects_considered": ["runtime-orchestrator"],
+    "earth_sweep_evidence_refs": ["reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"]
+  },
   "revision_snapshots": [
     {
       "revision_id": "strategy-2026-03-14",
@@ -71,6 +75,7 @@ REQ-069 output payload contains:
 - metadata: `ok`, `schema_version`, `requirement_id`, `analysis_type`, `call_id`, `checked_at_utc`
 - target anchor: `target_project`
 - artifact payload: `strategy_revision_history_and_diff_workflow`
+- reasoning payload: `processing_behavior`
 - bounded counts: `totals`
 
 `strategy_revision_history_and_diff_workflow` contains:
@@ -113,6 +118,21 @@ Each `diff_artifacts[]` row includes:
 - `approved_diff_ids[]`
 - `blocked_diff_ids[]`
 
+`processing_behavior` includes deterministic reasoning fields:
+- `strategy`
+- `context_inputs.broad_sweep_context`
+- `cross_project_context_usage`
+- `recommendation`
+
+`processing_behavior.recommendation` includes:
+- `decision`
+- `rationale`
+- `confidence`
+- `evidence_refs[]`
+- `recommended_actions[]`
+- `cross_project_obligations[]`
+- `open_risks[]`
+
 `totals` includes:
 - `revision_snapshots`
 - `diff_artifacts`
@@ -125,6 +145,8 @@ Behavior:
 - `diff_artifacts` sequence is deterministic and encoded by `sequence_position`.
 - Direction changes are derived per `change_domain` from prior emitted domain direction.
 - Governance review supports explicit approval and blocks random directional shifts without governance references.
+- Cross-project obligations are emitted only when Earth-sweep evidence refs are available.
+- Missing Earth-sweep context and unresolved governance review items are surfaced as `open_risks`.
 - `governance_review` and `totals` counts must equal derived directional-shift sets.
 
 ## Deterministic fixtures and samples
