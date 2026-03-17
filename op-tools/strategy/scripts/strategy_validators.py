@@ -30,6 +30,10 @@ REASON_CODE_RECOMMENDATION_COMPLETENESS_FAILED = "recommendation_completeness_fa
 REASON_CODE_RECOMMENDATION_LOW_SUBSTANCE_RATIONALE = "recommendation_low_substance_rationale"
 REASON_CODE_RECOMMENDATION_EVIDENCE_CITATIONS_BELOW_MINIMUM = "recommendation_evidence_citations_below_minimum"
 REASON_CODE_RECOMMENDATION_ID_DUPLICATE = "recommendation_id_duplicate"
+REASON_CODE_PRE_PLAN_STRATEGY_ARTIFACT_REFS_MISSING = "pre_plan_strategy_artifact_refs_missing"
+REASON_CODE_PRE_PLAN_MANDATORY_GUARDRAIL_MISSING = "pre_plan_mandatory_guardrail_missing"
+REASON_CODE_PRE_PLAN_RECOMMENDATION_CONTEXT_EMPTY = "pre_plan_recommendation_context_empty"
+REASON_CODE_PRE_PLAN_CONSTRAINT_CONTEXT_EMPTY = "pre_plan_constraint_context_empty"
 
 REQ_061_MIN_RATIONALE_WORD_COUNT = 12
 REQ_061_MIN_EVIDENCE_CITATIONS = 2
@@ -117,6 +121,22 @@ def _extract_evidence_citations(*values: str) -> list[str]:
     return citations
 
 
+def _collect_nonempty_strings(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized
+
+
 def load_json_file(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -148,8 +168,14 @@ def _result(
         REASON_CODE_RECOMMENDATION_EVIDENCE_CITATIONS_BELOW_MINIMUM,
         REASON_CODE_RECOMMENDATION_ID_DUPLICATE,
     }
+    pre_plan_failure_reason_codes = {
+        REASON_CODE_PRE_PLAN_STRATEGY_ARTIFACT_REFS_MISSING,
+        REASON_CODE_PRE_PLAN_MANDATORY_GUARDRAIL_MISSING,
+        REASON_CODE_PRE_PLAN_RECOMMENDATION_CONTEXT_EMPTY,
+        REASON_CODE_PRE_PLAN_CONSTRAINT_CONTEXT_EMPTY,
+    }
     planner_failure_reason_codes = (
-        constraint_failure_reason_codes | recommendation_failure_reason_codes
+        constraint_failure_reason_codes | recommendation_failure_reason_codes | pre_plan_failure_reason_codes
     )
     schema_failure_reason_codes = {
         REASON_CODE_SCHEMA_VALIDATION_FAILED,
@@ -179,6 +205,10 @@ def _result(
                 row["reason_code"] in constraint_failure_reason_codes for row in diagnostics
             ),
             "planner_policy_consumable": not any(
+                row["reason_code"] in planner_failure_reason_codes
+                for row in diagnostics
+            ),
+            "op_initialize_pre_plan_strategy_hook_consumable": not any(
                 row["reason_code"] in planner_failure_reason_codes
                 for row in diagnostics
             ),
@@ -405,6 +435,71 @@ def _validate_recommendation_quality(packet: Mapping[str, Any]) -> list[dict[str
     return diagnostics
 
 
+def _validate_pre_plan_strategy_hook_consumability(packet: Mapping[str, Any]) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+
+    strategy = packet.get("strategy")
+    if isinstance(strategy, Mapping):
+        link_map_ref = strategy.get("link_map_ref")
+        if not isinstance(link_map_ref, str) or not link_map_ref.strip():
+            diagnostics.append(
+                _diagnostic(
+                    "$.strategy.link_map_ref",
+                    REASON_CODE_PRE_PLAN_STRATEGY_ARTIFACT_REFS_MISSING,
+                    (
+                        "Pre-plan hook requires strategy artifact references; "
+                        "strategy.link_map_ref must be a non-empty string."
+                    ),
+                )
+            )
+
+    recommendations = packet.get("recommendations")
+    recommendation_ids: list[str] = []
+    if isinstance(recommendations, list):
+        for row in recommendations:
+            if not isinstance(row, Mapping):
+                continue
+            recommendation_id = row.get("recommendation_id")
+            if isinstance(recommendation_id, str) and recommendation_id.strip():
+                recommendation_ids.append(recommendation_id.strip())
+    if not recommendation_ids:
+        diagnostics.append(
+            _diagnostic(
+                "$.recommendations",
+                REASON_CODE_PRE_PLAN_RECOMMENDATION_CONTEXT_EMPTY,
+                "Pre-plan hook requires at least one recommendation_id for planner context.",
+            )
+        )
+
+    constraints = packet.get("constraints")
+    if isinstance(constraints, Mapping):
+        planner_policy = constraints.get("planner_policy")
+        if isinstance(planner_policy, Mapping):
+            mandatory_guardrail_ids = _collect_nonempty_strings(planner_policy.get("mandatory_guardrail_ids"))
+            optional_guidance_ids = _collect_nonempty_strings(planner_policy.get("optional_guidance_ids"))
+            if not mandatory_guardrail_ids:
+                diagnostics.append(
+                    _diagnostic(
+                        "$.constraints.planner_policy.mandatory_guardrail_ids",
+                        REASON_CODE_PRE_PLAN_MANDATORY_GUARDRAIL_MISSING,
+                        "Pre-plan hook requires at least one mandatory guardrail constraint ID.",
+                    )
+                )
+            if not mandatory_guardrail_ids and not optional_guidance_ids:
+                diagnostics.append(
+                    _diagnostic(
+                        "$.constraints.planner_policy",
+                        REASON_CODE_PRE_PLAN_CONSTRAINT_CONTEXT_EMPTY,
+                        (
+                            "Pre-plan hook requires non-empty constraint context; "
+                            "planner_policy must provide mandatory_guardrail_ids and/or optional_guidance_ids."
+                        ),
+                    )
+                )
+
+    return diagnostics
+
+
 def validate_strategy_packet(packet: Any, schema: Any, *, input_path: str | None = None, schema_path: str | None = None) -> dict[str, Any]:
     diagnostics: list[dict[str, str]] = []
     if not isinstance(packet, Mapping):
@@ -429,6 +524,7 @@ def validate_strategy_packet(packet: Any, schema: Any, *, input_path: str | None
 
     diagnostics.extend(_validate_constraint_artifact(packet))
     diagnostics.extend(_validate_recommendation_quality(packet))
+    diagnostics.extend(_validate_pre_plan_strategy_hook_consumability(packet))
     diagnostics.sort(key=lambda row: (row["path"], row["reason_code"], row["message"]))
     return _result(diagnostics=diagnostics, input_path=input_path, schema_path=schema_path)
 

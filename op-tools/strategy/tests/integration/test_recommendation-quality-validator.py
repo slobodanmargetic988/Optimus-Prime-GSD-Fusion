@@ -6,10 +6,12 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from scripts.strategy_validators import validate_strategy_packet
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "strategy_packet_validate.py"
 SCHEMA_PATH = REPO_ROOT / "contracts" / "strategy_packet.v1.schema.json"
 PACKET_PATH = REPO_ROOT / "strategy" / "current" / "strategy_packet.v1.json"
@@ -38,6 +40,7 @@ def test_validator_accepts_req061_recommendation_quality_validator_packet() -> N
         "schema_valid": True,
         "constraint_classification_consumable": True,
         "planner_policy_consumable": True,
+        "op_initialize_pre_plan_strategy_hook_consumable": True,
     }
     assert result["diagnostics"] == []
 
@@ -71,6 +74,7 @@ def test_cli_emits_req061_deterministic_diagnostics_for_low_substance_recommenda
         "schema_valid": True,
         "constraint_classification_consumable": True,
         "planner_policy_consumable": False,
+        "op_initialize_pre_plan_strategy_hook_consumable": False,
     }
     assert payload["diagnostics"] == [
         {

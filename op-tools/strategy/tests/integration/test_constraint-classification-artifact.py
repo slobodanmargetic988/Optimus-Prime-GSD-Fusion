@@ -6,10 +6,12 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from scripts.strategy_validators import validate_strategy_packet
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "strategy_packet_validate.py"
 SCHEMA_PATH = REPO_ROOT / "contracts" / "strategy_packet.v1.schema.json"
 PACKET_PATH = REPO_ROOT / "strategy" / "current" / "strategy_packet.v1.json"
@@ -38,6 +40,7 @@ def test_validator_accepts_req055_constraint_classification_artifact_packet() ->
         "schema_valid": True,
         "constraint_classification_consumable": True,
         "planner_policy_consumable": True,
+        "op_initialize_pre_plan_strategy_hook_consumable": True,
     }
     assert result["diagnostics"] == []
 
@@ -64,11 +67,13 @@ def test_cli_emits_deterministic_semantic_diagnostics_for_invalid_constraint_art
     assert payload["reason_codes"] == [
         "constraint_bucket_classification_mismatch",
         "planner_policy_alignment_mismatch",
+        "pre_plan_mandatory_guardrail_missing",
     ]
     assert payload["gate"] == {
         "schema_valid": True,
         "constraint_classification_consumable": False,
         "planner_policy_consumable": False,
+        "op_initialize_pre_plan_strategy_hook_consumable": False,
     }
     assert payload["diagnostics"] == [
         {
@@ -81,6 +86,12 @@ def test_cli_emits_deterministic_semantic_diagnostics_for_invalid_constraint_art
             "message": "mandatory_guardrail_ids must equal ['guardrail-task-floor'].",
             "path": "$.constraints.planner_policy.mandatory_guardrail_ids",
             "reason_code": "planner_policy_alignment_mismatch",
+            "severity": "error",
+        },
+        {
+            "message": "Pre-plan hook requires at least one mandatory guardrail constraint ID.",
+            "path": "$.constraints.planner_policy.mandatory_guardrail_ids",
+            "reason_code": "pre_plan_mandatory_guardrail_missing",
             "severity": "error",
         },
     ]
@@ -109,6 +120,7 @@ def test_cli_emits_schema_failure_with_field_path_for_malformed_constraint_artif
         "schema_valid": False,
         "constraint_classification_consumable": False,
         "planner_policy_consumable": False,
+        "op_initialize_pre_plan_strategy_hook_consumable": False,
     }
     assert payload["diagnostics"] == [
         {

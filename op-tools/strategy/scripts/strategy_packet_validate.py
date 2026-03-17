@@ -12,7 +12,9 @@ from scripts.strategy_validators import validate_strategy_packet_files
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Validate a strategy packet against the schema and REQ-055 gate.")
+    parser = argparse.ArgumentParser(
+        description="Validate a strategy packet against schema and REQ-055/REQ-061/REQ-067 consumability gates."
+    )
     parser.add_argument("--input", required=True, help="Path to the strategy packet JSON file.")
     parser.add_argument("--schema", required=True, help="Path to the strategy packet JSON schema.")
     return parser

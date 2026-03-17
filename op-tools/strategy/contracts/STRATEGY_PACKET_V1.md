@@ -74,3 +74,7 @@ Planner policy arrays must exactly align with the classified rows:
 - Machine schema: `contracts/strategy_packet.v1.schema.json`
 - Deterministic sample: `examples/strategy_packet.sample.v1.json`
 - CLI gate: `python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json`
+- Gate surfaces:
+  - `constraint_classification_consumable` (REQ-055)
+  - `planner_policy_consumable` (REQ-061 policy quality and recommendation quality)
+  - `op_initialize_pre_plan_strategy_hook_consumable` (REQ-067 pre-plan hook context readiness)
