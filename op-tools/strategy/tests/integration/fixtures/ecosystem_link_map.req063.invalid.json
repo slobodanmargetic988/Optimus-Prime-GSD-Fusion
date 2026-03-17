@@ -1,0 +1,31 @@
+{
+  "artifact_type": "ecosystem-link-map.v1",
+  "project_id": "prj.myownmint",
+  "discovered_projects": [
+    {
+      "project_id": "prj.myownmint"
+    },
+    {
+      "project_id": "prj.peer-alpha"
+    },
+    {
+      "project_id": "prj.peer-alpha"
+    }
+  ],
+  "links": [
+    {
+      "source_project_id": "prj.myownmint",
+      "target_project_id": "prj.peer-beta",
+      "relationship": "depends-on",
+      "status": "current",
+      "summary": "Broken target reference."
+    },
+    {
+      "source_project_id": "prj.orphan-source",
+      "target_project_id": "prj.peer-alpha",
+      "relationship": "proposes-improvement",
+      "status": "proposed",
+      "summary": "Broken source reference."
+    }
+  ]
+}

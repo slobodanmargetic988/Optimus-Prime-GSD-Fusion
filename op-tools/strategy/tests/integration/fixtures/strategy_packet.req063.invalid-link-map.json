@@ -1,0 +1,40 @@
+{
+  "schema_version": "strategy-packet.v1",
+  "identity": {
+    "project_id": "prj.myownmint",
+    "run_id": "run.20260317t120000z-s001",
+    "event_id": "event.20260317t120500z-strategy-packet"
+  },
+  "strategy": {
+    "revision_id": "strat.20260317-r1",
+    "summary": "Fail the REQ-063 link-map integrity validator with referential diagnostics.",
+    "link_map_ref": "ecosystem_link_map.req063.invalid.json"
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.link-map-integrity",
+      "priority": "high",
+      "summary": "Block malformed ecosystem link maps.",
+      "rationale": "Planner and runtime consumers need deterministic link integrity checks.",
+      "expected_impact": "Prevent orphaned ecosystem references from passing consumption gates.",
+      "risk_level": "medium"
+    }
+  ],
+  "constraints": {
+    "hard": [
+      "Do not auto-heal broken or orphaned links."
+    ],
+    "soft": []
+  },
+  "kpi_targets": [
+    {
+      "metric": "orphaned_link_acceptance_ratio",
+      "direction": "decrease",
+      "target": "0"
+    }
+  ],
+  "source": {
+    "repo": "Optimus-Prime-GSD-Fusion",
+    "tool": "op-tools/strategy"
+  }
+}

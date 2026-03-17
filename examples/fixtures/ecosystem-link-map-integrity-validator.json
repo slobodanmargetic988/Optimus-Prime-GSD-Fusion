@@ -1,0 +1,83 @@
+{
+  "input": {
+    "analysis_type": "ecosystem_link_map_integrity_validator",
+    "now_utc": "2026-03-16T12:30:00Z",
+    "target_project": {
+      "project_id": "prj.optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "link_map_ref": "strategy/current/ECOSYSTEM_LINK_MAP.json",
+    "discovered_projects": [
+      {
+        "project_id": "prj.optimus-prime-gsd-fusion",
+        "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+      },
+      {
+        "project_id": "prj.runtime-core",
+        "project_root": "/Users/slobodan/projects/Earth/Runtime-Core"
+      },
+      {
+        "project_id": "prj.analytics-hub",
+        "project_root": "/Users/slobodan/projects/Earth/Analytics-Hub"
+      }
+    ],
+    "links": [
+      {
+        "link_id": "link.runtime-core.depends-on",
+        "source_project_id": "prj.optimus-prime-gsd-fusion",
+        "target_project_id": "prj.runtime-core",
+        "link_type": "depends_on",
+        "declared_in": "strategy/current/ECOSYSTEM_LINK_MAP.json#links[0]",
+        "source_refs": [
+          "contracts/req/REQ-002_earth-wide-repository-discovery-manifest.md",
+          "strategy/current/strategy_packet.v1.json#strategy.link_map_ref"
+        ]
+      },
+      {
+        "link_id": "link.analytics-export.emits-to",
+        "source_project_id": "prj.optimus-prime-gsd-fusion",
+        "target_project_id": "prj.analytics-lab",
+        "link_type": "emits_to",
+        "declared_in": "strategy/current/ECOSYSTEM_LINK_MAP.json#links[1]",
+        "source_refs": [
+          "strategy/current/strategy_packet.v1.json#strategy.link_map_ref"
+        ]
+      },
+      {
+        "link_id": "link.runtime-core.self-loop",
+        "source_project_id": "prj.runtime-core",
+        "target_project_id": "prj.runtime-core",
+        "link_type": "depends_on",
+        "declared_in": "strategy/current/ECOSYSTEM_LINK_MAP.json#links[2]",
+        "source_refs": [
+          "strategy/current/ECOSYSTEM_LINK_MAP.json#links[2]"
+        ]
+      }
+    ]
+  },
+  "invalid_missing_source_refs_input": {
+    "analysis_type": "ecosystem_link_map_integrity_validator",
+    "now_utc": "2026-03-16T12:30:00Z",
+    "target_project": {
+      "project_id": "prj.optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "link_map_ref": "strategy/current/ECOSYSTEM_LINK_MAP.json",
+    "discovered_projects": [
+      {
+        "project_id": "prj.optimus-prime-gsd-fusion",
+        "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+      }
+    ],
+    "links": [
+      {
+        "link_id": "link.invalid.missing-source-refs",
+        "source_project_id": "prj.optimus-prime-gsd-fusion",
+        "target_project_id": "prj.runtime-core",
+        "link_type": "depends_on",
+        "declared_in": "strategy/current/ECOSYSTEM_LINK_MAP.json#links[0]",
+        "source_refs": []
+      }
+    ]
+  }
+}

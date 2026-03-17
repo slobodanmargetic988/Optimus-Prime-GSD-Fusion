@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-2",
+  "task_id": "TASK-205",
+  "requirement_ids": [
+    "REQ-057"
+  ],
+  "updated_at": "2026-03-16T08:00:00Z",
+  "dev": {
+    "status": "completed",
+    "checks": [],
+    "verify_results": [],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": []
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_057_reference_anchor_present"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}
