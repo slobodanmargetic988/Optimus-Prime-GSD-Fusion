@@ -1,0 +1,617 @@
+{
+  "schema_version": "req-031.call-6-kpi-impact-estimation-reasoning.v1",
+  "requirement_id": "REQ-031",
+  "analysis_type": "call_6_kpi_impact_estimation_reasoning",
+  "call_id": "call-6",
+  "checked_at_utc": "2026-03-16T14:20:00Z",
+  "processing_behavior": {
+    "strategy": "call-6-kpi-impact-estimation-reasoning",
+    "reasoning_mode": "deterministic-kpi-impact-replay-estimation",
+    "strict_evidence_discipline": true,
+    "context_inputs": {
+      "call_chain": [
+        {
+          "sequence": 1,
+          "call_id": "call-1",
+          "phase": "analysis",
+          "output_ref": "REQ-031::call::call-1::output::situational_analysis"
+        },
+        {
+          "sequence": 2,
+          "call_id": "call-2",
+          "phase": "planning",
+          "output_ref": "REQ-031::call::call-2::output::execution_plan"
+        },
+        {
+          "sequence": 3,
+          "call_id": "call-3",
+          "phase": "validation",
+          "output_ref": "REQ-031::call::call-3::output::evidence_validation"
+        },
+        {
+          "sequence": 4,
+          "call_id": "call-4",
+          "phase": "synthesis",
+          "output_ref": "REQ-031::call::call-4::output::recommendation_synthesis"
+        },
+        {
+          "sequence": 5,
+          "call_id": "call-5",
+          "phase": "sequencing",
+          "output_ref": "REQ-031::call::call-5::output::lane_design_reasoning"
+        },
+        {
+          "sequence": 6,
+          "call_id": "call-6",
+          "phase": "kpi-impact-estimation",
+          "output_ref": "REQ-031::call::call-6::output::kpi_impact_estimation"
+        }
+      ],
+      "target_project": {
+        "project_root": "/workspace/projects/optimus-prime",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json",
+          "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+        ]
+      },
+      "earth_sweep": {
+        "earth_root": "/workspace/projects/Earth",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+        ]
+      },
+      "recommendation_adoptions": [
+        {
+          "recommendation_id": "rec.local-determinism",
+          "summary": "Keep deterministic replay diagnostics on the committed branch head.",
+          "adoption_status": "planned",
+          "adoption_window": "this wave",
+          "project_id": "",
+          "requires_earth_evidence": false,
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "recommendation_id": "rec.runtime-sync",
+          "summary": "Adopt the cross-project runtime replay sync after local proof lands.",
+          "adoption_status": "conditional",
+          "adoption_window": "next wave",
+          "project_id": "runtime-orchestrator",
+          "requires_earth_evidence": true,
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ],
+      "kpi_definitions": [
+        {
+          "kpi_id": "kpi.mean-time-to-diagnose",
+          "kpi_name": "Mean Time To Diagnose",
+          "baseline_value": 75.0,
+          "unit": "minutes",
+          "desired_direction": "decrease",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "kpi_id": "kpi.replay-failure-rate",
+          "kpi_name": "Replay Failure Rate",
+          "baseline_value": 0.12,
+          "unit": "ratio",
+          "desired_direction": "decrease",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "impact_assumptions": [
+        {
+          "recommendation_id": "rec.local-determinism",
+          "kpi_id": "kpi.mean-time-to-diagnose",
+          "expected_movement_lower": -15.0,
+          "expected_movement_upper": -8.0,
+          "reasoning_summary": "Committed deterministic diagnostics should shorten branch-head failure triage.",
+          "confidence": "medium",
+          "caveats": [
+            "Savings depend on keeping evidence packets attached to reruns."
+          ],
+          "evidence_backed_assumptions": [
+            "Investigators continue to rely on branch-head trace artifacts for diagnosis."
+          ],
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "recommendation_id": "rec.local-determinism",
+          "kpi_id": "kpi.replay-failure-rate",
+          "expected_movement_lower": -0.04,
+          "expected_movement_upper": -0.02,
+          "reasoning_summary": "Local deterministic hardening should remove a larger share of replay failures.",
+          "confidence": "high",
+          "caveats": [
+            "The estimate assumes no new non-deterministic runtime inputs land mid-wave."
+          ],
+          "evidence_backed_assumptions": [
+            "Branch-head diagnostics remain replay-stable across repeated smoke and integration runs."
+          ],
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "recommendation_id": "rec.runtime-sync",
+          "kpi_id": "kpi.replay-failure-rate",
+          "expected_movement_lower": -0.03,
+          "expected_movement_upper": -0.01,
+          "reasoning_summary": "Cross-project runtime alignment should remove a smaller class of replay mismatches.",
+          "confidence": "low",
+          "caveats": [
+            "Runtime-orchestrator adoption remains conditional on fresh earth evidence."
+          ],
+          "evidence_backed_assumptions": [
+            "Lane 2 adoption stays aligned with the latest runtime-orchestrator sweep."
+          ],
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ]
+    },
+    "context_usage": {
+      "call_ids_considered": [
+        "call-1",
+        "call-2",
+        "call-3",
+        "call-4",
+        "call-5",
+        "call-6"
+      ],
+      "recommendation_ids_considered": [
+        "rec.local-determinism",
+        "rec.runtime-sync"
+      ],
+      "kpi_ids_considered": [
+        "kpi.mean-time-to-diagnose",
+        "kpi.replay-failure-rate"
+      ],
+      "estimate_ids_emitted": [
+        "estimate::rec.local-determinism::kpi.mean-time-to-diagnose",
+        "estimate::rec.local-determinism::kpi.replay-failure-rate",
+        "estimate::rec.runtime-sync::kpi.replay-failure-rate"
+      ],
+      "low_confidence_estimate_ids": [
+        "estimate::rec.runtime-sync::kpi.replay-failure-rate"
+      ],
+      "blocked_recommendation_ids": [],
+      "open_risk_ids_emitted": [],
+      "evidence_refs_used": [
+        "REQ-031::call::call-1::output::situational_analysis",
+        "REQ-031::call::call-2::output::execution_plan",
+        "REQ-031::call::call-3::output::evidence_validation",
+        "REQ-031::call::call-4::output::recommendation_synthesis",
+        "REQ-031::call::call-5::output::lane_design_reasoning",
+        "REQ-031::call::call-6::output::kpi_impact_estimation",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json",
+        "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+      ]
+    },
+    "kpi_impact_estimation": {
+      "decision": "proceed",
+      "rationale": "estimates=3 open_risks=0 blocked=0 low_confidence=1",
+      "confidence": "medium",
+      "evidence_refs": [
+        "REQ-031::call::call-1::output::situational_analysis",
+        "REQ-031::call::call-2::output::execution_plan",
+        "REQ-031::call::call-3::output::evidence_validation",
+        "REQ-031::call::call-4::output::recommendation_synthesis",
+        "REQ-031::call::call-5::output::lane_design_reasoning",
+        "REQ-031::call::call-6::output::kpi_impact_estimation",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json",
+        "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+      ],
+      "kpi_estimates": [
+        {
+          "estimate_id": "estimate::rec.local-determinism::kpi.mean-time-to-diagnose",
+          "recommendation_id": "rec.local-determinism",
+          "recommendation_summary": "Keep deterministic replay diagnostics on the committed branch head.",
+          "kpi_id": "kpi.mean-time-to-diagnose",
+          "kpi_name": "Mean Time To Diagnose",
+          "baseline_value": 75.0,
+          "unit": "minutes",
+          "desired_direction": "decrease",
+          "adoption_status": "planned",
+          "adoption_window": "this wave",
+          "expected_movement": {
+            "lower": -15.0,
+            "upper": -8.0
+          },
+          "estimated_post_adoption_range": {
+            "lower": 60.0,
+            "upper": 67.0
+          },
+          "reasoning_summary": "Committed deterministic diagnostics should shorten branch-head failure triage.",
+          "confidence": "medium",
+          "caveats": [
+            "Savings depend on keeping evidence packets attached to reruns."
+          ],
+          "evidence_backed_assumptions": [
+            "Investigators continue to rely on branch-head trace artifacts for diagnosis."
+          ],
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json",
+            "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "estimate_id": "estimate::rec.local-determinism::kpi.replay-failure-rate",
+          "recommendation_id": "rec.local-determinism",
+          "recommendation_summary": "Keep deterministic replay diagnostics on the committed branch head.",
+          "kpi_id": "kpi.replay-failure-rate",
+          "kpi_name": "Replay Failure Rate",
+          "baseline_value": 0.12,
+          "unit": "ratio",
+          "desired_direction": "decrease",
+          "adoption_status": "planned",
+          "adoption_window": "this wave",
+          "expected_movement": {
+            "lower": -0.04,
+            "upper": -0.02
+          },
+          "estimated_post_adoption_range": {
+            "lower": 0.07999999999999999,
+            "upper": 0.09999999999999999
+          },
+          "reasoning_summary": "Local deterministic hardening should remove a larger share of replay failures.",
+          "confidence": "high",
+          "caveats": [
+            "The estimate assumes no new non-deterministic runtime inputs land mid-wave."
+          ],
+          "evidence_backed_assumptions": [
+            "Branch-head diagnostics remain replay-stable across repeated smoke and integration runs."
+          ],
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "estimate_id": "estimate::rec.runtime-sync::kpi.replay-failure-rate",
+          "recommendation_id": "rec.runtime-sync",
+          "recommendation_summary": "Adopt the cross-project runtime replay sync after local proof lands.",
+          "kpi_id": "kpi.replay-failure-rate",
+          "kpi_name": "Replay Failure Rate",
+          "baseline_value": 0.12,
+          "unit": "ratio",
+          "desired_direction": "decrease",
+          "adoption_status": "conditional",
+          "adoption_window": "next wave",
+          "expected_movement": {
+            "lower": -0.03,
+            "upper": -0.01
+          },
+          "estimated_post_adoption_range": {
+            "lower": 0.09,
+            "upper": 0.11
+          },
+          "reasoning_summary": "Cross-project runtime alignment should remove a smaller class of replay mismatches.",
+          "confidence": "low",
+          "caveats": [
+            "Runtime-orchestrator adoption remains conditional on fresh earth evidence."
+          ],
+          "evidence_backed_assumptions": [
+            "Lane 2 adoption stays aligned with the latest runtime-orchestrator sweep."
+          ],
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "open_risks": []
+    }
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input": {
+      "runtime_mode": "llm-first",
+      "execution_mode": "long-thinking",
+      "target_project_root": "/workspace/projects/optimus-prime",
+      "earth_root": "/workspace/projects/Earth",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req031-evidence-r1",
+      "strategy_goal": "Estimate call-6 KPI impact from replay-stable recommendation adoption inputs.",
+      "analysis_type": "call_6_kpi_impact_estimation_reasoning",
+      "call_id": "call-6",
+      "checked_at_utc": "2026-03-16T14:20:00Z"
+    },
+    "canonical_input_sha256": "a0064954afc7b73a17172a158adeb7ebe837c998d81d6ebd29e981b3b975b456",
+    "reproducible_call_id": "req031-a0064954afc7b73a",
+    "canonical_processing_input": {
+      "call_chain": [
+        {
+          "sequence": 1,
+          "call_id": "call-1",
+          "phase": "analysis",
+          "output_ref": "REQ-031::call::call-1::output::situational_analysis"
+        },
+        {
+          "sequence": 2,
+          "call_id": "call-2",
+          "phase": "planning",
+          "output_ref": "REQ-031::call::call-2::output::execution_plan"
+        },
+        {
+          "sequence": 3,
+          "call_id": "call-3",
+          "phase": "validation",
+          "output_ref": "REQ-031::call::call-3::output::evidence_validation"
+        },
+        {
+          "sequence": 4,
+          "call_id": "call-4",
+          "phase": "synthesis",
+          "output_ref": "REQ-031::call::call-4::output::recommendation_synthesis"
+        },
+        {
+          "sequence": 5,
+          "call_id": "call-5",
+          "phase": "sequencing",
+          "output_ref": "REQ-031::call::call-5::output::lane_design_reasoning"
+        },
+        {
+          "sequence": 6,
+          "call_id": "call-6",
+          "phase": "kpi-impact-estimation",
+          "output_ref": "REQ-031::call::call-6::output::kpi_impact_estimation"
+        }
+      ],
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json",
+        "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+      ],
+      "recommendation_adoptions": [
+        {
+          "recommendation_id": "rec.local-determinism",
+          "summary": "Keep deterministic replay diagnostics on the committed branch head.",
+          "adoption_status": "planned",
+          "adoption_window": "this wave",
+          "project_id": "",
+          "requires_earth_evidence": false,
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "recommendation_id": "rec.runtime-sync",
+          "summary": "Adopt the cross-project runtime replay sync after local proof lands.",
+          "adoption_status": "conditional",
+          "adoption_window": "next wave",
+          "project_id": "runtime-orchestrator",
+          "requires_earth_evidence": true,
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ],
+      "kpi_definitions": [
+        {
+          "kpi_id": "kpi.mean-time-to-diagnose",
+          "kpi_name": "Mean Time To Diagnose",
+          "baseline_value": 75.0,
+          "unit": "minutes",
+          "desired_direction": "decrease",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "kpi_id": "kpi.replay-failure-rate",
+          "kpi_name": "Replay Failure Rate",
+          "baseline_value": 0.12,
+          "unit": "ratio",
+          "desired_direction": "decrease",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "impact_assumptions": [
+        {
+          "recommendation_id": "rec.local-determinism",
+          "kpi_id": "kpi.mean-time-to-diagnose",
+          "expected_movement_lower": -15.0,
+          "expected_movement_upper": -8.0,
+          "reasoning_summary": "Committed deterministic diagnostics should shorten branch-head failure triage.",
+          "confidence": "medium",
+          "caveats": [
+            "Savings depend on keeping evidence packets attached to reruns."
+          ],
+          "evidence_backed_assumptions": [
+            "Investigators continue to rely on branch-head trace artifacts for diagnosis."
+          ],
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "recommendation_id": "rec.local-determinism",
+          "kpi_id": "kpi.replay-failure-rate",
+          "expected_movement_lower": -0.04,
+          "expected_movement_upper": -0.02,
+          "reasoning_summary": "Local deterministic hardening should remove a larger share of replay failures.",
+          "confidence": "high",
+          "caveats": [
+            "The estimate assumes no new non-deterministic runtime inputs land mid-wave."
+          ],
+          "evidence_backed_assumptions": [
+            "Branch-head diagnostics remain replay-stable across repeated smoke and integration runs."
+          ],
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "recommendation_id": "rec.runtime-sync",
+          "kpi_id": "kpi.replay-failure-rate",
+          "expected_movement_lower": -0.03,
+          "expected_movement_upper": -0.01,
+          "reasoning_summary": "Cross-project runtime alignment should remove a smaller class of replay mismatches.",
+          "confidence": "low",
+          "caveats": [
+            "Runtime-orchestrator adoption remains conditional on fresh earth evidence."
+          ],
+          "evidence_backed_assumptions": [
+            "Lane 2 adoption stays aligned with the latest runtime-orchestrator sweep."
+          ],
+          "evidence_refs": [
+            "REQ-031::call::call-5::output::lane_design_reasoning",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ]
+    },
+    "processing_input_sha256": "c9c17a23d4f2a83f7e5e76478012d964ffd7c9911b613050a17adf7cea63bf3a",
+    "processing_call_id": "req031-processing-c9c17a23d4f2a83f",
+    "llm_call_trace_schema_version": "req-031.llm-call-trace-row.v1",
+    "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
+    "llm_call_trace_sha256": "c02e8703328e93f4968f3b9882f7b7bdec11cff40cd46cd034fc8f817f3267b0",
+    "llm_call_trace_rows": [
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-c9c17a23d4f2a83f",
+        "call_id": "call-1",
+        "sequence": 1,
+        "call_objective": "Assess target-project state and evidence anchors required for later strategy reasoning.",
+        "input_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json",
+          "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+        ],
+        "output_refs": [
+          "REQ-031::call::call-1::output::situational_analysis"
+        ],
+        "handoff_summary": "Call 1 hands off REQ-031::call::call-1::output::situational_analysis to call-2 after consuming 3 input ref(s)."
+      },
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-c9c17a23d4f2a83f",
+        "call_id": "call-2",
+        "sequence": 2,
+        "call_objective": "Refine implementation constraints into deterministic execution-planning inputs.",
+        "input_refs": [
+          "REQ-031::call::call-1::output::situational_analysis",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json",
+          "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+        ],
+        "output_refs": [
+          "REQ-031::call::call-2::output::execution_plan"
+        ],
+        "handoff_summary": "Call 2 hands off REQ-031::call::call-2::output::execution_plan to call-3 after consuming 4 input ref(s)."
+      },
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-c9c17a23d4f2a83f",
+        "call_id": "call-3",
+        "sequence": 3,
+        "call_objective": "Validate dependency and evidence readiness before recommendation promotion.",
+        "input_refs": [
+          "REQ-031::call::call-1::output::situational_analysis",
+          "REQ-031::call::call-2::output::execution_plan",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json",
+          "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+        ],
+        "output_refs": [
+          "REQ-031::call::call-3::output::evidence_validation"
+        ],
+        "handoff_summary": "Call 3 hands off REQ-031::call::call-3::output::evidence_validation to call-4 after consuming 5 input ref(s)."
+      },
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-c9c17a23d4f2a83f",
+        "call_id": "call-4",
+        "sequence": 4,
+        "call_objective": "Synthesize evidence-backed recommendation drafts from earlier call outputs.",
+        "input_refs": [
+          "REQ-031::call::call-1::output::situational_analysis",
+          "REQ-031::call::call-2::output::execution_plan",
+          "REQ-031::call::call-3::output::evidence_validation",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json",
+          "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+        ],
+        "output_refs": [
+          "REQ-031::call::call-4::output::recommendation_synthesis"
+        ],
+        "handoff_summary": "Call 4 hands off REQ-031::call::call-4::output::recommendation_synthesis to call-5 after consuming 6 input ref(s)."
+      },
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-c9c17a23d4f2a83f",
+        "call_id": "call-5",
+        "sequence": 5,
+        "call_objective": "Sequence recommendation adoption lanes for replay-stable branch-head execution.",
+        "input_refs": [
+          "REQ-031::call::call-1::output::situational_analysis",
+          "REQ-031::call::call-2::output::execution_plan",
+          "REQ-031::call::call-3::output::evidence_validation",
+          "REQ-031::call::call-4::output::recommendation_synthesis",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json",
+          "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+        ],
+        "output_refs": [
+          "REQ-031::call::call-5::output::lane_design_reasoning"
+        ],
+        "handoff_summary": "Call 5 hands off REQ-031::call::call-5::output::lane_design_reasoning to call-6 after consuming 7 input ref(s)."
+      },
+      {
+        "schema_version": "req-031.llm-call-trace-row.v1",
+        "requirement_id": "REQ-031",
+        "processing_call_id": "req031-processing-c9c17a23d4f2a83f",
+        "call_id": "call-6",
+        "sequence": 6,
+        "call_objective": "Estimate KPI impact from lane adoption using evidence-backed assumptions and explicit caveats.",
+        "input_refs": [
+          "REQ-031::call::call-1::output::situational_analysis",
+          "REQ-031::call::call-2::output::execution_plan",
+          "REQ-031::call::call-3::output::evidence_validation",
+          "REQ-031::call::call-4::output::recommendation_synthesis",
+          "REQ-031::call::call-5::output::lane_design_reasoning",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-102/TASK_EVIDENCE.json",
+          "reports/optimus-prime/planning/evidence/TASK-105/TASK_EVIDENCE.json"
+        ],
+        "output_refs": [
+          "REQ-031::call::call-6::output::kpi_impact_estimation"
+        ],
+        "handoff_summary": "Call 6 emits kpi_estimates via REQ-031::call::call-6::output::kpi_impact_estimation for 3 recommendation/KPI pair(s)."
+      }
+    ]
+  }
+}

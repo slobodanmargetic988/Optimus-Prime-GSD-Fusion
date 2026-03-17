@@ -1,0 +1,485 @@
+{
+  "ok": true,
+  "tool": "strategy-llm-pipeline",
+  "tool_version": "1.0.0",
+  "schema_version": "req-026.call-1-situational-analysis-reasoning.v1",
+  "requirement_id": "REQ-026",
+  "analysis_type": "call_1_situational_analysis_reasoning",
+  "call_id": "call-1",
+  "checked_at_utc": "2026-03-16T09:30:00Z",
+  "situational_analysis": {
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "mission": {
+        "text": "Keep autonomous delivery loops deterministic, observable, and grounded in verifiable evidence.",
+        "source": "mission.md",
+        "authoritative": true
+      },
+      "scope": {
+        "text": "Limit this wave to contract and data-model surfaces backed by planning and runtime evidence, with later-call follow-up for unresolved gaps.",
+        "source": "scope.md",
+        "authoritative": true
+      },
+      "anchor_summary": "Mission: Keep autonomous delivery loops deterministic, observable, and grounded in verifiable evidence. Scope: Limit this wave to contract and data-model surfaces backed by planning and runtime evidence, with later-call follow-up for unresolved gaps."
+    },
+    "planning_state": {
+      "status": "partial",
+      "artifact_ids": [
+        "PLAN-001",
+        "PLAN-002"
+      ],
+      "evidence_refs": [
+        "reports/optimus-prime/planning/PLAN_PACKETS.json",
+        "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json"
+      ],
+      "key_signals": [
+        "Planner output satisfies the mandatory planning gate.",
+        "Contract, fixture, sample, and test work are all explicitly scoped.",
+        "Implementation intent is stable.",
+        "Verification evidence is not yet attached to the task state."
+      ]
+    },
+    "runtime_state": {
+      "status": "degraded",
+      "artifact_ids": [
+        "RUN-001",
+        "RUN-002"
+      ],
+      "evidence_refs": [
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "reports/optimus-prime/planning/STATE.json"
+      ],
+      "key_signals": [
+        "Primary canary lane completed successfully.",
+        "Fallback recovery still needs tighter evidence on current branch behavior.",
+        "Runtime evidence is still being emitted deterministically.",
+        "No total runtime blackout is present."
+      ]
+    },
+    "reasoning": {
+      "assessment_status": "needs-follow-up",
+      "anchor_set": [
+        "mission",
+        "scope",
+        "planning_evidence",
+        "runtime_evidence"
+      ],
+      "state_summary": "optimus-prime-gsd-fusion remains anchored to mission and scope, planning evidence is partial, runtime evidence is degraded, and 3 explicit unknown(s) must be resolved in later calls.",
+      "evidence_basis": [
+        "PLAN-001",
+        "PLAN-002",
+        "RUN-001",
+        "RUN-002"
+      ],
+      "follow_up_required": true
+    }
+  },
+  "processing_behavior": {
+    "strategy": "call-1-situational-analysis",
+    "reasoning_mode": "deterministic-broad-sweep",
+    "context_inputs": {
+      "broad_sweep_context": {
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ],
+        "cross_project_context": [
+          {
+            "project_id": "runtime-orchestrator",
+            "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+            ],
+            "context_note": "Runtime orchestrator owns the shared recovery envelope touched by degraded fallback behavior."
+          },
+          {
+            "project_id": "planner-core",
+            "project_root": "/workspace/projects/Earth/planner-core",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/planner-core.json"
+            ],
+            "context_note": "Planner core may already reserve follow-up capacity for unknown resolution in later calls."
+          }
+        ],
+        "candidate_recommendations": [
+          {
+            "recommendation_id": "rec-call-2-follow-up",
+            "summary": "Carry explicit Call-1 unknowns into the next implementation-planning pass before scope expands.",
+            "rationale": "Planning and runtime evidence both show follow-up work is still required before later calls can safely commit to execution.",
+            "recommendation_scope": "local",
+            "project_id": "",
+            "requires_earth_evidence": false,
+            "evidence_refs": [
+              "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+              "reports/optimus-prime/planning/VERIFICATION.md"
+            ],
+            "next_step": "Record the unknowns in the Call-2 packet and attach updated verification evidence."
+          },
+          {
+            "recommendation_id": "rec-runtime-orchestrator-sync",
+            "summary": "Coordinate degraded fallback interpretation with runtime-orchestrator before shared runtime assumptions change.",
+            "rationale": "Earth-sweep context confirms runtime-orchestrator owns the shared recovery envelope implicated by degraded runtime evidence.",
+            "recommendation_scope": "cross-project",
+            "project_id": "runtime-orchestrator",
+            "requires_earth_evidence": true,
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+              "reports/optimus-prime/planning/VERIFICATION.md"
+            ],
+            "next_step": "Open a cross-project follow-up with Earth-sweep and runtime verification refs attached."
+          },
+          {
+            "recommendation_id": "rec-analytics-unknown-routing",
+            "summary": "Route situational-analysis unknowns into analytics-hub reporting.",
+            "rationale": "The idea is plausible, but Call-1 must not create a cross-project obligation without matched Earth-sweep context.",
+            "recommendation_scope": "cross-project",
+            "project_id": "analytics-hub",
+            "requires_earth_evidence": true,
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+            ],
+            "next_step": "Confirm analytics-hub participation with Earth-sweep evidence before adding any cross-project obligation."
+          }
+        ]
+      }
+    },
+    "context_usage": {
+      "broad_sweep_context_used": true,
+      "earth_sweep_context_used": true,
+      "cross_project_context_used": true,
+      "earth_sweep_evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-16/portfolio.json"
+      ],
+      "cross_project_projects_considered": [
+        "runtime-orchestrator",
+        "planner-core"
+      ],
+      "cross_project_projects_with_evidence_refs": [
+        "runtime-orchestrator",
+        "planner-core"
+      ],
+      "cross_project_projects_without_evidence_refs": [],
+      "candidate_recommendation_ids_considered": [
+        "rec-call-2-follow-up",
+        "rec-runtime-orchestrator-sync",
+        "rec-analytics-unknown-routing"
+      ],
+      "local_recommendation_ids_emitted": [
+        "rec-call-2-follow-up"
+      ],
+      "cross_project_obligation_ids_emitted": [
+        "obligation-rec-runtime-orchestrator-sync"
+      ],
+      "open_risk_ids_emitted": [
+        "risk-rec-analytics-unknown-routing"
+      ],
+      "unknown_ids_for_later_calls": [
+        "unknown.001",
+        "unknown.002",
+        "unknown.003"
+      ]
+    },
+    "recommendation": {
+      "decision": "proceed-with-open-risks",
+      "rationale": "assessment=needs-follow-up unknowns=3 local=1 obligations=1 open_risks=1",
+      "confidence": "low",
+      "evidence_refs": [
+        "reports/optimus-prime/planning/PLAN_PACKETS.json",
+        "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+        "reports/optimus-prime/planning/VERIFICATION.md",
+        "reports/optimus-prime/planning/STATE.json",
+        "reports/earth/sweeps/2026-03-16/portfolio.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+      ],
+      "recommended_next_actions": [
+        {
+          "recommendation_id": "rec-call-2-follow-up",
+          "summary": "Carry explicit Call-1 unknowns into the next implementation-planning pass before scope expands.",
+          "rationale": "Planning and runtime evidence both show follow-up work is still required before later calls can safely commit to execution.",
+          "next_step": "Record the unknowns in the Call-2 packet and attach updated verification evidence.",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+            "reports/optimus-prime/planning/VERIFICATION.md"
+          ]
+        }
+      ],
+      "cross_project_context": {
+        "cross_project": true,
+        "projects_considered": [
+          "runtime-orchestrator",
+          "planner-core"
+        ],
+        "projects_with_evidence_refs": [
+          "runtime-orchestrator",
+          "planner-core"
+        ],
+        "projects_without_evidence_refs": [],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ],
+        "evidence_refs_by_project": {
+          "runtime-orchestrator": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "planner-core": [
+            "reports/earth/sweeps/2026-03-16/planner-core.json"
+          ]
+        }
+      },
+      "cross_project_obligations": [
+        {
+          "obligation_id": "obligation-rec-runtime-orchestrator-sync",
+          "project_id": "runtime-orchestrator",
+          "summary": "Coordinate degraded fallback interpretation with runtime-orchestrator before shared runtime assumptions change.",
+          "rationale": "Earth-sweep context confirms runtime-orchestrator owns the shared recovery envelope implicated by degraded runtime evidence.",
+          "next_step": "Open a cross-project follow-up with Earth-sweep and runtime verification refs attached.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/portfolio.json",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/VERIFICATION.md"
+          ]
+        }
+      ],
+      "open_risks": [
+        {
+          "risk_id": "risk-rec-analytics-unknown-routing",
+          "reason_code": "missing_cross_project_context",
+          "summary": "Route situational-analysis unknowns into analytics-hub reporting.",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+          ]
+        }
+      ]
+    }
+  },
+  "unknowns": [
+    {
+      "unknown_id": "unknown.001",
+      "category": "planning",
+      "question": "Has task-state drift been reconciled against the latest implementation packet?",
+      "why_it_matters": "Call-2 needs a stable implementation target before expanding execution actions.",
+      "must_be_resolved_by": "call-2",
+      "provenance": {
+        "evidence_type": "planning",
+        "artifact_id": "PLAN-002",
+        "source_ref": "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json"
+      }
+    },
+    {
+      "unknown_id": "unknown.002",
+      "category": "planning",
+      "question": "Do current task packets already reserve follow-up work for unresolved Call-1 unknowns?",
+      "why_it_matters": "Call-2 must avoid duplicating work that is already planned elsewhere.",
+      "must_be_resolved_by": "call-2",
+      "provenance": {
+        "evidence_type": "planning",
+        "artifact_id": "PLAN-002",
+        "source_ref": "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json"
+      }
+    },
+    {
+      "unknown_id": "unknown.003",
+      "category": "runtime",
+      "question": "Is the degraded fallback behavior still reproducible on the current branch head?",
+      "why_it_matters": "Call-2 must know whether the runtime concern is active or stale before prescribing next actions.",
+      "must_be_resolved_by": "call-2",
+      "provenance": {
+        "evidence_type": "runtime",
+        "artifact_id": "RUN-001",
+        "source_ref": "reports/optimus-prime/planning/VERIFICATION.md"
+      }
+    }
+  ],
+  "source": {
+    "planning_artifact_count": 2,
+    "runtime_artifact_count": 2,
+    "mission_source": "mission.md",
+    "scope_source": "scope.md",
+    "earth_sweep_evidence_count": 1,
+    "cross_project_context_count": 2,
+    "candidate_recommendation_count": 3
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "4187e0976e6dff2586927fcfa35bfa461d966b7c7bcb8d2171ae5421a9866189",
+    "reproducible_call_id": "req026-4187e0976e6dff25",
+    "canonical_input": {
+      "requirement_id": "REQ-026",
+      "analysis_type": "call_1_situational_analysis_reasoning",
+      "call_id": "call-1",
+      "checked_at_utc": "2026-03-16T09:30:00Z",
+      "target_project": {
+        "project_id": "optimus-prime-gsd-fusion",
+        "mission": {
+          "text": "Keep autonomous delivery loops deterministic, observable, and grounded in verifiable evidence.",
+          "source": "mission.md",
+          "authoritative": true
+        },
+        "scope": {
+          "text": "Limit this wave to contract and data-model surfaces backed by planning and runtime evidence, with later-call follow-up for unresolved gaps.",
+          "source": "scope.md",
+          "authoritative": true
+        }
+      },
+      "planning_evidence": {
+        "artifacts": [
+          {
+            "artifact_id": "PLAN-001",
+            "summary": "Plan packets already cover the contract and testing work for the current wave.",
+            "status": "ready",
+            "source_ref": "reports/optimus-prime/planning/PLAN_PACKETS.json",
+            "signals": [
+              "Planner output satisfies the mandatory planning gate.",
+              "Contract, fixture, sample, and test work are all explicitly scoped."
+            ],
+            "unknowns": []
+          },
+          {
+            "artifact_id": "PLAN-002",
+            "summary": "Task execution state still marks Call-1 contract/data-model implementation as pending verification.",
+            "status": "partial",
+            "source_ref": "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+            "signals": [
+              "Implementation intent is stable.",
+              "Verification evidence is not yet attached to the task state."
+            ],
+            "unknowns": [
+              {
+                "question": "Has task-state drift been reconciled against the latest implementation packet?",
+                "why_it_matters": "Call-2 needs a stable implementation target before expanding execution actions."
+              },
+              {
+                "question": "Do current task packets already reserve follow-up work for unresolved Call-1 unknowns?",
+                "why_it_matters": "Call-2 must avoid duplicating work that is already planned elsewhere."
+              }
+            ]
+          }
+        ]
+      },
+      "runtime_evidence": {
+        "artifacts": [
+          {
+            "artifact_id": "RUN-001",
+            "summary": "Latest canary execution completed but recovery behavior remained degraded during fallback.",
+            "status": "degraded",
+            "source_ref": "reports/optimus-prime/planning/VERIFICATION.md",
+            "signals": [
+              "Primary canary lane completed successfully.",
+              "Fallback recovery still needs tighter evidence on current branch behavior."
+            ],
+            "unknowns": [
+              {
+                "question": "Is the degraded fallback behavior still reproducible on the current branch head?",
+                "why_it_matters": "Call-2 must know whether the runtime concern is active or stale before prescribing next actions."
+              }
+            ]
+          },
+          {
+            "artifact_id": "RUN-002",
+            "summary": "Runtime state artifacts confirm the system is still producing usable execution evidence.",
+            "status": "healthy",
+            "source_ref": "reports/optimus-prime/planning/STATE.json",
+            "signals": [
+              "Runtime evidence is still being emitted deterministically.",
+              "No total runtime blackout is present."
+            ],
+            "unknowns": []
+          }
+        ]
+      },
+      "broad_sweep_context": {
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ],
+        "cross_project_context": [
+          {
+            "project_id": "runtime-orchestrator",
+            "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+            ],
+            "context_note": "Runtime orchestrator owns the shared recovery envelope touched by degraded fallback behavior."
+          },
+          {
+            "project_id": "planner-core",
+            "project_root": "/workspace/projects/Earth/planner-core",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/planner-core.json"
+            ],
+            "context_note": "Planner core may already reserve follow-up capacity for unknown resolution in later calls."
+          }
+        ],
+        "candidate_recommendations": [
+          {
+            "recommendation_id": "rec-call-2-follow-up",
+            "summary": "Carry explicit Call-1 unknowns into the next implementation-planning pass before scope expands.",
+            "rationale": "Planning and runtime evidence both show follow-up work is still required before later calls can safely commit to execution.",
+            "recommendation_scope": "local",
+            "project_id": "",
+            "requires_earth_evidence": false,
+            "evidence_refs": [
+              "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+              "reports/optimus-prime/planning/VERIFICATION.md"
+            ],
+            "next_step": "Record the unknowns in the Call-2 packet and attach updated verification evidence."
+          },
+          {
+            "recommendation_id": "rec-runtime-orchestrator-sync",
+            "summary": "Coordinate degraded fallback interpretation with runtime-orchestrator before shared runtime assumptions change.",
+            "rationale": "Earth-sweep context confirms runtime-orchestrator owns the shared recovery envelope implicated by degraded runtime evidence.",
+            "recommendation_scope": "cross-project",
+            "project_id": "runtime-orchestrator",
+            "requires_earth_evidence": true,
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+              "reports/optimus-prime/planning/VERIFICATION.md"
+            ],
+            "next_step": "Open a cross-project follow-up with Earth-sweep and runtime verification refs attached."
+          },
+          {
+            "recommendation_id": "rec-analytics-unknown-routing",
+            "summary": "Route situational-analysis unknowns into analytics-hub reporting.",
+            "rationale": "The idea is plausible, but Call-1 must not create a cross-project obligation without matched Earth-sweep context.",
+            "recommendation_scope": "cross-project",
+            "project_id": "analytics-hub",
+            "requires_earth_evidence": true,
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+            ],
+            "next_step": "Confirm analytics-hub participation with Earth-sweep evidence before adding any cross-project obligation."
+          }
+        ]
+      }
+    },
+    "processing_call_id": "req026-processing-4187e0976e6dff25",
+    "llm_call_trace_schema_version": "req-026.llm-call-trace-row.v1",
+    "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
+    "llm_call_trace_sha256": "fc2b07a2010c8697bfcf0324d932b0499d7a97118406a5f7063b7022e2d2c850",
+    "llm_call_trace_rows": [
+      {
+        "schema_version": "req-026.llm-call-trace-row.v1",
+        "requirement_id": "REQ-026",
+        "processing_call_id": "req026-processing-4187e0976e6dff25",
+        "call_id": "call-1",
+        "sequence": 1,
+        "call_objective": "Assess target project state from mission, scope, planning evidence, runtime evidence, and explicit unknowns for later calls.",
+        "input_refs": [
+          "mission.md",
+          "scope.md",
+          "reports/optimus-prime/planning/PLAN_PACKETS.json",
+          "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+          "reports/optimus-prime/planning/VERIFICATION.md",
+          "reports/optimus-prime/planning/STATE.json",
+          "reports/earth/sweeps/2026-03-16/portfolio.json",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/earth/sweeps/2026-03-16/planner-core.json",
+          "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+        ],
+        "output_refs": [
+          "REQ-026::call::call-1::output::situational_analysis"
+        ],
+        "handoff_summary": "Call 1 hands off situational_analysis via REQ-026::call::call-1::output::situational_analysis with 3 explicit unknown(s) for later calls."
+      }
+    ]
+  }
+}
