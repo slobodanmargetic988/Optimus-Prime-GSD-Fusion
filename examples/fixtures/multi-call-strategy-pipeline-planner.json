@@ -1,0 +1,465 @@
+{
+  "input": {
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req025-fixture-r1",
+    "strategy_goal": "Plan a multi-call reasoning chain for REQ-025 anchored delivery.",
+    "call_depth": 4,
+    "evidence_refs": [
+      "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json",
+      "reports/earth/sweeps/2026-03-15/portfolio.json"
+    ],
+    "stage_blueprints": [
+      {
+        "purpose": "Frame REQ-025 scope and evidence anchors.",
+        "expected_output": "scope_frame"
+      },
+      {
+        "purpose": "Expand multi-call strategy options for heavy-thinking execution.",
+        "expected_output": "option_set"
+      },
+      {
+        "purpose": "Resolve dependency ordering and evidence sufficiency per call.",
+        "expected_output": "dependency_validated_pipeline"
+      },
+      {
+        "purpose": "Finalize executable pipeline summary with explicit outputs.",
+        "expected_output": "final_pipeline_plan"
+      }
+    ],
+    "target_project_evidence_refs": [
+      "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-15/portfolio.json",
+      "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+    ],
+    "cross_project_context": [
+      {
+        "project_id": "runtime-orchestrator",
+        "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "context_note": "Shared runtime coordination constraints for the planner chain."
+      }
+    ],
+    "candidate_recommendations": [
+      {
+        "action_id": "action-local-pipeline-hardening",
+        "summary": "Keep deterministic planner outputs replayable across reruns.",
+        "rationale": "Contract validation and metadata fingerprints require stable deterministic fields.",
+        "action_scope": "local",
+        "requires_earth_evidence": false,
+        "project_id": "",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+        ],
+        "next_step": "Maintain canonical processing input coverage in integration checks."
+      },
+      {
+        "action_id": "action-cross-project-runtime-sync",
+        "summary": "Coordinate planner dependencies with runtime-orchestrator.",
+        "rationale": "Cross-project call sequencing depends on Earth-sweep runtime evidence.",
+        "action_scope": "cross-project",
+        "requires_earth_evidence": true,
+        "project_id": "runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "next_step": "Publish obligation details with Earth-sweep evidence refs attached."
+      }
+    ]
+  },
+  "expected_payload": {
+    "schema_version": "req-025.multi-call-strategy-pipeline-planner.v1",
+    "requirement_id": "REQ-025",
+    "multi_call_strategy_pipeline_planner_entrypoint": {
+      "runtime_mode": "llm-first",
+      "execution_mode": "long-thinking",
+      "target_project_root": "/workspace/projects/optimus-prime",
+      "earth_root": "/workspace/projects/Earth",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req025-fixture-r1",
+      "strategy_goal": "Plan a multi-call reasoning chain for REQ-025 anchored delivery.",
+      "call_depth": 4
+    },
+    "processing_behavior": {
+      "strategy": "multi-call-strategy-pipeline-planner",
+      "reasoning_mode": "long-thinking",
+      "strict_evidence_discipline": true,
+      "heuristic_summarization_only": false,
+      "context_inputs": {
+        "target_project": {
+          "project_root": "/workspace/projects/optimus-prime",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+          ]
+        },
+        "earth_sweep": {
+          "earth_root": "/workspace/projects/Earth",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ]
+        },
+        "cross_project_context": [
+          {
+            "project_id": "runtime-orchestrator",
+            "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ],
+            "context_note": "Shared runtime coordination constraints for the planner chain."
+          }
+        ],
+        "candidate_recommendations": [
+          {
+            "action_id": "action-cross-project-runtime-sync",
+            "summary": "Coordinate planner dependencies with runtime-orchestrator.",
+            "rationale": "Cross-project call sequencing depends on Earth-sweep runtime evidence.",
+            "action_scope": "cross-project",
+            "requires_earth_evidence": true,
+            "project_id": "runtime-orchestrator",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ],
+            "next_step": "Publish obligation details with Earth-sweep evidence refs attached."
+          },
+          {
+            "action_id": "action-local-pipeline-hardening",
+            "summary": "Keep deterministic planner outputs replayable across reruns.",
+            "rationale": "Contract validation and metadata fingerprints require stable deterministic fields.",
+            "action_scope": "local",
+            "requires_earth_evidence": false,
+            "project_id": "",
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+            ],
+            "next_step": "Maintain canonical processing input coverage in integration checks."
+          }
+        ]
+      },
+      "context_usage": {
+        "target_project_context_used": true,
+        "earth_sweep_context_used": true,
+        "cross_project_context_used": true,
+        "target_project_refs_used": [
+          "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+        ],
+        "earth_sweep_refs_used": [
+          "reports/earth/sweeps/2026-03-15/portfolio.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "cross_project_refs_used": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "cross_project_projects_considered": [
+          "runtime-orchestrator"
+        ],
+        "evidence_refs_used": [
+          "reports/earth/sweeps/2026-03-15/portfolio.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+        ]
+      },
+      "pipeline_plan": {
+        "plan_id": "req025-plan-aca92a93fc6ae4f6",
+        "planner_mode": "multi-call-reasoning-chain",
+        "total_calls": 4,
+        "required_evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+        ],
+        "calls": [
+          {
+            "call_id": "req025-call-01-8171b95589",
+            "sequence": 1,
+            "purpose": "Frame REQ-025 scope and evidence anchors.",
+            "depends_on": [],
+            "expected_output": "scope_frame",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/portfolio.json",
+              "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+            ]
+          },
+          {
+            "call_id": "req025-call-02-68e82b4d99",
+            "sequence": 2,
+            "purpose": "Expand multi-call strategy options for heavy-thinking execution.",
+            "depends_on": [
+              "req025-call-01-8171b95589"
+            ],
+            "expected_output": "option_set",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/portfolio.json",
+              "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+            ]
+          },
+          {
+            "call_id": "req025-call-03-26c1ba1b8d",
+            "sequence": 3,
+            "purpose": "Resolve dependency ordering and evidence sufficiency per call.",
+            "depends_on": [
+              "req025-call-02-68e82b4d99"
+            ],
+            "expected_output": "dependency_validated_pipeline",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/portfolio.json",
+              "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+            ]
+          },
+          {
+            "call_id": "req025-call-04-76d5d88f1a",
+            "sequence": 4,
+            "purpose": "Finalize executable pipeline summary with explicit outputs.",
+            "depends_on": [
+              "req025-call-03-26c1ba1b8d"
+            ],
+            "expected_output": "final_pipeline_plan",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/portfolio.json",
+              "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+            ]
+          }
+        ],
+        "dependency_edges": [
+          {
+            "from_call_id": "req025-call-01-8171b95589",
+            "to_call_id": "req025-call-02-68e82b4d99"
+          },
+          {
+            "from_call_id": "req025-call-02-68e82b4d99",
+            "to_call_id": "req025-call-03-26c1ba1b8d"
+          },
+          {
+            "from_call_id": "req025-call-03-26c1ba1b8d",
+            "to_call_id": "req025-call-04-76d5d88f1a"
+          }
+        ],
+        "terminal_expected_output": "final_pipeline_plan"
+      },
+      "recommendation": {
+        "decision": "proceed",
+        "rationale": "Broad-sweep context evidence is sufficient for immediate multi-call execution.",
+        "confidence": "high",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/portfolio.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+        ],
+        "recommended_actions": [
+          {
+            "action_id": "action-cross-project-runtime-sync",
+            "summary": "Coordinate planner dependencies with runtime-orchestrator.",
+            "rationale": "Cross-project call sequencing depends on Earth-sweep runtime evidence.",
+            "action_scope": "cross-project",
+            "next_step": "Publish obligation details with Earth-sweep evidence refs attached.",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ]
+          },
+          {
+            "action_id": "action-local-pipeline-hardening",
+            "summary": "Keep deterministic planner outputs replayable across reruns.",
+            "rationale": "Contract validation and metadata fingerprints require stable deterministic fields.",
+            "action_scope": "local",
+            "next_step": "Maintain canonical processing input coverage in integration checks.",
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+            ]
+          }
+        ],
+        "cross_project_obligations": [
+          {
+            "obligation_id": "obligation-action-cross-project-runtime-sync",
+            "project_id": "runtime-orchestrator",
+            "summary": "Coordinate planner dependencies with runtime-orchestrator.",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/portfolio.json",
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ]
+          }
+        ],
+        "open_risks": []
+      },
+      "summary": "Planned 4 deterministic calls with broad-sweep context inputs, explicit dependencies, required evidence refs, and recommendation outputs."
+    },
+    "call_metadata": {
+      "reproducibility": "deterministic-input-fingerprint",
+      "canonical_input_sha256": "d4359e3ff6baa1a31d0d80b563f6d18fec784a0c5b92c207f459143523c96a35",
+      "reproducible_call_id": "req025-d4359e3ff6baa1a3",
+      "canonical_input": {
+        "runtime_mode": "llm-first",
+        "execution_mode": "long-thinking",
+        "target_project_root": "/workspace/projects/optimus-prime",
+        "earth_root": "/workspace/projects/Earth",
+        "output_root": "/workspace/projects/optimus-prime/strategy/out",
+        "revision_identity": "rev-req025-fixture-r1",
+        "strategy_goal": "Plan a multi-call reasoning chain for REQ-025 anchored delivery.",
+        "call_depth": 4
+      },
+      "processing_input_sha256": "aca92a93fc6ae4f62d11eac83659e3f7e4c1712e586d775722651a0f32ff1d2a",
+      "processing_call_id": "req025-processing-aca92a93fc6ae4f6",
+      "canonical_processing_input": {
+        "call_depth": 4,
+        "required_evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+        ],
+        "target_project_evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/portfolio.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "cross_project_context": [
+          {
+            "project_id": "runtime-orchestrator",
+            "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ],
+            "context_note": "Shared runtime coordination constraints for the planner chain."
+          }
+        ],
+        "candidate_recommendations": [
+          {
+            "action_id": "action-cross-project-runtime-sync",
+            "summary": "Coordinate planner dependencies with runtime-orchestrator.",
+            "rationale": "Cross-project call sequencing depends on Earth-sweep runtime evidence.",
+            "action_scope": "cross-project",
+            "requires_earth_evidence": true,
+            "project_id": "runtime-orchestrator",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ],
+            "next_step": "Publish obligation details with Earth-sweep evidence refs attached."
+          },
+          {
+            "action_id": "action-local-pipeline-hardening",
+            "summary": "Keep deterministic planner outputs replayable across reruns.",
+            "rationale": "Contract validation and metadata fingerprints require stable deterministic fields.",
+            "action_scope": "local",
+            "requires_earth_evidence": false,
+            "project_id": "",
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+            ],
+            "next_step": "Maintain canonical processing input coverage in integration checks."
+          }
+        ],
+        "stage_blueprints": [
+          {
+            "purpose": "Frame REQ-025 scope and evidence anchors.",
+            "expected_output": "scope_frame"
+          },
+          {
+            "purpose": "Expand multi-call strategy options for heavy-thinking execution.",
+            "expected_output": "option_set"
+          },
+          {
+            "purpose": "Resolve dependency ordering and evidence sufficiency per call.",
+            "expected_output": "dependency_validated_pipeline"
+          },
+          {
+            "purpose": "Finalize executable pipeline summary with explicit outputs.",
+            "expected_output": "final_pipeline_plan"
+          }
+        ]
+      },
+      "llm_call_trace_schema_version": "req-025.llm-call-trace-row.v1",
+      "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
+      "llm_call_trace_sha256": "3b2bde72246fbfcfd2972fd5a3cc8b0da7d2a8c5b10ac42e9e7e61f6a095626b",
+      "llm_call_trace_rows": [
+        {
+          "schema_version": "req-025.llm-call-trace-row.v1",
+          "requirement_id": "REQ-025",
+          "plan_id": "req025-plan-aca92a93fc6ae4f6",
+          "processing_call_id": "req025-processing-aca92a93fc6ae4f6",
+          "call_id": "req025-call-01-8171b95589",
+          "sequence": 1,
+          "call_objective": "Frame REQ-025 scope and evidence anchors.",
+          "depends_on": [],
+          "expected_output": "scope_frame",
+          "input_refs": [
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+            "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json"
+          ],
+          "output_refs": [
+            "req025-plan-aca92a93fc6ae4f6::call::req025-call-01-8171b95589::output::scope_frame"
+          ],
+          "handoff_summary": "Call 1 hands off scope_frame via req025-plan-aca92a93fc6ae4f6::call::req025-call-01-8171b95589::output::scope_frame to req025-call-02-68e82b4d99 after consuming 2 input refs."
+        },
+        {
+          "schema_version": "req-025.llm-call-trace-row.v1",
+          "requirement_id": "REQ-025",
+          "plan_id": "req025-plan-aca92a93fc6ae4f6",
+          "processing_call_id": "req025-processing-aca92a93fc6ae4f6",
+          "call_id": "req025-call-02-68e82b4d99",
+          "sequence": 2,
+          "call_objective": "Expand multi-call strategy options for heavy-thinking execution.",
+          "depends_on": [
+            "req025-call-01-8171b95589"
+          ],
+          "expected_output": "option_set",
+          "input_refs": [
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+            "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json",
+            "req025-plan-aca92a93fc6ae4f6::call::req025-call-01-8171b95589::output::scope_frame"
+          ],
+          "output_refs": [
+            "req025-plan-aca92a93fc6ae4f6::call::req025-call-02-68e82b4d99::output::option_set"
+          ],
+          "handoff_summary": "Call 2 hands off option_set via req025-plan-aca92a93fc6ae4f6::call::req025-call-02-68e82b4d99::output::option_set to req025-call-03-26c1ba1b8d after consuming 3 input refs."
+        },
+        {
+          "schema_version": "req-025.llm-call-trace-row.v1",
+          "requirement_id": "REQ-025",
+          "plan_id": "req025-plan-aca92a93fc6ae4f6",
+          "processing_call_id": "req025-processing-aca92a93fc6ae4f6",
+          "call_id": "req025-call-03-26c1ba1b8d",
+          "sequence": 3,
+          "call_objective": "Resolve dependency ordering and evidence sufficiency per call.",
+          "depends_on": [
+            "req025-call-02-68e82b4d99"
+          ],
+          "expected_output": "dependency_validated_pipeline",
+          "input_refs": [
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+            "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json",
+            "req025-plan-aca92a93fc6ae4f6::call::req025-call-02-68e82b4d99::output::option_set"
+          ],
+          "output_refs": [
+            "req025-plan-aca92a93fc6ae4f6::call::req025-call-03-26c1ba1b8d::output::dependency_validated_pipeline"
+          ],
+          "handoff_summary": "Call 3 hands off dependency_validated_pipeline via req025-plan-aca92a93fc6ae4f6::call::req025-call-03-26c1ba1b8d::output::dependency_validated_pipeline to req025-call-04-76d5d88f1a after consuming 3 input refs."
+        },
+        {
+          "schema_version": "req-025.llm-call-trace-row.v1",
+          "requirement_id": "REQ-025",
+          "plan_id": "req025-plan-aca92a93fc6ae4f6",
+          "processing_call_id": "req025-processing-aca92a93fc6ae4f6",
+          "call_id": "req025-call-04-76d5d88f1a",
+          "sequence": 4,
+          "call_objective": "Finalize executable pipeline summary with explicit outputs.",
+          "depends_on": [
+            "req025-call-03-26c1ba1b8d"
+          ],
+          "expected_output": "final_pipeline_plan",
+          "input_refs": [
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+            "reports/optimus-prime/planning/evidence/TASK-079/TASK_EVIDENCE.json",
+            "req025-plan-aca92a93fc6ae4f6::call::req025-call-03-26c1ba1b8d::output::dependency_validated_pipeline"
+          ],
+          "output_refs": [
+            "req025-plan-aca92a93fc6ae4f6::call::req025-call-04-76d5d88f1a::output::final_pipeline_plan"
+          ],
+          "handoff_summary": "Call 4 hands off final_pipeline_plan via req025-plan-aca92a93fc6ae4f6::call::req025-call-04-76d5d88f1a::output::final_pipeline_plan as the terminal planner output with recommendation decision proceed."
+        }
+      ]
+    }
+  }
+}
