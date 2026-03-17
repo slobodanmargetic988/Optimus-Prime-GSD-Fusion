@@ -1,0 +1,133 @@
+{
+  "payload": {
+    "identity": {
+      "project_id": "prj.optimus-prime",
+      "run_id": "run.20260317t101500z-req070",
+      "event_id": "event.20260317t101900z-acceptance"
+    },
+    "strategy": {
+      "revision_id": "strat.20260317-r7"
+    },
+    "planner_hook": {
+      "recommendation_readiness": [
+        {
+          "recommendation_id": "rec.dispatch-quality-first",
+          "recommendation_key": "dispatch-quality-first",
+          "status": "ready",
+          "artifact_refs": [
+            "strategy/current/strategy_packet.context.v1.json"
+          ],
+          "evidence_refs": [
+            "Optimus-Prime-GSD-Fusion/strategy/current/strategy_packet.context.v1.json#L1"
+          ]
+        }
+      ]
+    },
+    "recommendations": [
+      {
+        "recommendation_id": "rec.dispatch-quality-first",
+        "priority": "high",
+        "summary": "Keep dispatch quality first in the autonomous lane.",
+        "rationale": "This preserves planner trust in each run output.",
+        "expected_impact": "Lower invalid handoff churn.",
+        "risk_level": "medium",
+        "confidence": "high",
+        "evidence_refs": [
+          "Optimus-Prime-GSD-Fusion/reports/optimus-prime/planning/STATE.md#L12",
+          "Earth/peer-alpha/mission.md#L3"
+        ]
+      },
+      {
+        "recommendation_id": "rec.peer-signal-reuse",
+        "priority": "medium",
+        "summary": "Reuse peer planning signals during the autonomous sweep.",
+        "rationale": "Broad-sweep context reduces duplicate solution hunting.",
+        "expected_impact": "Faster planner-ready synthesis.",
+        "risk_level": "low",
+        "confidence": "medium"
+      }
+    ],
+    "evidence_provenance": [
+      {
+        "recommendation_id": "rec.peer-signal-reuse",
+        "evidence_refs": [
+          "Earth/peer-beta/reports/planning/ROADMAP.md#L9"
+        ]
+      }
+    ],
+    "earth_sweep": {
+      "projects": [
+        {
+          "project_id": "prj.optimus-prime"
+        },
+        {
+          "project_id": "prj.peer-alpha",
+          "evidence_refs": [
+            "Earth/peer-alpha/reports/planning/PROJECT.md#L4"
+          ]
+        },
+        {
+          "project_id": "prj.peer-beta",
+          "evidence_refs": [
+            "Earth/peer-beta/reports/planning/STATE.md#L6"
+          ]
+        }
+      ]
+    },
+    "broad_sweep": {
+      "projects": [
+        {
+          "project_id": "prj.peer-gamma",
+          "evidence_refs": [
+            "Earth/peer-gamma/reports/planning/ROADMAP.md#L8"
+          ]
+        }
+      ]
+    },
+    "cross_project_context": [
+      {
+        "project_id": "prj.peer-alpha",
+        "summary": "Peer alpha exposes stable contract signals.",
+        "evidence_refs": [
+          "Earth/peer-alpha/reports/planning/RISK_REGISTER.json#L2"
+        ]
+      }
+    ],
+    "current_artifacts": [
+      {
+        "artifact_id": "current.strategy-packet",
+        "artifact_ref": "strategy/current/strategy_packet.v1.json",
+        "evidence_refs": [
+          "Optimus-Prime-GSD-Fusion/strategy/current/strategy_packet.v1.json#L1"
+        ]
+      }
+    ],
+    "history_artifacts": [
+      {
+        "artifact_id": "history.revision-log",
+        "artifact_ref": "strategy/history/REVISION_HISTORY.json",
+        "evidence_refs": [
+          "Optimus-Prime-GSD-Fusion/strategy/history/REVISION_HISTORY.json#L1"
+        ]
+      }
+    ],
+    "validator_artifacts": [
+      {
+        "artifact_id": "validator.packet",
+        "artifact_ref": "reports/optimus-prime/planning/validator/strategy_packet_validation.json",
+        "evidence_refs": [
+          "Optimus-Prime-GSD-Fusion/reports/optimus-prime/planning/validator/strategy_packet_validation.json#L1"
+        ]
+      }
+    ],
+    "obligations": [
+      {
+        "project_id": "prj.peer-beta",
+        "summary": "Consider a shared taxonomy sync with peer beta.",
+        "linked_recommendation_ids": [
+          "rec.peer-signal-reuse"
+        ]
+      }
+    ]
+  }
+}

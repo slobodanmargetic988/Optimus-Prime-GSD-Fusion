@@ -1,0 +1,64 @@
+{
+  "req_id": "REQ-070",
+  "summary": {
+    "artifact_type": "end_to_end_autonomous_strategy_acceptance_packet",
+    "result": "pass",
+    "statement": "REQ-070 remains planner-consumable for an end-to-end autonomous strategy run: current, history, and validator artifacts are present, planner-hook recommendation mapping is complete, and the remaining cross-project evidence gap is carried as an explicit open risk instead of a blocker.",
+    "artifact_refs": [
+      "reports/optimus-prime/planning/validator/strategy_packet_validation.json",
+      "strategy/current/strategy_packet.v1.json",
+      "strategy/history/REVISION_HISTORY.json"
+    ],
+    "run_identity": {
+      "project_id": "prj.optimus-prime",
+      "run_id": "run.20260317t101500z-req070",
+      "event_id": "event.20260317t101900z-acceptance",
+      "revision_id": "strat.20260317-r7"
+    },
+    "planner_hook_mapping_complete": true
+  },
+  "evidence_refs": [
+    "tests/contracts/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py::test_req_070_acceptance_packet_contract_exposes_planner_hook_and_open_risk_diagnostics",
+    "tests/contracts/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py::test_req_070_acceptance_packet_artifact_refs_exist_in_repo",
+    "tests/integration/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py::test_acceptance_packet_is_planner_consumable_and_uses_broad_sweep_context",
+    "tests/integration/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py::test_acceptance_packet_fails_when_recommendations_or_cross_project_context_are_incomplete",
+    "tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py::test_req_070_hardening_artifact_regeneration_has_no_semantic_drift_on_no_change_rerun",
+    "tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py::test_req_070_hardening_planner_hook_receives_complete_recommendation_mapping_set",
+    "tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py::test_req_070_hardening_acceptance_packet_includes_required_evidence_refs_and_open_risk_handling"
+  ],
+  "consumability_verdict": {
+    "verdict": "pass",
+    "planner_consumable": true,
+    "ecosystem_aware": true,
+    "artifacts_complete": true,
+    "citation_coverage_pass": true,
+    "recommendation_fields_pass": true,
+    "contradiction_pass": true,
+    "ready_for_autonomous_planning": true,
+    "missing_artifact_groups": [],
+    "blocking_reasons": [],
+    "warning_reasons": [
+      "open_risks_present"
+    ]
+  },
+  "open_risks": [
+    {
+      "risk_id": "risk.unsupported-cross-project-obligation.001",
+      "severity": "medium",
+      "category": "open_risk",
+      "reason_code": "missing_earth_sweep_evidence_refs",
+      "summary": "Cross-project obligation for prj.peer-beta has no Earth-sweep evidence refs.",
+      "project_id": "prj.peer-beta",
+      "linked_recommendation_ids": [
+        "rec.peer-signal-reuse"
+      ],
+      "evidence_refs": [
+        "Earth/peer-beta/reports/planning/STATE.md#L6"
+      ],
+      "required_evidence_refs": [
+        "Earth/peer-beta/reports/planning/STATE.md#L6"
+      ],
+      "recommendation": "Keep this as an open risk until Earth-sweep evidence refs exist."
+    }
+  ]
+}

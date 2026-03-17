@@ -1,0 +1,85 @@
+{
+  "task_identifier": "TASK-227",
+  "requirement_ids": [
+    "REQ-062"
+  ],
+  "summary": {
+    "result": "pass",
+    "reason_codes": [],
+    "checked_at": "2026-03-16T23:04:53Z",
+    "notes": "REQ-062 hardening edge cases validated with deterministic diagnostics and stable reason-code behavior across two consecutive verification runs."
+  },
+  "verification_runs": [
+    {
+      "run_id": "run-1-direct-pytest",
+      "checks": [
+        {
+          "command": "python3 -m pytest tests/contracts/test_recommendation-id-uniqueness-validator.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/integration/test_recommendation-id-uniqueness-validator.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/hardening/test_recommendation-id-uniqueness-validator_hardening.py -q",
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "run_id": "run-2-direct-pytest",
+      "checks": [
+        {
+          "command": "python3 -m pytest tests/contracts/test_recommendation-id-uniqueness-validator.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/integration/test_recommendation-id-uniqueness-validator.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/hardening/test_recommendation-id-uniqueness-validator_hardening.py -q",
+          "exit_code": 0
+        }
+      ]
+    }
+  ],
+  "edge_case_rows": [
+    {
+      "edge_case": "invalid_strategy_packet_schema_row_rejected",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "invalid_strategy_packet_schema_row"
+      ],
+      "evidence_refs": [
+        "tests/hardening/test_recommendation-id-uniqueness-validator_hardening.py::test_req_062_hardening_rejects_invalid_strategy_packet_schema_row_with_deterministic_diagnostics"
+      ]
+    },
+    {
+      "edge_case": "duplicate_recommendation_id_collision_flagged_with_diff_details",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "recommendation_id_collision",
+        "recommendation_id_drift"
+      ],
+      "evidence_refs": [
+        "tests/hardening/test_recommendation-id-uniqueness-validator_hardening.py::test_req_062_hardening_flags_duplicate_recommendation_id_collision_with_diff_details"
+      ]
+    },
+    {
+      "edge_case": "broken_evidence_reference_traceability_gate_failure",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "traceability_gate_failure"
+      ],
+      "evidence_refs": [
+        "tests/hardening/test_recommendation-id-uniqueness-validator_hardening.py::test_req_062_hardening_broken_evidence_reference_fails_traceability_gate"
+      ]
+    }
+  ],
+  "unresolved_blocker_rows": []
+}

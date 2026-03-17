@@ -20,6 +20,14 @@
       "rationale": "This directly reduces non-actionable cycles and improves output per token budget using evidence from reports/strategy/lane-throughput-2026-03-15.json and strategy/current/ECOSYSTEM_LINK_MAP.json.",
       "expected_impact": "Lower idle loops and better per-cycle productivity under constrained hardware and rate limits, aligned with reports/strategy/lane-throughput-2026-03-15.json and strategy/current/ECOSYSTEM_LINK_MAP.json.",
       "risk_level": "medium"
+    },
+    {
+      "recommendation_id": "rec.runtime-canary-coverage",
+      "priority": "medium",
+      "summary": "Expand canary task coverage for runtime coordination path regressions.",
+      "rationale": "Gate failures earlier by linking KPI drift to concrete lane-level recommendations.",
+      "expected_impact": "Faster issue isolation and lower failure amplification across planner/runtime handoffs.",
+      "risk_level": "medium"
     }
   ],
   "recommendation_mapping": [
@@ -143,6 +151,49 @@
       "target": "100% of recommendations mapped to at least one planner task intent"
     }
   ],
+  "assumptions": [
+    {
+      "assumption_id": "assumption.telemetry-path-stable",
+      "statement": "Telemetry path naming and ownership remain stable for this planning wave."
+    },
+    {
+      "assumption_id": "assumption.runtime-ownership-confirmed",
+      "statement": "Runtime orchestration ownership remains with the same operating team for KPI target rollout."
+    }
+  ],
+  "kpi_target_artifact": {
+    "kpi_targets": [
+      {
+        "target_id": "kpi.non-actionable-cycle-ratio",
+        "metric_name": "non_actionable_cycle_ratio",
+        "expected_direction": "decrease",
+        "baseline_reference": "reports/optimus-prime/planning/STATE.md#cycle-metrics-baseline-2026-03-14",
+        "confidence_level": "high",
+        "originating_recommendation_ids": ["rec.dispatch-quality-first"],
+        "assumption_ids": [
+          "assumption.runtime-ownership-confirmed",
+          "assumption.telemetry-path-stable"
+        ]
+      },
+      {
+        "target_id": "kpi.redispatch-loop-ratio",
+        "metric_name": "redispatch_loop_ratio",
+        "expected_direction": "decrease",
+        "baseline_reference": "reports/optimus-prime/planning/STATE.md#redispatch-metrics-baseline-2026-03-14",
+        "confidence_level": "medium",
+        "originating_recommendation_ids": [
+          "rec.dispatch-quality-first",
+          "rec.runtime-canary-coverage"
+        ],
+        "assumption_ids": ["assumption.telemetry-path-stable"]
+      }
+    ],
+    "totals": {
+      "kpi_targets": 2,
+      "unique_recommendations_linked": 2,
+      "unique_assumptions_linked": 2
+    }
+  },
   "source": {
     "repo": "Optimus-Prime-GSD-Fusion",
     "tool": "op-tools/strategy"

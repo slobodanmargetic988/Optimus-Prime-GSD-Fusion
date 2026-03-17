@@ -1,0 +1,16 @@
+{
+  "artifact_type": "strategy_revision_history",
+  "project_id": "prj.optimus-prime",
+  "revisions": [
+    {
+      "revision_id": "strat.20260317-r6",
+      "status": "superseded",
+      "strategy_packet_ref": "strategy/current/strategy_packet.v1.json"
+    },
+    {
+      "revision_id": "strat.20260317-r7",
+      "status": "current",
+      "strategy_packet_ref": "strategy/current/strategy_packet.v1.json"
+    }
+  ]
+}

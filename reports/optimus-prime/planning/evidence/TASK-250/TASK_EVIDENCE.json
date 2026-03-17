@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "task_id": "TASK-250",
+  "requirement_ids": [
+    "REQ-068"
+  ],
+  "updated_at": "2026-03-17T00:00:00Z",
+  "dev": {
+    "status": "done",
+    "checks": [
+      {
+        "name": "python3 -m pytest tests/integration/test_op-plan-strategy-ingestion-hook.py -q",
+        "runs": 2,
+        "passed": true
+      }
+    ],
+    "blockers": [],
+    "unresolved_blockers": [],
+    "artifacts": [
+      "scripts/strategy_artifacts_handoff.py",
+      "tests/integration/test_op-plan-strategy-ingestion-hook.py",
+      "tests/contracts/test_op-plan-strategy-ingestion-hook.py",
+      "examples/fixtures/op-plan-strategy-ingestion-hook.json",
+      "strategy/current/samples/REQ-068_op-plan-strategy-ingestion-hook.sample.json",
+      "contracts/req/REQ-068_op-plan-strategy-ingestion-hook.md"
+    ]
+  },
+  "test": {
+    "status": "done",
+    "checks": [
+      {
+        "name": "python3 -m pytest tests/integration/test_op-plan-strategy-ingestion-hook.py -q",
+        "runs": 2,
+        "passed": true
+      }
+    ],
+    "blockers": [],
+    "unresolved_blockers": [],
+    "artifacts": [
+      "tests/integration/test_op-plan-strategy-ingestion-hook.py"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "unresolved_blockers": [],
+    "artifacts": []
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": []
+  },
+  "unresolved_blocker_rows": []
+}
