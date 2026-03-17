@@ -1,0 +1,444 @@
+{
+  "schema_version": "req-011.cross-project-dependency-extraction.v1",
+  "requirement_id": "REQ-011",
+  "cross_project_dependency_extraction": {
+    "target_project_id": "prj.optimus-prime-gsd-fusion",
+    "source_signals": {
+      "contract_signals": [
+        {
+          "source_kind": "contract",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.analytics-hub",
+          "dependency_ref": "contracts/analytics-ingest.v2",
+          "summary": "Analytics ingestion contract defines cycle export payload.",
+          "signal_strength": "moderate",
+          "evidence_refs": [
+            "contracts/analytics-ingest-v2.md#L22"
+          ]
+        },
+        {
+          "source_kind": "contract",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-core",
+          "dependency_ref": "contracts/runtime-heartbeat.v1",
+          "summary": "Runtime lease heartbeat contract binds dispatch cadence.",
+          "signal_strength": "strong",
+          "evidence_refs": [
+            "contracts/runtime-heartbeat.md#L10",
+            "reports/earth/contracts-index.json#runtime-heartbeat-v1"
+          ]
+        }
+      ],
+      "trace_signals": [
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.analytics-hub",
+          "dependency_ref": "traces/export-cycle-2026-03-15.jsonl#evt-122",
+          "summary": "Trace confirms export submission attempts to analytics endpoint.",
+          "signal_strength": "weak",
+          "evidence_refs": [
+            "reports/runtime/export-cycle-2026-03-15.jsonl#L122"
+          ]
+        },
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.optimus-prime-gsd-fusion",
+          "dependency_ref": "traces/local-controller-loop-2026-03-15.jsonl#evt-9",
+          "summary": "Local-only loopback trace should not produce cross-project edges.",
+          "signal_strength": "moderate",
+          "evidence_refs": [
+            "reports/runtime/local-controller-loop-2026-03-15.jsonl#L9"
+          ]
+        },
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-core",
+          "dependency_ref": "traces/dispatch-cycle-2026-03-15.jsonl#evt-404",
+          "summary": "Dispatch trace shows heartbeat lookups before queue rebalance.",
+          "signal_strength": "moderate",
+          "evidence_refs": [
+            "reports/runtime/dispatch-cycle-2026-03-15.jsonl#L404"
+          ]
+        },
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-observability",
+          "dependency_ref": "traces/rate-snapshot-bridge-2026-03-15.jsonl#evt-78",
+          "summary": "Single weak trace mentions optional observability bridge handoff.",
+          "signal_strength": "weak",
+          "evidence_refs": [
+            "reports/runtime/rate-snapshot-bridge-2026-03-15.jsonl#L78"
+          ]
+        }
+      ],
+      "integration_point_signals": [
+        {
+          "source_kind": "integration_point",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.analytics-hub",
+          "dependency_ref": "integration/analytics-export-v2",
+          "summary": "Declared integration point exports per-cycle diagnostics to analytics-hub.",
+          "signal_strength": "weak",
+          "evidence_refs": [
+            "strategy/current/integration/analytics-export-v2.md#L6"
+          ]
+        },
+        {
+          "source_kind": "integration_point",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-core",
+          "dependency_ref": "integration/runtime-core-lease-heartbeat",
+          "summary": "Declared integration point consumes runtime-core lease heartbeat feed.",
+          "signal_strength": "strong",
+          "evidence_refs": [
+            "strategy/current/integration/runtime-core-lease-heartbeat.md#L4"
+          ]
+        }
+      ]
+    },
+    "dependency_edges": [
+      {
+        "dependency_edge_id": "dependency-edge.adae06614470",
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-core",
+        "relationship": "depends_on",
+        "summary": "Runtime lease heartbeat contract binds dispatch cadence.",
+        "source_kinds": [
+          "contract",
+          "integration_point",
+          "trace"
+        ],
+        "supporting_signal_count": 3,
+        "dependency_refs": [
+          "contracts/runtime-heartbeat.v1",
+          "integration/runtime-core-lease-heartbeat",
+          "traces/dispatch-cycle-2026-03-15.jsonl#evt-404"
+        ],
+        "confidence": "high",
+        "hard_dependency": true,
+        "evidence_refs": [
+          "contracts/runtime-heartbeat.md#L10",
+          "reports/earth/contracts-index.json#runtime-heartbeat-v1",
+          "reports/runtime/dispatch-cycle-2026-03-15.jsonl#L404",
+          "strategy/current/integration/runtime-core-lease-heartbeat.md#L4"
+        ]
+      },
+      {
+        "dependency_edge_id": "dependency-edge.c0c6c34bcb34",
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.analytics-hub",
+        "relationship": "depends_on",
+        "summary": "Analytics ingestion contract defines cycle export payload.",
+        "source_kinds": [
+          "contract",
+          "integration_point",
+          "trace"
+        ],
+        "supporting_signal_count": 3,
+        "dependency_refs": [
+          "contracts/analytics-ingest.v2",
+          "integration/analytics-export-v2",
+          "traces/export-cycle-2026-03-15.jsonl#evt-122"
+        ],
+        "confidence": "medium",
+        "hard_dependency": false,
+        "evidence_refs": [
+          "contracts/analytics-ingest-v2.md#L22",
+          "reports/runtime/export-cycle-2026-03-15.jsonl#L122",
+          "strategy/current/integration/analytics-export-v2.md#L6"
+        ]
+      },
+      {
+        "dependency_edge_id": "dependency-edge.ddea10bc7257",
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-observability",
+        "relationship": "depends_on",
+        "summary": "Single weak trace mentions optional observability bridge handoff.",
+        "source_kinds": [
+          "trace"
+        ],
+        "supporting_signal_count": 1,
+        "dependency_refs": [
+          "traces/rate-snapshot-bridge-2026-03-15.jsonl#evt-78"
+        ],
+        "confidence": "low",
+        "hard_dependency": false,
+        "evidence_refs": [
+          "reports/runtime/rate-snapshot-bridge-2026-03-15.jsonl#L78"
+        ]
+      }
+    ],
+    "open_risks": [
+      {
+        "risk_id": "dependency-risk.22396ec678b0",
+        "dependency_edge_id": "dependency-edge.ddea10bc7257",
+        "reason_code": "low_confidence_dependency_edge",
+        "risk_level": "high",
+        "summary": "Dependency edge prj.optimus-prime-gsd-fusion -> prj.runtime-observability remains a soft dependency because confidence is low.",
+        "confidence": "low",
+        "evidence_refs": [
+          "reports/runtime/rate-snapshot-bridge-2026-03-15.jsonl#L78"
+        ]
+      },
+      {
+        "risk_id": "dependency-risk.d7e4a5632d7b",
+        "dependency_edge_id": "dependency-edge.c0c6c34bcb34",
+        "reason_code": "medium_confidence_dependency_edge",
+        "risk_level": "medium",
+        "summary": "Dependency edge prj.optimus-prime-gsd-fusion -> prj.analytics-hub remains a soft dependency because confidence is medium.",
+        "confidence": "medium",
+        "evidence_refs": [
+          "contracts/analytics-ingest-v2.md#L22",
+          "reports/runtime/export-cycle-2026-03-15.jsonl#L122",
+          "strategy/current/integration/analytics-export-v2.md#L6"
+        ]
+      }
+    ],
+    "summary": {
+      "source_signal_count": 8,
+      "filtered_local_signal_count": 1,
+      "source_signal_count_by_kind": {
+        "contracts": 2,
+        "traces": 4,
+        "integration_points": 2
+      },
+      "dependency_edge_count": 3,
+      "hard_dependency_count": 1,
+      "soft_dependency_count": 2,
+      "weak_dependency_count": 1,
+      "hard_dependency_edge_ids": [
+        "dependency-edge.adae06614470"
+      ],
+      "soft_dependency_edge_ids": [
+        "dependency-edge.c0c6c34bcb34",
+        "dependency-edge.ddea10bc7257"
+      ],
+      "weak_dependency_edge_ids": [
+        "dependency-edge.ddea10bc7257"
+      ],
+      "projects_involved": [
+        "prj.analytics-hub",
+        "prj.optimus-prime-gsd-fusion",
+        "prj.runtime-core",
+        "prj.runtime-observability"
+      ],
+      "open_risk_count": 2
+    },
+    "evidence_refs": [
+      "contracts/analytics-ingest-v2.md#L22",
+      "contracts/runtime-heartbeat.md#L10",
+      "reports/earth/contracts-index.json#runtime-heartbeat-v1",
+      "reports/runtime/dispatch-cycle-2026-03-15.jsonl#L404",
+      "reports/runtime/export-cycle-2026-03-15.jsonl#L122",
+      "reports/runtime/rate-snapshot-bridge-2026-03-15.jsonl#L78",
+      "strategy/current/integration/analytics-export-v2.md#L6",
+      "strategy/current/integration/runtime-core-lease-heartbeat.md#L4"
+    ]
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "810a8800decdab04b7be4afce9c38ed2cdec4004189934cb864247115d634538",
+    "reproducible_call_id": "req011-810a8800decdab04",
+    "canonical_input": {
+      "target_project_id": "prj.optimus-prime-gsd-fusion",
+      "contract_signals": [
+        {
+          "source_kind": "contract",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.analytics-hub",
+          "dependency_ref": "contracts/analytics-ingest.v2",
+          "summary": "Analytics ingestion contract defines cycle export payload.",
+          "signal_strength": "moderate",
+          "evidence_refs": [
+            "contracts/analytics-ingest-v2.md#L22"
+          ]
+        },
+        {
+          "source_kind": "contract",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-core",
+          "dependency_ref": "contracts/runtime-heartbeat.v1",
+          "summary": "Runtime lease heartbeat contract binds dispatch cadence.",
+          "signal_strength": "strong",
+          "evidence_refs": [
+            "contracts/runtime-heartbeat.md#L10",
+            "reports/earth/contracts-index.json#runtime-heartbeat-v1"
+          ]
+        }
+      ],
+      "trace_signals": [
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.analytics-hub",
+          "dependency_ref": "traces/export-cycle-2026-03-15.jsonl#evt-122",
+          "summary": "Trace confirms export submission attempts to analytics endpoint.",
+          "signal_strength": "weak",
+          "evidence_refs": [
+            "reports/runtime/export-cycle-2026-03-15.jsonl#L122"
+          ]
+        },
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.optimus-prime-gsd-fusion",
+          "dependency_ref": "traces/local-controller-loop-2026-03-15.jsonl#evt-9",
+          "summary": "Local-only loopback trace should not produce cross-project edges.",
+          "signal_strength": "moderate",
+          "evidence_refs": [
+            "reports/runtime/local-controller-loop-2026-03-15.jsonl#L9"
+          ]
+        },
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-core",
+          "dependency_ref": "traces/dispatch-cycle-2026-03-15.jsonl#evt-404",
+          "summary": "Dispatch trace shows heartbeat lookups before queue rebalance.",
+          "signal_strength": "moderate",
+          "evidence_refs": [
+            "reports/runtime/dispatch-cycle-2026-03-15.jsonl#L404"
+          ]
+        },
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-observability",
+          "dependency_ref": "traces/rate-snapshot-bridge-2026-03-15.jsonl#evt-78",
+          "summary": "Single weak trace mentions optional observability bridge handoff.",
+          "signal_strength": "weak",
+          "evidence_refs": [
+            "reports/runtime/rate-snapshot-bridge-2026-03-15.jsonl#L78"
+          ]
+        }
+      ],
+      "integration_point_signals": [
+        {
+          "source_kind": "integration_point",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.analytics-hub",
+          "dependency_ref": "integration/analytics-export-v2",
+          "summary": "Declared integration point exports per-cycle diagnostics to analytics-hub.",
+          "signal_strength": "weak",
+          "evidence_refs": [
+            "strategy/current/integration/analytics-export-v2.md#L6"
+          ]
+        },
+        {
+          "source_kind": "integration_point",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-core",
+          "dependency_ref": "integration/runtime-core-lease-heartbeat",
+          "summary": "Declared integration point consumes runtime-core lease heartbeat feed.",
+          "signal_strength": "strong",
+          "evidence_refs": [
+            "strategy/current/integration/runtime-core-lease-heartbeat.md#L4"
+          ]
+        }
+      ]
+    },
+    "processing_input_sha256": "05434e17e85c727b33dc8a5afd7656156053062b82e0ae0f3a7456d306cc2b99",
+    "processing_call_id": "req011-processing-05434e17e85c727b",
+    "canonical_processing_input": {
+      "contract_signals": [
+        {
+          "source_kind": "contract",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.analytics-hub",
+          "dependency_ref": "contracts/analytics-ingest.v2",
+          "summary": "Analytics ingestion contract defines cycle export payload.",
+          "signal_strength": "moderate",
+          "evidence_refs": [
+            "contracts/analytics-ingest-v2.md#L22"
+          ]
+        },
+        {
+          "source_kind": "contract",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-core",
+          "dependency_ref": "contracts/runtime-heartbeat.v1",
+          "summary": "Runtime lease heartbeat contract binds dispatch cadence.",
+          "signal_strength": "strong",
+          "evidence_refs": [
+            "contracts/runtime-heartbeat.md#L10",
+            "reports/earth/contracts-index.json#runtime-heartbeat-v1"
+          ]
+        }
+      ],
+      "trace_signals": [
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.analytics-hub",
+          "dependency_ref": "traces/export-cycle-2026-03-15.jsonl#evt-122",
+          "summary": "Trace confirms export submission attempts to analytics endpoint.",
+          "signal_strength": "weak",
+          "evidence_refs": [
+            "reports/runtime/export-cycle-2026-03-15.jsonl#L122"
+          ]
+        },
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.optimus-prime-gsd-fusion",
+          "dependency_ref": "traces/local-controller-loop-2026-03-15.jsonl#evt-9",
+          "summary": "Local-only loopback trace should not produce cross-project edges.",
+          "signal_strength": "moderate",
+          "evidence_refs": [
+            "reports/runtime/local-controller-loop-2026-03-15.jsonl#L9"
+          ]
+        },
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-core",
+          "dependency_ref": "traces/dispatch-cycle-2026-03-15.jsonl#evt-404",
+          "summary": "Dispatch trace shows heartbeat lookups before queue rebalance.",
+          "signal_strength": "moderate",
+          "evidence_refs": [
+            "reports/runtime/dispatch-cycle-2026-03-15.jsonl#L404"
+          ]
+        },
+        {
+          "source_kind": "trace",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-observability",
+          "dependency_ref": "traces/rate-snapshot-bridge-2026-03-15.jsonl#evt-78",
+          "summary": "Single weak trace mentions optional observability bridge handoff.",
+          "signal_strength": "weak",
+          "evidence_refs": [
+            "reports/runtime/rate-snapshot-bridge-2026-03-15.jsonl#L78"
+          ]
+        }
+      ],
+      "integration_point_signals": [
+        {
+          "source_kind": "integration_point",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.analytics-hub",
+          "dependency_ref": "integration/analytics-export-v2",
+          "summary": "Declared integration point exports per-cycle diagnostics to analytics-hub.",
+          "signal_strength": "weak",
+          "evidence_refs": [
+            "strategy/current/integration/analytics-export-v2.md#L6"
+          ]
+        },
+        {
+          "source_kind": "integration_point",
+          "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+          "provider_project_id": "prj.runtime-core",
+          "dependency_ref": "integration/runtime-core-lease-heartbeat",
+          "summary": "Declared integration point consumes runtime-core lease heartbeat feed.",
+          "signal_strength": "strong",
+          "evidence_refs": [
+            "strategy/current/integration/runtime-core-lease-heartbeat.md#L4"
+          ]
+        }
+      ]
+    }
+  }
+}

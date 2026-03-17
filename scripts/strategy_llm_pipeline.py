@@ -15,11 +15,13 @@ from typing import Any, Mapping, Sequence
 
 try:
     from scripts import strategy_llm_pipeline_req027_035 as _req27_35
+    from scripts import strategy_llm_pipeline_req036 as _req36
 except ModuleNotFoundError:
     _repo_root = Path(__file__).resolve().parents[1]
     if str(_repo_root) not in sys.path:
         sys.path.insert(0, str(_repo_root))
     from scripts import strategy_llm_pipeline_req027_035 as _req27_35
+    from scripts import strategy_llm_pipeline_req036 as _req36
 
 TOOL = "strategy-llm-pipeline"
 TOOL_VERSION = "1.0.0"
@@ -69,6 +71,14 @@ REQ_035_PROCESSING_SCHEMA_VERSION = _req27_35.REQ_035_PROCESSING_SCHEMA_VERSION
 REQ_035_REQUIREMENT_ID = _req27_35.REQ_035_REQUIREMENT_ID
 REQ_035_ANALYSIS_TYPE = _req27_35.REQ_035_ANALYSIS_TYPE
 REQ_035_CALL_ID = _req27_35.REQ_035_CALL_ID
+REQ_036_REQUIREMENT_ID = _req36.REQ_036_REQUIREMENT_ID
+REQ_036_SCHEMA_VERSION = _req36.REQ_036_SCHEMA_VERSION
+REQ_036_DETECTION_STRATEGY = _req36.REQ_036_DETECTION_STRATEGY
+REQ_036_REASON_CODE = _req36.REQ_036_REASON_CODE
+REQ_036_HANDLING_POLICY = _req36.REQ_036_HANDLING_POLICY
+REQ_036_LLM_CALL_TRACE_SCHEMA_VERSION = _req36.REQ_036_LLM_CALL_TRACE_SCHEMA_VERSION
+REQ_036_LLM_CALL_TRACE_ROW_SCHEMA_VERSION = _req36.REQ_036_LLM_CALL_TRACE_ROW_SCHEMA_VERSION
+REQ_036_DEFAULT_LLM_CALL_TRACE_PATH = _req36.REQ_036_DEFAULT_LLM_CALL_TRACE_PATH
 REQ_026_PROCESSING_STRATEGY = "call-1-situational-analysis"
 REQ_026_REASONING_MODE = "deterministic-broad-sweep"
 REQ_029_PROCESSING_STRATEGY = "call-4-recommendation-synthesis"
@@ -202,6 +212,29 @@ build_req_035_evidence_citation_discipline_in_reasoning_calls = (
 validate_req_035_evidence_citation_discipline_in_reasoning_calls = (
     _req27_35.validate_req_035_evidence_citation_discipline_in_reasoning_calls
 )
+build_req_036_cross_call_contradiction_detection = _req36.build_req_036_cross_call_contradiction_detection
+validate_req_036_cross_call_contradiction_detection = _req36.validate_req_036_cross_call_contradiction_detection
+
+
+def process_req_035_evidence_citation_discipline_in_reasoning_calls(
+    payload: Mapping[str, Any],
+    *,
+    emit: Any | None = None,
+    trace_path: str | Path | None = None,
+    trace_artifacts_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    artifacts_root = (
+        Path(trace_artifacts_dir)
+        if trace_artifacts_dir is not None
+        else REPO_ROOT / "strategy/current/llm_call_trace_artifacts"
+    )
+    artifacts_root.mkdir(parents=True, exist_ok=True)
+    return _req27_35.process_req_035_evidence_citation_discipline_in_reasoning_calls(
+        payload,
+        emit=emit,
+        trace_path=trace_path,
+        trace_artifacts_dir=artifacts_root,
+    )
 
 
 class Req026Error(ValueError):
@@ -13448,6 +13481,8 @@ def _detect_requirement(payload: Mapping[str, Any]) -> str:
         return REQ_031_REQUIREMENT_ID
     if payload.get("analysis_type") == REQ_027_ANALYSIS_TYPE:
         return REQ_027_REQUIREMENT_ID
+    if "call_outputs" in payload and "contradiction_resolutions" in payload:
+        return REQ_036_REQUIREMENT_ID
     if payload.get("analysis_type") == REQ_030_ANALYSIS_TYPE or "candidate_lane_designs" in payload:
         return REQ_030_REQUIREMENT_ID
     if payload.get("analysis_type") == REQ_034_ANALYSIS_TYPE or "prior_call_handoffs" in payload:
@@ -13459,7 +13494,7 @@ def _detect_requirement(payload: Mapping[str, Any]) -> str:
     if "target_project" in payload or payload.get("analysis_type") == REQ_026_ANALYSIS_TYPE:
         return REQ_026_REQUIREMENT_ID
     raise ValueError(
-        "input payload does not match REQ-025, REQ-026, REQ-027, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-033, REQ-034, REQ-035, REQ-037, or REQ-046 contract anchors"
+        "input payload does not match REQ-025, REQ-026, REQ-027, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-033, REQ-034, REQ-035, REQ-036, REQ-037, or REQ-046 contract anchors"
     )
 
 
@@ -13467,6 +13502,8 @@ def run(payload: Mapping[str, Any]) -> dict[str, Any]:
     requirement_id = _detect_requirement(payload)
     if requirement_id == REQ_046_REQUIREMENT_ID:
         return build_req_046_final_strategy_synthesis_composer(payload)
+    if requirement_id == REQ_036_REQUIREMENT_ID:
+        return build_req_036_cross_call_contradiction_detection(**dict(payload))
     if requirement_id == REQ_035_REQUIREMENT_ID:
         return build_req_035_evidence_citation_discipline_in_reasoning_calls(dict(payload))
     if requirement_id == REQ_037_REQUIREMENT_ID:
@@ -13646,6 +13683,8 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
     requirement_id = _as_text(payload.get("requirement_id"))
     if requirement_id == REQ_046_REQUIREMENT_ID:
         return validate_req_046_final_strategy_synthesis_composer(payload)
+    if requirement_id == REQ_036_REQUIREMENT_ID:
+        return validate_req_036_cross_call_contradiction_detection(payload)
     if requirement_id == REQ_035_REQUIREMENT_ID:
         return validate_req_035_evidence_citation_discipline_in_reasoning_calls(payload)
     if requirement_id == REQ_037_REQUIREMENT_ID:
@@ -13675,7 +13714,7 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Emit REQ-025, REQ-026, REQ-027, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-033, REQ-034, REQ-035, REQ-037, or REQ-046 strategy pipeline payloads."
+        description="Emit REQ-025, REQ-026, REQ-027, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-033, REQ-034, REQ-035, REQ-036, REQ-037, or REQ-046 strategy pipeline payloads."
     )
     parser.add_argument("--input-json", required=True, help="Input JSON path or '-' for stdin.")
     parser.add_argument("--output-json", default="", help="Optional output JSON path.")

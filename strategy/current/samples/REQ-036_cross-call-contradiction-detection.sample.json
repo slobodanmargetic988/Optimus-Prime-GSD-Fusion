@@ -1,0 +1,494 @@
+{
+  "schema_version": "req-036.cross-call-contradiction-detection.v1",
+  "requirement_id": "REQ-036",
+  "cross_call_contradiction_detection": {
+    "runtime_mode": "llm-first",
+    "execution_mode": "long-thinking",
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req036-fixture-r1"
+  },
+  "processing_behavior": {
+    "strategy": "cross-call-contradiction-detection",
+    "reasoning_mode": "long-thinking",
+    "heuristic_summarization_only": false,
+    "contradiction_handling_policy": "explicit-resolution-or-unresolved-risk",
+    "context_inputs": {
+      "broad_sweep_context": {
+        "target_project_root": "/workspace/projects/optimus-prime",
+        "earth_root": "/workspace/projects/Earth",
+        "output_root": "/workspace/projects/optimus-prime/strategy/out",
+        "revision_identity": "rev-req036-fixture-r1"
+      },
+      "call_outputs": [
+        {
+          "call_id": "call-1",
+          "call_requirement_id": "REQ-026",
+          "emitted_claims": [
+            {
+              "claim_id": "claim-lane-parallelism",
+              "claim_text": "Execution can safely run five lanes in parallel under current runtime constraints.",
+              "stance": "support",
+              "evidence_refs": [
+                "reports/strategy/call-1/runtime-budget.json"
+              ]
+            },
+            {
+              "claim_id": "claim-token-headroom",
+              "claim_text": "Token budget headroom is sufficient for deep recommendation synthesis.",
+              "stance": "support",
+              "evidence_refs": [
+                "reports/strategy/call-1/token-budget.json"
+              ]
+            }
+          ]
+        },
+        {
+          "call_id": "call-2",
+          "call_requirement_id": "REQ-030",
+          "emitted_claims": [
+            {
+              "claim_id": "claim-lane-parallelism",
+              "claim_text": "Execution should serialize lane operations due to runtime saturation risk.",
+              "stance": "contradict",
+              "evidence_refs": [
+                "reports/strategy/call-2/runtime-saturation.json"
+              ]
+            },
+            {
+              "claim_id": "claim-token-headroom",
+              "claim_text": "Token budget headroom is insufficient for deep recommendation synthesis.",
+              "stance": "contradict",
+              "evidence_refs": [
+                "reports/strategy/call-2/token-budget-alert.json"
+              ]
+            }
+          ]
+        },
+        {
+          "call_id": "call-3",
+          "call_requirement_id": "REQ-031",
+          "emitted_claims": [
+            {
+              "claim_id": "claim-kpi-projection",
+              "claim_text": "KPI projection confidence remains medium until contradiction handling completes.",
+              "stance": "support",
+              "evidence_refs": [
+                "reports/strategy/call-3/kpi-projection.json"
+              ]
+            }
+          ]
+        }
+      ],
+      "contradiction_resolutions": [
+        {
+          "claim_id": "claim-lane-parallelism",
+          "resolution_status": "resolved",
+          "resolution_summary": "Adopt two-lane phased parallelism to satisfy both throughput and saturation constraints.",
+          "resolved_by_call_id": "call-3",
+          "evidence_refs": [
+            "reports/strategy/call-3/lane-phasing-decision.json"
+          ]
+        }
+      ]
+    },
+    "context_usage": {
+      "call_count": 3,
+      "call_ids_considered": [
+        "call-1",
+        "call-2",
+        "call-3"
+      ],
+      "contradiction_claim_ids": [
+        "claim-lane-parallelism",
+        "claim-token-headroom"
+      ],
+      "contradiction_count": 2,
+      "resolved_contradictions": 1,
+      "unresolved_contradictions": 1,
+      "evidence_refs_used": [
+        "reports/strategy/call-1/runtime-budget.json",
+        "reports/strategy/call-1/token-budget.json",
+        "reports/strategy/call-2/runtime-saturation.json",
+        "reports/strategy/call-2/token-budget-alert.json"
+      ],
+      "broad_sweep_context_used": true,
+      "broad_sweep_context_scope": "earth-wide",
+      "target_project_root": "/workspace/projects/optimus-prime",
+      "earth_root": "/workspace/projects/Earth",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req036-fixture-r1"
+    },
+    "recommendation": {
+      "decision": "requires-resolution-before-final-synthesis",
+      "rationale": "At least one cross-call contradiction remains unresolved and is now explicitly risk-marked.",
+      "confidence": "low",
+      "evidence_refs": [
+        "reports/strategy/call-1/runtime-budget.json",
+        "reports/strategy/call-1/token-budget.json",
+        "reports/strategy/call-2/runtime-saturation.json",
+        "reports/strategy/call-2/token-budget-alert.json"
+      ],
+      "recommended_actions": [
+        {
+          "action_id": "resolve-cross-call-contradictions",
+          "summary": "Resolve contradiction claims or accept unresolved risk before final synthesis.",
+          "rationale": "REQ-036 requires explicit resolution or unresolved-risk marking for contradictions.",
+          "next_step": "Address contradiction_report.open_risks or acknowledge each unresolved risk in synthesis output.",
+          "evidence_refs": [
+            "reports/strategy/call-1/runtime-budget.json",
+            "reports/strategy/call-1/token-budget.json",
+            "reports/strategy/call-2/runtime-saturation.json",
+            "reports/strategy/call-2/token-budget-alert.json"
+          ]
+        }
+      ],
+      "open_risks": [
+        {
+          "risk_id": "risk-claim-claim-token-headroom-contradiction",
+          "summary": "Claim 'claim-token-headroom' has contradictory stances across call outputs.",
+          "reason_code": "cross_call_contradiction",
+          "required_evidence_refs": [
+            "reports/strategy/call-1/token-budget.json",
+            "reports/strategy/call-2/token-budget-alert.json"
+          ]
+        }
+      ]
+    }
+  },
+  "contradiction_report": {
+    "detection_strategy": "cross-call-claim-stance-comparison",
+    "contradiction_count": 2,
+    "resolved_contradictions": 1,
+    "unresolved_contradictions": 1,
+    "contradictions": [
+      {
+        "claim_id": "claim-lane-parallelism",
+        "summary": "Claim 'claim-lane-parallelism' has contradictory stances across call outputs.",
+        "contradictory_calls": [
+          {
+            "call_id": "call-1",
+            "call_requirement_id": "REQ-026",
+            "claim_text": "Execution can safely run five lanes in parallel under current runtime constraints.",
+            "stance": "support",
+            "evidence_refs": [
+              "reports/strategy/call-1/runtime-budget.json"
+            ]
+          },
+          {
+            "call_id": "call-2",
+            "call_requirement_id": "REQ-030",
+            "claim_text": "Execution should serialize lane operations due to runtime saturation risk.",
+            "stance": "contradict",
+            "evidence_refs": [
+              "reports/strategy/call-2/runtime-saturation.json"
+            ]
+          }
+        ],
+        "resolution_status": "resolved",
+        "resolution": {
+          "resolution_status": "resolved",
+          "resolution_summary": "Adopt two-lane phased parallelism to satisfy both throughput and saturation constraints.",
+          "resolved_by_call_id": "call-3",
+          "evidence_refs": [
+            "reports/strategy/call-3/lane-phasing-decision.json"
+          ]
+        },
+        "unresolved_risk": null,
+        "required_evidence_refs": [
+          "reports/strategy/call-1/runtime-budget.json",
+          "reports/strategy/call-2/runtime-saturation.json"
+        ]
+      },
+      {
+        "claim_id": "claim-token-headroom",
+        "summary": "Claim 'claim-token-headroom' has contradictory stances across call outputs.",
+        "contradictory_calls": [
+          {
+            "call_id": "call-1",
+            "call_requirement_id": "REQ-026",
+            "claim_text": "Token budget headroom is sufficient for deep recommendation synthesis.",
+            "stance": "support",
+            "evidence_refs": [
+              "reports/strategy/call-1/token-budget.json"
+            ]
+          },
+          {
+            "call_id": "call-2",
+            "call_requirement_id": "REQ-030",
+            "claim_text": "Token budget headroom is insufficient for deep recommendation synthesis.",
+            "stance": "contradict",
+            "evidence_refs": [
+              "reports/strategy/call-2/token-budget-alert.json"
+            ]
+          }
+        ],
+        "resolution_status": "unresolved",
+        "resolution": null,
+        "unresolved_risk": {
+          "risk_id": "risk-claim-claim-token-headroom-contradiction",
+          "summary": "Claim 'claim-token-headroom' has contradictory stances across call outputs.",
+          "reason_code": "cross_call_contradiction",
+          "required_evidence_refs": [
+            "reports/strategy/call-1/token-budget.json",
+            "reports/strategy/call-2/token-budget-alert.json"
+          ]
+        },
+        "required_evidence_refs": [
+          "reports/strategy/call-1/token-budget.json",
+          "reports/strategy/call-2/token-budget-alert.json"
+        ]
+      }
+    ],
+    "open_risks": [
+      {
+        "risk_id": "risk-claim-claim-token-headroom-contradiction",
+        "summary": "Claim 'claim-token-headroom' has contradictory stances across call outputs.",
+        "reason_code": "cross_call_contradiction",
+        "required_evidence_refs": [
+          "reports/strategy/call-1/token-budget.json",
+          "reports/strategy/call-2/token-budget-alert.json"
+        ]
+      }
+    ],
+    "evidence_refs": [
+      "reports/strategy/call-1/runtime-budget.json",
+      "reports/strategy/call-1/token-budget.json",
+      "reports/strategy/call-2/runtime-saturation.json",
+      "reports/strategy/call-2/token-budget-alert.json"
+    ]
+  },
+  "context_bundle": {
+    "schema_version": "req-036.cross-call-contradiction-context-bundle.v1",
+    "canonical_json": "{\"contradiction_report\":{\"contradiction_count\":2,\"contradictions\":[{\"claim_id\":\"claim-lane-parallelism\",\"contradictory_calls\":[{\"call_id\":\"call-1\",\"call_requirement_id\":\"REQ-026\",\"claim_text\":\"Execution can safely run five lanes in parallel under current runtime constraints.\",\"evidence_refs\":[\"reports/strategy/call-1/runtime-budget.json\"],\"stance\":\"support\"},{\"call_id\":\"call-2\",\"call_requirement_id\":\"REQ-030\",\"claim_text\":\"Execution should serialize lane operations due to runtime saturation risk.\",\"evidence_refs\":[\"reports/strategy/call-2/runtime-saturation.json\"],\"stance\":\"contradict\"}],\"required_evidence_refs\":[\"reports/strategy/call-1/runtime-budget.json\",\"reports/strategy/call-2/runtime-saturation.json\"],\"resolution\":{\"evidence_refs\":[\"reports/strategy/call-3/lane-phasing-decision.json\"],\"resolution_status\":\"resolved\",\"resolution_summary\":\"Adopt two-lane phased parallelism to satisfy both throughput and saturation constraints.\",\"resolved_by_call_id\":\"call-3\"},\"resolution_status\":\"resolved\",\"summary\":\"Claim 'claim-lane-parallelism' has contradictory stances across call outputs.\",\"unresolved_risk\":null},{\"claim_id\":\"claim-token-headroom\",\"contradictory_calls\":[{\"call_id\":\"call-1\",\"call_requirement_id\":\"REQ-026\",\"claim_text\":\"Token budget headroom is sufficient for deep recommendation synthesis.\",\"evidence_refs\":[\"reports/strategy/call-1/token-budget.json\"],\"stance\":\"support\"},{\"call_id\":\"call-2\",\"call_requirement_id\":\"REQ-030\",\"claim_text\":\"Token budget headroom is insufficient for deep recommendation synthesis.\",\"evidence_refs\":[\"reports/strategy/call-2/token-budget-alert.json\"],\"stance\":\"contradict\"}],\"required_evidence_refs\":[\"reports/strategy/call-1/token-budget.json\",\"reports/strategy/call-2/token-budget-alert.json\"],\"resolution\":null,\"resolution_status\":\"unresolved\",\"summary\":\"Claim 'claim-token-headroom' has contradictory stances across call outputs.\",\"unresolved_risk\":{\"reason_code\":\"cross_call_contradiction\",\"required_evidence_refs\":[\"reports/strategy/call-1/token-budget.json\",\"reports/strategy/call-2/token-budget-alert.json\"],\"risk_id\":\"risk-claim-claim-token-headroom-contradiction\",\"summary\":\"Claim 'claim-token-headroom' has contradictory stances across call outputs.\"}}],\"detection_strategy\":\"cross-call-claim-stance-comparison\",\"evidence_refs\":[\"reports/strategy/call-1/runtime-budget.json\",\"reports/strategy/call-1/token-budget.json\",\"reports/strategy/call-2/runtime-saturation.json\",\"reports/strategy/call-2/token-budget-alert.json\"],\"open_risks\":[{\"reason_code\":\"cross_call_contradiction\",\"required_evidence_refs\":[\"reports/strategy/call-1/token-budget.json\",\"reports/strategy/call-2/token-budget-alert.json\"],\"risk_id\":\"risk-claim-claim-token-headroom-contradiction\",\"summary\":\"Claim 'claim-token-headroom' has contradictory stances across call outputs.\"}],\"resolved_contradictions\":1,\"unresolved_contradictions\":1},\"processing_context_inputs\":{\"broad_sweep_context\":{\"earth_root\":\"/workspace/projects/Earth\",\"output_root\":\"/workspace/projects/optimus-prime/strategy/out\",\"revision_identity\":\"rev-req036-fixture-r1\",\"target_project_root\":\"/workspace/projects/optimus-prime\"},\"call_outputs\":[{\"call_id\":\"call-1\",\"call_requirement_id\":\"REQ-026\",\"emitted_claims\":[{\"claim_id\":\"claim-lane-parallelism\",\"claim_text\":\"Execution can safely run five lanes in parallel under current runtime constraints.\",\"evidence_refs\":[\"reports/strategy/call-1/runtime-budget.json\"],\"stance\":\"support\"},{\"claim_id\":\"claim-token-headroom\",\"claim_text\":\"Token budget headroom is sufficient for deep recommendation synthesis.\",\"evidence_refs\":[\"reports/strategy/call-1/token-budget.json\"],\"stance\":\"support\"}]},{\"call_id\":\"call-2\",\"call_requirement_id\":\"REQ-030\",\"emitted_claims\":[{\"claim_id\":\"claim-lane-parallelism\",\"claim_text\":\"Execution should serialize lane operations due to runtime saturation risk.\",\"evidence_refs\":[\"reports/strategy/call-2/runtime-saturation.json\"],\"stance\":\"contradict\"},{\"claim_id\":\"claim-token-headroom\",\"claim_text\":\"Token budget headroom is insufficient for deep recommendation synthesis.\",\"evidence_refs\":[\"reports/strategy/call-2/token-budget-alert.json\"],\"stance\":\"contradict\"}]},{\"call_id\":\"call-3\",\"call_requirement_id\":\"REQ-031\",\"emitted_claims\":[{\"claim_id\":\"claim-kpi-projection\",\"claim_text\":\"KPI projection confidence remains medium until contradiction handling completes.\",\"evidence_refs\":[\"reports/strategy/call-3/kpi-projection.json\"],\"stance\":\"support\"}]}],\"contradiction_resolutions\":[{\"claim_id\":\"claim-lane-parallelism\",\"evidence_refs\":[\"reports/strategy/call-3/lane-phasing-decision.json\"],\"resolution_status\":\"resolved\",\"resolution_summary\":\"Adopt two-lane phased parallelism to satisfy both throughput and saturation constraints.\",\"resolved_by_call_id\":\"call-3\"}]},\"processing_context_usage\":{\"broad_sweep_context_scope\":\"earth-wide\",\"broad_sweep_context_used\":true,\"call_count\":3,\"call_ids_considered\":[\"call-1\",\"call-2\",\"call-3\"],\"contradiction_claim_ids\":[\"claim-lane-parallelism\",\"claim-token-headroom\"],\"contradiction_count\":2,\"earth_root\":\"/workspace/projects/Earth\",\"evidence_refs_used\":[\"reports/strategy/call-1/runtime-budget.json\",\"reports/strategy/call-1/token-budget.json\",\"reports/strategy/call-2/runtime-saturation.json\",\"reports/strategy/call-2/token-budget-alert.json\"],\"output_root\":\"/workspace/projects/optimus-prime/strategy/out\",\"resolved_contradictions\":1,\"revision_identity\":\"rev-req036-fixture-r1\",\"target_project_root\":\"/workspace/projects/optimus-prime\",\"unresolved_contradictions\":1},\"recommendation\":{\"confidence\":\"low\",\"decision\":\"requires-resolution-before-final-synthesis\",\"evidence_refs\":[\"reports/strategy/call-1/runtime-budget.json\",\"reports/strategy/call-1/token-budget.json\",\"reports/strategy/call-2/runtime-saturation.json\",\"reports/strategy/call-2/token-budget-alert.json\"],\"open_risks\":[{\"reason_code\":\"cross_call_contradiction\",\"required_evidence_refs\":[\"reports/strategy/call-1/token-budget.json\",\"reports/strategy/call-2/token-budget-alert.json\"],\"risk_id\":\"risk-claim-claim-token-headroom-contradiction\",\"summary\":\"Claim 'claim-token-headroom' has contradictory stances across call outputs.\"}],\"rationale\":\"At least one cross-call contradiction remains unresolved and is now explicitly risk-marked.\",\"recommended_actions\":[{\"action_id\":\"resolve-cross-call-contradictions\",\"evidence_refs\":[\"reports/strategy/call-1/runtime-budget.json\",\"reports/strategy/call-1/token-budget.json\",\"reports/strategy/call-2/runtime-saturation.json\",\"reports/strategy/call-2/token-budget-alert.json\"],\"next_step\":\"Address contradiction_report.open_risks or acknowledge each unresolved risk in synthesis output.\",\"rationale\":\"REQ-036 requires explicit resolution or unresolved-risk marking for contradictions.\",\"summary\":\"Resolve contradiction claims or accept unresolved risk before final synthesis.\"}]}}",
+    "sha256": "79e3d910769a7dc017d793f899ce2a38f6ab5aa1c0bf378bcd016503fb5a2cad"
+  },
+  "llm_call_trace": {
+    "schema_version": "req-036.llm-call-trace.v1",
+    "trace_artifact_path": "strategy/current/llm_call_trace.jsonl",
+    "row_count": 3,
+    "rows": [
+      {
+        "schema_version": "req-036.llm-call-trace-row.v1",
+        "trace_row_id": "req036-trace-call-1-6b66c2d68c93e2be",
+        "call_id": "call-1",
+        "call_requirement_id": "REQ-026",
+        "call_objective": "Assess REQ-026 claims for REQ-036 cross-call contradiction detection before final synthesis.",
+        "input_refs": [
+          "call_requirement_id:REQ-026",
+          "cross_call_contradiction_detection.earth_root",
+          "cross_call_contradiction_detection.output_root",
+          "cross_call_contradiction_detection.revision_identity",
+          "cross_call_contradiction_detection.target_project_root",
+          "processing_behavior.context_inputs.call_outputs.call_id:call-1"
+        ],
+        "output_refs": [
+          "reports/strategy/call-1/runtime-budget.json",
+          "reports/strategy/call-1/token-budget.json"
+        ],
+        "handoff_summary": {
+          "decision": "requires-unresolved-risk-marking",
+          "emitted_claim_count": 2,
+          "emitted_claim_ids": [
+            "claim-lane-parallelism",
+            "claim-token-headroom"
+          ],
+          "emitted_claim_stances": [
+            "claim-lane-parallelism:support",
+            "claim-token-headroom:support"
+          ],
+          "contradiction_claim_ids": [
+            "claim-lane-parallelism",
+            "claim-token-headroom"
+          ],
+          "resolved_contradiction_claim_ids": [
+            "claim-lane-parallelism"
+          ],
+          "unresolved_contradiction_claim_ids": [
+            "claim-token-headroom"
+          ],
+          "evidence_refs": [
+            "reports/strategy/call-1/runtime-budget.json",
+            "reports/strategy/call-1/token-budget.json"
+          ]
+        }
+      },
+      {
+        "schema_version": "req-036.llm-call-trace-row.v1",
+        "trace_row_id": "req036-trace-call-2-5446ebad039e82bc",
+        "call_id": "call-2",
+        "call_requirement_id": "REQ-030",
+        "call_objective": "Assess REQ-030 claims for REQ-036 cross-call contradiction detection before final synthesis.",
+        "input_refs": [
+          "call_requirement_id:REQ-030",
+          "cross_call_contradiction_detection.earth_root",
+          "cross_call_contradiction_detection.output_root",
+          "cross_call_contradiction_detection.revision_identity",
+          "cross_call_contradiction_detection.target_project_root",
+          "processing_behavior.context_inputs.call_outputs.call_id:call-2"
+        ],
+        "output_refs": [
+          "reports/strategy/call-2/runtime-saturation.json",
+          "reports/strategy/call-2/token-budget-alert.json"
+        ],
+        "handoff_summary": {
+          "decision": "requires-unresolved-risk-marking",
+          "emitted_claim_count": 2,
+          "emitted_claim_ids": [
+            "claim-lane-parallelism",
+            "claim-token-headroom"
+          ],
+          "emitted_claim_stances": [
+            "claim-lane-parallelism:contradict",
+            "claim-token-headroom:contradict"
+          ],
+          "contradiction_claim_ids": [
+            "claim-lane-parallelism",
+            "claim-token-headroom"
+          ],
+          "resolved_contradiction_claim_ids": [
+            "claim-lane-parallelism"
+          ],
+          "unresolved_contradiction_claim_ids": [
+            "claim-token-headroom"
+          ],
+          "evidence_refs": [
+            "reports/strategy/call-2/runtime-saturation.json",
+            "reports/strategy/call-2/token-budget-alert.json"
+          ]
+        }
+      },
+      {
+        "schema_version": "req-036.llm-call-trace-row.v1",
+        "trace_row_id": "req036-trace-call-3-4a3b15b80ce6210d",
+        "call_id": "call-3",
+        "call_requirement_id": "REQ-031",
+        "call_objective": "Assess REQ-031 claims for REQ-036 cross-call contradiction detection before final synthesis.",
+        "input_refs": [
+          "call_requirement_id:REQ-031",
+          "cross_call_contradiction_detection.earth_root",
+          "cross_call_contradiction_detection.output_root",
+          "cross_call_contradiction_detection.revision_identity",
+          "cross_call_contradiction_detection.target_project_root",
+          "processing_behavior.context_inputs.call_outputs.call_id:call-3"
+        ],
+        "output_refs": [
+          "reports/strategy/call-3/kpi-projection.json"
+        ],
+        "handoff_summary": {
+          "decision": "no-contradiction-observed",
+          "emitted_claim_count": 1,
+          "emitted_claim_ids": [
+            "claim-kpi-projection"
+          ],
+          "emitted_claim_stances": [
+            "claim-kpi-projection:support"
+          ],
+          "contradiction_claim_ids": [],
+          "resolved_contradiction_claim_ids": [],
+          "unresolved_contradiction_claim_ids": [],
+          "evidence_refs": [
+            "reports/strategy/call-3/kpi-projection.json"
+          ]
+        }
+      }
+    ],
+    "canonical_json": "{\"rows\":[{\"call_id\":\"call-1\",\"call_objective\":\"Assess REQ-026 claims for REQ-036 cross-call contradiction detection before final synthesis.\",\"call_requirement_id\":\"REQ-026\",\"handoff_summary\":{\"contradiction_claim_ids\":[\"claim-lane-parallelism\",\"claim-token-headroom\"],\"decision\":\"requires-unresolved-risk-marking\",\"emitted_claim_count\":2,\"emitted_claim_ids\":[\"claim-lane-parallelism\",\"claim-token-headroom\"],\"emitted_claim_stances\":[\"claim-lane-parallelism:support\",\"claim-token-headroom:support\"],\"evidence_refs\":[\"reports/strategy/call-1/runtime-budget.json\",\"reports/strategy/call-1/token-budget.json\"],\"resolved_contradiction_claim_ids\":[\"claim-lane-parallelism\"],\"unresolved_contradiction_claim_ids\":[\"claim-token-headroom\"]},\"input_refs\":[\"call_requirement_id:REQ-026\",\"cross_call_contradiction_detection.earth_root\",\"cross_call_contradiction_detection.output_root\",\"cross_call_contradiction_detection.revision_identity\",\"cross_call_contradiction_detection.target_project_root\",\"processing_behavior.context_inputs.call_outputs.call_id:call-1\"],\"output_refs\":[\"reports/strategy/call-1/runtime-budget.json\",\"reports/strategy/call-1/token-budget.json\"],\"schema_version\":\"req-036.llm-call-trace-row.v1\",\"trace_row_id\":\"req036-trace-call-1-6b66c2d68c93e2be\"},{\"call_id\":\"call-2\",\"call_objective\":\"Assess REQ-030 claims for REQ-036 cross-call contradiction detection before final synthesis.\",\"call_requirement_id\":\"REQ-030\",\"handoff_summary\":{\"contradiction_claim_ids\":[\"claim-lane-parallelism\",\"claim-token-headroom\"],\"decision\":\"requires-unresolved-risk-marking\",\"emitted_claim_count\":2,\"emitted_claim_ids\":[\"claim-lane-parallelism\",\"claim-token-headroom\"],\"emitted_claim_stances\":[\"claim-lane-parallelism:contradict\",\"claim-token-headroom:contradict\"],\"evidence_refs\":[\"reports/strategy/call-2/runtime-saturation.json\",\"reports/strategy/call-2/token-budget-alert.json\"],\"resolved_contradiction_claim_ids\":[\"claim-lane-parallelism\"],\"unresolved_contradiction_claim_ids\":[\"claim-token-headroom\"]},\"input_refs\":[\"call_requirement_id:REQ-030\",\"cross_call_contradiction_detection.earth_root\",\"cross_call_contradiction_detection.output_root\",\"cross_call_contradiction_detection.revision_identity\",\"cross_call_contradiction_detection.target_project_root\",\"processing_behavior.context_inputs.call_outputs.call_id:call-2\"],\"output_refs\":[\"reports/strategy/call-2/runtime-saturation.json\",\"reports/strategy/call-2/token-budget-alert.json\"],\"schema_version\":\"req-036.llm-call-trace-row.v1\",\"trace_row_id\":\"req036-trace-call-2-5446ebad039e82bc\"},{\"call_id\":\"call-3\",\"call_objective\":\"Assess REQ-031 claims for REQ-036 cross-call contradiction detection before final synthesis.\",\"call_requirement_id\":\"REQ-031\",\"handoff_summary\":{\"contradiction_claim_ids\":[],\"decision\":\"no-contradiction-observed\",\"emitted_claim_count\":1,\"emitted_claim_ids\":[\"claim-kpi-projection\"],\"emitted_claim_stances\":[\"claim-kpi-projection:support\"],\"evidence_refs\":[\"reports/strategy/call-3/kpi-projection.json\"],\"resolved_contradiction_claim_ids\":[],\"unresolved_contradiction_claim_ids\":[]},\"input_refs\":[\"call_requirement_id:REQ-031\",\"cross_call_contradiction_detection.earth_root\",\"cross_call_contradiction_detection.output_root\",\"cross_call_contradiction_detection.revision_identity\",\"cross_call_contradiction_detection.target_project_root\",\"processing_behavior.context_inputs.call_outputs.call_id:call-3\"],\"output_refs\":[\"reports/strategy/call-3/kpi-projection.json\"],\"schema_version\":\"req-036.llm-call-trace-row.v1\",\"trace_row_id\":\"req036-trace-call-3-4a3b15b80ce6210d\"}],\"schema_version\":\"req-036.llm-call-trace.v1\",\"trace_artifact_path\":\"strategy/current/llm_call_trace.jsonl\"}",
+    "sha256": "5ab9934bb133607deaac58f73f2f2f3e5d0315b311396a51f4bb2d29d55ef690"
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input": {
+      "earth_root": "/workspace/projects/Earth",
+      "execution_mode": "long-thinking",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req036-fixture-r1",
+      "runtime_mode": "llm-first",
+      "target_project_root": "/workspace/projects/optimus-prime"
+    },
+    "canonical_input_sha256": "5f04a41a12f074fd95e4f0fb447b4dbb351ac61f8375f988278dde12f2c5072a",
+    "reproducible_call_id": "req036-5f04a41a12f074fd",
+    "canonical_processing_input": {
+      "call_outputs": [
+        {
+          "call_id": "call-1",
+          "call_requirement_id": "REQ-026",
+          "emitted_claims": [
+            {
+              "claim_id": "claim-lane-parallelism",
+              "claim_text": "Execution can safely run five lanes in parallel under current runtime constraints.",
+              "stance": "support",
+              "evidence_refs": [
+                "reports/strategy/call-1/runtime-budget.json"
+              ]
+            },
+            {
+              "claim_id": "claim-token-headroom",
+              "claim_text": "Token budget headroom is sufficient for deep recommendation synthesis.",
+              "stance": "support",
+              "evidence_refs": [
+                "reports/strategy/call-1/token-budget.json"
+              ]
+            }
+          ]
+        },
+        {
+          "call_id": "call-2",
+          "call_requirement_id": "REQ-030",
+          "emitted_claims": [
+            {
+              "claim_id": "claim-lane-parallelism",
+              "claim_text": "Execution should serialize lane operations due to runtime saturation risk.",
+              "stance": "contradict",
+              "evidence_refs": [
+                "reports/strategy/call-2/runtime-saturation.json"
+              ]
+            },
+            {
+              "claim_id": "claim-token-headroom",
+              "claim_text": "Token budget headroom is insufficient for deep recommendation synthesis.",
+              "stance": "contradict",
+              "evidence_refs": [
+                "reports/strategy/call-2/token-budget-alert.json"
+              ]
+            }
+          ]
+        },
+        {
+          "call_id": "call-3",
+          "call_requirement_id": "REQ-031",
+          "emitted_claims": [
+            {
+              "claim_id": "claim-kpi-projection",
+              "claim_text": "KPI projection confidence remains medium until contradiction handling completes.",
+              "stance": "support",
+              "evidence_refs": [
+                "reports/strategy/call-3/kpi-projection.json"
+              ]
+            }
+          ]
+        }
+      ],
+      "contradiction_resolutions": [
+        {
+          "claim_id": "claim-lane-parallelism",
+          "resolution_status": "resolved",
+          "resolution_summary": "Adopt two-lane phased parallelism to satisfy both throughput and saturation constraints.",
+          "resolved_by_call_id": "call-3",
+          "evidence_refs": [
+            "reports/strategy/call-3/lane-phasing-decision.json"
+          ]
+        }
+      ],
+      "broad_sweep_context": {
+        "target_project_root": "/workspace/projects/optimus-prime",
+        "earth_root": "/workspace/projects/Earth",
+        "output_root": "/workspace/projects/optimus-prime/strategy/out",
+        "revision_identity": "rev-req036-fixture-r1"
+      }
+    },
+    "processing_input_sha256": "597789349d2810f8f59e17ccd6f3297ee701573eda9b1fa9b0f73343c8406c63",
+    "processing_call_id": "req036-processing-597789349d2810f8"
+  }
+}

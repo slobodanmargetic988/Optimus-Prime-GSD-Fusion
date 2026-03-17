@@ -1,0 +1,32 @@
+{
+  "req_id": "REQ-021",
+  "summary": "Evidence provenance ledger for context is accepted as operationally consumable because contract, integration, and hardening outputs confirm each context claim maps to concrete source artifacts, replay stays deterministic, and missing or stale anchors are surfaced as explicit open risks instead of implied support.",
+  "evidence_refs": [
+    {
+      "type": "test_output",
+      "test_path": "tests/contracts/test_evidence-provenance-ledger-for-context.py",
+      "command": "python3 -m pytest tests/contracts/test_evidence-provenance-ledger-for-context.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-068/contract_evidence-provenance-ledger-for-context.output.txt",
+      "observed_output": "3 passed in 0.02s"
+    },
+    {
+      "type": "test_output",
+      "test_path": "tests/integration/test_evidence-provenance-ledger-for-context.py",
+      "command": "python3 -m pytest tests/integration/test_evidence-provenance-ledger-for-context.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-068/integration_evidence-provenance-ledger-for-context.output.txt",
+      "observed_output": "2 passed in 0.02s"
+    },
+    {
+      "type": "test_output",
+      "test_path": "tests/hardening/test_evidence-provenance-ledger-for-context_hardening.py",
+      "command": "python3 -m pytest tests/hardening/test_evidence-provenance-ledger-for-context_hardening.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-068/hardening_evidence-provenance-ledger-for-context.output.txt",
+      "observed_output": "3 passed in 0.02s"
+    }
+  ],
+  "consumability_verdict": "accepted_with_open_risks",
+  "open_risks": [
+    "Acceptance remains bounded to deterministic fixture-backed and unit-scale evidence; the task does not re-prove behavior against live Earth sweep inputs or production-volume provenance ledgers.",
+    "Consumers must continue treating any claim with missing or stale source anchors as unresolved context debt and preserve the ledger's explicit open-risk output instead of inferring supporting evidence."
+  ]
+}
