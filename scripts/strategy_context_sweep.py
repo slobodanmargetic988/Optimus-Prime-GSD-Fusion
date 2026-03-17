@@ -38,8 +38,12 @@ RUNTIME_MODE = "llm-first"
 EXECUTION_MODE = "long-thinking"
 REQ_009_SCHEMA_VERSION = "req-009.prior-strategy-revision-ingestion.v1"
 REQ_009_REQUIREMENT_ID = "REQ-009"
+REQ_011_SCHEMA_VERSION = "req-011.cross-project-dependency-extraction.v1"
+REQ_011_REQUIREMENT_ID = "REQ-011"
 REQ_013_SCHEMA_VERSION = "req-013.capability-catalog-extraction.v1"
 REQ_013_REQUIREMENT_ID = "REQ-013"
+REQ_019_SCHEMA_VERSION = "req-019.execution-resource-context-ingestion.v1"
+REQ_019_REQUIREMENT_ID = "REQ-019"
 REQ_023_SCHEMA_VERSION = "req-023.context-compaction-for-llm-call-budget.v1"
 REQ_023_REQUIREMENT_ID = "REQ-023"
 REQ_023_DEFAULT_LLM_CALL_BUDGET = {
@@ -193,10 +197,14 @@ def _normalize_cross_project_context(raw_value: Any) -> list[dict[str, Any]]:
         raise ValueError("cross_project_context must be a list")
 
     normalized: list[dict[str, Any]] = []
+    seen_project_ids: set[str] = set()
     for index, item in enumerate(raw_value):
         if not isinstance(item, Mapping):
             raise ValueError(f"cross_project_context[{index}] must be an object")
         project_id = _require_nonempty_text(item.get("project_id"), field_name=f"cross_project_context[{index}].project_id")
+        if project_id in seen_project_ids:
+            raise ValueError(f"cross_project_context[{index}].project_id must be unique")
+        seen_project_ids.add(project_id)
         project_root = _normalize_root(item.get("project_root"), field_name=f"cross_project_context[{index}].project_root")
         evidence_refs = _normalize_string_list(
             item.get("evidence_refs"),
@@ -973,6 +981,703 @@ def validate_req_001_runtime_entrypoint(payload: Mapping[str, Any]) -> list[str]
     if metadata.get("processing_input_sha256") != expected_processing_digest:
         errors.append("call_metadata.processing_input_sha256 does not match processing input")
     if metadata.get("processing_call_id") != expected_processing_call_id:
+        errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    return errors
+
+
+def _slug_token(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    return slug or _stable_id_fragment(value)
+
+
+def _normalize_req_011_signal_row(
+    raw_value: Any,
+    *,
+    index: int,
+    field_name: str,
+    signal_type: str,
+) -> dict[str, Any]:
+    if not isinstance(raw_value, Mapping):
+        raise ValueError(f"{field_name}[{index}] must be an object")
+
+    source_ref_field = {
+        "contract": "contract_ref",
+        "trace": "trace_ref",
+        "declared-integration-point": "integration_point_ref",
+    }[signal_type]
+    source_project_id = _require_nonempty_text(
+        raw_value.get("source_project_id"),
+        field_name=f"{field_name}[{index}].source_project_id",
+    )
+    target_project_id = _require_nonempty_text(
+        raw_value.get("target_project_id"),
+        field_name=f"{field_name}[{index}].target_project_id",
+    )
+    if source_project_id == target_project_id:
+        raise ValueError(f"{field_name}[{index}] must describe a cross-project dependency edge")
+
+    dependency_key = _require_nonempty_text(
+        raw_value.get("dependency_key"),
+        field_name=f"{field_name}[{index}].dependency_key",
+    )
+    signal_slug = "-".join(
+        (
+            _slug_token(source_project_id),
+            _slug_token(target_project_id),
+            _slug_token(dependency_key),
+            _slug_token(signal_type),
+        )
+    )
+    return {
+        "signal_id": _require_nonempty_text(
+            raw_value.get("signal_id") if raw_value.get("signal_id") is not None else f"signal-{signal_slug}",
+            field_name=f"{field_name}[{index}].signal_id",
+        ),
+        "signal_type": signal_type,
+        "dependency_key": dependency_key,
+        "summary": _require_nonempty_text(
+            raw_value.get("summary"),
+            field_name=f"{field_name}[{index}].summary",
+        ),
+        "source_project_id": source_project_id,
+        "source_project_root": _normalize_root(
+            raw_value.get("source_project_root"),
+            field_name=f"{field_name}[{index}].source_project_root",
+        ),
+        "target_project_id": target_project_id,
+        "target_project_root": _normalize_root(
+            raw_value.get("target_project_root"),
+            field_name=f"{field_name}[{index}].target_project_root",
+        ),
+        source_ref_field: _require_nonempty_text(
+            raw_value.get(source_ref_field),
+            field_name=f"{field_name}[{index}].{source_ref_field}",
+        ),
+        "evidence_refs": _normalize_string_list(
+            raw_value.get("evidence_refs"),
+            field_name=f"{field_name}[{index}].evidence_refs",
+        ),
+    }
+
+
+def _normalize_req_011_signal_rows(
+    raw_value: Any,
+    *,
+    field_name: str,
+    signal_type: str,
+) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError(f"{field_name} must be a list")
+
+    normalized = [
+        _normalize_req_011_signal_row(row, index=index, field_name=field_name, signal_type=signal_type)
+        for index, row in enumerate(raw_value)
+    ]
+    normalized.sort(
+        key=lambda row: (
+            row["source_project_id"],
+            row["target_project_id"],
+            row["dependency_key"],
+            row["signal_id"],
+        )
+    )
+    return normalized
+
+
+def _normalize_req_011_broad_sweep_context(raw_value: Any) -> dict[str, Any]:
+    if raw_value is None:
+        raw_value = {}
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("broad_sweep_context must be an object")
+
+    return {
+        "earth_sweep_evidence_refs": _normalize_string_list(
+            raw_value.get("earth_sweep_evidence_refs"),
+            field_name="broad_sweep_context.earth_sweep_evidence_refs",
+        ),
+        "cross_project_context": _normalize_cross_project_context(raw_value.get("cross_project_context")),
+        "contract_dependencies": _normalize_req_011_signal_rows(
+            raw_value.get("contract_dependencies"),
+            field_name="broad_sweep_context.contract_dependencies",
+            signal_type="contract",
+        ),
+        "trace_dependencies": _normalize_req_011_signal_rows(
+            raw_value.get("trace_dependencies"),
+            field_name="broad_sweep_context.trace_dependencies",
+            signal_type="trace",
+        ),
+        "declared_integration_points": _normalize_req_011_signal_rows(
+            raw_value.get("declared_integration_points"),
+            field_name="broad_sweep_context.declared_integration_points",
+            signal_type="declared-integration-point",
+        ),
+        "earth_sweep_source_artifacts": _normalize_earth_sweep_source_artifacts(
+            raw_value.get("earth_sweep_source_artifacts")
+        ),
+        "required_context_documents": _normalize_required_context_documents(
+            raw_value.get("required_context_documents")
+        ),
+    }
+
+
+def _req_011_signal_source_ref(signal: Mapping[str, Any]) -> str:
+    if signal["signal_type"] == "contract":
+        return str(signal["contract_ref"])
+    if signal["signal_type"] == "trace":
+        return str(signal["trace_ref"])
+    return str(signal["integration_point_ref"])
+
+
+def _req_011_signal_evidence_refs(signal: Mapping[str, Any]) -> list[str]:
+    return _collect_unique_refs(list(signal["evidence_refs"]), [_req_011_signal_source_ref(signal)])
+
+
+def _req_011_edge_confidence(signal_types: list[str], *, evidence_refs: list[str]) -> tuple[str, str]:
+    if len(signal_types) >= 3 and evidence_refs:
+        return "high", "Contracts, traces, and declared integration points corroborate the edge."
+    if len(signal_types) >= 2 and evidence_refs:
+        return "medium", "Multiple broad-sweep signal types corroborate the edge."
+    if evidence_refs:
+        return "low", "Only one corroborating signal type is attached to the edge."
+    return "low", "The edge lacks evidence refs and cannot be treated as confirmed."
+
+
+def _build_req_011_dependency_edges(
+    *,
+    broad_sweep_context: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    cross_project_context = list(broad_sweep_context["cross_project_context"])
+    context_refs_by_project = {
+        row["project_id"]: list(row["evidence_refs"])
+        for row in cross_project_context
+    }
+    grouped_signals: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for signal in (
+        list(broad_sweep_context["contract_dependencies"])
+        + list(broad_sweep_context["trace_dependencies"])
+        + list(broad_sweep_context["declared_integration_points"])
+    ):
+        key = (signal["source_project_id"], signal["target_project_id"], signal["dependency_key"])
+        grouped_signals.setdefault(key, []).append(signal)
+
+    dependency_edges: list[dict[str, Any]] = []
+    for key, signals in grouped_signals.items():
+        source_project_id, target_project_id, dependency_key = key
+        ordered_signals = sorted(signals, key=lambda row: (row["signal_type"], row["signal_id"]))
+        signal_types = sorted({str(row["signal_type"]) for row in ordered_signals})
+        signal_evidence_refs = _collect_unique_refs(*[_req_011_signal_evidence_refs(row) for row in ordered_signals])
+        supporting_context_project_ids = sorted(
+            project_id
+            for project_id in {source_project_id, target_project_id}
+            if project_id in context_refs_by_project
+        )
+        supporting_context_evidence_refs = _collect_unique_refs(
+            *[context_refs_by_project.get(project_id, []) for project_id in supporting_context_project_ids]
+        )
+        confidence, confidence_reason = _req_011_edge_confidence(signal_types, evidence_refs=signal_evidence_refs)
+        edge_slug = "-".join(
+            (
+                _slug_token(source_project_id),
+                _slug_token(target_project_id),
+                _slug_token(dependency_key),
+            )
+        )
+
+        dependency_edges.append(
+            {
+                "dependency_edge_id": f"dependency-edge-{edge_slug}",
+                "dependency_key": dependency_key,
+                "source_project_id": source_project_id,
+                "source_project_root": ordered_signals[0]["source_project_root"],
+                "target_project_id": target_project_id,
+                "target_project_root": ordered_signals[0]["target_project_root"],
+                "summary": sorted({str(row["summary"]) for row in ordered_signals})[0],
+                "signal_types": signal_types,
+                "supporting_signal_ids": [str(row["signal_id"]) for row in ordered_signals],
+                "supporting_signal_count": len(ordered_signals),
+                "contract_refs": sorted(
+                    {str(row["contract_ref"]) for row in ordered_signals if row["signal_type"] == "contract"}
+                ),
+                "trace_refs": sorted(
+                    {str(row["trace_ref"]) for row in ordered_signals if row["signal_type"] == "trace"}
+                ),
+                "integration_point_refs": sorted(
+                    {
+                        str(row["integration_point_ref"])
+                        for row in ordered_signals
+                        if row["signal_type"] == "declared-integration-point"
+                    }
+                ),
+                "confidence": confidence,
+                "confidence_reason": confidence_reason,
+                "evidence_refs": signal_evidence_refs,
+                "supporting_context_project_ids": supporting_context_project_ids,
+                "supporting_context_evidence_refs": supporting_context_evidence_refs,
+            }
+        )
+
+    dependency_edges.sort(
+        key=lambda row: (
+            row["source_project_id"],
+            row["target_project_id"],
+            row["dependency_key"],
+            row["dependency_edge_id"],
+        )
+    )
+    return dependency_edges
+
+
+def _req_011_recommendation_decision(
+    *,
+    dependency_edges: list[dict[str, Any]],
+    cross_project_obligations: list[dict[str, Any]],
+    open_risks: list[dict[str, Any]],
+) -> str:
+    if cross_project_obligations and not open_risks:
+        return "proceed"
+    if cross_project_obligations and open_risks:
+        return "proceed-with-open-risks"
+    if dependency_edges and open_risks:
+        return "record-open-risks"
+    if open_risks:
+        return "resolve-context-gaps"
+    if dependency_edges:
+        return "observe"
+    return "insufficient-context"
+
+
+def _req_011_recommendation_rationale(*, decision: str) -> str:
+    if decision == "proceed":
+        return "Cross-project dependency edges are corroborated strongly enough to emit obligations."
+    if decision == "proceed-with-open-risks":
+        return "Some dependency edges are obligation-ready, while weaker or under-evidenced edges remain open risks."
+    if decision == "record-open-risks":
+        return "Dependency edges were extracted, but evidence or confidence gaps prevent obligation promotion."
+    if decision == "resolve-context-gaps":
+        return "Stale or missing context artifacts prevent reliable cross-project dependency replay."
+    if decision == "observe":
+        return "Dependency edges were extracted for observation, but no cross-project obligation is warranted yet."
+    return "No cross-project dependency edges were extracted from the provided broad-sweep context."
+
+
+def _build_req_011_processing_behavior(
+    *,
+    broad_sweep_context: dict[str, Any],
+) -> dict[str, Any]:
+    earth_sweep_evidence_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
+    cross_project_context = list(broad_sweep_context["cross_project_context"])
+    earth_sweep_source_artifacts = list(broad_sweep_context["earth_sweep_source_artifacts"])
+    required_context_documents = list(broad_sweep_context["required_context_documents"])
+    dependency_edges = _build_req_011_dependency_edges(broad_sweep_context=broad_sweep_context)
+    source_artifact_refs = _collect_unique_refs(
+        *[_collect_unique_refs([row["artifact_ref"]], row["evidence_refs"]) for row in earth_sweep_source_artifacts]
+    )
+    required_doc_refs = _collect_unique_refs(
+        *[_collect_unique_refs([row["doc_ref"]], row["evidence_refs"]) for row in required_context_documents]
+    )
+
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    matched_context_projects: set[str] = set()
+
+    for source_artifact in earth_sweep_source_artifacts:
+        if source_artifact["status"] != "stale":
+            continue
+        open_risks.append(
+            {
+                "risk_id": f"risk-earth-source-{_stable_id_fragment(source_artifact['artifact_ref'])}",
+                "reason_code": "stale_earth_sweep_source_artifact",
+                "summary": f"Earth sweep source artifact is stale: {source_artifact['artifact_ref']}",
+                "required_evidence_refs": _collect_unique_refs(
+                    [source_artifact["artifact_ref"]],
+                    source_artifact["evidence_refs"],
+                ),
+            }
+        )
+
+    for required_doc in required_context_documents:
+        if required_doc["status"] != "missing":
+            continue
+        reason_code = {
+            "mission": "missing_mission_doc",
+            "scope": "missing_scope_doc",
+            "peer-project": "missing_peer_project_doc",
+        }[required_doc["doc_kind"]]
+        summary = (
+            f"Required peer-project document is missing for '{required_doc['project_id']}': {required_doc['doc_ref']}"
+            if required_doc["doc_kind"] == "peer-project"
+            else f"Required {required_doc['doc_kind']} document is missing: {required_doc['doc_ref']}"
+        )
+        open_risks.append(
+            {
+                "risk_id": (
+                    "risk-context-doc-"
+                    f"{_stable_id_fragment(required_doc['doc_kind'], required_doc['project_id'], required_doc['doc_ref'])}"
+                ),
+                "reason_code": reason_code,
+                "summary": summary,
+                "required_evidence_refs": _collect_unique_refs(
+                    [required_doc["doc_ref"]],
+                    required_doc["evidence_refs"],
+                ),
+            }
+        )
+
+    for edge in dependency_edges:
+        supporting_context_project_ids = list(edge["supporting_context_project_ids"])
+        supporting_context_refs = list(edge["supporting_context_evidence_refs"])
+        matched_context_projects.update(supporting_context_project_ids)
+        required_refs = _collect_unique_refs(edge["evidence_refs"], supporting_context_refs)
+        if edge["confidence"] == "low":
+            open_risks.append(
+                {
+                    "risk_id": f"risk-dependency-confidence-{edge['dependency_edge_id']}",
+                    "reason_code": "dependency_confidence_below_commit_threshold",
+                    "summary": (
+                        f"Dependency edge '{edge['dependency_key']}' between '{edge['source_project_id']}' and "
+                        f"'{edge['target_project_id']}' remains an open risk because corroboration is weak."
+                    ),
+                    "required_evidence_refs": required_refs,
+                }
+            )
+            continue
+        if not earth_sweep_evidence_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-dependency-earth-evidence-{edge['dependency_edge_id']}",
+                    "reason_code": "missing_earth_sweep_evidence_refs",
+                    "summary": (
+                        f"Dependency edge '{edge['dependency_key']}' between '{edge['source_project_id']}' and "
+                        f"'{edge['target_project_id']}' cannot become a cross-project obligation until "
+                        "Earth-sweep evidence refs are attached."
+                    ),
+                    "required_evidence_refs": required_refs,
+                }
+            )
+            continue
+        if not supporting_context_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-dependency-context-evidence-{edge['dependency_edge_id']}",
+                    "reason_code": "missing_cross_project_context_evidence_refs",
+                    "summary": (
+                        f"Dependency edge '{edge['dependency_key']}' between '{edge['source_project_id']}' and "
+                        f"'{edge['target_project_id']}' lacks Earth-sweep cross-project context evidence refs."
+                    ),
+                    "required_evidence_refs": _collect_unique_refs(edge["evidence_refs"], earth_sweep_evidence_refs),
+                }
+            )
+            continue
+
+        cross_project_obligations.append(
+            {
+                "obligation_id": f"obligation-{edge['dependency_edge_id']}",
+                "project_id": edge["target_project_id"],
+                "summary": (
+                    f"Coordinate dependency '{edge['dependency_key']}' between '{edge['source_project_id']}' and "
+                    f"'{edge['target_project_id']}' before implementation."
+                ),
+                "confidence": edge["confidence"],
+                "evidence_refs": _collect_unique_refs(
+                    earth_sweep_evidence_refs,
+                    edge["evidence_refs"],
+                    supporting_context_refs,
+                ),
+            }
+        )
+
+    cross_project_obligations.sort(key=lambda row: (row["project_id"], row["obligation_id"]))
+    open_risks.sort(key=lambda row: row["risk_id"])
+    evidence_refs = _collect_unique_refs(
+        earth_sweep_evidence_refs,
+        source_artifact_refs,
+        required_doc_refs,
+        *[row["evidence_refs"] for row in cross_project_context],
+        *[row["evidence_refs"] for row in dependency_edges],
+        *[row["supporting_context_evidence_refs"] for row in dependency_edges],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    decision = _req_011_recommendation_decision(
+        dependency_edges=dependency_edges,
+        cross_project_obligations=cross_project_obligations,
+        open_risks=open_risks,
+    )
+
+    contract_signal_ids = [row["signal_id"] for row in broad_sweep_context["contract_dependencies"]]
+    trace_signal_ids = [row["signal_id"] for row in broad_sweep_context["trace_dependencies"]]
+    integration_signal_ids = [row["signal_id"] for row in broad_sweep_context["declared_integration_points"]]
+    context_usage = {
+        "broad_sweep_context_used": any(
+            (
+                earth_sweep_evidence_refs,
+                cross_project_context,
+                broad_sweep_context["contract_dependencies"],
+                broad_sweep_context["trace_dependencies"],
+                broad_sweep_context["declared_integration_points"],
+            )
+        ),
+        "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+        "cross_project_context_used": bool(cross_project_context),
+        "contract_dependency_signal_ids_used": contract_signal_ids,
+        "trace_dependency_signal_ids_used": trace_signal_ids,
+        "declared_integration_point_signal_ids_used": integration_signal_ids,
+        "cross_project_projects_considered": [row["project_id"] for row in cross_project_context],
+        "cross_project_context_projects_matched": sorted(matched_context_projects),
+        "dependency_keys_extracted": [row["dependency_key"] for row in dependency_edges],
+        "dependency_edge_ids_extracted": [row["dependency_edge_id"] for row in dependency_edges],
+        "high_confidence_dependency_edge_ids": [
+            row["dependency_edge_id"] for row in dependency_edges if row["confidence"] == "high"
+        ],
+        "medium_confidence_dependency_edge_ids": [
+            row["dependency_edge_id"] for row in dependency_edges if row["confidence"] == "medium"
+        ],
+        "low_confidence_dependency_edge_ids": [
+            row["dependency_edge_id"] for row in dependency_edges if row["confidence"] == "low"
+        ],
+        "evidence_refs_used": evidence_refs,
+    }
+    if earth_sweep_source_artifacts:
+        context_usage["earth_sweep_source_artifacts_used"] = True
+        context_usage["earth_sweep_source_artifact_refs_used"] = source_artifact_refs
+    if required_context_documents:
+        context_usage["required_context_documents_used"] = True
+        context_usage["required_context_document_refs_used"] = required_doc_refs
+
+    return {
+        "strategy": "cross-project-dependency-extraction",
+        "reasoning_mode": EXECUTION_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": {
+            "broad_sweep_context": broad_sweep_context,
+        },
+        "context_usage": context_usage,
+        "recommendation": {
+            "decision": decision,
+            "rationale": _req_011_recommendation_rationale(decision=decision),
+            "confidence": _recommendation_confidence(evidence_refs=evidence_refs, open_risks=open_risks),
+            "evidence_refs": evidence_refs,
+            "dependency_edges": dependency_edges,
+            "cross_project_obligations": cross_project_obligations,
+            "open_risks": open_risks,
+        },
+    }
+
+
+def _canonical_req_011_processing_input(*, broad_sweep_context: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "broad_sweep_context": broad_sweep_context,
+    }
+
+
+def build_req_011_cross_project_dependency_extraction(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    broad_sweep_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_nonempty_text(revision_identity, field_name="revision_identity")
+    normalized_broad_sweep_context = _normalize_req_011_broad_sweep_context(broad_sweep_context)
+
+    canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    digest = _canonical_input_digest(canonical_input)
+    canonical_processing_input = _canonical_req_011_processing_input(
+        broad_sweep_context=normalized_broad_sweep_context,
+    )
+    processing_digest = _canonical_input_digest(canonical_processing_input)
+    processing_behavior = _build_req_011_processing_behavior(
+        broad_sweep_context=normalized_broad_sweep_context,
+    )
+
+    return {
+        "schema_version": REQ_011_SCHEMA_VERSION,
+        "requirement_id": REQ_011_REQUIREMENT_ID,
+        "cross_project_dependency_extraction": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+        },
+        "processing_behavior": processing_behavior,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req011-{digest[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_digest,
+            "processing_call_id": f"req011-processing-{processing_digest[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+        },
+    }
+
+
+def validate_req_011_cross_project_dependency_extraction(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    top_keys = set(payload.keys())
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "cross_project_dependency_extraction",
+        "processing_behavior",
+        "call_metadata",
+    }
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_011_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_011_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_011_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_011_REQUIREMENT_ID}")
+
+    extraction = payload.get("cross_project_dependency_extraction")
+    if not isinstance(extraction, Mapping):
+        errors.append("cross_project_dependency_extraction must be an object")
+        return errors
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+
+    required_processing = {
+        "strategy",
+        "reasoning_mode",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "recommendation",
+    }
+    missing_processing = sorted(required_processing - set(processing_behavior.keys()))
+    if missing_processing:
+        errors.append(f"processing_behavior missing keys: {missing_processing}")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        return errors
+    if "broad_sweep_context" not in context_inputs:
+        errors.append("processing_behavior.context_inputs missing broad_sweep_context")
+        return errors
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+        return errors
+    for required_field in (
+        "decision",
+        "rationale",
+        "confidence",
+        "evidence_refs",
+        "dependency_edges",
+        "cross_project_obligations",
+        "open_risks",
+    ):
+        if required_field not in recommendation:
+            errors.append(f"processing_behavior.recommendation missing {required_field}")
+
+    try:
+        normalized_target_root = _normalize_root(
+            extraction.get("target_project_root"),
+            field_name="cross_project_dependency_extraction.target_project_root",
+        )
+        normalized_earth_root = _normalize_root(
+            extraction.get("earth_root"),
+            field_name="cross_project_dependency_extraction.earth_root",
+        )
+        normalized_output_root = _normalize_root(
+            extraction.get("output_root"),
+            field_name="cross_project_dependency_extraction.output_root",
+        )
+        normalized_revision_identity = _require_nonempty_text(
+            extraction.get("revision_identity"),
+            field_name="cross_project_dependency_extraction.revision_identity",
+        )
+        normalized_broad_sweep_context = _normalize_req_011_broad_sweep_context(
+            context_inputs.get("broad_sweep_context")
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
+
+    if extraction.get("runtime_mode") != RUNTIME_MODE:
+        errors.append(f"cross_project_dependency_extraction.runtime_mode must be {RUNTIME_MODE}")
+    if extraction.get("execution_mode") != EXECUTION_MODE:
+        errors.append(f"cross_project_dependency_extraction.execution_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("strategy") != "cross-project-dependency-extraction":
+        errors.append("processing_behavior.strategy must be cross-project-dependency-extraction")
+    if processing_behavior.get("reasoning_mode") != EXECUTION_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    expected_canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+    if dict(canonical_input) != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+
+    expected_digest = _canonical_input_digest(expected_canonical_input)
+    if metadata.get("canonical_input_sha256") != expected_digest:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != f"req011-{expected_digest[:16]}":
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    expected_processing_behavior = _build_req_011_processing_behavior(
+        broad_sweep_context=normalized_broad_sweep_context,
+    )
+    if payload.get("processing_behavior") != expected_processing_behavior:
+        errors.append("processing_behavior must mirror deterministic broad-sweep processing output")
+
+    expected_canonical_processing_input = _canonical_req_011_processing_input(
+        broad_sweep_context=normalized_broad_sweep_context,
+    )
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+        return errors
+    if dict(canonical_processing_input) != expected_canonical_processing_input:
+        errors.append("call_metadata.canonical_processing_input must mirror normalized processing input")
+
+    expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
+    if metadata.get("processing_input_sha256") != expected_processing_digest:
+        errors.append("call_metadata.processing_input_sha256 does not match processing input")
+    if metadata.get("processing_call_id") != f"req011-processing-{expected_processing_digest[:16]}":
         errors.append("call_metadata.processing_call_id does not match processing digest")
 
     return errors
@@ -2369,6 +3074,959 @@ def validate_req_023_context_compaction_for_llm_call_budget(payload: Mapping[str
                 errors.append(
                     f"processing_behavior.context_compaction.compacted_packets[{index}].hard_constraint_ids must include every hard constraint"
                 )
+
+    return errors
+
+
+def _normalize_nonnegative_int(raw_value: Any, *, field_name: str) -> int:
+    if not isinstance(raw_value, int) or isinstance(raw_value, bool):
+        raise ValueError(f"{field_name} must be an integer")
+    if raw_value < 0:
+        raise ValueError(f"{field_name} must be greater than or equal to zero")
+    return raw_value
+
+
+def _normalize_storage_tier(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return "standard"
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string when provided")
+    value = raw_value.strip().lower()
+    if value not in {"standard", "high-throughput"}:
+        raise ValueError(f"{field_name} must be either 'standard' or 'high-throughput'")
+    return value
+
+
+def _normalize_model_tier(raw_value: Any, *, field_name: str) -> str:
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string")
+    value = raw_value.strip().lower()
+    if value not in {"fast", "balanced", "heavy"}:
+        raise ValueError(f"{field_name} must be one of: fast, balanced, heavy")
+    return value
+
+
+def _normalize_optional_model_tier(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return ""
+    return _normalize_model_tier(raw_value, field_name=field_name)
+
+
+def _normalize_execution_resource_context(raw_value: Any) -> dict[str, Any]:
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("execution_resource_context must be an object")
+
+    hardware_profile = raw_value.get("hardware_profile")
+    if not isinstance(hardware_profile, Mapping):
+        raise ValueError("execution_resource_context.hardware_profile must be an object")
+    rate_limits = raw_value.get("rate_limits")
+    if not isinstance(rate_limits, Mapping):
+        raise ValueError("execution_resource_context.rate_limits must be an object")
+    runtime_budget = raw_value.get("runtime_budget")
+    if not isinstance(runtime_budget, Mapping):
+        raise ValueError("execution_resource_context.runtime_budget must be an object")
+
+    model_inventory_raw = raw_value.get("model_inventory")
+    if not isinstance(model_inventory_raw, list) or not model_inventory_raw:
+        raise ValueError("execution_resource_context.model_inventory must be a non-empty list")
+
+    normalized_hardware_profile = {
+        "cpu_cores": _normalize_positive_int(
+            hardware_profile.get("cpu_cores"),
+            field_name="execution_resource_context.hardware_profile.cpu_cores",
+        ),
+        "memory_gb": _normalize_positive_int(
+            hardware_profile.get("memory_gb"),
+            field_name="execution_resource_context.hardware_profile.memory_gb",
+        ),
+        "gpu_count": _normalize_nonnegative_int(
+            hardware_profile.get("gpu_count") if hardware_profile.get("gpu_count") is not None else 0,
+            field_name="execution_resource_context.hardware_profile.gpu_count",
+        ),
+        "storage_tier": _normalize_storage_tier(
+            hardware_profile.get("storage_tier"),
+            field_name="execution_resource_context.hardware_profile.storage_tier",
+        ),
+        "evidence_refs": _normalize_string_list(
+            hardware_profile.get("evidence_refs"),
+            field_name="execution_resource_context.hardware_profile.evidence_refs",
+        ),
+    }
+
+    daily_token_budget_raw = rate_limits.get("daily_token_budget")
+    normalized_rate_limits = {
+        "max_parallel_tasks": _normalize_positive_int(
+            rate_limits.get("max_parallel_tasks"),
+            field_name="execution_resource_context.rate_limits.max_parallel_tasks",
+        ),
+        "tokens_per_minute": _normalize_positive_int(
+            rate_limits.get("tokens_per_minute"),
+            field_name="execution_resource_context.rate_limits.tokens_per_minute",
+        ),
+        "requests_per_minute": _normalize_positive_int(
+            rate_limits.get("requests_per_minute"),
+            field_name="execution_resource_context.rate_limits.requests_per_minute",
+        ),
+        "daily_token_budget": (
+            _normalize_positive_int(
+                daily_token_budget_raw,
+                field_name="execution_resource_context.rate_limits.daily_token_budget",
+            )
+            if daily_token_budget_raw is not None
+            else 0
+        ),
+        "evidence_refs": _normalize_string_list(
+            rate_limits.get("evidence_refs"),
+            field_name="execution_resource_context.rate_limits.evidence_refs",
+        ),
+    }
+
+    checkpoint_interval = runtime_budget.get("checkpoint_interval_minutes")
+    normalized_runtime_budget = {
+        "max_execution_minutes": _normalize_positive_int(
+            runtime_budget.get("max_execution_minutes"),
+            field_name="execution_resource_context.runtime_budget.max_execution_minutes",
+        ),
+        "checkpoint_interval_minutes": _normalize_positive_int(
+            checkpoint_interval if checkpoint_interval is not None else 15,
+            field_name="execution_resource_context.runtime_budget.checkpoint_interval_minutes",
+        ),
+        "evidence_refs": _normalize_string_list(
+            runtime_budget.get("evidence_refs"),
+            field_name="execution_resource_context.runtime_budget.evidence_refs",
+        ),
+    }
+
+    normalized_model_inventory: list[dict[str, Any]] = []
+    seen_model_ids: set[str] = set()
+    for index, model in enumerate(model_inventory_raw):
+        if not isinstance(model, Mapping):
+            raise ValueError(f"execution_resource_context.model_inventory[{index}] must be an object")
+        model_id = _require_nonempty_text(
+            model.get("model_id"),
+            field_name=f"execution_resource_context.model_inventory[{index}].model_id",
+        )
+        if model_id in seen_model_ids:
+            raise ValueError(f"execution_resource_context.model_inventory[{index}].model_id must be unique")
+        seen_model_ids.add(model_id)
+        requests_cap = model.get("requests_per_minute_cap")
+        normalized_model_inventory.append(
+            {
+                "model_id": model_id,
+                "routing_tier": _normalize_model_tier(
+                    model.get("routing_tier"),
+                    field_name=f"execution_resource_context.model_inventory[{index}].routing_tier",
+                ),
+                "max_output_tokens": _normalize_positive_int(
+                    model.get("max_output_tokens"),
+                    field_name=f"execution_resource_context.model_inventory[{index}].max_output_tokens",
+                ),
+                "requests_per_minute_cap": (
+                    _normalize_positive_int(
+                        requests_cap,
+                        field_name=f"execution_resource_context.model_inventory[{index}].requests_per_minute_cap",
+                    )
+                    if requests_cap is not None
+                    else normalized_rate_limits["requests_per_minute"]
+                ),
+                "evidence_refs": _normalize_string_list(
+                    model.get("evidence_refs"),
+                    field_name=f"execution_resource_context.model_inventory[{index}].evidence_refs",
+                ),
+            }
+        )
+
+    normalized_model_inventory.sort(key=lambda row: (row["routing_tier"], row["model_id"]))
+    return {
+        "hardware_profile": normalized_hardware_profile,
+        "rate_limits": normalized_rate_limits,
+        "runtime_budget": normalized_runtime_budget,
+        "model_inventory": normalized_model_inventory,
+    }
+
+
+def _normalize_execution_candidate_priority(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return "medium"
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string when provided")
+    value = raw_value.strip().lower()
+    if value not in {"high", "medium", "low"}:
+        raise ValueError(f"{field_name} must be one of: high, medium, low")
+    return value
+
+
+def _normalize_execution_candidate_complexity(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return "medium"
+    if not isinstance(raw_value, str):
+        raise ValueError(f"{field_name} must be a string when provided")
+    value = raw_value.strip().lower()
+    if value not in {"high", "medium", "low"}:
+        raise ValueError(f"{field_name} must be one of: high, medium, low")
+    return value
+
+
+def _normalize_execution_candidates(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("execution_candidates must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    seen_action_ids: set[str] = set()
+    for index, row in enumerate(raw_value):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"execution_candidates[{index}] must be an object")
+        action_id = _require_nonempty_text(row.get("action_id"), field_name=f"execution_candidates[{index}].action_id")
+        if action_id in seen_action_ids:
+            raise ValueError(f"execution_candidates[{index}].action_id must be unique")
+        seen_action_ids.add(action_id)
+
+        complexity = _normalize_execution_candidate_complexity(
+            row.get("complexity"),
+            field_name=f"execution_candidates[{index}].complexity",
+        )
+        normalized.append(
+            {
+                "action_id": action_id,
+                "summary": _require_nonempty_text(
+                    row.get("summary"),
+                    field_name=f"execution_candidates[{index}].summary",
+                ),
+                "priority": _normalize_execution_candidate_priority(
+                    row.get("priority"),
+                    field_name=f"execution_candidates[{index}].priority",
+                ),
+                "complexity": complexity,
+                "estimated_token_cost": _normalize_positive_int(
+                    row.get("estimated_token_cost") if row.get("estimated_token_cost") is not None else 1200,
+                    field_name=f"execution_candidates[{index}].estimated_token_cost",
+                ),
+                "requires_gpu": bool(row.get("requires_gpu", complexity == "high")),
+                "preferred_model_tier": _normalize_optional_model_tier(
+                    row.get("preferred_model_tier"),
+                    field_name=f"execution_candidates[{index}].preferred_model_tier",
+                ),
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"execution_candidates[{index}].evidence_refs",
+                ),
+                "next_step": _require_nonempty_text(
+                    row.get("next_step")
+                    if row.get("next_step") is not None
+                    else f"Execute '{action_id}' within resource-aware sequencing policy.",
+                    field_name=f"execution_candidates[{index}].next_step",
+                ),
+            }
+        )
+
+    normalized.sort(key=lambda item: item["action_id"])
+    return normalized
+
+
+def _preferred_model_tier_for_complexity(complexity: str) -> str:
+    return {"low": "fast", "medium": "balanced", "high": "heavy"}[complexity]
+
+
+def _model_tier_fallback_order(preferred_tier: str) -> list[str]:
+    if preferred_tier == "fast":
+        return ["fast", "balanced", "heavy"]
+    if preferred_tier == "balanced":
+        return ["balanced", "fast", "heavy"]
+    return ["heavy", "balanced", "fast"]
+
+
+def _execution_priority_rank(priority: str) -> int:
+    return {"high": 0, "medium": 1, "low": 2}[priority]
+
+
+def _execution_complexity_rank(complexity: str) -> int:
+    return {"high": 0, "medium": 1, "low": 2}[complexity]
+
+
+def _effective_parallel_slots(resource_context: Mapping[str, Any]) -> int:
+    hardware_profile = resource_context["hardware_profile"]
+    rate_limits = resource_context["rate_limits"]
+    cpu_capacity = int(hardware_profile["cpu_cores"]) + int(hardware_profile["gpu_count"])
+    return max(1, min(int(rate_limits["max_parallel_tasks"]), max(1, cpu_capacity)))
+
+
+def _build_req_019_cross_project_context_summary(
+    *,
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "cross_project": bool(cross_project_context),
+        "projects_considered": [row["project_id"] for row in cross_project_context],
+        "projects_with_evidence_refs": [row["project_id"] for row in cross_project_context if row["evidence_refs"]],
+        "projects_without_evidence_refs": [row["project_id"] for row in cross_project_context if not row["evidence_refs"]],
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "evidence_refs_by_project": {
+            row["project_id"]: list(row["evidence_refs"])
+            for row in cross_project_context
+        },
+    }
+
+
+def _build_req_019_cross_project_recommendations(
+    *,
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    for row in cross_project_context:
+        project_id = str(row["project_id"])
+        project_refs = list(row["evidence_refs"])
+        if not earth_sweep_evidence_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-cross-project-earth-evidence-{project_id}",
+                    "reason_code": "missing_earth_sweep_evidence_refs",
+                    "summary": (
+                        f"Cross-project execution-resource coordination for '{project_id}' remains unresolved "
+                        "until Earth-sweep evidence refs are attached."
+                    ),
+                    "required_evidence_refs": project_refs,
+                }
+            )
+            continue
+        if not project_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-cross-project-context-evidence-{project_id}",
+                    "reason_code": "missing_cross_project_context_evidence_refs",
+                    "summary": (
+                        f"Cross-project execution-resource coordination for '{project_id}' remains unresolved "
+                        "because project-specific evidence refs are missing."
+                    ),
+                    "required_evidence_refs": list(earth_sweep_evidence_refs),
+                }
+            )
+            continue
+        cross_project_obligations.append(
+            {
+                "obligation_id": f"obligation-resource-{project_id}",
+                "project_id": project_id,
+                "summary": (
+                    f"Coordinate execution-resource sequencing and model-routing policy with '{project_id}' "
+                    "before shared execution."
+                ),
+                "evidence_refs": _collect_unique_refs(earth_sweep_evidence_refs, project_refs),
+            }
+        )
+    cross_project_obligations.sort(key=lambda row: (row["project_id"], row["obligation_id"]))
+    open_risks.sort(key=lambda row: row["risk_id"])
+    return cross_project_obligations, open_risks
+
+
+def _route_models_for_execution_candidates(
+    *,
+    execution_candidates: list[dict[str, Any]],
+    resource_context: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[str]]:
+    model_inventory = list(resource_context["model_inventory"])
+    models_by_tier: dict[str, list[dict[str, Any]]] = {"fast": [], "balanced": [], "heavy": []}
+    for model in model_inventory:
+        models_by_tier[str(model["routing_tier"])].append(model)
+
+    suggestions: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    routed_action_ids: set[str] = set()
+    for candidate in execution_candidates:
+        preferred_tier = candidate["preferred_model_tier"] or _preferred_model_tier_for_complexity(candidate["complexity"])
+        fallback_tier_order = _model_tier_fallback_order(preferred_tier)
+        selected_model: dict[str, Any] | None = None
+        selected_tier = ""
+        for tier in fallback_tier_order:
+            tier_models = models_by_tier[tier]
+            if tier_models:
+                selected_model = tier_models[0]
+                selected_tier = tier
+                break
+
+        if selected_model is None:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-model-route-{candidate['action_id']}",
+                    "reason_code": "missing_model_route",
+                    "summary": (
+                        f"No model route available for action '{candidate['action_id']}' "
+                        f"with preferred tier '{preferred_tier}'."
+                    ),
+                    "required_evidence_refs": candidate["evidence_refs"],
+                }
+            )
+            continue
+
+        routed_action_ids.add(candidate["action_id"])
+        suggestions.append(
+            {
+                "action_id": candidate["action_id"],
+                "preferred_model_tier": preferred_tier,
+                "suggested_model_id": selected_model["model_id"],
+                "suggested_model_tier": selected_tier,
+                "fallback_tier_order": fallback_tier_order,
+                "routing_reason": (
+                    f"Matched complexity '{candidate['complexity']}' and priority '{candidate['priority']}' "
+                    f"to tier '{selected_tier}'."
+                ),
+                "max_output_tokens": selected_model["max_output_tokens"],
+                "requests_per_minute_cap": selected_model["requests_per_minute_cap"],
+                "evidence_refs": _collect_unique_refs(candidate["evidence_refs"], selected_model["evidence_refs"]),
+            }
+        )
+
+    suggestions.sort(key=lambda row: row["action_id"])
+    open_risks.sort(key=lambda row: row["risk_id"])
+    return suggestions, open_risks, routed_action_ids
+
+
+def _canonical_req_019_processing_input(
+    *,
+    execution_resource_context: dict[str, Any],
+    execution_candidates: list[dict[str, Any]],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "execution_resource_context": execution_resource_context,
+        "execution_candidates": execution_candidates,
+        "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+        "cross_project_context": cross_project_context,
+    }
+
+
+def _req_019_recommendation_decision(
+    *,
+    execution_candidates: list[dict[str, Any]],
+    routed_action_ids: set[str],
+    open_risks: list[dict[str, Any]],
+) -> str:
+    if not execution_candidates:
+        return "insufficient-context"
+    if not routed_action_ids and open_risks:
+        return "resource-blocked"
+    if open_risks:
+        return "proceed-with-constraints"
+    return "proceed"
+
+
+def _req_019_recommendation_rationale(*, decision: str) -> str:
+    if decision == "proceed":
+        return "Resource context supports deterministic sequencing and model routing for all actions."
+    if decision == "proceed-with-constraints":
+        return "Resource context allows partial execution, but open risks must be tracked during scheduling."
+    if decision == "resource-blocked":
+        return "Resource context cannot route actionable work without violating model or runtime constraints."
+    return "No execution candidates were provided for resource-aware sequencing."
+
+
+def _build_req_019_processing_behavior(
+    *,
+    execution_resource_context: dict[str, Any],
+    execution_candidates: list[dict[str, Any]],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+) -> dict[str, Any]:
+    routing_suggestions, routing_risks, routed_action_ids = _route_models_for_execution_candidates(
+        execution_candidates=execution_candidates,
+        resource_context=execution_resource_context,
+    )
+    route_by_action = {row["action_id"]: row for row in routing_suggestions}
+    cross_project_context_summary = _build_req_019_cross_project_context_summary(
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+    )
+    cross_project_obligations, cross_project_risks = _build_req_019_cross_project_recommendations(
+        earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+        cross_project_context=cross_project_context,
+    )
+
+    hardware_profile = execution_resource_context["hardware_profile"]
+    rate_limits = execution_resource_context["rate_limits"]
+    runtime_budget = execution_resource_context["runtime_budget"]
+    effective_parallel_slots = _effective_parallel_slots(execution_resource_context)
+    total_estimated_token_cost = sum(int(row["estimated_token_cost"]) for row in execution_candidates)
+    runtime_token_budget = int(rate_limits["tokens_per_minute"]) * int(runtime_budget["max_execution_minutes"])
+    daily_token_budget = int(rate_limits["daily_token_budget"])
+
+    open_risks = list(routing_risks)
+    if total_estimated_token_cost > runtime_token_budget:
+        open_risks.append(
+            {
+                "risk_id": "risk-runtime-token-budget-exceeded",
+                "reason_code": "runtime_token_budget_exceeded",
+                "summary": (
+                    f"Estimated token cost {total_estimated_token_cost} exceeds runtime budget {runtime_token_budget}."
+                ),
+                "required_evidence_refs": _collect_unique_refs(*[row["evidence_refs"] for row in execution_candidates]),
+            }
+        )
+    if daily_token_budget and total_estimated_token_cost > daily_token_budget:
+        open_risks.append(
+            {
+                "risk_id": "risk-daily-token-budget-exceeded",
+                "reason_code": "daily_token_budget_exceeded",
+                "summary": (
+                    f"Estimated token cost {total_estimated_token_cost} exceeds daily token budget {daily_token_budget}."
+                ),
+                "required_evidence_refs": _collect_unique_refs(*[row["evidence_refs"] for row in execution_candidates]),
+            }
+        )
+
+    for candidate in execution_candidates:
+        if candidate["requires_gpu"] and int(hardware_profile["gpu_count"]) == 0:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-gpu-required-{candidate['action_id']}",
+                    "reason_code": "gpu_required_but_unavailable",
+                    "summary": f"Action '{candidate['action_id']}' requires GPU resources, but gpu_count is zero.",
+                    "required_evidence_refs": candidate["evidence_refs"],
+                }
+            )
+
+    open_risks.extend(cross_project_risks)
+    open_risks.sort(key=lambda row: row["risk_id"])
+    ordered_candidates = sorted(
+        execution_candidates,
+        key=lambda row: (
+            _execution_priority_rank(str(row["priority"])),
+            _execution_complexity_rank(str(row["complexity"])),
+            -int(row["estimated_token_cost"]),
+            str(row["action_id"]),
+        ),
+    )
+
+    sequencing_policy_suggestions: list[dict[str, Any]] = []
+    for index, candidate in enumerate(ordered_candidates):
+        action_id = candidate["action_id"]
+        route = route_by_action.get(action_id)
+        estimated_runtime_slice_minutes = (
+            int(candidate["estimated_token_cost"]) + int(rate_limits["tokens_per_minute"]) - 1
+        ) // int(rate_limits["tokens_per_minute"])
+        sequencing_policy_suggestions.append(
+            {
+                "sequence_index": index + 1,
+                "execution_batch": (index // effective_parallel_slots) + 1,
+                "action_id": action_id,
+                "summary": candidate["summary"],
+                "priority": candidate["priority"],
+                "complexity": candidate["complexity"],
+                "estimated_token_cost": candidate["estimated_token_cost"],
+                "estimated_runtime_slice_minutes": max(1, estimated_runtime_slice_minutes),
+                "routing_status": "routed" if route else "unrouted",
+                "suggested_model_id": route["suggested_model_id"] if route else "",
+                "suggested_model_tier": route["suggested_model_tier"] if route else "",
+                "next_step": candidate["next_step"],
+                "sequencing_rationale": (
+                    f"Placed using effective_parallel_slots={effective_parallel_slots} under "
+                    f"max_parallel_tasks={rate_limits['max_parallel_tasks']} and "
+                    f"cpu_cores={hardware_profile['cpu_cores']}."
+                ),
+                "evidence_refs": _collect_unique_refs(
+                    candidate["evidence_refs"],
+                    route["evidence_refs"] if route else [],
+                ),
+            }
+        )
+
+    evidence_refs = _collect_unique_refs(
+        hardware_profile["evidence_refs"],
+        rate_limits["evidence_refs"],
+        runtime_budget["evidence_refs"],
+        earth_sweep_evidence_refs,
+        *[row["evidence_refs"] for row in cross_project_context],
+        *[row["evidence_refs"] for row in execution_resource_context["model_inventory"]],
+        *[row["evidence_refs"] for row in execution_candidates],
+        *[row["evidence_refs"] for row in routing_suggestions],
+        *[row["evidence_refs"] for row in sequencing_policy_suggestions],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    decision = _req_019_recommendation_decision(
+        execution_candidates=execution_candidates,
+        routed_action_ids=routed_action_ids,
+        open_risks=open_risks,
+    )
+
+    context_inputs = {
+        "execution_resource_context": execution_resource_context,
+        "execution_candidates": execution_candidates,
+        "broad_sweep_context": {
+            "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+            "cross_project_context": cross_project_context,
+        },
+    }
+    context_usage = {
+        "resource_context_used": True,
+        "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+        "cross_project_context_used": bool(cross_project_context),
+        "cpu_cores_used": hardware_profile["cpu_cores"],
+        "gpu_count_used": hardware_profile["gpu_count"],
+        "max_parallel_tasks_used": rate_limits["max_parallel_tasks"],
+        "effective_parallel_slots_used": effective_parallel_slots,
+        "tokens_per_minute_used": rate_limits["tokens_per_minute"],
+        "runtime_token_budget_used": runtime_token_budget,
+        "daily_token_budget_used": daily_token_budget,
+        "model_inventory_ids_used": [row["model_id"] for row in execution_resource_context["model_inventory"]],
+        "execution_candidate_ids_used": [row["action_id"] for row in execution_candidates],
+        "routed_action_ids_used": sorted(routed_action_ids),
+        "cross_project_projects_considered": cross_project_context_summary["projects_considered"],
+        "cross_project_projects_with_evidence_refs": cross_project_context_summary["projects_with_evidence_refs"],
+        "cross_project_projects_without_evidence_refs": cross_project_context_summary["projects_without_evidence_refs"],
+        "earth_sweep_evidence_refs_used": list(earth_sweep_evidence_refs),
+        "sequencing_batch_count": max([row["execution_batch"] for row in sequencing_policy_suggestions], default=0),
+        "total_estimated_token_cost": total_estimated_token_cost,
+        "evidence_refs_used": evidence_refs,
+    }
+
+    recommendation = {
+        "decision": decision,
+        "rationale": _req_019_recommendation_rationale(decision=decision),
+        "confidence": _recommendation_confidence(evidence_refs=evidence_refs, open_risks=open_risks),
+        "evidence_refs": evidence_refs,
+        "sequencing_policy_suggestions": sequencing_policy_suggestions,
+        "model_routing_policy_suggestions": routing_suggestions,
+        "cross_project_context": cross_project_context_summary,
+        "cross_project_obligations": cross_project_obligations,
+        "open_risks": open_risks,
+    }
+    return {
+        "strategy": "execution-resource-aware-sequencing",
+        "reasoning_mode": EXECUTION_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": context_inputs,
+        "context_usage": context_usage,
+        "recommendation": recommendation,
+    }
+
+
+def build_req_019_execution_resource_context_ingestion(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    execution_resource_context: Mapping[str, Any],
+    execution_candidates: list[Mapping[str, Any]] | None = None,
+    earth_sweep_evidence_refs: list[str] | None = None,
+    cross_project_context: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_nonempty_text(revision_identity, field_name="revision_identity")
+    normalized_execution_resource_context = _normalize_execution_resource_context(execution_resource_context)
+    normalized_execution_candidates = _normalize_execution_candidates(execution_candidates)
+    normalized_earth_sweep_evidence_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
+
+    canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    digest = _canonical_input_digest(canonical_input)
+    canonical_processing_input = _canonical_req_019_processing_input(
+        execution_resource_context=normalized_execution_resource_context,
+        execution_candidates=normalized_execution_candidates,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
+    )
+    processing_digest = _canonical_input_digest(canonical_processing_input)
+    processing_behavior = _build_req_019_processing_behavior(
+        execution_resource_context=normalized_execution_resource_context,
+        execution_candidates=normalized_execution_candidates,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
+    )
+
+    return {
+        "schema_version": REQ_019_SCHEMA_VERSION,
+        "requirement_id": REQ_019_REQUIREMENT_ID,
+        "execution_resource_context_ingestion": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+            "resource_context": normalized_execution_resource_context,
+        },
+        "processing_behavior": processing_behavior,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req019-{digest[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_digest,
+            "processing_call_id": f"req019-processing-{processing_digest[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+        },
+    }
+
+
+def validate_req_019_execution_resource_context_ingestion(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    top_keys = set(payload.keys())
+    required_top = {
+        "schema_version",
+        "requirement_id",
+        "execution_resource_context_ingestion",
+        "processing_behavior",
+        "call_metadata",
+    }
+    missing_top = sorted(required_top - top_keys)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    unexpected_top = sorted(top_keys - required_top)
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_019_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_019_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_019_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_019_REQUIREMENT_ID}")
+
+    ingestion = payload.get("execution_resource_context_ingestion")
+    if not isinstance(ingestion, Mapping):
+        errors.append("execution_resource_context_ingestion must be an object")
+        return errors
+
+    required_ingestion = {
+        "runtime_mode",
+        "execution_mode",
+        "target_project_root",
+        "earth_root",
+        "output_root",
+        "revision_identity",
+        "resource_context",
+    }
+    ingestion_keys = set(ingestion.keys())
+    missing_ingestion = sorted(required_ingestion - ingestion_keys)
+    if missing_ingestion:
+        errors.append(f"execution_resource_context_ingestion missing keys: {missing_ingestion}")
+    unexpected_ingestion = sorted(ingestion_keys - required_ingestion)
+    if unexpected_ingestion:
+        errors.append(f"execution_resource_context_ingestion has unexpected keys: {unexpected_ingestion}")
+
+    if ingestion.get("runtime_mode") != RUNTIME_MODE:
+        errors.append(f"runtime_mode must be {RUNTIME_MODE}")
+    if ingestion.get("execution_mode") != EXECUTION_MODE:
+        errors.append(f"execution_mode must be {EXECUTION_MODE}")
+
+    for root_field in ("target_project_root", "earth_root", "output_root"):
+        value = ingestion.get(root_field)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{root_field} must be non-empty string")
+        elif not value.startswith("/"):
+            errors.append(f"{root_field} must be absolute path")
+
+    revision_identity = ingestion.get("revision_identity")
+    if not isinstance(revision_identity, str) or not revision_identity.strip():
+        errors.append("revision_identity must be non-empty string")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+
+    required_processing_behavior = {
+        "strategy",
+        "reasoning_mode",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "recommendation",
+    }
+    processing_keys = set(processing_behavior.keys())
+    missing_processing = sorted(required_processing_behavior - processing_keys)
+    if missing_processing:
+        errors.append(f"processing_behavior missing keys: {missing_processing}")
+    unexpected_processing = sorted(processing_keys - required_processing_behavior)
+    if unexpected_processing:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected_processing}")
+
+    if processing_behavior.get("strategy") != "execution-resource-aware-sequencing":
+        errors.append("processing_behavior.strategy must be execution-resource-aware-sequencing")
+    if processing_behavior.get("reasoning_mode") != EXECUTION_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        return errors
+    for required_field in ("execution_resource_context", "execution_candidates", "broad_sweep_context"):
+        if required_field not in context_inputs:
+            errors.append(f"processing_behavior.context_inputs missing {required_field}")
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        for required_field in (
+            "resource_context_used",
+            "earth_sweep_context_used",
+            "cross_project_context_used",
+            "cpu_cores_used",
+            "gpu_count_used",
+            "max_parallel_tasks_used",
+            "effective_parallel_slots_used",
+            "tokens_per_minute_used",
+            "runtime_token_budget_used",
+            "daily_token_budget_used",
+            "model_inventory_ids_used",
+            "execution_candidate_ids_used",
+            "routed_action_ids_used",
+            "cross_project_projects_considered",
+            "cross_project_projects_with_evidence_refs",
+            "cross_project_projects_without_evidence_refs",
+            "earth_sweep_evidence_refs_used",
+            "sequencing_batch_count",
+            "total_estimated_token_cost",
+            "evidence_refs_used",
+        ):
+            if required_field not in context_usage:
+                errors.append(f"processing_behavior.context_usage missing {required_field}")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        for required_field in (
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "sequencing_policy_suggestions",
+            "model_routing_policy_suggestions",
+            "cross_project_context",
+            "cross_project_obligations",
+            "open_risks",
+        ):
+            if required_field not in recommendation:
+                errors.append(f"processing_behavior.recommendation missing {required_field}")
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+
+    required_metadata = {
+        "reproducibility",
+        "canonical_input_sha256",
+        "reproducible_call_id",
+        "canonical_input",
+        "processing_input_sha256",
+        "processing_call_id",
+        "canonical_processing_input",
+    }
+    metadata_keys = set(metadata.keys())
+    missing_metadata = sorted(required_metadata - metadata_keys)
+    if missing_metadata:
+        errors.append(f"call_metadata missing keys: {missing_metadata}")
+    unexpected_metadata = sorted(metadata_keys - required_metadata)
+    if unexpected_metadata:
+        errors.append(f"call_metadata has unexpected keys: {unexpected_metadata}")
+
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+
+    try:
+        normalized_target_root = _normalize_root(
+            ingestion.get("target_project_root"),
+            field_name="execution_resource_context_ingestion.target_project_root",
+        )
+        normalized_earth_root = _normalize_root(
+            ingestion.get("earth_root"),
+            field_name="execution_resource_context_ingestion.earth_root",
+        )
+        normalized_output_root = _normalize_root(
+            ingestion.get("output_root"),
+            field_name="execution_resource_context_ingestion.output_root",
+        )
+        normalized_revision_identity = _require_nonempty_text(
+            ingestion.get("revision_identity"),
+            field_name="execution_resource_context_ingestion.revision_identity",
+        )
+        normalized_resource_context = _normalize_execution_resource_context(ingestion.get("resource_context"))
+        normalized_execution_candidates = _normalize_execution_candidates(context_inputs.get("execution_candidates"))
+        broad_sweep_context = context_inputs.get("broad_sweep_context")
+        if not isinstance(broad_sweep_context, Mapping):
+            raise ValueError("processing_behavior.context_inputs.broad_sweep_context must be an object")
+        normalized_earth_sweep_evidence_refs = _normalize_string_list(
+            broad_sweep_context.get("earth_sweep_evidence_refs"),
+            field_name="processing_behavior.context_inputs.broad_sweep_context.earth_sweep_evidence_refs",
+        )
+        normalized_cross_project_context = _normalize_cross_project_context(
+            broad_sweep_context.get("cross_project_context")
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
+
+    expected_canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    if dict(canonical_input) != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized ingestion anchors")
+
+    expected_digest = _canonical_input_digest(expected_canonical_input)
+    expected_call_id = f"req019-{expected_digest[:16]}"
+    if metadata.get("canonical_input_sha256") != expected_digest:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != expected_call_id:
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    expected_processing_behavior = _build_req_019_processing_behavior(
+        execution_resource_context=normalized_resource_context,
+        execution_candidates=normalized_execution_candidates,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
+    )
+    if dict(processing_behavior) != expected_processing_behavior:
+        errors.append("processing_behavior must mirror deterministic resource-aware processing output")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+        return errors
+
+    expected_canonical_processing_input = _canonical_req_019_processing_input(
+        execution_resource_context=normalized_resource_context,
+        execution_candidates=normalized_execution_candidates,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
+    )
+    if dict(canonical_processing_input) != expected_canonical_processing_input:
+        errors.append("call_metadata.canonical_processing_input must mirror normalized processing input")
+
+    expected_processing_digest = _canonical_input_digest(expected_canonical_processing_input)
+    expected_processing_call_id = f"req019-processing-{expected_processing_digest[:16]}"
+    if metadata.get("processing_input_sha256") != expected_processing_digest:
+        errors.append("call_metadata.processing_input_sha256 does not match processing input")
+    if metadata.get("processing_call_id") != expected_processing_call_id:
+        errors.append("call_metadata.processing_call_id does not match processing digest")
 
     return errors
 
@@ -5519,6 +7177,34 @@ def _looks_like_req008_builder_input(payload: Mapping[str, Any]) -> bool:
     return required.issubset(payload.keys())
 
 
+def _looks_like_req011_builder_input(payload: Mapping[str, Any]) -> bool:
+    analysis_type = str(payload.get("analysis_type", "")).strip()
+    if analysis_type == "cross_project_dependency_extraction":
+        return True
+    required = {
+        "target_project_root",
+        "earth_root",
+        "output_root",
+        "revision_identity",
+        "broad_sweep_context",
+    }
+    return required.issubset(payload.keys())
+
+
+def _looks_like_req019_builder_input(payload: Mapping[str, Any]) -> bool:
+    analysis_type = str(payload.get("analysis_type", "")).strip()
+    if analysis_type == "execution_resource_context_ingestion":
+        return True
+    required = {
+        "target_project_root",
+        "earth_root",
+        "output_root",
+        "revision_identity",
+        "execution_resource_context",
+    }
+    return required.issubset(payload.keys())
+
+
 def _looks_like_req020_builder_input(payload: Mapping[str, Any]) -> bool:
     analysis_type = str(payload.get("analysis_type", "")).strip()
     if analysis_type == "risk_signal_normalization":
@@ -5560,6 +7246,25 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     analysis_type = str(payload.get("analysis_type", "")).strip()
     if analysis_type == "deficit_and_need_signal_extraction":
         return _worker_w02.run(payload)
+    if analysis_type == "cross_project_dependency_extraction" or _looks_like_req011_builder_input(payload):
+        return build_req_011_cross_project_dependency_extraction(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            broad_sweep_context=payload.get("broad_sweep_context"),
+        )
+    if analysis_type == "execution_resource_context_ingestion" or _looks_like_req019_builder_input(payload):
+        return build_req_019_execution_resource_context_ingestion(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            execution_resource_context=payload.get("execution_resource_context"),
+            execution_candidates=payload.get("execution_candidates"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            cross_project_context=payload.get("cross_project_context"),
+        )
     if analysis_type == "risk_signal_normalization":
         return build_req_020_risk_signal_normalization(
             risk_signals=list(payload.get("risk_signals", [])),
@@ -5598,9 +7303,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return _worker_w02.run(payload)
 
     raise ValueError(
-        "unable to route run payload: expected deficit/need extraction, risk signal normalization, "
-        "context confidence scoring, strategy context bundle serialization, planning artifact sweep, "
-        "or runtime telemetry sweep input"
+        "unable to route run payload: expected deficit/need extraction, cross-project dependency extraction, "
+        "execution resource context ingestion, risk signal normalization, context confidence scoring, "
+        "strategy context bundle serialization, planning artifact sweep, or runtime telemetry sweep input"
     )
 
 
@@ -5635,6 +7340,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if _looks_like_req008_builder_input(payload):
             output_payload = build_req_008_research_packet_ingestion_and_normalization(**payload)
+        elif _looks_like_req011_builder_input(payload):
+            output_payload = build_req_011_cross_project_dependency_extraction(**payload)
+        elif _looks_like_req019_builder_input(payload):
+            output_payload = build_req_019_execution_resource_context_ingestion(**payload)
         elif _looks_like_req020_builder_input(payload):
             output_payload = build_req_020_risk_signal_normalization(
                 risk_signals=list(payload.get("risk_signals", [])),

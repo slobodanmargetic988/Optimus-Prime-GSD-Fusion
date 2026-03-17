@@ -179,13 +179,13 @@
     "processing_strategy": "call-1-situational-analysis",
     "reasoning_mode": "deterministic-broad-sweep",
     "cross_project_projects_considered": [
-      "runtime-orchestrator",
-      "planner-core"
+      "planner-core",
+      "runtime-orchestrator"
     ],
     "candidate_recommendation_ids": [
+      "rec-analytics-unknown-routing",
       "rec-call-2-follow-up",
-      "rec-runtime-orchestrator-sync",
-      "rec-analytics-unknown-routing"
+      "rec-runtime-orchestrator-sync"
     ],
     "recommendation_decision": "proceed-with-open-risks",
     "recommendation_confidence": "low",

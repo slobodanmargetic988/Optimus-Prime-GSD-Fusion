@@ -1,0 +1,108 @@
+{
+  "schema_version": "1.0",
+  "task_id": "TASK-096",
+  "requirement_ids": [
+    "REQ-029"
+  ],
+  "updated_at": "2026-03-16T01:49:17Z",
+  "dev": {
+    "status": "done",
+    "checks": [
+      "Implement REQ-029 Call-4 recommendation synthesis with deterministic recommendation draft IDs, context usage, and cross-project Earth-evidence gating.",
+      "Record unsupported cross-project recommendations as open_risks instead of silently emitting draft outputs without Earth-sweep evidence refs."
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_call-4-recommendation-synthesis.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-096/contracts_call-4-recommendation-synthesis.output.txt"
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_call-4-recommendation-synthesis.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": ".. [100%] 2 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-096/integration_call-4-recommendation-synthesis.output.txt"
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "recommendation_draft_fields_complete_with_evidence_refs_and_traceability",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "cross_project_recommendations_require_earth_sweep_evidence_or_become_open_risks",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "context_usage_records_cross_project_usage_deterministically",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "contracts/req/REQ-029_call-4-recommendation-synthesis.md",
+      "examples/fixtures/call-4-recommendation-synthesis.json",
+      "strategy/current/samples/REQ-029_call-4-recommendation-synthesis.sample.json",
+      "tests/contracts/test_call-4-recommendation-synthesis.py",
+      "tests/integration/test_call-4-recommendation-synthesis.py",
+      "reports/optimus-prime/planning/evidence/TASK-096/contracts_call-4-recommendation-synthesis.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-096/integration_call-4-recommendation-synthesis.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-096/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "done",
+    "checks": [
+      "python3 -m pytest tests/integration/test_call-4-recommendation-synthesis.py -q"
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_call-4-recommendation-synthesis.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": ".. [100%] 2 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-096/integration_call-4-recommendation-synthesis.output.txt"
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-029",
+        "passed": true,
+        "notes": "Call-4 recommendation synthesis emits complete draft fields, records deterministic context usage, and converts unsupported cross-project candidates into open_risks."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-096/integration_call-4-recommendation-synthesis.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-096/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_029_deterministic_recommendation_drafts_emitted",
+      "req_029_cross_project_evidence_gating_verified",
+      "req_029_context_usage_verified",
+      "task_evidence_path_resolved"
+    ]
+  }
+}

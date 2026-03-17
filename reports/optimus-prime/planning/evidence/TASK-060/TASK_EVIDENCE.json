@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-unknown",
+  "task_id": "TASK-060",
+  "requirement_ids": [
+    "REQ-019"
+  ],
+  "updated_at": "2026-03-15T19:23:20Z",
+  "dev": {
+    "status": "pass",
+    "checks": [
+      "python3 -m pytest tests/contracts/test_execution-resource-context-ingestion.py -q",
+      "python3 -m pytest tests/integration/test_execution-resource-context-ingestion.py -q"
+    ],
+    "verify_results": [
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/contracts/test_execution-resource-context-ingestion.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "...... [100%] 6 passed in 0.03s"
+      },
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/integration/test_execution-resource-context-ingestion.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.03s"
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "cross_project_context_requires_earth_evidence",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "recommendation_fields_and_evidence_refs_remain_complete",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "contracts/req/REQ-019_execution-resource-context-ingestion.md",
+      "examples/fixtures/execution-resource-context-ingestion.json",
+      "strategy/current/samples/REQ-019_execution-resource-context-ingestion.sample.json",
+      "tests/contracts/test_execution-resource-context-ingestion.py",
+      "tests/integration/test_execution-resource-context-ingestion.py",
+      "reports/optimus-prime/planning/evidence/TASK-060/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "pending",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_019_broad_sweep_context_ingested",
+      "req_019_cross_project_context_usage_verified",
+      "req_019_duplicate_cross_project_ids_rejected",
+      "req_019_missing_earth_evidence_open_risk_verified",
+      "task_evidence_path_resolved"
+    ]
+  }
+}

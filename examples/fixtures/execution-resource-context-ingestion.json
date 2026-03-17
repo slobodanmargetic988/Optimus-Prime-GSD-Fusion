@@ -1,0 +1,658 @@
+{
+  "input": {
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req019-fixture-r1",
+    "execution_resource_context": {
+      "hardware_profile": {
+        "cpu_cores": 4,
+        "memory_gb": 32,
+        "gpu_count": 1,
+        "storage_tier": "high-throughput",
+        "evidence_refs": [
+          "reports/runtime/hardware/profile-2026-03-15.json"
+        ]
+      },
+      "rate_limits": {
+        "max_parallel_tasks": 2,
+        "tokens_per_minute": 12000,
+        "requests_per_minute": 120,
+        "daily_token_budget": 30000,
+        "evidence_refs": [
+          "reports/runtime/rate-limits/policy-2026-03-15.json"
+        ]
+      },
+      "runtime_budget": {
+        "max_execution_minutes": 3,
+        "checkpoint_interval_minutes": 1,
+        "evidence_refs": [
+          "reports/runtime/budget/window-2026-03-15.json"
+        ]
+      },
+      "model_inventory": [
+        {
+          "model_id": "gpt-5-mini",
+          "routing_tier": "fast",
+          "max_output_tokens": 8000,
+          "requests_per_minute_cap": 90,
+          "evidence_refs": [
+            "reports/runtime/models/gpt-5-mini.json"
+          ]
+        },
+        {
+          "model_id": "gpt-5",
+          "routing_tier": "balanced",
+          "max_output_tokens": 16000,
+          "requests_per_minute_cap": 60,
+          "evidence_refs": [
+            "reports/runtime/models/gpt-5.json"
+          ]
+        },
+        {
+          "model_id": "gpt-5-pro",
+          "routing_tier": "heavy",
+          "max_output_tokens": 32000,
+          "requests_per_minute_cap": 25,
+          "evidence_refs": [
+            "reports/runtime/models/gpt-5-pro.json"
+          ]
+        }
+      ]
+    },
+    "execution_candidates": [
+      {
+        "action_id": "action-risk-scan",
+        "summary": "Run deep risk scan over runtime and planning artifacts.",
+        "priority": "high",
+        "complexity": "high",
+        "estimated_token_cost": 22000,
+        "requires_gpu": true,
+        "preferred_model_tier": "heavy",
+        "evidence_refs": [
+          "reports/planning/TASK-059/risk-scan-inputs.json"
+        ],
+        "next_step": "Schedule first and checkpoint after initial high-cost pass."
+      },
+      {
+        "action_id": "action-contract-normalize",
+        "summary": "Normalize contract artifacts and verify deterministic schema fields.",
+        "priority": "medium",
+        "complexity": "medium",
+        "estimated_token_cost": 9000,
+        "requires_gpu": false,
+        "preferred_model_tier": "balanced",
+        "evidence_refs": [
+          "contracts/req/REQ-019_execution-resource-context-ingestion.md"
+        ],
+        "next_step": "Route through balanced lane and validate output shape."
+      },
+      {
+        "action_id": "action-summary-pass",
+        "summary": "Produce concise human-facing summary for execution handoff.",
+        "priority": "low",
+        "complexity": "low",
+        "estimated_token_cost": 5000,
+        "requires_gpu": false,
+        "preferred_model_tier": "fast",
+        "evidence_refs": [
+          "reports/planning/TASK-059/summary-inputs.json"
+        ],
+        "next_step": "Run after higher priority actions complete."
+      }
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-15/resource-portfolio.json"
+    ],
+    "cross_project_context": [
+      {
+        "project_id": "runtime-orchestrator",
+        "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "context_note": "Shared runtime constraints for scheduling and routing."
+      }
+    ]
+  },
+  "expected_payload": {
+    "schema_version": "req-019.execution-resource-context-ingestion.v1",
+    "requirement_id": "REQ-019",
+    "execution_resource_context_ingestion": {
+      "runtime_mode": "llm-first",
+      "execution_mode": "long-thinking",
+      "target_project_root": "/workspace/projects/optimus-prime",
+      "earth_root": "/workspace/projects/Earth",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req019-fixture-r1",
+      "resource_context": {
+        "hardware_profile": {
+          "cpu_cores": 4,
+          "memory_gb": 32,
+          "gpu_count": 1,
+          "storage_tier": "high-throughput",
+          "evidence_refs": [
+            "reports/runtime/hardware/profile-2026-03-15.json"
+          ]
+        },
+        "rate_limits": {
+          "max_parallel_tasks": 2,
+          "tokens_per_minute": 12000,
+          "requests_per_minute": 120,
+          "daily_token_budget": 30000,
+          "evidence_refs": [
+            "reports/runtime/rate-limits/policy-2026-03-15.json"
+          ]
+        },
+        "runtime_budget": {
+          "max_execution_minutes": 3,
+          "checkpoint_interval_minutes": 1,
+          "evidence_refs": [
+            "reports/runtime/budget/window-2026-03-15.json"
+          ]
+        },
+        "model_inventory": [
+          {
+            "model_id": "gpt-5",
+            "routing_tier": "balanced",
+            "max_output_tokens": 16000,
+            "requests_per_minute_cap": 60,
+            "evidence_refs": [
+              "reports/runtime/models/gpt-5.json"
+            ]
+          },
+          {
+            "model_id": "gpt-5-mini",
+            "routing_tier": "fast",
+            "max_output_tokens": 8000,
+            "requests_per_minute_cap": 90,
+            "evidence_refs": [
+              "reports/runtime/models/gpt-5-mini.json"
+            ]
+          },
+          {
+            "model_id": "gpt-5-pro",
+            "routing_tier": "heavy",
+            "max_output_tokens": 32000,
+            "requests_per_minute_cap": 25,
+            "evidence_refs": [
+              "reports/runtime/models/gpt-5-pro.json"
+            ]
+          }
+        ]
+      }
+    },
+    "processing_behavior": {
+      "strategy": "execution-resource-aware-sequencing",
+      "reasoning_mode": "long-thinking",
+      "heuristic_summarization_only": false,
+      "context_inputs": {
+        "execution_resource_context": {
+          "hardware_profile": {
+            "cpu_cores": 4,
+            "memory_gb": 32,
+            "gpu_count": 1,
+            "storage_tier": "high-throughput",
+            "evidence_refs": [
+              "reports/runtime/hardware/profile-2026-03-15.json"
+            ]
+          },
+          "rate_limits": {
+            "max_parallel_tasks": 2,
+            "tokens_per_minute": 12000,
+            "requests_per_minute": 120,
+            "daily_token_budget": 30000,
+            "evidence_refs": [
+              "reports/runtime/rate-limits/policy-2026-03-15.json"
+            ]
+          },
+          "runtime_budget": {
+            "max_execution_minutes": 3,
+            "checkpoint_interval_minutes": 1,
+            "evidence_refs": [
+              "reports/runtime/budget/window-2026-03-15.json"
+            ]
+          },
+          "model_inventory": [
+            {
+              "model_id": "gpt-5",
+              "routing_tier": "balanced",
+              "max_output_tokens": 16000,
+              "requests_per_minute_cap": 60,
+              "evidence_refs": [
+                "reports/runtime/models/gpt-5.json"
+              ]
+            },
+            {
+              "model_id": "gpt-5-mini",
+              "routing_tier": "fast",
+              "max_output_tokens": 8000,
+              "requests_per_minute_cap": 90,
+              "evidence_refs": [
+                "reports/runtime/models/gpt-5-mini.json"
+              ]
+            },
+            {
+              "model_id": "gpt-5-pro",
+              "routing_tier": "heavy",
+              "max_output_tokens": 32000,
+              "requests_per_minute_cap": 25,
+              "evidence_refs": [
+                "reports/runtime/models/gpt-5-pro.json"
+              ]
+            }
+          ]
+        },
+        "execution_candidates": [
+          {
+            "action_id": "action-contract-normalize",
+            "summary": "Normalize contract artifacts and verify deterministic schema fields.",
+            "priority": "medium",
+            "complexity": "medium",
+            "estimated_token_cost": 9000,
+            "requires_gpu": false,
+            "preferred_model_tier": "balanced",
+            "evidence_refs": [
+              "contracts/req/REQ-019_execution-resource-context-ingestion.md"
+            ],
+            "next_step": "Route through balanced lane and validate output shape."
+          },
+          {
+            "action_id": "action-risk-scan",
+            "summary": "Run deep risk scan over runtime and planning artifacts.",
+            "priority": "high",
+            "complexity": "high",
+            "estimated_token_cost": 22000,
+            "requires_gpu": true,
+            "preferred_model_tier": "heavy",
+            "evidence_refs": [
+              "reports/planning/TASK-059/risk-scan-inputs.json"
+            ],
+            "next_step": "Schedule first and checkpoint after initial high-cost pass."
+          },
+          {
+            "action_id": "action-summary-pass",
+            "summary": "Produce concise human-facing summary for execution handoff.",
+            "priority": "low",
+            "complexity": "low",
+            "estimated_token_cost": 5000,
+            "requires_gpu": false,
+            "preferred_model_tier": "fast",
+            "evidence_refs": [
+              "reports/planning/TASK-059/summary-inputs.json"
+            ],
+            "next_step": "Run after higher priority actions complete."
+          }
+        ],
+        "broad_sweep_context": {
+          "earth_sweep_evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/resource-portfolio.json"
+          ],
+          "cross_project_context": [
+            {
+              "project_id": "runtime-orchestrator",
+              "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+              ],
+              "context_note": "Shared runtime constraints for scheduling and routing."
+            }
+          ]
+        }
+      },
+      "context_usage": {
+        "resource_context_used": true,
+        "earth_sweep_context_used": true,
+        "cross_project_context_used": true,
+        "cpu_cores_used": 4,
+        "gpu_count_used": 1,
+        "max_parallel_tasks_used": 2,
+        "effective_parallel_slots_used": 2,
+        "tokens_per_minute_used": 12000,
+        "runtime_token_budget_used": 36000,
+        "daily_token_budget_used": 30000,
+        "model_inventory_ids_used": [
+          "gpt-5",
+          "gpt-5-mini",
+          "gpt-5-pro"
+        ],
+        "execution_candidate_ids_used": [
+          "action-contract-normalize",
+          "action-risk-scan",
+          "action-summary-pass"
+        ],
+        "routed_action_ids_used": [
+          "action-contract-normalize",
+          "action-risk-scan",
+          "action-summary-pass"
+        ],
+        "cross_project_projects_considered": [
+          "runtime-orchestrator"
+        ],
+        "cross_project_projects_with_evidence_refs": [
+          "runtime-orchestrator"
+        ],
+        "cross_project_projects_without_evidence_refs": [],
+        "earth_sweep_evidence_refs_used": [
+          "reports/earth/sweeps/2026-03-15/resource-portfolio.json"
+        ],
+        "sequencing_batch_count": 2,
+        "total_estimated_token_cost": 36000,
+        "evidence_refs_used": [
+          "contracts/req/REQ-019_execution-resource-context-ingestion.md",
+          "reports/earth/sweeps/2026-03-15/resource-portfolio.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "reports/planning/TASK-059/risk-scan-inputs.json",
+          "reports/planning/TASK-059/summary-inputs.json",
+          "reports/runtime/budget/window-2026-03-15.json",
+          "reports/runtime/hardware/profile-2026-03-15.json",
+          "reports/runtime/models/gpt-5-mini.json",
+          "reports/runtime/models/gpt-5-pro.json",
+          "reports/runtime/models/gpt-5.json",
+          "reports/runtime/rate-limits/policy-2026-03-15.json"
+        ]
+      },
+      "recommendation": {
+        "decision": "proceed-with-constraints",
+        "rationale": "Resource context allows partial execution, but open risks must be tracked during scheduling.",
+        "confidence": "medium",
+        "evidence_refs": [
+          "contracts/req/REQ-019_execution-resource-context-ingestion.md",
+          "reports/earth/sweeps/2026-03-15/resource-portfolio.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "reports/planning/TASK-059/risk-scan-inputs.json",
+          "reports/planning/TASK-059/summary-inputs.json",
+          "reports/runtime/budget/window-2026-03-15.json",
+          "reports/runtime/hardware/profile-2026-03-15.json",
+          "reports/runtime/models/gpt-5-mini.json",
+          "reports/runtime/models/gpt-5-pro.json",
+          "reports/runtime/models/gpt-5.json",
+          "reports/runtime/rate-limits/policy-2026-03-15.json"
+        ],
+        "sequencing_policy_suggestions": [
+          {
+            "sequence_index": 1,
+            "execution_batch": 1,
+            "action_id": "action-risk-scan",
+            "summary": "Run deep risk scan over runtime and planning artifacts.",
+            "priority": "high",
+            "complexity": "high",
+            "estimated_token_cost": 22000,
+            "estimated_runtime_slice_minutes": 2,
+            "routing_status": "routed",
+            "suggested_model_id": "gpt-5-pro",
+            "suggested_model_tier": "heavy",
+            "next_step": "Schedule first and checkpoint after initial high-cost pass.",
+            "sequencing_rationale": "Placed using effective_parallel_slots=2 under max_parallel_tasks=2 and cpu_cores=4.",
+            "evidence_refs": [
+              "reports/planning/TASK-059/risk-scan-inputs.json",
+              "reports/runtime/models/gpt-5-pro.json"
+            ]
+          },
+          {
+            "sequence_index": 2,
+            "execution_batch": 1,
+            "action_id": "action-contract-normalize",
+            "summary": "Normalize contract artifacts and verify deterministic schema fields.",
+            "priority": "medium",
+            "complexity": "medium",
+            "estimated_token_cost": 9000,
+            "estimated_runtime_slice_minutes": 1,
+            "routing_status": "routed",
+            "suggested_model_id": "gpt-5",
+            "suggested_model_tier": "balanced",
+            "next_step": "Route through balanced lane and validate output shape.",
+            "sequencing_rationale": "Placed using effective_parallel_slots=2 under max_parallel_tasks=2 and cpu_cores=4.",
+            "evidence_refs": [
+              "contracts/req/REQ-019_execution-resource-context-ingestion.md",
+              "reports/runtime/models/gpt-5.json"
+            ]
+          },
+          {
+            "sequence_index": 3,
+            "execution_batch": 2,
+            "action_id": "action-summary-pass",
+            "summary": "Produce concise human-facing summary for execution handoff.",
+            "priority": "low",
+            "complexity": "low",
+            "estimated_token_cost": 5000,
+            "estimated_runtime_slice_minutes": 1,
+            "routing_status": "routed",
+            "suggested_model_id": "gpt-5-mini",
+            "suggested_model_tier": "fast",
+            "next_step": "Run after higher priority actions complete.",
+            "sequencing_rationale": "Placed using effective_parallel_slots=2 under max_parallel_tasks=2 and cpu_cores=4.",
+            "evidence_refs": [
+              "reports/planning/TASK-059/summary-inputs.json",
+              "reports/runtime/models/gpt-5-mini.json"
+            ]
+          }
+        ],
+        "model_routing_policy_suggestions": [
+          {
+            "action_id": "action-contract-normalize",
+            "preferred_model_tier": "balanced",
+            "suggested_model_id": "gpt-5",
+            "suggested_model_tier": "balanced",
+            "fallback_tier_order": [
+              "balanced",
+              "fast",
+              "heavy"
+            ],
+            "routing_reason": "Matched complexity 'medium' and priority 'medium' to tier 'balanced'.",
+            "max_output_tokens": 16000,
+            "requests_per_minute_cap": 60,
+            "evidence_refs": [
+              "contracts/req/REQ-019_execution-resource-context-ingestion.md",
+              "reports/runtime/models/gpt-5.json"
+            ]
+          },
+          {
+            "action_id": "action-risk-scan",
+            "preferred_model_tier": "heavy",
+            "suggested_model_id": "gpt-5-pro",
+            "suggested_model_tier": "heavy",
+            "fallback_tier_order": [
+              "heavy",
+              "balanced",
+              "fast"
+            ],
+            "routing_reason": "Matched complexity 'high' and priority 'high' to tier 'heavy'.",
+            "max_output_tokens": 32000,
+            "requests_per_minute_cap": 25,
+            "evidence_refs": [
+              "reports/planning/TASK-059/risk-scan-inputs.json",
+              "reports/runtime/models/gpt-5-pro.json"
+            ]
+          },
+          {
+            "action_id": "action-summary-pass",
+            "preferred_model_tier": "fast",
+            "suggested_model_id": "gpt-5-mini",
+            "suggested_model_tier": "fast",
+            "fallback_tier_order": [
+              "fast",
+              "balanced",
+              "heavy"
+            ],
+            "routing_reason": "Matched complexity 'low' and priority 'low' to tier 'fast'.",
+            "max_output_tokens": 8000,
+            "requests_per_minute_cap": 90,
+            "evidence_refs": [
+              "reports/planning/TASK-059/summary-inputs.json",
+              "reports/runtime/models/gpt-5-mini.json"
+            ]
+          }
+        ],
+        "cross_project_context": {
+          "cross_project": true,
+          "projects_considered": [
+            "runtime-orchestrator"
+          ],
+          "projects_with_evidence_refs": [
+            "runtime-orchestrator"
+          ],
+          "projects_without_evidence_refs": [],
+          "earth_sweep_evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/resource-portfolio.json"
+          ],
+          "evidence_refs_by_project": {
+            "runtime-orchestrator": [
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ]
+          }
+        },
+        "cross_project_obligations": [
+          {
+            "obligation_id": "obligation-resource-runtime-orchestrator",
+            "project_id": "runtime-orchestrator",
+            "summary": "Coordinate execution-resource sequencing and model-routing policy with 'runtime-orchestrator' before shared execution.",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/resource-portfolio.json",
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ]
+          }
+        ],
+        "open_risks": [
+          {
+            "risk_id": "risk-daily-token-budget-exceeded",
+            "reason_code": "daily_token_budget_exceeded",
+            "summary": "Estimated token cost 36000 exceeds daily token budget 30000.",
+            "required_evidence_refs": [
+              "contracts/req/REQ-019_execution-resource-context-ingestion.md",
+              "reports/planning/TASK-059/risk-scan-inputs.json",
+              "reports/planning/TASK-059/summary-inputs.json"
+            ]
+          }
+        ]
+      }
+    },
+    "call_metadata": {
+      "reproducibility": "deterministic-input-fingerprint",
+      "canonical_input_sha256": "9772db8cd2347ea96427f822cbff68d37aec9176d06a7287dc81ff2aed4fb65d",
+      "reproducible_call_id": "req019-9772db8cd2347ea9",
+      "canonical_input": {
+        "earth_root": "/workspace/projects/Earth",
+        "execution_mode": "long-thinking",
+        "output_root": "/workspace/projects/optimus-prime/strategy/out",
+        "revision_identity": "rev-req019-fixture-r1",
+        "runtime_mode": "llm-first",
+        "target_project_root": "/workspace/projects/optimus-prime"
+      },
+      "processing_input_sha256": "58e0b2dfc2e6cb76d7f4379ae5a801c84961d357a332493ef9e31a732d437eb1",
+      "processing_call_id": "req019-processing-58e0b2dfc2e6cb76",
+      "canonical_processing_input": {
+        "execution_resource_context": {
+          "hardware_profile": {
+            "cpu_cores": 4,
+            "memory_gb": 32,
+            "gpu_count": 1,
+            "storage_tier": "high-throughput",
+            "evidence_refs": [
+              "reports/runtime/hardware/profile-2026-03-15.json"
+            ]
+          },
+          "rate_limits": {
+            "max_parallel_tasks": 2,
+            "tokens_per_minute": 12000,
+            "requests_per_minute": 120,
+            "daily_token_budget": 30000,
+            "evidence_refs": [
+              "reports/runtime/rate-limits/policy-2026-03-15.json"
+            ]
+          },
+          "runtime_budget": {
+            "max_execution_minutes": 3,
+            "checkpoint_interval_minutes": 1,
+            "evidence_refs": [
+              "reports/runtime/budget/window-2026-03-15.json"
+            ]
+          },
+          "model_inventory": [
+            {
+              "model_id": "gpt-5",
+              "routing_tier": "balanced",
+              "max_output_tokens": 16000,
+              "requests_per_minute_cap": 60,
+              "evidence_refs": [
+                "reports/runtime/models/gpt-5.json"
+              ]
+            },
+            {
+              "model_id": "gpt-5-mini",
+              "routing_tier": "fast",
+              "max_output_tokens": 8000,
+              "requests_per_minute_cap": 90,
+              "evidence_refs": [
+                "reports/runtime/models/gpt-5-mini.json"
+              ]
+            },
+            {
+              "model_id": "gpt-5-pro",
+              "routing_tier": "heavy",
+              "max_output_tokens": 32000,
+              "requests_per_minute_cap": 25,
+              "evidence_refs": [
+                "reports/runtime/models/gpt-5-pro.json"
+              ]
+            }
+          ]
+        },
+        "execution_candidates": [
+          {
+            "action_id": "action-contract-normalize",
+            "summary": "Normalize contract artifacts and verify deterministic schema fields.",
+            "priority": "medium",
+            "complexity": "medium",
+            "estimated_token_cost": 9000,
+            "requires_gpu": false,
+            "preferred_model_tier": "balanced",
+            "evidence_refs": [
+              "contracts/req/REQ-019_execution-resource-context-ingestion.md"
+            ],
+            "next_step": "Route through balanced lane and validate output shape."
+          },
+          {
+            "action_id": "action-risk-scan",
+            "summary": "Run deep risk scan over runtime and planning artifacts.",
+            "priority": "high",
+            "complexity": "high",
+            "estimated_token_cost": 22000,
+            "requires_gpu": true,
+            "preferred_model_tier": "heavy",
+            "evidence_refs": [
+              "reports/planning/TASK-059/risk-scan-inputs.json"
+            ],
+            "next_step": "Schedule first and checkpoint after initial high-cost pass."
+          },
+          {
+            "action_id": "action-summary-pass",
+            "summary": "Produce concise human-facing summary for execution handoff.",
+            "priority": "low",
+            "complexity": "low",
+            "estimated_token_cost": 5000,
+            "requires_gpu": false,
+            "preferred_model_tier": "fast",
+            "evidence_refs": [
+              "reports/planning/TASK-059/summary-inputs.json"
+            ],
+            "next_step": "Run after higher priority actions complete."
+          }
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/resource-portfolio.json"
+        ],
+        "cross_project_context": [
+          {
+            "project_id": "runtime-orchestrator",
+            "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+            ],
+            "context_note": "Shared runtime constraints for scheduling and routing."
+          }
+        ]
+      }
+    }
+  }
+}

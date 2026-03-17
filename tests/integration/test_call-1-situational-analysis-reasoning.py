@@ -189,6 +189,7 @@ def test_req_026_recommendation_is_complete_and_uses_cross_project_context() -> 
         "cross_project_obligations",
         "open_risks",
     }
+    assert processing["strict_evidence_discipline"] is True
     assert recommendation["decision"] == "proceed-with-open-risks"
     assert recommendation["confidence"] == "low"
     assert recommendation["rationale"] == "assessment=needs-follow-up unknowns=3 local=1 obligations=1 open_risks=1"
@@ -207,8 +208,8 @@ def test_req_026_recommendation_is_complete_and_uses_cross_project_context() -> 
         "reports/optimus-prime/planning/VERIFICATION.md",
         "reports/optimus-prime/planning/STATE.json",
         "reports/earth/sweeps/2026-03-16/portfolio.json",
-        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
         "reports/earth/sweeps/2026-03-16/planner-core.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
         "reports/earth/sweeps/2026-03-16/analytics-hub.json",
     ]
     assert trace_rows[0]["output_refs"] == ["REQ-026::call::call-1::output::situational_analysis"]
@@ -230,25 +231,25 @@ def test_req_026_recommendation_is_complete_and_uses_cross_project_context() -> 
     assert usage["earth_sweep_context_used"] is True
     assert usage["cross_project_context_used"] is True
     assert usage["earth_sweep_evidence_refs_used"] == ["reports/earth/sweeps/2026-03-16/portfolio.json"]
-    assert usage["cross_project_projects_considered"] == ["runtime-orchestrator", "planner-core"]
-    assert usage["cross_project_projects_with_evidence_refs"] == ["runtime-orchestrator", "planner-core"]
+    assert usage["cross_project_projects_considered"] == ["planner-core", "runtime-orchestrator"]
+    assert usage["cross_project_projects_with_evidence_refs"] == ["planner-core", "runtime-orchestrator"]
     assert usage["cross_project_projects_without_evidence_refs"] == []
     assert usage["candidate_recommendation_ids_considered"] == [
+        "rec-analytics-unknown-routing",
         "rec-call-2-follow-up",
         "rec-runtime-orchestrator-sync",
-        "rec-analytics-unknown-routing",
     ]
     assert usage["unknown_ids_for_later_calls"] == ["unknown.001", "unknown.002", "unknown.003"]
 
     assert recommendation["cross_project_context"] == {
         "cross_project": True,
-        "projects_considered": ["runtime-orchestrator", "planner-core"],
-        "projects_with_evidence_refs": ["runtime-orchestrator", "planner-core"],
+        "projects_considered": ["planner-core", "runtime-orchestrator"],
+        "projects_with_evidence_refs": ["planner-core", "runtime-orchestrator"],
         "projects_without_evidence_refs": [],
         "earth_sweep_evidence_refs": ["reports/earth/sweeps/2026-03-16/portfolio.json"],
         "evidence_refs_by_project": {
-            "runtime-orchestrator": ["reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"],
             "planner-core": ["reports/earth/sweeps/2026-03-16/planner-core.json"],
+            "runtime-orchestrator": ["reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"],
         },
     }
     assert recommendation["recommended_next_actions"] == [
