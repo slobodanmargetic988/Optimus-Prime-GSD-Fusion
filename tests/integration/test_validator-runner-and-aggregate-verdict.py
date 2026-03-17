@@ -3,11 +3,14 @@ import json
 from pathlib import Path
 
 from scripts import strategy_artifacts_handoff as module
+from scripts import strategy_validators as strategy_validators_module
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_PATH = REPO_ROOT / "examples" / "fixtures" / "validator-runner-and-aggregate-verdict.json"
 PACKET_SAMPLE_PATH = REPO_ROOT / "op-tools" / "strategy" / "examples" / "strategy_packet.sample.v1.json"
+CURRENT_PACKET_PATH = REPO_ROOT / "strategy" / "current" / "strategy_packet.v1.json"
+SCHEMA_PATH = REPO_ROOT / "contracts" / "strategy_packet.v1.schema.json"
 
 
 def _read_json(path: Path) -> dict:
@@ -243,3 +246,97 @@ def test_req_066_integration_keeps_packet_payload_not_object_deterministic() -> 
             }
         ],
     }
+
+
+def test_strategy_validators_runner_emits_req_066_aggregate_verdict_for_current_packet() -> None:
+    out = strategy_validators_module.run_strategy_packet_validator_runner_files(
+        input_path=CURRENT_PACKET_PATH,
+        schema_path=SCHEMA_PATH,
+    )
+
+    assert out["requirement_id"] == "REQ-066"
+    assert out["analysis_type"] == "validator_runner_and_aggregate_verdict"
+    assert out["ok"] is True
+    assert out["verdict"] == "pass"
+    assert out["planner_consumability"] == "planner_ready"
+    assert out["blocking_reason_codes"] == []
+    assert out["validator_count"] == 1
+    assert out["passed_validator_count"] == 1
+    assert out["failed_validator_count"] == 0
+    assert out["diagnostic_count"] == 0
+    assert out["diagnostics"] == []
+
+    assert out["validators"] == [
+        {
+            "validator_id": "strategy_packet_v1_schema_validator",
+            "requirement_id": "REQ-060",
+            "analysis_type": "strategy_packet_v1_schema_validator",
+            "ok": True,
+            "verdict": "pass",
+            "blocking_reason_codes": [],
+            "diagnostic_count": 0,
+            "summary": "Strategy packet is planner-consumable.",
+            "diagnostics": [],
+        }
+    ]
+
+
+def test_strategy_validators_runner_surfaces_deterministic_field_paths_and_severity_for_invalid_packets(
+    tmp_path: Path,
+) -> None:
+    broken_packet = _read_json(PACKET_SAMPLE_PATH)
+    broken_packet["recommendation_to_planner_mapping_artifact"]["recommendation_to_task_intent_mappings"] = [
+        row
+        for row in broken_packet["recommendation_to_planner_mapping_artifact"]["recommendation_to_task_intent_mappings"]
+        if row["recommendation_id"] != "rec.review-reuse-contracts"
+    ]
+    broken_packet["recommendation_to_planner_mapping_artifact"]["recommendation_ids"] = [
+        "rec.align-earth-runtime-canary",
+        "rec.harden-telemetry-freshness",
+    ]
+
+    packet_path = tmp_path / "broken.packet.json"
+    packet_path.write_text(json.dumps(broken_packet), encoding="utf-8")
+
+    out = strategy_validators_module.run_strategy_packet_validator_runner_files(
+        input_path=packet_path,
+        schema_path=SCHEMA_PATH,
+    )
+
+    assert out["ok"] is False
+    assert out["verdict"] == "fail"
+    assert out["planner_consumability"] == "planner_blocked"
+    assert out["blocking_reason_codes"] == [
+        "mapping_artifact_recommendation_ids_mismatch",
+        "packet_recommendation_missing_mapping",
+        "req_054_contract_violation",
+    ]
+    assert out["validator_count"] == 1
+    assert out["passed_validator_count"] == 0
+    assert out["failed_validator_count"] == 1
+    assert out["diagnostic_count"] == 3
+    assert len(out["diagnostics"]) == 3
+
+    validator_row = out["validators"][0]
+    assert validator_row["ok"] is False
+    assert validator_row["verdict"] == "fail"
+    assert validator_row["blocking_reason_codes"] == [
+        "mapping_artifact_recommendation_ids_mismatch",
+        "packet_recommendation_missing_mapping",
+        "req_054_contract_violation",
+    ]
+    assert validator_row["diagnostic_count"] == 3
+
+    diagnostics_by_reason = {row["reason_code"]: row for row in validator_row["diagnostics"]}
+    assert diagnostics_by_reason["mapping_artifact_recommendation_ids_mismatch"]["severity"] == "error"
+    assert diagnostics_by_reason["mapping_artifact_recommendation_ids_mismatch"]["field_path"] == (
+        "recommendation_to_planner_mapping_artifact.recommendation_ids"
+    )
+    assert diagnostics_by_reason["packet_recommendation_missing_mapping"]["severity"] == "error"
+    assert diagnostics_by_reason["packet_recommendation_missing_mapping"]["field_path"] == (
+        "recommendations[2].recommendation_id"
+    )
+    assert diagnostics_by_reason["req_054_contract_violation"]["severity"] == "error"
+    assert diagnostics_by_reason["req_054_contract_violation"]["field_path"] == (
+        "recommendation_to_planner_mapping_artifact.planner_task_intent_handles"
+    )

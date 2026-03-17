@@ -26,6 +26,12 @@ from scripts.strategy_artifacts_handoff import (
     validate_req_054_recommendation_to_planner_mapping_artifact,
 )
 
+REQ_060_REQUIREMENT_ID = "REQ-060"
+REQ_060_ANALYSIS_TYPE = "strategy_packet_v1_schema_validator"
+REQ_066_REQUIREMENT_ID = "REQ-066"
+REQ_066_ANALYSIS_TYPE = "validator_runner_and_aggregate_verdict"
+REQ_066_STRATEGY_PACKET_VALIDATOR_ID = "strategy_packet_v1_schema_validator"
+
 SEVERITY_ERROR = "error"
 REASON_REQ_054_CONTRACT_VIOLATION = "req_054_contract_violation"
 REASON_PACKET_RECOMMENDATION_MISSING_MAPPING = "packet_recommendation_missing_mapping"
@@ -441,24 +447,167 @@ def validate_strategy_packet_payload(
     }
 
 
+def _packet_payload_not_object_validation_result(*, checked_at_utc: str | None = None) -> dict[str, Any]:
+    checked_at = checked_at_utc or _utc_timestamp()
+    return {
+        "ok": False,
+        "checked_at_utc": checked_at,
+        "verdict": "fail",
+        "planner_consumability": "planner_blocked",
+        "reason_codes": ["packet_payload_not_object"],
+        "diagnostic_count": 1,
+        "summary": "Strategy packet is not planner-consumable; packet JSON root must be an object.",
+        "diagnostics": [
+            _diagnostic(
+                field_path="$",
+                reason_code="packet_payload_not_object",
+                message="strategy packet JSON root must be an object",
+            )
+        ],
+    }
+
+
+def _run_req_060_strategy_packet_v1_schema_validator(
+    packet: Mapping[str, Any],
+    schema: Mapping[str, Any],
+) -> dict[str, Any]:
+    return validate_strategy_packet_payload(packet, schema)
+
+
+def _req_066_validator_registry() -> tuple[dict[str, Any], ...]:
+    return (
+        {
+            "validator_id": REQ_066_STRATEGY_PACKET_VALIDATOR_ID,
+            "requirement_id": REQ_060_REQUIREMENT_ID,
+            "analysis_type": REQ_060_ANALYSIS_TYPE,
+            "runner": _run_req_060_strategy_packet_v1_schema_validator,
+        },
+    )
+
+
+def _req_066_validator_row(definition: Mapping[str, Any], output: Mapping[str, Any]) -> dict[str, Any]:
+    diagnostics = output.get("diagnostics")
+    normalized_diagnostics = list(diagnostics) if isinstance(diagnostics, list) else []
+    reason_codes = output.get("reason_codes")
+    normalized_reason_codes = list(reason_codes) if isinstance(reason_codes, list) else []
+    return {
+        "validator_id": definition["validator_id"],
+        "requirement_id": definition["requirement_id"],
+        "analysis_type": definition["analysis_type"],
+        "ok": bool(output.get("ok")),
+        "verdict": "pass" if output.get("ok") else "fail",
+        "blocking_reason_codes": sorted(
+            code for code in normalized_reason_codes if isinstance(code, str) and code.strip()
+        ),
+        "diagnostic_count": len(normalized_diagnostics),
+        "summary": str(output.get("summary") or ""),
+        "diagnostics": normalized_diagnostics,
+    }
+
+
+def _req_066_aggregate_diagnostics(validators: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    aggregate: list[dict[str, str]] = []
+    for row in validators:
+        validator_id = str(row.get("validator_id") or "")
+        diagnostics = row.get("diagnostics")
+        if not isinstance(diagnostics, list):
+            continue
+        for diagnostic in diagnostics:
+            if not isinstance(diagnostic, Mapping):
+                continue
+            aggregate.append(
+                {
+                    "validator_id": validator_id,
+                    "severity": str(diagnostic.get("severity") or ""),
+                    "reason_code": str(diagnostic.get("reason_code") or ""),
+                    "field_path": str(diagnostic.get("field_path") or ""),
+                    "message": str(diagnostic.get("message") or ""),
+                }
+            )
+
+    return sorted(
+        aggregate,
+        key=lambda row: (
+            row["validator_id"],
+            row["field_path"],
+            row["severity"],
+            row["reason_code"],
+            row["message"],
+        ),
+    )
+
+
+def _build_req_066_aggregate_verdict(
+    validators: Sequence[Mapping[str, Any]],
+    *,
+    checked_at_utc: str,
+) -> dict[str, Any]:
+    validator_rows = [dict(row) for row in validators]
+    validator_count = len(validator_rows)
+    failed_validator_count = sum(1 for row in validator_rows if row.get("ok") is False)
+    passed_validator_count = validator_count - failed_validator_count
+    ok = failed_validator_count == 0
+    blocking_reason_codes = sorted(
+        {
+            reason_code
+            for row in validator_rows
+            for reason_code in row.get("blocking_reason_codes", [])
+            if isinstance(reason_code, str) and reason_code.strip()
+        }
+    )
+    diagnostics = _req_066_aggregate_diagnostics(validator_rows)
+    return {
+        "requirement_id": REQ_066_REQUIREMENT_ID,
+        "analysis_type": REQ_066_ANALYSIS_TYPE,
+        "checked_at_utc": checked_at_utc,
+        "ok": ok,
+        "verdict": "pass" if ok else "fail",
+        "planner_consumability": "planner_ready" if ok else "planner_blocked",
+        "blocking_reason_codes": blocking_reason_codes,
+        "validator_count": validator_count,
+        "passed_validator_count": passed_validator_count,
+        "failed_validator_count": failed_validator_count,
+        "diagnostic_count": len(diagnostics),
+        "summary": (
+            "All validators passed; aggregate verdict is pass."
+            if ok
+            else f"{failed_validator_count} of {validator_count} validators reported blocking failures."
+        ),
+        "validators": validator_rows,
+        "diagnostics": diagnostics,
+    }
+
+
+def run_strategy_packet_validator_runner(
+    packet: Mapping[str, Any],
+    schema: Mapping[str, Any],
+    *,
+    checked_at_utc: str | None = None,
+) -> dict[str, Any]:
+    normalized_checked_at = checked_at_utc or _utc_timestamp()
+    validator_rows: list[dict[str, Any]] = []
+    for definition in _req_066_validator_registry():
+        runner = definition["runner"]
+        output = runner(packet, schema)
+        validator_rows.append(_req_066_validator_row(definition, output))
+    return _build_req_066_aggregate_verdict(validator_rows, checked_at_utc=normalized_checked_at)
+
+
+def run_strategy_packet_validator_runner_files(input_path: str | Path, schema_path: str | Path) -> dict[str, Any]:
+    packet = load_json_file(input_path)
+    schema = load_json_schema(schema_path)
+    checked_at_utc = _utc_timestamp()
+    if not isinstance(packet, Mapping):
+        output = _packet_payload_not_object_validation_result(checked_at_utc=checked_at_utc)
+        definition = _req_066_validator_registry()[0]
+        row = _req_066_validator_row(definition, output)
+        return _build_req_066_aggregate_verdict([row], checked_at_utc=checked_at_utc)
+    return run_strategy_packet_validator_runner(packet, schema, checked_at_utc=checked_at_utc)
+
+
 def validate_strategy_packet_files(input_path: str | Path, schema_path: str | Path) -> dict[str, Any]:
     packet = load_json_file(input_path)
     schema = load_json_schema(schema_path)
     if not isinstance(packet, Mapping):
-        return {
-            "ok": False,
-            "checked_at_utc": _utc_timestamp(),
-            "verdict": "fail",
-            "planner_consumability": "planner_blocked",
-            "reason_codes": ["packet_payload_not_object"],
-            "diagnostic_count": 1,
-            "summary": "Strategy packet is not planner-consumable; packet JSON root must be an object.",
-            "diagnostics": [
-                _diagnostic(
-                    field_path="$",
-                    reason_code="packet_payload_not_object",
-                    message="strategy packet JSON root must be an object",
-                )
-            ],
-        }
+        return _packet_payload_not_object_validation_result()
     return validate_strategy_packet_payload(packet, schema)
