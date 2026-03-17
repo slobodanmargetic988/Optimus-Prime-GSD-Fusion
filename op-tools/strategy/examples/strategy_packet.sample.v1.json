@@ -1,15 +1,15 @@
 {
   "schema_version": "strategy-packet.v1",
   "identity": {
-    "project_id": "prj.myownmint",
-    "run_id": "run.20260312t201000z-s001",
-    "event_id": "event.20260312t201400z-strategy-packet",
+    "project_id": "prj.optimus-prime-gsd-fusion",
+    "run_id": "run.20260316t090500z-r054",
+    "event_id": "event.20260316t091000z-strategy-packet",
     "era_id": "era.2026q1-execution",
-    "plan_id": "plan.myownmint-phase2"
+    "plan_id": "plan.optimus-prime-phase2"
   },
   "strategy": {
-    "revision_id": "strat.20260312-r1",
-    "summary": "Prioritize dispatch quality and deterministic continuation to unlock reliable autonomous throughput.",
+    "revision_id": "strat.20260316-r054",
+    "summary": "Package recommendation-to-planner traceability into the canonical strategy packet so planner gating remains deterministic.",
     "link_map_ref": "strategy/current/ECOSYSTEM_LINK_MAP.json"
   },
   "recommendations": [
@@ -29,6 +29,42 @@
       "op_initialize_ref": "op-initialize.input.recommendations[rec.dispatch-quality-first]"
     }
   ],
+  "recommendation_to_planner_mapping_artifact": {
+    "recommendation_to_task_intent_mappings": [
+      {
+        "mapping_id": "rtp.dispatch-quality-first",
+        "recommendation_id": "rec.dispatch-quality-first",
+        "planner_task_intent_handle": "intent.dispatch-quality-first",
+        "planner_task_intent_summary": "Implement watcher-driven cycle release and redispatch-quality controls before broader runtime features.",
+        "planner_lane": "execution",
+        "sequence_hint": 1,
+        "traceability_refs": [
+          "reports/optimus-prime/planning/PLAN_PACKETS.json#execution.dispatch-quality-first",
+          "strategy/current/ECOSYSTEM_LINK_MAP.json"
+        ],
+        "downstream_audit_trail": {
+          "source_call_trace_refs": [
+            "strategy/current/llm_call_trace.jsonl#call-5-001"
+          ],
+          "source_evidence_refs": [
+            "reports/strategy/lane-throughput-2026-03-15.json",
+            "strategy/current/ECOSYSTEM_LINK_MAP.json"
+          ],
+          "source_packet_refs": [
+            "reports/optimus-prime/planning/PLAN_PACKETS.json#execution.dispatch-quality-first"
+          ],
+          "emitted_at_utc": "2026-03-16T09:05:00Z",
+          "emitted_by_requirement_id": "REQ-054"
+        }
+      }
+    ],
+    "recommendation_ids": [
+      "rec.dispatch-quality-first"
+    ],
+    "planner_task_intent_handles": [
+      "intent.dispatch-quality-first"
+    ]
+  },
   "constraints": {
     "hard_constraints": [
       {
@@ -97,14 +133,14 @@
   },
   "kpi_targets": [
     {
-      "metric": "non_actionable_cycle_ratio",
+      "metric": "planner_intake_blockers",
       "direction": "decrease",
-      "target": ">=20% reduction versus baseline"
+      "target": "0 unmapped recommendations per strategy packet"
     },
     {
-      "metric": "redispatch_loop_ratio",
-      "direction": "decrease",
-      "target": ">=15% reduction versus baseline"
+      "metric": "traceability_coverage",
+      "direction": "maintain",
+      "target": "100% of recommendations mapped to at least one planner task intent"
     }
   ],
   "source": {
