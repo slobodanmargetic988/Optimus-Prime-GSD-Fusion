@@ -475,7 +475,16 @@
               "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
             ]
           }
-        ]
+        ],
+        "broad_sweep_context": {
+          "earth_sweep_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/portfolio.json"
+          ],
+          "scenario_branch_keys_with_earth_sweep_evidence": [
+            "cross-project-alignment-first",
+            "parallel-discovery-track"
+          ]
+        }
       },
       "context_usage": {
         "triggered": true,
@@ -501,7 +510,15 @@
         "evidence_refs_used": [
           "reports/earth/sweeps/2026-03-16/portfolio.json",
           "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
-        ]
+        ],
+        "cross_project_context_used": true,
+        "cross_project_scenario_ids_used": [
+          "scenario.cross-project-alignment-first"
+        ],
+        "cross_project_obligation_ids_used": [
+          "obl.cross-project-alignment-first"
+        ],
+        "cross_project_open_risk_ids": []
       },
       "recommendation": {
         "decision": "generate-alternatives",
@@ -512,7 +529,35 @@
         "evidence_refs": [
           "reports/earth/sweeps/2026-03-16/portfolio.json",
           "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
-        ]
+        ],
+        "cross_project_context": {
+          "cross_project": true,
+          "earth_sweep_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/portfolio.json"
+          ],
+          "cross_project_scenario_ids": [
+            "scenario.cross-project-alignment-first"
+          ],
+          "scenario_ids_with_earth_sweep_evidence": [
+            "scenario.cross-project-alignment-first",
+            "scenario.parallel-discovery-track"
+          ]
+        },
+        "obligations": [
+          {
+            "obligation_id": "obl.cross-project-alignment-first",
+            "scenario_id": "scenario.cross-project-alignment-first",
+            "summary": "Use cross-project-alignment-first only while its trigger conditions remain satisfied.",
+            "trigger_condition_ids": [
+              "cond.cross-project-dependency-block",
+              "cond.earth-evidence-required"
+            ],
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/portfolio.json"
+            ]
+          }
+        ],
+        "open_risks": []
       }
     },
     "call_metadata": {
@@ -528,8 +573,8 @@
         "revision_identity": "rev-req045-contract-r1",
         "strategy_goal": "Generate bounded alternative branches when evidence conflict or uncertainty makes a single strategy path unsafe."
       },
-      "processing_input_sha256": "a6a11929eef1a960169dfe07de2245493ef6d2a0c1c5ce83362fbbc31f19cbdb",
-      "processing_call_id": "req045-processing-a6a11929eef1a960",
+      "processing_input_sha256": "4d9aa42a70517ac7cb3b60f28a41ba48a4a5e7a3a7ad4855558f2479174ae5b9",
+      "processing_call_id": "req045-processing-4d9aa42a70517ac7",
       "canonical_processing_input": {
         "generated_at_utc": "2026-03-16T11:30:00Z",
         "uncertainty_score": 0.81,
@@ -673,7 +718,16 @@
               "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
             ]
           }
-        ]
+        ],
+        "broad_sweep_context": {
+          "earth_sweep_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/portfolio.json"
+          ],
+          "scenario_branch_keys_with_earth_sweep_evidence": [
+            "cross-project-alignment-first",
+            "parallel-discovery-track"
+          ]
+        }
       }
     }
   }

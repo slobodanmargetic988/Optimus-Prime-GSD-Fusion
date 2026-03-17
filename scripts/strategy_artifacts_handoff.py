@@ -18,6 +18,8 @@ for candidate in (SCRIPTS_ROOT,):
 
 from scripts import _strategy_artifacts_req052 as _req052
 from scripts import _strategy_artifacts_req049 as _req049
+from scripts import _strategy_artifacts_req048_049_processing as _req048_049_processing
+from scripts import _strategy_artifacts_req050_compat as _req050_compat
 from scripts import _strategy_artifacts_req054_060_066 as _req054_060_066
 from scripts import _strategy_artifacts_req056_057_063_069 as _req056_057_063_069
 from scripts import _strategy_artifacts_req056_059 as _req056_059
@@ -32,15 +34,18 @@ REQ_051_ANALYSIS_TYPE = getattr(_req052, "REQ_051_ANALYSIS_TYPE", "strategy_chan
 REQ_052_ANALYSIS_TYPE = getattr(_req052, "REQ_052_ANALYSIS_TYPE", "strategy_packet_v1_generator")
 REQ_053_ANALYSIS_TYPE = getattr(_req052, "REQ_053_ANALYSIS_TYPE", "recommendation_id_stability_contract")
 REQ_054_ANALYSIS_TYPE = getattr(_req054_060_066, "REQ_054_ANALYSIS_TYPE", "recommendation_to_planner_mapping_artifact")
+REQ_055_ANALYSIS_TYPE = getattr(_req069, "REQ_055_ANALYSIS_TYPE", "constraint_classification_artifact")
 REQ_056_ANALYSIS_TYPE = getattr(_req056_062_068, "REQ_056_ANALYSIS_TYPE", "kpi_target_artifact")
 REQ_057_ANALYSIS_TYPE = getattr(_req056_057_063_069, "REQ_057_ANALYSIS_TYPE", "blocker_handling_policy_artifact")
 REQ_058_ANALYSIS_TYPE = getattr(_req058_064_070, "REQ_058_ANALYSIS_TYPE", "ecosystem_obligation_artifact")
 REQ_059_ANALYSIS_TYPE = getattr(_req056_059, "REQ_059_ANALYSIS_TYPE", "strategy_quality_report_artifact")
 REQ_060_ANALYSIS_TYPE = getattr(_req054_060_066, "REQ_060_ANALYSIS_TYPE", "strategy_packet_v1_schema_validator")
+REQ_061_ANALYSIS_TYPE = getattr(_req069, "REQ_061_ANALYSIS_TYPE", "recommendation_quality_validator")
 REQ_062_ANALYSIS_TYPE = getattr(_req056_062_068, "REQ_062_ANALYSIS_TYPE", "recommendation_id_uniqueness_validator")
 REQ_063_ANALYSIS_TYPE = getattr(_req056_057_063_069, "REQ_063_ANALYSIS_TYPE", "ecosystem_link_map_integrity_validator")
 REQ_064_ANALYSIS_TYPE = getattr(_req058_064_070, "REQ_064_ANALYSIS_TYPE", "source_traceability_validator")
 REQ_066_ANALYSIS_TYPE = getattr(_req054_060_066, "REQ_066_ANALYSIS_TYPE", "validator_runner_and_aggregate_verdict")
+REQ_067_ANALYSIS_TYPE = getattr(_req069, "REQ_067_ANALYSIS_TYPE", "op_initialize_pre_plan_strategy_hook")
 REQ_068_ANALYSIS_TYPE = getattr(_req056_062_068, "REQ_068_ANALYSIS_TYPE", "op_plan_strategy_ingestion_hook")
 REQ_069_ANALYSIS_TYPE = getattr(_req069, "REQ_069_ANALYSIS_TYPE", "strategy_revision_history_and_diff_workflow")
 REQ_070_ANALYSIS_TYPE = getattr(
@@ -51,16 +56,31 @@ REQ_070_ANALYSIS_TYPE = getattr(
 
 build_req_048_strategy_md_generator = _req052.build_req_048_strategy_md_generator
 validate_req_048_strategy_md_generator = _req052.validate_req_048_strategy_md_generator
+process_req_048_strategy_md_generator = _req048_049_processing.process_req_048_strategy_md_generator
 build_req_049_strategy_json_generator = _req049.build_req_049_strategy_json_generator
 validate_req_049_strategy_json_generator = _req049.validate_req_049_strategy_json_generator
-build_req_050_ecosystem_link_map_json_generator = _req052.build_req_050_ecosystem_link_map_json_generator
-validate_req_050_ecosystem_link_map_json_generator = _req052.validate_req_050_ecosystem_link_map_json_generator
-build_req_051_strategy_changelog_md_generator = _req052.build_req_051_strategy_changelog_md_generator
-validate_req_051_strategy_changelog_md_generator = _req052.validate_req_051_strategy_changelog_md_generator
+process_req_049_strategy_json_generator = _req048_049_processing.process_req_049_strategy_json_generator
+build_req_050_ecosystem_link_map_json_generator = _req050_compat.build_req_050_ecosystem_link_map_json_generator
+validate_req_050_ecosystem_link_map_json_generator = _req050_compat.validate_req_050_ecosystem_link_map_json_generator
+process_req_050_ecosystem_link_map_json_generator = _req050_compat.process_req_050_ecosystem_link_map_json_generator
+build_req_051_strategy_changelog_md_generator = _req050_compat.build_req_051_strategy_changelog_md_generator
+validate_req_051_strategy_changelog_md_generator = _req050_compat.validate_req_051_strategy_changelog_md_generator
+process_req_051_strategy_changelog_md_generator = _req050_compat.process_req_051_strategy_changelog_md_generator
 build_req_052_strategy_packet_v1_generator = _req052.build_req_052_strategy_packet_v1_generator
 validate_req_052_strategy_packet_v1_generator = _req052.validate_req_052_strategy_packet_v1_generator
 build_req_053_recommendation_id_stability_contract = _req052.build_req_053_recommendation_id_stability_contract
+build_req_053_planner_recommendation_mapping_set = _req052.build_req_053_planner_recommendation_mapping_set
+build_req_053_acceptance_packet = _req052.build_req_053_acceptance_packet
 validate_req_053_recommendation_id_stability_contract = _req052.validate_req_053_recommendation_id_stability_contract
+
+REQ_050_SCHEMA_VERSION = _req050_compat.REQ_050_SCHEMA_VERSION
+REQ_050_REQUIREMENT_ID = _req050_compat.REQ_050_REQUIREMENT_ID
+REQ_050_ARTIFACT_KIND = _req050_compat.REQ_050_ARTIFACT_KIND
+REQ_050_ARTIFACT_PATH = _req050_compat.REQ_050_ARTIFACT_PATH
+REQ_051_SCHEMA_VERSION = _req050_compat.REQ_051_SCHEMA_VERSION
+REQ_051_REQUIREMENT_ID = _req050_compat.REQ_051_REQUIREMENT_ID
+REQ_051_ARTIFACT_KIND = _req050_compat.REQ_051_ARTIFACT_KIND
+REQ_051_ARTIFACT_PATH = _req050_compat.REQ_051_ARTIFACT_PATH
 
 build_req_054_recommendation_to_planner_mapping_artifact = (
     _req054_060_066.build_req_054_recommendation_to_planner_mapping_artifact
@@ -68,10 +88,25 @@ build_req_054_recommendation_to_planner_mapping_artifact = (
 validate_req_054_recommendation_to_planner_mapping_artifact = (
     _req054_060_066.validate_req_054_recommendation_to_planner_mapping_artifact
 )
+build_req_055_constraint_classification_artifact = _req069.build_req_055_constraint_classification_artifact
+validate_req_055_constraint_classification_artifact = (
+    _req069.validate_req_055_constraint_classification_artifact
+)
 build_req_060_strategy_packet_v1_schema_validator = _req054_060_066.build_req_060_strategy_packet_v1_schema_validator
 validate_req_060_strategy_packet_v1_schema_validator = (
     _req054_060_066.validate_req_060_strategy_packet_v1_schema_validator
 )
+build_req_061_recommendation_quality_validator = _req069.build_req_061_recommendation_quality_validator
+validate_req_061_recommendation_quality_validator = (
+    _req069.validate_req_061_recommendation_quality_validator
+)
+_REQ_061_REASON_CODE_STRATEGY_PACKET_SCHEMA_ROW_INVALID = (
+    _req069._REQ_061_REASON_CODE_STRATEGY_PACKET_SCHEMA_ROW_INVALID
+)
+_REQ_061_REASON_CODE_DUPLICATE_RECOMMENDATION_ID_COLLISION = (
+    _req069._REQ_061_REASON_CODE_DUPLICATE_RECOMMENDATION_ID_COLLISION
+)
+_REQ_061_REASON_CODE_TRACEABILITY_GATE_FAILED = _req069._REQ_061_REASON_CODE_TRACEABILITY_GATE_FAILED
 build_req_066_validator_runner_and_aggregate_verdict = (
     _req054_060_066.build_req_066_validator_runner_and_aggregate_verdict
 )
@@ -98,6 +133,8 @@ validate_req_057_blocker_handling_policy_artifact = (
 )
 build_req_058_ecosystem_obligation_artifact = _req058_064_070.build_req_058_ecosystem_obligation_artifact
 validate_req_058_ecosystem_obligation_artifact = _req058_064_070.validate_req_058_ecosystem_obligation_artifact
+REQ_064_PROCESSING_STRATEGY = _req058_064_070.REQ_064_PROCESSING_STRATEGY
+REQ_064_REASONING_MODE = _req058_064_070.REQ_064_REASONING_MODE
 build_req_063_ecosystem_link_map_integrity_validator = (
     _req056_057_063_069.build_req_063_ecosystem_link_map_integrity_validator
 )
@@ -106,6 +143,10 @@ validate_req_063_ecosystem_link_map_integrity_validator = (
 )
 build_req_064_source_traceability_validator = _req058_064_070.build_req_064_source_traceability_validator
 validate_req_064_source_traceability_validator = _req058_064_070.validate_req_064_source_traceability_validator
+build_req_067_op_initialize_pre_plan_strategy_hook = _req069.build_req_067_op_initialize_pre_plan_strategy_hook
+validate_req_067_op_initialize_pre_plan_strategy_hook = (
+    _req069.validate_req_067_op_initialize_pre_plan_strategy_hook
+)
 build_req_069_strategy_revision_history_and_diff_workflow = _req069.build_req_069_strategy_revision_history_and_diff_workflow
 validate_req_069_strategy_revision_history_and_diff_workflow = (
     _req069.validate_req_069_strategy_revision_history_and_diff_workflow
@@ -134,15 +175,18 @@ _BUILDERS: dict[str, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
     REQ_052_ANALYSIS_TYPE: build_req_052_strategy_packet_v1_generator,
     REQ_053_ANALYSIS_TYPE: build_req_053_recommendation_id_stability_contract,
     REQ_054_ANALYSIS_TYPE: build_req_054_recommendation_to_planner_mapping_artifact,
+    REQ_055_ANALYSIS_TYPE: build_req_055_constraint_classification_artifact,
     REQ_056_ANALYSIS_TYPE: build_req_056_kpi_target_artifact,
     REQ_057_ANALYSIS_TYPE: build_req_057_blocker_handling_policy_artifact,
     REQ_058_ANALYSIS_TYPE: build_req_058_ecosystem_obligation_artifact,
     REQ_059_ANALYSIS_TYPE: build_req_059_strategy_quality_report_artifact,
     REQ_060_ANALYSIS_TYPE: build_req_060_strategy_packet_v1_schema_validator,
+    REQ_061_ANALYSIS_TYPE: build_req_061_recommendation_quality_validator,
     REQ_062_ANALYSIS_TYPE: build_req_062_recommendation_id_uniqueness_validator,
     REQ_063_ANALYSIS_TYPE: build_req_063_ecosystem_link_map_integrity_validator,
     REQ_064_ANALYSIS_TYPE: build_req_064_source_traceability_validator,
     REQ_066_ANALYSIS_TYPE: build_req_066_validator_runner_and_aggregate_verdict,
+    REQ_067_ANALYSIS_TYPE: build_req_067_op_initialize_pre_plan_strategy_hook,
     REQ_068_ANALYSIS_TYPE: build_req_068_op_plan_strategy_ingestion_hook,
     REQ_069_ANALYSIS_TYPE: build_req_069_strategy_revision_history_and_diff_workflow,
     REQ_070_ANALYSIS_TYPE: build_req_070_end_to_end_autonomous_strategy_run_acceptance_packet,

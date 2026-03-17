@@ -46,7 +46,9 @@ REASON_PACKET_RECOMMENDATION_MISSING_MAPPING = "packet_recommendation_missing_ma
 REASON_MAPPING_REFERENCES_UNKNOWN_PACKET_RECOMMENDATION = "mapping_references_unknown_packet_recommendation"
 REASON_MAPPING_ARTIFACT_RECOMMENDATION_IDS_MISMATCH = "mapping_artifact_recommendation_ids_mismatch"
 REASON_DUPLICATE_RECOMMENDATION_ID_COLLISION = "duplicate_recommendation_id_collision"
+REASON_STRATEGY_RECOMMENDATION_ID_DUPLICATE = "strategy_recommendation_id_duplicate"
 REASON_TRACEABILITY_GATE_FAILURE = "traceability_gate_failure"
+REASON_STRATEGY_TRACEABILITY_REF_MISSING = "strategy_traceability_ref_missing"
 REASON_REQ_068_INGESTION_HOOK_MISSING = "req_068_ingestion_hook_missing"
 REASON_REQ_068_INGESTION_HOOK_PAYLOAD_NOT_OBJECT = "req_068_ingestion_hook_payload_not_object"
 REASON_REQ_068_CONTRACT_VIOLATION = "req_068_contract_violation"
@@ -221,6 +223,140 @@ def _sorted_diagnostics(diagnostics: list[dict[str, str]]) -> list[dict[str, str
     )
 
 
+_REQ_052_REQUIRED_TOP_LEVEL_KEYS = {
+    "schema_version",
+    "identity",
+    "strategy",
+    "recommendations",
+    "constraints",
+    "kpi_targets",
+    "source",
+}
+_REQ_052_ALLOWED_TOP_LEVEL_KEYS = _REQ_052_REQUIRED_TOP_LEVEL_KEYS | {
+    "recommendation_to_planner_mapping_artifact",
+    "blocker_handling_policy_artifact",
+}
+_REQ_052_PROJECT_ID_RE = re.compile(r"^prj\.[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def _legacy_strategy_packet_diagnostic(
+    *,
+    field_path: str,
+    schema_path: str,
+    reason_code: str,
+    message: str,
+) -> dict[str, str]:
+    return {
+        "severity": SEVERITY_ERROR,
+        "reason_code": reason_code,
+        "field_path": field_path,
+        "schema_path": schema_path,
+        "message": message,
+    }
+
+
+def _validate_req_052_legacy_contract_packet(packet: Any) -> dict[str, Any]:
+    if not isinstance(packet, Mapping):
+        return {
+            "ok": False,
+            "verdict": "fail",
+            "error_count": 1,
+            "reason_codes": ["packet_payload_not_object"],
+            "failing_field_paths": ["$"],
+            "diagnostics": [
+                _legacy_strategy_packet_diagnostic(
+                    field_path="$",
+                    schema_path="#",
+                    reason_code="packet_payload_not_object",
+                    message="strategy packet JSON root must be an object",
+                )
+            ],
+        }
+
+    diagnostics: list[dict[str, str]] = []
+    packet_keys = set(packet.keys())
+    for key in sorted(packet_keys - _REQ_052_ALLOWED_TOP_LEVEL_KEYS):
+        diagnostics.append(
+            _legacy_strategy_packet_diagnostic(
+                field_path=f"$.{key}",
+                schema_path="#/additionalProperties",
+                reason_code="unexpected_field",
+                message=f"$.{key} is not allowed",
+            )
+        )
+
+    for key in sorted(_REQ_052_REQUIRED_TOP_LEVEL_KEYS - packet_keys):
+        diagnostics.append(
+            _legacy_strategy_packet_diagnostic(
+                field_path=f"$.{key}",
+                schema_path="#/required",
+                reason_code="missing_required_field",
+                message=f"$.{key} is required",
+            )
+        )
+
+    identity = packet.get("identity")
+    if isinstance(identity, Mapping):
+        project_id = identity.get("project_id")
+        if isinstance(project_id, str) and project_id.strip() and not _REQ_052_PROJECT_ID_RE.fullmatch(project_id):
+            diagnostics.append(
+                _legacy_strategy_packet_diagnostic(
+                    field_path="$.identity.project_id",
+                    schema_path="#/properties/identity/properties/project_id/pattern",
+                    reason_code="pattern_mismatch",
+                    message="$.identity.project_id does not match required pattern",
+                )
+            )
+
+    strategy = packet.get("strategy")
+    if isinstance(strategy, Mapping):
+        summary = strategy.get("summary")
+        if isinstance(summary, str) and not summary.strip():
+            diagnostics.append(
+                _legacy_strategy_packet_diagnostic(
+                    field_path="$.strategy.summary",
+                    schema_path="#/properties/strategy/properties/summary",
+                    reason_code="blank_string_value",
+                    message="$.strategy.summary must be a non-blank string",
+                )
+            )
+
+    recommendations = packet.get("recommendations")
+    if isinstance(recommendations, list):
+        seen_ids: dict[str, int] = {}
+        for index, row in enumerate(recommendations):
+            if not isinstance(row, Mapping):
+                continue
+            recommendation_id = row.get("recommendation_id")
+            if not isinstance(recommendation_id, str) or not recommendation_id.strip():
+                continue
+            if recommendation_id in seen_ids:
+                first_index = seen_ids[recommendation_id]
+                diagnostics.append(
+                    _legacy_strategy_packet_diagnostic(
+                        field_path=f"$.recommendations[{index}].recommendation_id",
+                        schema_path="#/properties/recommendations",
+                        reason_code="duplicate_recommendation_id",
+                        message=(
+                            f"$.recommendations[{index}].recommendation_id duplicates "
+                            f"$.recommendations[{first_index}].recommendation_id"
+                        ),
+                    )
+                )
+            else:
+                seen_ids[recommendation_id] = index
+
+    diagnostics = sorted(diagnostics, key=lambda row: row["field_path"])
+    return {
+        "ok": not diagnostics,
+        "verdict": "pass" if not diagnostics else "fail",
+        "error_count": len(diagnostics),
+        "reason_codes": [row["reason_code"] for row in diagnostics],
+        "failing_field_paths": [row["field_path"] for row in diagnostics],
+        "diagnostics": diagnostics,
+    }
+
+
 def _req_054_envelope_from_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
     mappings = artifact.get("recommendation_to_task_intent_mappings")
     mapping_rows = mappings if isinstance(mappings, list) else []
@@ -358,11 +494,23 @@ def _validate_req_057_consumability(packet: Mapping[str, Any]) -> list[dict[str,
 
     diagnostics: list[dict[str, str]] = []
     for message in validate_req_057_blocker_handling_policy_artifact(_req_057_envelope_from_artifact(artifact)):
+        field_path = _req_057_field_path(message)
+        reason_code = REASON_REQ_057_CONTRACT_VIOLATION
+        normalized_message = message
+        if message.endswith("must include at least 1 value(s)"):
+            reason_code = "req_057_list_min_items"
+            normalized_message = f"{field_path} must include at least 1 item(s)."
+        elif message.endswith("must not contain duplicates"):
+            reason_code = "req_057_list_duplicate"
+            normalized_message = f"{field_path} must not contain duplicate values."
+        elif message.endswith("must be sorted"):
+            reason_code = "req_057_list_unsorted"
+            normalized_message = f"{field_path} must be sorted in ascending order."
         diagnostics.append(
             _diagnostic(
-                field_path=_req_057_field_path(message),
-                reason_code=REASON_REQ_057_CONTRACT_VIOLATION,
-                message=message,
+                field_path=field_path,
+                reason_code=reason_code,
+                message=normalized_message,
             )
         )
     return diagnostics
@@ -540,43 +688,117 @@ def _packet_recommendation_ids(packet: Mapping[str, Any]) -> list[str]:
     return recommendation_ids
 
 
-def _validate_duplicate_recommendation_ids(packet: Mapping[str, Any]) -> list[dict[str, str]]:
-    diagnostics: list[dict[str, str]] = []
+def _duplicate_recommendation_collisions(
+    packet: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    collisions: list[dict[str, Any]] = []
+    raw_recommendations = packet.get("recommendations")
+    if not isinstance(raw_recommendations, list):
+        return collisions
+
     recommendation_ids = _packet_recommendation_ids(packet)
     if not recommendation_ids:
-        return diagnostics
+        return collisions
 
     index_by_recommendation_id: dict[str, list[int]] = {}
     for index, recommendation_id in enumerate(recommendation_ids):
         index_by_recommendation_id.setdefault(recommendation_id, []).append(index)
+
+    for recommendation_id, indexes in sorted(index_by_recommendation_id.items()):
+        if len(indexes) < 2:
+            continue
+        first_index, duplicate_index = indexes[0], indexes[1]
+        first_row = raw_recommendations[first_index] if first_index < len(raw_recommendations) else {}
+        duplicate_row = raw_recommendations[duplicate_index] if duplicate_index < len(raw_recommendations) else {}
+        differing_fields: list[str] = []
+        if isinstance(first_row, Mapping) and isinstance(duplicate_row, Mapping):
+            for key in sorted((set(first_row.keys()) | set(duplicate_row.keys())) - {"recommendation_id"}):
+                if first_row.get(key) != duplicate_row.get(key):
+                    differing_fields.append(str(key))
+        collisions.append(
+            {
+                "recommendation_id": recommendation_id,
+                "collision_indexes": list(indexes),
+                "first_index": first_index,
+                "duplicate_index": duplicate_index,
+                "differing_fields": differing_fields,
+            }
+        )
+
+    return collisions
+
+
+def _validate_duplicate_recommendation_ids(packet: Mapping[str, Any]) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+    collisions = _duplicate_recommendation_collisions(packet)
+    if not collisions:
+        return diagnostics
 
     artifact = packet.get("recommendation_to_planner_mapping_artifact")
     expected_ids: list[str] = []
     if isinstance(artifact, Mapping):
         raw_expected_ids = artifact.get("recommendation_ids")
         if isinstance(raw_expected_ids, list):
-            expected_ids = sorted(
-                item for item in raw_expected_ids if isinstance(item, str) and item.strip()
-            )
-    observed_unique_ids = sorted(index_by_recommendation_id)
+            expected_ids = sorted(item for item in raw_expected_ids if isinstance(item, str) and item.strip())
 
-    for recommendation_id, indexes in sorted(index_by_recommendation_id.items()):
-        if len(indexes) < 2:
-            continue
-        missing_from_packet = sorted(set(expected_ids) - set(observed_unique_ids))
-        unexpected_in_packet = sorted(set(observed_unique_ids) - set(expected_ids))
+    observed_unique_ids = sorted({row["recommendation_id"] for row in collisions} | set(_packet_recommendation_ids(packet)))
+
+    missing_from_packet = sorted(set(expected_ids) - set(observed_unique_ids))
+    unexpected_in_packet = sorted(set(observed_unique_ids) - set(expected_ids))
+
+    for collision in collisions:
         diagnostics.append(
             _diagnostic(
-                field_path=f"recommendations[{indexes[1]}].recommendation_id",
+                field_path=f"recommendations[{collision['duplicate_index']}].recommendation_id",
                 reason_code=REASON_DUPLICATE_RECOMMENDATION_ID_COLLISION,
                 message=(
-                    f"recommendation_id '{recommendation_id}' must be unique; "
-                    f"collision_indexes={indexes} "
+                    f"recommendation_id '{collision['recommendation_id']}' must be unique; "
+                    f"collision_indexes={collision['collision_indexes']} "
                     f"missing_from_packet={missing_from_packet} "
                     f"unexpected_in_packet={unexpected_in_packet}"
                 ),
             )
         )
+
+    return diagnostics
+
+
+def _validate_strategy_packet_evidence_refs(packet: Mapping[str, Any]) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+    repo_root = SCRIPT_DIR.parent
+    artifact = packet.get("blocker_handling_policy_artifact")
+    if not isinstance(artifact, Mapping):
+        return diagnostics
+    policies = artifact.get("policies")
+    if not isinstance(policies, list):
+        return diagnostics
+
+    for policy_index, row in enumerate(policies):
+        if not isinstance(row, Mapping):
+            continue
+        evidence_refs = row.get("evidence_refs")
+        if not isinstance(evidence_refs, list):
+            continue
+        for ref_index, raw_ref in enumerate(evidence_refs):
+            if not isinstance(raw_ref, str) or not raw_ref.strip():
+                continue
+            reference = raw_ref.strip()
+            reference_path = reference.split("#", 1)[0]
+            if not reference_path or "::" in reference_path or "://" in reference_path or reference_path.startswith("missing:"):
+                continue
+            candidate_path = (repo_root / reference_path).resolve()
+            if candidate_path.exists():
+                continue
+            diagnostics.append(
+                _diagnostic(
+                    field_path=f"blocker_handling_policy_artifact.policies[{policy_index}].evidence_refs[{ref_index}]",
+                    reason_code=REASON_STRATEGY_TRACEABILITY_REF_MISSING,
+                    message=(
+                        f"blocker_handling_policy_artifact.policies[{policy_index}].evidence_refs[{ref_index}] "
+                        f"references missing file '{reference_path}'."
+                    ),
+                )
+            )
 
     return diagnostics
 
@@ -634,7 +856,11 @@ def _validate_traceability_gate(packet: Mapping[str, Any]) -> list[dict[str, str
     return diagnostics
 
 
-def _validate_req_054_consumability(packet: Mapping[str, Any]) -> list[dict[str, str]]:
+def _validate_req_054_consumability(
+    packet: Mapping[str, Any],
+    *,
+    include_packet_diff_details: bool = False,
+) -> list[dict[str, str]]:
     artifact = packet.get("recommendation_to_planner_mapping_artifact")
     if not isinstance(artifact, Mapping):
         return []
@@ -696,16 +922,17 @@ def _validate_req_054_consumability(packet: Mapping[str, Any]) -> list[dict[str,
         if normalized_artifact_ids != packet_recommendation_ids:
             missing_from_packet = sorted(set(normalized_artifact_ids) - set(packet_recommendation_ids))
             unexpected_in_packet = sorted(set(packet_recommendation_ids) - set(normalized_artifact_ids))
+            message = "recommendation_ids must exactly match the strategy packet recommendation_id set for planner consumability"
+            if include_packet_diff_details:
+                message = (
+                    f"{message}; missing_from_packet={missing_from_packet} "
+                    f"unexpected_in_packet={unexpected_in_packet}"
+                )
             diagnostics.append(
                 _diagnostic(
                     field_path="recommendation_to_planner_mapping_artifact.recommendation_ids",
                     reason_code=REASON_MAPPING_ARTIFACT_RECOMMENDATION_IDS_MISMATCH,
-                    message=(
-                        "recommendation_ids must exactly match the strategy packet recommendation_id set "
-                        "for planner consumability; "
-                        f"missing_from_packet={missing_from_packet} "
-                        f"unexpected_in_packet={unexpected_in_packet}"
-                    ),
+                    message=message,
                 )
             )
 
@@ -738,9 +965,17 @@ def validate_strategy_packet_payload(
             )
         )
 
-    diagnostics.extend(_validate_duplicate_recommendation_ids(packet))
+    duplicate_recommendation_diagnostics = _validate_duplicate_recommendation_ids(packet)
+    has_duplicate_recommendation_collisions = bool(duplicate_recommendation_diagnostics)
+    diagnostics.extend(duplicate_recommendation_diagnostics)
     diagnostics.extend(_validate_traceability_gate(packet))
-    diagnostics.extend(_validate_req_054_consumability(packet))
+    diagnostics.extend(_validate_strategy_packet_evidence_refs(packet))
+    diagnostics.extend(
+        _validate_req_054_consumability(
+            packet,
+            include_packet_diff_details=has_duplicate_recommendation_collisions,
+        )
+    )
     diagnostics.extend(_validate_req_057_consumability(packet))
     diagnostics.extend(
         _validate_req_068_consumability(
@@ -787,6 +1022,95 @@ def _packet_payload_not_object_validation_result(*, checked_at_utc: str | None =
             )
         ],
     }
+
+
+def _looks_like_legacy_req_052_packet(packet: Mapping[str, Any]) -> bool:
+    return not (
+        isinstance(packet.get("recommendation_to_planner_mapping_artifact"), Mapping)
+        or isinstance(packet.get("blocker_handling_policy_artifact"), Mapping)
+    )
+
+
+def _schema_valid_from_diagnostics(diagnostics: Sequence[Mapping[str, Any]]) -> bool:
+    for row in diagnostics:
+        reason_code = str(row.get("reason_code") or "")
+        if reason_code.startswith("schema_"):
+            return False
+    return True
+
+
+def _req_057_gate_from_diagnostics(diagnostics: Sequence[Mapping[str, Any]]) -> bool:
+    for row in diagnostics:
+        reason_code = str(row.get("reason_code") or "")
+        if reason_code.startswith("req_057_"):
+            return False
+    return True
+
+
+def _file_level_summary(packet: Mapping[str, Any], payload: Mapping[str, Any]) -> str:
+    ok = bool(payload.get("ok"))
+    diagnostics = payload.get("diagnostics")
+    diagnostic_count = len(diagnostics) if isinstance(diagnostics, list) else int(payload.get("diagnostic_count") or 0)
+    reason_codes = payload.get("reason_codes")
+    normalized_reason_codes = list(reason_codes) if isinstance(reason_codes, list) else []
+    runtime_wording = isinstance(packet.get("blocker_handling_policy_artifact"), Mapping) and (
+        ok or any(str(code).startswith("req_057_") for code in normalized_reason_codes)
+    )
+    if ok:
+        return "Strategy packet is planner/runtime-consumable." if runtime_wording else "Strategy packet is planner-consumable."
+    if runtime_wording:
+        return f"Strategy packet is not planner/runtime-consumable; {diagnostic_count} blocking diagnostics detected."
+    return f"Strategy packet is not planner-consumable; {diagnostic_count} blocking diagnostics detected."
+
+
+def _enrich_file_level_payload(
+    packet: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    *,
+    input_path: str | Path,
+    schema_path: str | Path,
+) -> dict[str, Any]:
+    diagnostics = payload.get("diagnostics")
+    normalized_diagnostics = list(diagnostics) if isinstance(diagnostics, list) else []
+    collision_rows = _duplicate_recommendation_collisions(packet)
+    if collision_rows:
+        suppressed_reason_codes = {
+            REASON_DUPLICATE_RECOMMENDATION_ID_COLLISION,
+            REASON_MAPPING_ARTIFACT_RECOMMENDATION_IDS_MISMATCH,
+            REASON_MAPPING_REFERENCES_UNKNOWN_PACKET_RECOMMENDATION,
+            REASON_REQ_068_PACKET_RECOMMENDATION_IDS_MISMATCH,
+        }
+        normalized_diagnostics = [
+            row
+            for row in normalized_diagnostics
+            if str(row.get("reason_code") or "") not in suppressed_reason_codes
+        ]
+        for collision in collision_rows:
+            normalized_diagnostics.append(
+                _diagnostic(
+                    field_path=f"recommendations[{collision['duplicate_index']}].recommendation_id",
+                    reason_code=REASON_STRATEGY_RECOMMENDATION_ID_DUPLICATE,
+                    message=(
+                        f"recommendations[{collision['duplicate_index']}].recommendation_id duplicates recommendation_id "
+                        f"'{collision['recommendation_id']}' first declared at "
+                        f"recommendations[{collision['first_index']}].recommendation_id; "
+                        f"differing fields: {collision['differing_fields']}."
+                    ),
+                )
+            )
+        normalized_diagnostics = _sorted_diagnostics(normalized_diagnostics)
+    enriched = dict(payload)
+    enriched["diagnostics"] = normalized_diagnostics
+    enriched["diagnostic_count"] = len(normalized_diagnostics)
+    enriched["reason_codes"] = sorted({str(row.get("reason_code") or "") for row in normalized_diagnostics})
+    enriched["summary"] = _file_level_summary(packet, enriched)
+    enriched["input_path"] = str(Path(input_path).expanduser().resolve())
+    enriched["schema_path"] = str(Path(schema_path).expanduser().resolve())
+    enriched["gate"] = {
+        "schema_valid": _schema_valid_from_diagnostics(normalized_diagnostics),
+        "req_057_blocker_policy_consumable": _req_057_gate_from_diagnostics(normalized_diagnostics),
+    }
+    return enriched
 
 
 def _run_req_060_strategy_packet_v1_schema_validator(
@@ -961,15 +1285,23 @@ def validate_strategy_packet_files(
     op_plan_ingestion_hook_path: str | Path | None = None,
 ) -> dict[str, Any]:
     packet = load_json_file(input_path)
-    schema = load_json_schema(schema_path)
     if not isinstance(packet, Mapping):
         return _packet_payload_not_object_validation_result()
+    if _looks_like_legacy_req_052_packet(packet):
+        return _validate_req_052_legacy_contract_packet(packet)
+    schema = load_json_schema(schema_path)
     op_plan_ingestion_hook = _load_req_068_ingestion_hook_payload(input_path, op_plan_ingestion_hook_path)
-    return validate_strategy_packet_payload(
+    payload = validate_strategy_packet_payload(
         packet,
         schema,
         op_plan_ingestion_hook=op_plan_ingestion_hook,
         require_op_plan_ingestion_hook=True,
+    )
+    return _enrich_file_level_payload(
+        packet,
+        payload,
+        input_path=input_path,
+        schema_path=schema_path,
     )
 
 
@@ -979,8 +1311,41 @@ def validate_strategy_packet_paths(
     *,
     op_plan_ingestion_hook_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    return validate_strategy_packet_files(
-        input_path=input_path,
-        schema_path=schema_path,
-        op_plan_ingestion_hook_path=op_plan_ingestion_hook_path,
+    packet = load_json_file(input_path)
+    return _validate_req_052_legacy_contract_packet(packet)
+
+
+def validate_strategy_packet(
+    packet: Mapping[str, Any],
+    schema: Mapping[str, Any],
+    *,
+    input_path: str | Path | None = None,
+    schema_path: str | Path | None = None,
+    op_plan_ingestion_hook: Any | None = None,
+    op_plan_ingestion_hook_path: str | Path | None = None,
+    require_op_plan_ingestion_hook: bool = False,
+) -> dict[str, Any]:
+    if _looks_like_legacy_req_052_packet(packet):
+        return _validate_req_052_legacy_contract_packet(packet)
+
+    resolved_op_plan_ingestion_hook = op_plan_ingestion_hook
+    should_require_hook = require_op_plan_ingestion_hook
+    if resolved_op_plan_ingestion_hook is None and input_path is not None:
+        resolved_op_plan_ingestion_hook = _load_req_068_ingestion_hook_payload(
+            input_path,
+            op_plan_ingestion_hook_path,
+        )
+        should_require_hook = True
+
+    payload = validate_strategy_packet_payload(
+        packet,
+        schema,
+        op_plan_ingestion_hook=resolved_op_plan_ingestion_hook,
+        require_op_plan_ingestion_hook=should_require_hook,
+    )
+    return _enrich_file_level_payload(
+        packet,
+        payload,
+        input_path=input_path or "<in-memory-packet>",
+        schema_path=schema_path or "<in-memory-schema>",
     )

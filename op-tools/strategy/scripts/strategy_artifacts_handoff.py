@@ -57,6 +57,20 @@ def _unique_sorted_strings(values: Iterable[Any]) -> list[str]:
     return sorted(normalized)
 
 
+def _ordered_unique_strings(values: Iterable[Any]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        if item is None:
+            continue
+        normalized = str(item).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
+
+
 def _coalesce(*values: Any) -> Any:
     for value in values:
         if value not in (None, "", [], {}):
@@ -935,6 +949,348 @@ def write_planner_consumability_validator(
     if output_path is not None:
         _write_json(output_path, report)
     return report
+
+
+def _normalize_artifact_records(value: Any) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for index, item in enumerate(_as_list(value), start=1):
+        record = _as_dict(item)
+        artifact_ref = _coalesce_string(
+            record.get("artifact_ref"),
+            record.get("path"),
+            record.get("ref"),
+        )
+        if not artifact_ref:
+            continue
+        records.append(
+            {
+                "artifact_id": _coalesce_string(
+                    record.get("artifact_id"),
+                    record.get("id"),
+                    f"artifact-{index:03d}",
+                ),
+                "artifact_ref": artifact_ref,
+                "evidence_refs": _unique_sorted_strings(
+                    _as_list(record.get("evidence_refs")) + _as_list(record.get("evidence"))
+                ),
+            }
+        )
+    return records
+
+
+def _project_evidence_index(payload: dict[str, Any]) -> tuple[dict[str, list[str]], list[str]]:
+    index: dict[str, set[str]] = {}
+    sources_used: set[str] = set()
+
+    source_specs = (
+        ("earth_sweep", _as_list(_as_dict(payload.get("earth_sweep")).get("projects"))),
+        ("broad_sweep", _as_list(_as_dict(payload.get("broad_sweep")).get("projects"))),
+        ("cross_project_context", _as_list(payload.get("cross_project_context"))),
+    )
+
+    for source_name, items in source_specs:
+        if items:
+            sources_used.add(source_name)
+        for item in items:
+            record = _as_dict(item)
+            project_id = _project_id_from_item(record)
+            if not project_id:
+                continue
+            refs = _unique_sorted_strings(
+                _as_list(record.get("evidence_refs"))
+                + _as_list(record.get("evidence"))
+                + _as_list(record.get("source_refs"))
+            )
+            if refs:
+                index.setdefault(project_id, set()).update(refs)
+
+    return (
+        {project_id: sorted(refs) for project_id, refs in sorted(index.items())},
+        sorted(sources_used),
+    )
+
+
+def build_end_to_end_autonomous_strategy_acceptance_packet(payload: dict[str, Any]) -> dict[str, Any]:
+    recommendations = _normalize_recommendations(payload)
+    evidence_index = _build_evidence_index(payload)
+
+    current_artifacts = _normalize_artifact_records(payload.get("current_artifacts"))
+    history_artifacts = _normalize_artifact_records(payload.get("history_artifacts"))
+    validator_artifacts = _normalize_artifact_records(payload.get("validator_artifacts"))
+    artifacts = {
+        "current": current_artifacts,
+        "history": history_artifacts,
+        "validators": validator_artifacts,
+    }
+    artifact_refs = _ordered_unique_strings(
+        [row["artifact_ref"] for row in validator_artifacts]
+        + [row["artifact_ref"] for row in current_artifacts]
+        + [row["artifact_ref"] for row in history_artifacts]
+    )
+
+    required_fields_missing: dict[str, list[str]] = {}
+    missing_evidence_recommendation_ids: list[str] = []
+    all_recommendation_evidence_refs: set[str] = set()
+    normalized_recommendations: list[dict[str, Any]] = []
+    for recommendation in recommendations:
+        recommendation_id = recommendation["recommendation_id"]
+        evidence_refs = _recommendation_evidence_refs(recommendation, evidence_index)
+        missing_fields = [
+            field
+            for field in REQUIRED_RECOMMENDATION_FIELDS
+            if not _is_present_value(recommendation.get(field))
+        ]
+        if missing_fields:
+            required_fields_missing[recommendation_id] = missing_fields
+        if not evidence_refs:
+            missing_evidence_recommendation_ids.append(recommendation_id)
+        all_recommendation_evidence_refs.update(evidence_refs)
+        normalized_recommendations.append(
+            {
+                "recommendation_id": recommendation_id,
+                "priority": _coalesce_string(recommendation.get("priority")),
+                "summary": _coalesce_string(recommendation.get("summary")),
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    readiness_index: dict[str, dict[str, Any]] = {}
+    raw_readiness = _as_list(_as_dict(payload.get("planner_hook")).get("recommendation_readiness"))
+    for item in raw_readiness:
+        record = _as_dict(item)
+        recommendation_id = _coalesce_string(
+            record.get("recommendation_id"),
+            record.get("id"),
+        )
+        if recommendation_id:
+            readiness_index[recommendation_id] = record
+
+    validator_artifact_refs = [row["artifact_ref"] for row in validator_artifacts]
+    current_artifact_refs = [row["artifact_ref"] for row in current_artifacts]
+    history_artifact_refs = [row["artifact_ref"] for row in history_artifacts]
+    base_artifact_refs = _ordered_unique_strings(
+        validator_artifact_refs + current_artifact_refs + history_artifact_refs
+    )
+    planner_mapping: dict[str, dict[str, Any]] = {}
+    planner_evidence_refs: set[str] = set()
+    for recommendation in normalized_recommendations:
+        recommendation_id = recommendation["recommendation_id"]
+        readiness = readiness_index.get(recommendation_id, {})
+        row_artifact_refs = _ordered_unique_strings(
+            validator_artifact_refs
+            + _as_list(readiness.get("artifact_refs"))
+            + _as_list(readiness.get("artifacts"))
+            + current_artifact_refs
+            + history_artifact_refs
+        )
+        row_evidence_refs = _unique_sorted_strings(
+            recommendation["evidence_refs"]
+            + _as_list(readiness.get("evidence_refs"))
+            + _as_list(readiness.get("evidence"))
+        )
+        planner_evidence_refs.update(row_evidence_refs)
+        planner_mapping[recommendation_id] = {
+            "recommendation_id": recommendation_id,
+            "recommendation_key": _coalesce_string(
+                readiness.get("recommendation_key"),
+                recommendation_id,
+            ),
+            "status": _coalesce_string(readiness.get("status"), "ready"),
+            "priority": recommendation["priority"],
+            "summary": recommendation["summary"],
+            "artifact_refs": row_artifact_refs,
+            "evidence_refs": row_evidence_refs,
+        }
+
+    recommendation_ids = [row["recommendation_id"] for row in normalized_recommendations]
+    mapped_recommendation_ids = sorted(planner_mapping)
+    missing_recommendation_ids = [
+        recommendation_id
+        for recommendation_id in recommendation_ids
+        if recommendation_id not in planner_mapping
+    ]
+
+    target_project_id = _coalesce_string(
+        _as_dict(payload.get("identity")).get("project_id"),
+        _as_dict(_as_dict(payload.get("strategy_packet")).get("identity")).get("project_id"),
+        payload.get("project_id"),
+    )
+    project_ids = _collect_projects(payload)
+    peer_project_ids = [
+        project_id
+        for project_id in project_ids
+        if project_id and project_id != target_project_id
+    ]
+    project_evidence_refs, context_sources_used = _project_evidence_index(payload)
+    cross_project_context = {
+        "target_project_id": target_project_id,
+        "project_ids": project_ids,
+        "peer_project_ids": peer_project_ids,
+        "project_count": len(project_ids),
+        "peer_project_count": len(peer_project_ids),
+        "used_in_quality_report": bool(peer_project_ids),
+        "context_sources_used": context_sources_used,
+        "evidence_refs": _unique_sorted_strings(
+            ref
+            for refs in project_evidence_refs.values()
+            for ref in refs
+        ),
+        "used_in_acceptance_packet": bool(peer_project_ids),
+    }
+
+    open_risks: list[dict[str, Any]] = []
+    for index, item in enumerate(_as_list(payload.get("obligations")), start=1):
+        record = _as_dict(item)
+        if not record:
+            continue
+        obligation_evidence_refs = _unique_sorted_strings(
+            _as_list(record.get("evidence_refs")) + _as_list(record.get("evidence"))
+        )
+        if obligation_evidence_refs:
+            continue
+        project_id = _project_id_from_item(record) or f"project-{index:03d}"
+        required_evidence_refs = project_evidence_refs.get(project_id, [])
+        open_risks.append(
+            {
+                "risk_id": f"risk.unsupported-cross-project-obligation.{index:03d}",
+                "severity": "medium",
+                "category": "open_risk",
+                "reason_code": "missing_earth_sweep_evidence_refs",
+                "summary": f"Cross-project obligation for {project_id} has no Earth-sweep evidence refs.",
+                "project_id": project_id,
+                "linked_recommendation_ids": _unique_sorted_strings(
+                    _as_list(record.get("linked_recommendation_ids"))
+                ),
+                "evidence_refs": required_evidence_refs,
+                "required_evidence_refs": required_evidence_refs,
+                "recommendation": "Keep this as an open risk until Earth-sweep evidence refs exist.",
+            }
+        )
+    open_risks.sort(key=lambda item: item["risk_id"])
+
+    contradictions = _normalize_contradictions(payload)
+    open_contradictions = [
+        item for item in contradictions if item["status"] not in PASS_STATUSES
+    ]
+
+    artifact_evidence_refs = _unique_sorted_strings(
+        ref
+        for group in artifacts.values()
+        for row in group
+        for ref in row["evidence_refs"]
+    )
+    citation_coverage_pass = bool(normalized_recommendations) and not missing_evidence_recommendation_ids
+    recommendation_fields_pass = not required_fields_missing
+    contradiction_pass = not open_contradictions
+    artifacts_complete = all(bool(group) for group in artifacts.values())
+    planner_consumable = (
+        not missing_recommendation_ids
+        and recommendation_fields_pass
+        and citation_coverage_pass
+        and contradiction_pass
+        and artifacts_complete
+    )
+    ecosystem_aware = bool(peer_project_ids)
+
+    missing_artifact_groups = [
+        group_name
+        for group_name, group in artifacts.items()
+        if not group
+    ]
+    blocking_reasons: list[str] = []
+    if missing_artifact_groups:
+        blocking_reasons.append("missing_artifact_groups")
+    if required_fields_missing:
+        blocking_reasons.append("incomplete_recommendations")
+    if missing_recommendation_ids:
+        blocking_reasons.append("incomplete_planner_mapping")
+    if missing_evidence_recommendation_ids:
+        blocking_reasons.append("missing_evidence_refs")
+    if open_contradictions:
+        blocking_reasons.append("open_contradictions")
+    if not ecosystem_aware:
+        blocking_reasons.append("missing_cross_project_context")
+
+    warning_reasons = ["open_risks_present"] if open_risks else []
+    all_evidence_refs = _unique_sorted_strings(
+        list(all_recommendation_evidence_refs)
+        + artifact_evidence_refs
+        + list(planner_evidence_refs)
+        + cross_project_context["evidence_refs"]
+        + [
+            ref
+            for risk in open_risks
+            for ref in _as_list(risk.get("evidence_refs")) + _as_list(risk.get("required_evidence_refs"))
+        ]
+        + [
+            ref
+            for contradiction in contradictions
+            for ref in _as_list(contradiction.get("evidence_refs"))
+        ]
+    )
+
+    return {
+        "artifact_type": "end_to_end_autonomous_strategy_acceptance_packet",
+        "requirement_id": "REQ-070",
+        "acceptance_packet_version": "1.0",
+        "run_identity": {
+            "project_id": target_project_id,
+            "run_id": _coalesce_string(_as_dict(payload.get("identity")).get("run_id")),
+            "event_id": _coalesce_string(_as_dict(payload.get("identity")).get("event_id")),
+            "revision_id": _coalesce_string(_as_dict(payload.get("strategy")).get("revision_id")),
+        },
+        "artifacts": artifacts,
+        "artifact_refs": artifact_refs,
+        "recommendation_field_completeness": {
+            "required_fields": list(REQUIRED_RECOMMENDATION_FIELDS),
+            "complete_recommendations": len(normalized_recommendations) - len(required_fields_missing),
+            "incomplete_recommendations": len(required_fields_missing),
+            "missing_by_recommendation": {key: value for key, value in sorted(required_fields_missing.items())},
+        },
+        "planner_hook": {
+            "recommendation_ids": recommendation_ids,
+            "mapped_recommendation_ids": mapped_recommendation_ids,
+            "missing_recommendation_ids": missing_recommendation_ids,
+            "mapping_complete": not missing_recommendation_ids,
+            "sources_used": _ordered_unique_strings(
+                ["generated_from_recommendations"]
+                + (["planner_hook.recommendation_readiness"] if raw_readiness else [])
+            ),
+            "recommendation_mapping": planner_mapping,
+            "evidence_refs": _unique_sorted_strings(planner_evidence_refs),
+        },
+        "cross_project_context": cross_project_context,
+        "evidence_refs": all_evidence_refs,
+        "open_risks": open_risks,
+        "consumability_verdict": {
+            "verdict": "pass" if not blocking_reasons else "fail",
+            "planner_consumable": planner_consumable,
+            "ecosystem_aware": ecosystem_aware,
+            "artifacts_complete": artifacts_complete,
+            "citation_coverage_pass": citation_coverage_pass,
+            "recommendation_fields_pass": recommendation_fields_pass,
+            "contradiction_pass": contradiction_pass,
+            "ready_for_autonomous_planning": planner_consumable and ecosystem_aware,
+            "missing_artifact_groups": missing_artifact_groups,
+            "blocking_reasons": blocking_reasons,
+            "warning_reasons": warning_reasons,
+        },
+    }
+
+
+build_req_070_end_to_end_autonomous_strategy_run_acceptance_packet = (
+    build_end_to_end_autonomous_strategy_acceptance_packet
+)
+
+
+def write_end_to_end_autonomous_strategy_acceptance_packet(
+    payload: dict[str, Any],
+    output_path: str | Path | None = None,
+) -> dict[str, Any]:
+    packet = build_end_to_end_autonomous_strategy_acceptance_packet(payload)
+    if output_path is not None:
+        _write_json(output_path, packet)
+    return packet
 
 
 def _timestamp() -> str:

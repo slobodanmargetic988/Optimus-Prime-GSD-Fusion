@@ -243,7 +243,15 @@ def build_req_049_strategy_json_generator(payload: Mapping[str, Any]) -> dict[st
     if analysis_type and analysis_type != REQ_049_ANALYSIS_TYPE:
         raise ValueError(f"analysis_type must be {REQ_049_ANALYSIS_TYPE}")
 
-    expected_top_keys = {"analysis_type", "now_utc", "target_project", "strategy_revision", "recommendations", "risks"}
+    expected_top_keys = {
+        "analysis_type",
+        "now_utc",
+        "target_project",
+        "strategy_revision",
+        "recommendations",
+        "risks",
+        "broad_sweep_context",
+    }
     unexpected_top = sorted(set(raw.keys()) - expected_top_keys)
     if unexpected_top:
         raise ValueError(f"payload has unexpected keys: {unexpected_top}")

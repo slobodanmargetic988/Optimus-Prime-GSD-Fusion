@@ -21,6 +21,7 @@ try:
     from scripts.strategy_context_workers import w07 as _worker_w07
     from scripts.strategy_context_workers import w07_req016_bundle as _worker_w07_req016
     from scripts.strategy_context_workers import w08 as _worker_w08
+    from scripts import strategy_context_sweep_req020 as _req020
     from scripts import strategy_context_sweep_req021 as _req021
 except ModuleNotFoundError:
     _repo_root = Path(__file__).resolve().parents[1]
@@ -34,6 +35,7 @@ except ModuleNotFoundError:
     from scripts.strategy_context_workers import w07 as _worker_w07
     from scripts.strategy_context_workers import w07_req016_bundle as _worker_w07_req016
     from scripts.strategy_context_workers import w08 as _worker_w08
+    from scripts import strategy_context_sweep_req020 as _req020
     from scripts import strategy_context_sweep_req021 as _req021
 
 SCHEMA_VERSION = "req-001.llm-first-strategy-runtime-entrypoint.v1"
@@ -125,6 +127,10 @@ REQ_020_REASON_CODE_ALIASES = {
     "watchdog_terminal_exit": "stale_run_base_hard_limit",
     "regression_pattern_detected": "regression_detected",
 }
+REQ_020_ALLOWED_SIGNAL_KINDS = _req020.REQ_020_ALLOWED_SIGNAL_KINDS
+REQ_020_ALLOWED_DECISIONS = _req020.REQ_020_ALLOWED_DECISIONS
+REQ_020_ALLOWED_CONFIDENCE_LABELS = _req020.REQ_020_ALLOWED_CONFIDENCE_LABELS
+REQ_020_ALLOWED_RISK_LEVELS = _req020.REQ_020_ALLOWED_RISK_LEVELS
 
 
 def _require_nonempty_text(value: Any, *, field_name: str) -> str:
@@ -134,6 +140,18 @@ def _require_nonempty_text(value: Any, *, field_name: str) -> str:
     if not text:
         raise ValueError(f"{field_name} must be a non-empty string")
     return text
+
+
+def _require_mapping(value: Any, *, field_name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be an object")
+    return value
+
+
+def _require_positive_int(value: Any, *, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return value
 
 
 def _normalize_root(raw_path: str, *, field_name: str) -> str:
@@ -3712,6 +3730,480 @@ def _build_req_019_processing_behavior(
     }
 
 
+def _is_req_019_rich_execution_resource_context(raw_value: Any) -> bool:
+    return isinstance(raw_value, Mapping) and any(
+        key in raw_value for key in ("hardware_profiles", "rate_limit_windows", "model_catalog")
+    )
+
+
+def _normalize_req_019_rich_execution_resource_context(raw_value: Any) -> dict[str, Any]:
+    resource_context = _require_mapping(raw_value, field_name="execution_resource_context")
+
+    hardware_profiles_raw = resource_context.get("hardware_profiles")
+    if not isinstance(hardware_profiles_raw, list) or not hardware_profiles_raw:
+        raise ValueError("execution_resource_context.hardware_profiles must be a non-empty list")
+    hardware_profiles: list[dict[str, Any]] = []
+    for index, row in enumerate(hardware_profiles_raw):
+        profile = _require_mapping(row, field_name=f"execution_resource_context.hardware_profiles[{index}]")
+        hardware_profiles.append(
+            {
+                "profile_id": _require_nonempty_text(
+                    profile.get("profile_id"),
+                    field_name=f"execution_resource_context.hardware_profiles[{index}].profile_id",
+                ),
+                "cpu_cores": _require_positive_int(
+                    profile.get("cpu_cores"),
+                    field_name=f"execution_resource_context.hardware_profiles[{index}].cpu_cores",
+                ),
+                "memory_gb": _require_positive_int(
+                    profile.get("memory_gb"),
+                    field_name=f"execution_resource_context.hardware_profiles[{index}].memory_gb",
+                ),
+                "gpu_count": int(profile.get("gpu_count") or 0),
+            }
+        )
+    hardware_profiles.sort(key=lambda row: row["profile_id"])
+
+    rate_limit_windows_raw = resource_context.get("rate_limit_windows")
+    if not isinstance(rate_limit_windows_raw, list) or not rate_limit_windows_raw:
+        raise ValueError("execution_resource_context.rate_limit_windows must be a non-empty list")
+    rate_limit_windows: list[dict[str, Any]] = []
+    for index, row in enumerate(rate_limit_windows_raw):
+        window = _require_mapping(row, field_name=f"execution_resource_context.rate_limit_windows[{index}]")
+        rate_limit_windows.append(
+            {
+                "provider": _require_nonempty_text(
+                    window.get("provider"),
+                    field_name=f"execution_resource_context.rate_limit_windows[{index}].provider",
+                ),
+                "model": _require_nonempty_text(
+                    window.get("model"),
+                    field_name=f"execution_resource_context.rate_limit_windows[{index}].model",
+                ),
+                "requests_per_minute": _require_positive_int(
+                    window.get("requests_per_minute"),
+                    field_name=f"execution_resource_context.rate_limit_windows[{index}].requests_per_minute",
+                ),
+                "tokens_per_minute": _require_positive_int(
+                    window.get("tokens_per_minute"),
+                    field_name=f"execution_resource_context.rate_limit_windows[{index}].tokens_per_minute",
+                ),
+            }
+        )
+    rate_limit_windows.sort(key=lambda row: (row["provider"], row["model"]))
+
+    model_catalog_raw = resource_context.get("model_catalog")
+    if not isinstance(model_catalog_raw, list) or not model_catalog_raw:
+        raise ValueError("execution_resource_context.model_catalog must be a non-empty list")
+    model_catalog: list[dict[str, Any]] = []
+    seen_model_ids: set[str] = set()
+    for index, row in enumerate(model_catalog_raw):
+        model = _require_mapping(row, field_name=f"execution_resource_context.model_catalog[{index}]")
+        model_id = _require_nonempty_text(
+            model.get("model_id"),
+            field_name=f"execution_resource_context.model_catalog[{index}].model_id",
+        )
+        if model_id in seen_model_ids:
+            raise ValueError(f"execution_resource_context.model_catalog[{index}].model_id must be unique")
+        seen_model_ids.add(model_id)
+        reasoning_tier = _require_nonempty_text(
+            model.get("reasoning_tier"),
+            field_name=f"execution_resource_context.model_catalog[{index}].reasoning_tier",
+        ).lower()
+        if reasoning_tier not in {"light", "balanced", "high"}:
+            raise ValueError(
+                f"execution_resource_context.model_catalog[{index}].reasoning_tier must be one of: light, balanced, high"
+            )
+        model_catalog.append(
+            {
+                "model_id": model_id,
+                "reasoning_tier": reasoning_tier,
+            }
+        )
+    model_catalog.sort(key=lambda row: (row["reasoning_tier"], row["model_id"]))
+
+    runtime_budget = _require_mapping(resource_context.get("runtime_budget"), field_name="execution_resource_context.runtime_budget")
+    normalized_runtime_budget = {
+        "max_parallel_actions": _require_positive_int(
+            runtime_budget.get("max_parallel_actions"),
+            field_name="execution_resource_context.runtime_budget.max_parallel_actions",
+        ),
+        "max_daily_tokens": _require_positive_int(
+            runtime_budget.get("max_daily_tokens"),
+            field_name="execution_resource_context.runtime_budget.max_daily_tokens",
+        ),
+    }
+
+    return {
+        "hardware_profiles": hardware_profiles,
+        "rate_limit_windows": rate_limit_windows,
+        "model_catalog": model_catalog,
+        "runtime_budget": normalized_runtime_budget,
+    }
+
+
+def _normalize_req_019_rich_candidate_recommendations(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("candidate_recommendations must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    seen_action_ids: set[str] = set()
+    for index, item in enumerate(raw_value):
+        row = _require_mapping(item, field_name=f"candidate_recommendations[{index}]")
+        action_id = _require_nonempty_text(row.get("action_id"), field_name=f"candidate_recommendations[{index}].action_id")
+        if action_id in seen_action_ids:
+            raise ValueError(f"candidate_recommendations[{index}].action_id must be unique")
+        seen_action_ids.add(action_id)
+        resource_intensity = _require_nonempty_text(
+            row.get("resource_intensity") if row.get("resource_intensity") is not None else "medium",
+            field_name=f"candidate_recommendations[{index}].resource_intensity",
+        ).lower()
+        if resource_intensity not in {"low", "medium", "high"}:
+            raise ValueError(
+                f"candidate_recommendations[{index}].resource_intensity must be one of: low, medium, high"
+            )
+        normalized.append(
+            {
+                "action_id": action_id,
+                "summary": _require_nonempty_text(
+                    row.get("summary"),
+                    field_name=f"candidate_recommendations[{index}].summary",
+                ),
+                "rationale": _require_nonempty_text(
+                    row.get("rationale"),
+                    field_name=f"candidate_recommendations[{index}].rationale",
+                ),
+                "action_scope": _normalize_action_scope(
+                    row.get("action_scope"),
+                    field_name=f"candidate_recommendations[{index}].action_scope",
+                ),
+                "requires_earth_evidence": bool(row.get("requires_earth_evidence", False)),
+                "project_id": _normalize_context_note(
+                    row.get("project_id"),
+                    field_name=f"candidate_recommendations[{index}].project_id",
+                ),
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"candidate_recommendations[{index}].evidence_refs",
+                ),
+                "next_step": _require_nonempty_text(
+                    row.get("next_step"),
+                    field_name=f"candidate_recommendations[{index}].next_step",
+                ),
+                "resource_intensity": resource_intensity,
+                "estimated_tokens": _require_positive_int(
+                    row.get("estimated_tokens"),
+                    field_name=f"candidate_recommendations[{index}].estimated_tokens",
+                ),
+            }
+        )
+
+    normalized.sort(key=lambda row: row["action_id"])
+    return normalized
+
+
+def _convert_req_019_rich_candidates_to_execution_candidates(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    priority_by_intensity = {"low": "medium", "medium": "medium", "high": "high"}
+    model_tier_by_intensity = {"low": "fast", "medium": "balanced", "high": "heavy"}
+    converted: list[dict[str, Any]] = []
+    for row in candidates:
+        converted.append(
+            {
+                "action_id": row["action_id"],
+                "summary": row["summary"],
+                "priority": priority_by_intensity[row["resource_intensity"]],
+                "complexity": row["resource_intensity"],
+                "estimated_token_cost": row["estimated_tokens"],
+                "requires_gpu": False,
+                "preferred_model_tier": model_tier_by_intensity[row["resource_intensity"]],
+                "evidence_refs": list(row["evidence_refs"]),
+                "next_step": row["next_step"],
+            }
+        )
+    converted.sort(key=lambda row: row["action_id"])
+    return converted
+
+
+def _convert_req_019_rich_resource_context_to_compat(
+    resource_context: dict[str, Any],
+) -> dict[str, Any]:
+    primary_profile = resource_context["hardware_profiles"][0]
+    primary_window = resource_context["rate_limit_windows"][0]
+    model_inventory: list[dict[str, Any]] = []
+    tier_map = {"light": "fast", "balanced": "balanced", "high": "heavy"}
+    output_tokens_by_tier = {"fast": 8000, "balanced": 16000, "heavy": 32000}
+    for row in resource_context["model_catalog"]:
+        routing_tier = tier_map[row["reasoning_tier"]]
+        model_inventory.append(
+            {
+                "model_id": row["model_id"],
+                "routing_tier": routing_tier,
+                "max_output_tokens": output_tokens_by_tier[routing_tier],
+                "requests_per_minute_cap": primary_window["requests_per_minute"],
+                "evidence_refs": [],
+            }
+        )
+
+    return {
+        "hardware_profile": {
+            "cpu_cores": primary_profile["cpu_cores"],
+            "memory_gb": primary_profile["memory_gb"],
+            "gpu_count": primary_profile["gpu_count"],
+            "storage_tier": "standard",
+            "evidence_refs": [],
+        },
+        "rate_limits": {
+            "max_parallel_tasks": resource_context["runtime_budget"]["max_parallel_actions"],
+            "tokens_per_minute": primary_window["tokens_per_minute"],
+            "requests_per_minute": primary_window["requests_per_minute"],
+            "daily_token_budget": resource_context["runtime_budget"]["max_daily_tokens"],
+            "evidence_refs": [],
+        },
+        "runtime_budget": {
+            "max_execution_minutes": 1,
+            "checkpoint_interval_minutes": 1,
+            "evidence_refs": [],
+        },
+        "model_inventory": model_inventory,
+    }
+
+
+def _build_req_019_context_bundle(
+    *,
+    execution_resource_context: dict[str, Any],
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    candidate_recommendations: list[dict[str, Any]],
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+) -> dict[str, str]:
+    bundle = {
+        "execution_resource_context": execution_resource_context,
+        "target_project_evidence_refs": target_project_evidence_refs,
+        "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+        "cross_project_context": cross_project_context,
+        "candidate_recommendations": candidate_recommendations,
+        "earth_sweep_source_artifacts": earth_sweep_source_artifacts,
+        "required_context_documents": required_context_documents,
+    }
+    canonical_json = json.dumps(bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return {
+        "canonical_json": canonical_json,
+        "sha256": hashlib.sha256(canonical_json.encode("utf-8")).hexdigest(),
+    }
+
+
+def _build_req_019_rich_output(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    execution_resource_context: Mapping[str, Any],
+    target_project_evidence_refs: list[str] | None = None,
+    candidate_recommendations: list[Mapping[str, Any]] | None = None,
+    earth_sweep_evidence_refs: list[str] | None = None,
+    cross_project_context: list[Mapping[str, Any]] | None = None,
+    earth_sweep_source_artifacts: list[Mapping[str, Any]] | None = None,
+    required_context_documents: list[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_nonempty_text(revision_identity, field_name="revision_identity")
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_candidate_recommendations = _normalize_req_019_rich_candidate_recommendations(candidate_recommendations)
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
+    normalized_earth_source_artifacts = _normalize_earth_sweep_source_artifacts(earth_sweep_source_artifacts)
+    normalized_required_documents = _normalize_required_context_documents(required_context_documents)
+    normalized_rich_resource_context = _normalize_req_019_rich_execution_resource_context(execution_resource_context)
+
+    compat_resource_context = _convert_req_019_rich_resource_context_to_compat(normalized_rich_resource_context)
+    compat_execution_candidates = _convert_req_019_rich_candidates_to_execution_candidates(
+        normalized_candidate_recommendations
+    )
+
+    canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+    )
+    digest = _canonical_input_digest(canonical_input)
+    canonical_processing_input = {
+        "execution_resource_context": normalized_rich_resource_context,
+        "target_project_evidence_refs": normalized_target_refs,
+        "candidate_recommendations": normalized_candidate_recommendations,
+        "earth_sweep_evidence_refs": normalized_earth_refs,
+        "cross_project_context": normalized_cross_project_context,
+        "earth_sweep_source_artifacts": normalized_earth_source_artifacts,
+        "required_context_documents": normalized_required_documents,
+    }
+    processing_digest = _canonical_input_digest(canonical_processing_input)
+
+    processing_behavior = _build_req_019_processing_behavior(
+        execution_resource_context=compat_resource_context,
+        execution_candidates=compat_execution_candidates,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_project_context,
+    )
+
+    extra_open_risks: list[dict[str, Any]] = []
+    resource_policy_reason_codes: set[str] = set()
+    for source_artifact in normalized_earth_source_artifacts:
+        if source_artifact["status"] != "stale":
+            continue
+        resource_policy_reason_codes.add("stale_earth_sweep_source_artifact_detected")
+        extra_open_risks.append(
+            {
+                "risk_id": f"risk-earth-source-{_stable_id_fragment(source_artifact['artifact_ref'])}",
+                "reason_code": "stale_earth_sweep_source_artifact",
+                "summary": f"Earth sweep source artifact is stale: {source_artifact['artifact_ref']}",
+                "required_evidence_refs": _collect_unique_refs(
+                    [source_artifact["artifact_ref"]],
+                    source_artifact["evidence_refs"],
+                ),
+            }
+        )
+    for required_doc in normalized_required_documents:
+        if required_doc["status"] != "missing":
+            continue
+        resource_policy_reason_codes.add("required_context_document_missing")
+        reason_code = {
+            "mission": "missing_mission_doc",
+            "scope": "missing_scope_doc",
+            "peer-project": "missing_peer_project_doc",
+        }[required_doc["doc_kind"]]
+        summary = (
+            f"Required peer-project document is missing for '{required_doc['project_id']}': {required_doc['doc_ref']}"
+            if required_doc["doc_kind"] == "peer-project"
+            else f"Required {required_doc['doc_kind']} document is missing: {required_doc['doc_ref']}"
+        )
+        extra_open_risks.append(
+            {
+                "risk_id": f"risk-context-doc-{_stable_id_fragment(required_doc['doc_kind'], required_doc['project_id'], required_doc['doc_ref'])}",
+                "reason_code": reason_code,
+                "summary": summary,
+                "required_evidence_refs": _collect_unique_refs([required_doc["doc_ref"]], required_doc["evidence_refs"]),
+            }
+        )
+
+    merged_open_risks = {
+        row["risk_id"]: row
+        for row in list(processing_behavior["recommendation"]["open_risks"]) + extra_open_risks
+    }
+    processing_behavior["recommendation"]["open_risks"] = sorted(
+        merged_open_risks.values(),
+        key=lambda row: row["risk_id"],
+    )
+    evidence_refs = _collect_unique_refs(
+        processing_behavior["recommendation"]["evidence_refs"],
+        normalized_target_refs,
+        *[_collect_unique_refs([row["artifact_ref"]], row["evidence_refs"]) for row in normalized_earth_source_artifacts],
+        *[_collect_unique_refs([row["doc_ref"]], row["evidence_refs"]) for row in normalized_required_documents],
+        *[row["required_evidence_refs"] for row in processing_behavior["recommendation"]["open_risks"]],
+    )
+    routed_action_ids = set(processing_behavior["context_usage"]["routed_action_ids_used"])
+    decision = _req_019_recommendation_decision(
+        execution_candidates=compat_execution_candidates,
+        routed_action_ids=routed_action_ids,
+        open_risks=processing_behavior["recommendation"]["open_risks"],
+    )
+    processing_behavior["recommendation"]["decision"] = decision
+    processing_behavior["recommendation"]["rationale"] = _req_019_recommendation_rationale(decision=decision)
+    processing_behavior["recommendation"]["confidence"] = _recommendation_confidence(
+        evidence_refs=evidence_refs,
+        open_risks=processing_behavior["recommendation"]["open_risks"],
+    )
+    processing_behavior["recommendation"]["evidence_refs"] = evidence_refs
+    processing_behavior["context_usage"]["evidence_refs_used"] = evidence_refs
+
+    context_bundle = _build_req_019_context_bundle(
+        execution_resource_context=normalized_rich_resource_context,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_project_context,
+        candidate_recommendations=normalized_candidate_recommendations,
+        earth_sweep_source_artifacts=normalized_earth_source_artifacts,
+        required_context_documents=normalized_required_documents,
+    )
+
+    return {
+        "schema_version": REQ_019_SCHEMA_VERSION,
+        "requirement_id": REQ_019_REQUIREMENT_ID,
+        "execution_resource_context_ingestion": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+            "resource_context": compat_resource_context,
+        },
+        "processing_behavior": processing_behavior,
+        "resource_policy": {
+            "sequencing_policy_suggestions": {
+                "reason_codes": sorted(resource_policy_reason_codes),
+            }
+        },
+        "context_bundle": context_bundle,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": digest,
+            "reproducible_call_id": f"req019-{digest[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_digest,
+            "processing_call_id": f"req019-processing-{processing_digest[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+        },
+    }
+
+
+def _validate_req_019_rich_output(payload: Mapping[str, Any]) -> list[str]:
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        return ["call_metadata must be an object"]
+    canonical_input = metadata.get("canonical_input")
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_input, Mapping):
+        return ["call_metadata.canonical_input must be an object"]
+    if not isinstance(canonical_processing_input, Mapping):
+        return ["call_metadata.canonical_processing_input must be an object"]
+
+    try:
+        rebuilt = _build_req_019_rich_output(
+            target_project_root=canonical_input.get("target_project_root"),
+            earth_root=canonical_input.get("earth_root"),
+            output_root=canonical_input.get("output_root"),
+            revision_identity=canonical_input.get("revision_identity"),
+            execution_resource_context=canonical_processing_input.get("execution_resource_context"),
+            target_project_evidence_refs=canonical_processing_input.get("target_project_evidence_refs"),
+            candidate_recommendations=canonical_processing_input.get("candidate_recommendations"),
+            earth_sweep_evidence_refs=canonical_processing_input.get("earth_sweep_evidence_refs"),
+            cross_project_context=canonical_processing_input.get("cross_project_context"),
+            earth_sweep_source_artifacts=canonical_processing_input.get("earth_sweep_source_artifacts"),
+            required_context_documents=canonical_processing_input.get("required_context_documents"),
+        )
+    except ValueError as exc:
+        return [str(exc)]
+
+    if dict(payload) != rebuilt:
+        return ["payload must mirror deterministic REQ-019 execution resource context output"]
+    return []
+
+
 def build_req_019_execution_resource_context_ingestion(
     *,
     target_project_root: str,
@@ -3720,9 +4212,34 @@ def build_req_019_execution_resource_context_ingestion(
     revision_identity: str,
     execution_resource_context: Mapping[str, Any],
     execution_candidates: list[Mapping[str, Any]] | None = None,
+    target_project_evidence_refs: list[str] | None = None,
+    candidate_recommendations: list[Mapping[str, Any]] | None = None,
     earth_sweep_evidence_refs: list[str] | None = None,
     cross_project_context: list[Mapping[str, Any]] | None = None,
+    earth_sweep_source_artifacts: list[Mapping[str, Any]] | None = None,
+    required_context_documents: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    if (
+        target_project_evidence_refs is not None
+        or candidate_recommendations is not None
+        or earth_sweep_source_artifacts is not None
+        or required_context_documents is not None
+        or _is_req_019_rich_execution_resource_context(execution_resource_context)
+    ):
+        return _build_req_019_rich_output(
+            target_project_root=target_project_root,
+            earth_root=earth_root,
+            output_root=output_root,
+            revision_identity=revision_identity,
+            execution_resource_context=execution_resource_context,
+            target_project_evidence_refs=target_project_evidence_refs,
+            candidate_recommendations=candidate_recommendations,
+            earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+            cross_project_context=cross_project_context,
+            earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+            required_context_documents=required_context_documents,
+        )
+
     normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
     normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
     normalized_output_root = _normalize_root(output_root, field_name="output_root")
@@ -3782,6 +4299,9 @@ def build_req_019_execution_resource_context_ingestion(
 
 
 def validate_req_019_execution_resource_context_ingestion(payload: Mapping[str, Any]) -> list[str]:
+    if isinstance(payload, Mapping) and any(key in payload for key in ("resource_policy", "context_bundle")):
+        return _validate_req_019_rich_output(payload)
+
     errors: list[str] = []
     if not isinstance(payload, Mapping):
         return ["payload must be a JSON object"]
@@ -5541,6 +6061,10 @@ def validate_req_020_risk_signal_normalization(payload: Mapping[str, Any]) -> li
     return errors
 
 
+build_req_020_risk_signal_normalization = _req020.build_req_020_risk_signal_normalization
+validate_req_020_risk_signal_normalization = _req020.validate_req_020_risk_signal_normalization
+
+
 def _normalize_req_024_timestamp(raw_value: Any, *, field_name: str) -> str:
     if raw_value is None:
         return REQ_024_FALLBACK_BUNDLE_GENERATED_AT_UTC
@@ -6111,6 +6635,8 @@ validate_req_008_research_packet_ingestion_and_normalization = (
 serialize_req_015_integration_opportunity_bundle = _worker_w08.serialize_req_015_integration_opportunity_bundle
 build_req_015_integration_opportunity_detection = _worker_w08.build_req_015_integration_opportunity_detection
 validate_req_015_integration_opportunity_detection = _worker_w08.validate_req_015_integration_opportunity_detection
+detect_overlap_and_conflicts = _worker_w07.detect_overlap_and_conflicts
+serialize_overlap_and_conflict_context_bundle = _worker_w07.serialize_overlap_and_conflict_context_bundle
 serialize_req_017_overlap_and_conflict_bundle = _worker_w08.serialize_req_017_overlap_and_conflict_bundle
 build_req_017_overlap_and_conflict_detection = _worker_w08.build_req_017_overlap_and_conflict_detection
 validate_req_017_overlap_and_conflict_detection = _worker_w08.validate_req_017_overlap_and_conflict_detection
@@ -6120,6 +6646,754 @@ ALLOWED_RISK_LEVELS = _worker_w08.ALLOWED_RISK_LEVELS
 REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT = _worker_w08.REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT
 REASON_CODE_CONTEXT_DOC_MISSING = _worker_w08.REASON_CODE_CONTEXT_DOC_MISSING
 REASON_CODE_PEER_PROJECT_DOC_MISSING = _worker_w08.REASON_CODE_PEER_PROJECT_DOC_MISSING
+
+REQ_018_ANALYSIS_TYPE = "strategic_debt_signal_extraction"
+REQ_018_REQUIREMENT_ID = "REQ-018"
+REQ_018_SCHEMA_VERSION = "req-018.strategic-debt-signal-extraction.v1"
+REQ_018_ANALYSIS_ANCHORS = [
+    "future_velocity_degradation",
+    "recurrence",
+    "likely_blast_radius",
+]
+REQ_018_DEFAULT_THRESHOLDS = {
+    "min_recurrence_count": 3,
+    "min_likely_blast_radius": 2,
+}
+REQ_018_DEFAULT_MAX_SIGNALS = 5
+
+
+def _normalize_req_018_nonnegative_int(raw_value: Any, *, field_name: str) -> int:
+    if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    if raw_value < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    return raw_value
+
+
+def _normalize_req_018_positive_int(raw_value: Any, *, field_name: str) -> int:
+    if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+        raise ValueError(f"{field_name} must be a positive integer")
+    if raw_value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return raw_value
+
+
+def _normalize_req_018_thresholds(raw_value: Any) -> dict[str, int]:
+    thresholds = dict(REQ_018_DEFAULT_THRESHOLDS)
+    if raw_value is None:
+        return thresholds
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("thresholds must be an object when provided")
+    if "min_recurrence_count" in raw_value:
+        thresholds["min_recurrence_count"] = _normalize_req_018_nonnegative_int(
+            raw_value.get("min_recurrence_count"),
+            field_name="thresholds.min_recurrence_count",
+        )
+    if "min_likely_blast_radius" in raw_value:
+        thresholds["min_likely_blast_radius"] = _normalize_req_018_nonnegative_int(
+            raw_value.get("min_likely_blast_radius"),
+            field_name="thresholds.min_likely_blast_radius",
+        )
+    return thresholds
+
+
+def _normalize_req_018_debt_observations(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("debt_observations must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    seen_debt_ids: set[str] = set()
+    for index, row in enumerate(raw_value):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"debt_observations[{index}] must be an object")
+        debt_id = _require_nonempty_text(
+            row.get("debt_id"),
+            field_name=f"debt_observations[{index}].debt_id",
+        )
+        if debt_id in seen_debt_ids:
+            raise ValueError(f"debt_observations[{index}].debt_id must be unique")
+        seen_debt_ids.add(debt_id)
+        summary = _require_nonempty_text(
+            row.get("summary"),
+            field_name=f"debt_observations[{index}].summary",
+        )
+        category = _normalize_context_note(
+            row.get("category"),
+            field_name=f"debt_observations[{index}].category",
+        ) or "unspecified"
+        recurrence_count = _normalize_req_018_nonnegative_int(
+            row.get("recurrence_count"),
+            field_name=f"debt_observations[{index}].recurrence_count",
+        )
+        likely_blast_radius = _normalize_req_018_nonnegative_int(
+            row.get("likely_blast_radius"),
+            field_name=f"debt_observations[{index}].likely_blast_radius",
+        )
+        evidence_refs = _normalize_string_list(
+            row.get("evidence_refs"),
+            field_name=f"debt_observations[{index}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "debt_id": debt_id,
+                "summary": summary,
+                "category": category,
+                "recurrence_count": recurrence_count,
+                "likely_blast_radius": likely_blast_radius,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(key=lambda row: row["debt_id"])
+    return normalized
+
+
+def _req_018_blast_radius_tier(likely_blast_radius: int) -> str:
+    if likely_blast_radius >= 5:
+        return "ecosystem-wide"
+    if likely_blast_radius >= 3:
+        return "cross-project"
+    if likely_blast_radius >= 1:
+        return "project-scoped"
+    return "contained"
+
+
+def _normalize_req_018_unresolved_ideas(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError("broad_sweep_context.unresolved_ideas must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, row in enumerate(raw_value):
+        if isinstance(row, str):
+            summary = _require_nonempty_text(
+                row,
+                field_name=f"broad_sweep_context.unresolved_ideas[{index}]",
+            )
+            evidence_refs: list[str] = []
+        elif isinstance(row, Mapping):
+            summary = _require_nonempty_text(
+                row.get("summary"),
+                field_name=f"broad_sweep_context.unresolved_ideas[{index}].summary",
+            )
+            evidence_refs = _normalize_string_list(
+                row.get("evidence_refs"),
+                field_name=f"broad_sweep_context.unresolved_ideas[{index}].evidence_refs",
+            )
+        else:
+            raise ValueError(
+                f"broad_sweep_context.unresolved_ideas[{index}] must be a string or object"
+            )
+        normalized.append(
+            {
+                "summary": summary,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    normalized.sort(key=lambda row: (row["summary"], tuple(row["evidence_refs"])))
+    return normalized
+
+
+def _normalize_req_018_broad_sweep_context(
+    raw_value: Any,
+    *,
+    active_project_id: str,
+) -> dict[str, Any]:
+    if raw_value is None:
+        projects_considered = [active_project_id]
+        evidence_refs_by_project = {active_project_id: []}
+        cross_project = False
+        unresolved_ideas: list[dict[str, Any]] = []
+    else:
+        if not isinstance(raw_value, Mapping):
+            raise ValueError("broad_sweep_context must be an object")
+
+        raw_evidence_refs = raw_value.get("evidence_refs_by_project")
+        if raw_evidence_refs is None:
+            raw_evidence_refs = {}
+        if not isinstance(raw_evidence_refs, Mapping):
+            raise ValueError("broad_sweep_context.evidence_refs_by_project must be an object")
+
+        evidence_refs_by_project: dict[str, list[str]] = {}
+        for raw_project_id, raw_refs in raw_evidence_refs.items():
+            project_id = _require_nonempty_text(
+                raw_project_id,
+                field_name="broad_sweep_context.evidence_refs_by_project project_id",
+            )
+            evidence_refs_by_project[project_id] = _normalize_string_list(
+                raw_refs,
+                field_name=f"broad_sweep_context.evidence_refs_by_project.{project_id}",
+            )
+
+        raw_projects_considered = raw_value.get("projects_considered")
+        if raw_projects_considered is None:
+            projects_considered = sorted(evidence_refs_by_project)
+        else:
+            projects_considered = _normalize_string_list(
+                raw_projects_considered,
+                field_name="broad_sweep_context.projects_considered",
+            )
+        if active_project_id not in projects_considered:
+            projects_considered = _collect_unique_refs(projects_considered, [active_project_id])
+        if not projects_considered:
+            projects_considered = [active_project_id]
+        for project_id in projects_considered:
+            evidence_refs_by_project.setdefault(project_id, [])
+
+        raw_cross_project = raw_value.get("cross_project")
+        if raw_cross_project is None:
+            cross_project = len(projects_considered) > 1
+        elif isinstance(raw_cross_project, bool):
+            cross_project = raw_cross_project
+        else:
+            raise ValueError("broad_sweep_context.cross_project must be a boolean when provided")
+
+        unresolved_ideas = _normalize_req_018_unresolved_ideas(
+            raw_value.get("unresolved_ideas")
+        )
+
+    projects_with_evidence_refs = [
+        project_id for project_id in projects_considered if evidence_refs_by_project.get(project_id)
+    ]
+    projects_without_evidence_refs = [
+        project_id for project_id in projects_considered if not evidence_refs_by_project.get(project_id)
+    ]
+    earth_sweep_evidence_refs = _collect_unique_refs(
+        *[evidence_refs_by_project.get(project_id, []) for project_id in projects_considered]
+    )
+
+    out: dict[str, Any] = {
+        "cross_project": cross_project,
+        "projects_considered": projects_considered,
+        "projects_with_evidence_refs": projects_with_evidence_refs,
+        "projects_without_evidence_refs": projects_without_evidence_refs,
+        "evidence_refs_by_project": evidence_refs_by_project,
+        "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+        "unresolved_ideas": unresolved_ideas,
+    }
+    if isinstance(raw_value, Mapping):
+        earth_sweep_source_artifacts = _normalize_earth_sweep_source_artifacts(
+            raw_value.get("earth_sweep_source_artifacts")
+        )
+        if earth_sweep_source_artifacts:
+            out["earth_sweep_source_artifacts"] = earth_sweep_source_artifacts
+
+        required_context_documents = _normalize_required_context_documents(
+            raw_value.get("required_context_documents")
+        )
+        if required_context_documents:
+            out["required_context_documents"] = required_context_documents
+
+    return out
+
+
+def serialize_req_018_context_bundle(payload: Mapping[str, Any]) -> str:
+    """Serialize a replay-stable context bundle for REQ-018 diagnostics."""
+    if not isinstance(payload, Mapping):
+        raise ValueError("payload must be an object")
+    active_project_id = _require_nonempty_text(
+        payload.get("active_project_id"),
+        field_name="active_project_id",
+    )
+    thresholds = _normalize_req_018_thresholds(payload.get("thresholds"))
+    max_signals = (
+        _normalize_req_018_positive_int(
+            payload.get("max_signals"),
+            field_name="max_signals",
+        )
+        if payload.get("max_signals") is not None
+        else REQ_018_DEFAULT_MAX_SIGNALS
+    )
+    debt_observations = _normalize_req_018_debt_observations(payload.get("debt_observations"))
+    broad_sweep_context = _normalize_req_018_broad_sweep_context(
+        payload.get("broad_sweep_context"),
+        active_project_id=active_project_id,
+    )
+
+    bundle = {
+        "requirement_id": REQ_018_REQUIREMENT_ID,
+        "schema_version": REQ_018_SCHEMA_VERSION,
+        "analysis_type": REQ_018_ANALYSIS_TYPE,
+        "active_project_id": active_project_id,
+        "thresholds": thresholds,
+        "max_signals": max_signals,
+        "broad_sweep_context": broad_sweep_context,
+        "debt_observations": debt_observations,
+    }
+    return json.dumps(bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _req_018_collect_context_gap_open_risks(
+    broad_sweep_context: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+
+    earth_sweep_source_artifacts = broad_sweep_context.get("earth_sweep_source_artifacts")
+    if isinstance(earth_sweep_source_artifacts, list):
+        for row in earth_sweep_source_artifacts:
+            if not isinstance(row, Mapping):
+                continue
+            if row.get("status") != "stale":
+                continue
+            artifact_ref = str(row.get("artifact_ref", "")).strip()
+            evidence_refs = (
+                row.get("evidence_refs")
+                if isinstance(row.get("evidence_refs"), list)
+                else []
+            )
+            out.append(
+                {
+                    "risk_id": f"RISK-CTX-{_stable_id_fragment('earth-sweep-source', artifact_ref)}",
+                    "summary": f"Earth sweep source artifact is stale: {artifact_ref}",
+                    "reason_code": _worker_w08.REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT,
+                    "artifact_ref": artifact_ref,
+                    "evidence_refs": _collect_unique_refs([artifact_ref], list(evidence_refs)),
+                }
+            )
+
+    required_context_documents = broad_sweep_context.get("required_context_documents")
+    if isinstance(required_context_documents, list):
+        for row in required_context_documents:
+            if not isinstance(row, Mapping):
+                continue
+            if row.get("status") != "missing":
+                continue
+            doc_kind = str(row.get("doc_kind", "")).strip()
+            doc_ref = str(row.get("doc_ref", "")).strip()
+            project_id = str(row.get("project_id", "")).strip()
+            evidence_refs = (
+                row.get("evidence_refs")
+                if isinstance(row.get("evidence_refs"), list)
+                else []
+            )
+
+            reason_code = (
+                _worker_w08.REASON_CODE_PEER_PROJECT_DOC_MISSING
+                if doc_kind == "peer-project"
+                else _worker_w08.REASON_CODE_CONTEXT_DOC_MISSING
+            )
+            summary = (
+                f"Required peer-project document is missing for '{project_id}': {doc_ref}"
+                if doc_kind == "peer-project"
+                else f"Required {doc_kind} document is missing: {doc_ref}"
+            )
+            risk_row = {
+                "risk_id": (
+                    f"RISK-CTX-{_stable_id_fragment('context-doc', doc_kind, project_id, doc_ref)}"
+                ),
+                "summary": summary,
+                "reason_code": reason_code,
+                "doc_kind": doc_kind,
+                "doc_ref": doc_ref,
+                "evidence_refs": _collect_unique_refs([doc_ref], list(evidence_refs)),
+            }
+            if project_id:
+                risk_row["project_id"] = project_id
+            out.append(risk_row)
+
+    out.sort(key=lambda row: row["risk_id"])
+    return out
+
+
+def extract_strategic_debt_signals(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise ValueError("strategic debt input payload must be an object")
+
+    active_project_id = _require_nonempty_text(
+        payload.get("active_project_id"),
+        field_name="active_project_id",
+    )
+    evaluated_at = (
+        _normalize_context_note(payload.get("evaluated_at"), field_name="evaluated_at")
+        or _worker_w08.utc_now_iso()
+    )
+    thresholds = _normalize_req_018_thresholds(payload.get("thresholds"))
+    max_signals = (
+        _normalize_req_018_positive_int(
+            payload.get("max_signals"),
+            field_name="max_signals",
+        )
+        if payload.get("max_signals") is not None
+        else REQ_018_DEFAULT_MAX_SIGNALS
+    )
+    debt_observations = _normalize_req_018_debt_observations(payload.get("debt_observations"))
+    if not debt_observations:
+        raise ValueError("debt_observations must contain at least one item")
+    broad_sweep_context = _normalize_req_018_broad_sweep_context(
+        payload.get("broad_sweep_context"),
+        active_project_id=active_project_id,
+    )
+
+    eligible_candidates: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+
+    for row in debt_observations:
+        failed_criteria: list[str] = []
+        if row["recurrence_count"] < thresholds["min_recurrence_count"]:
+            failed_criteria.append("recurrence_below_threshold")
+        if row["likely_blast_radius"] < thresholds["min_likely_blast_radius"]:
+            failed_criteria.append("blast_radius_below_threshold")
+
+        if failed_criteria:
+            excluded.append(
+                {
+                    "debt_id": row["debt_id"],
+                    "summary": row["summary"],
+                    "category": row["category"],
+                    "recurrence_count": row["recurrence_count"],
+                    "likely_blast_radius": row["likely_blast_radius"],
+                    "failed_criteria": failed_criteria,
+                    "reason_code": (
+                        "multiple_threshold_failures"
+                        if len(failed_criteria) > 1
+                        else failed_criteria[0]
+                    ),
+                }
+            )
+            continue
+
+        eligible_candidates.append(
+            {
+                "debt_id": row["debt_id"],
+                "summary": row["summary"],
+                "category": row["category"],
+                "recurrence_count": row["recurrence_count"],
+                "likely_blast_radius": row["likely_blast_radius"],
+                "blast_radius_tier": _req_018_blast_radius_tier(
+                    row["likely_blast_radius"]
+                ),
+                "priority_score": float(
+                    row["recurrence_count"] * row["likely_blast_radius"]
+                ),
+                "reason_code": "eligible_strategic_debt_signal",
+                "_upstream_evidence_refs": list(row["evidence_refs"]),
+            }
+        )
+
+    eligible_candidates.sort(
+        key=lambda row: (
+            -row["priority_score"],
+            -row["recurrence_count"],
+            -row["likely_blast_radius"],
+            row["debt_id"],
+        )
+    )
+
+    selected_candidates = eligible_candidates[:max_signals]
+    for row in eligible_candidates[max_signals:]:
+        excluded.append(
+            {
+                "debt_id": row["debt_id"],
+                "summary": row["summary"],
+                "category": row["category"],
+                "recurrence_count": row["recurrence_count"],
+                "likely_blast_radius": row["likely_blast_radius"],
+                "failed_criteria": ["max_signals_cap_reached"],
+                "reason_code": "max_signals_cap_reached",
+            }
+        )
+
+    excluded.sort(key=lambda row: row["debt_id"])
+
+    strategic_debt_signals: list[dict[str, Any]] = []
+    evidence_references: list[dict[str, Any]] = []
+    citation_counter = 0
+    for index, row in enumerate(selected_candidates):
+        signal_id = f"DEBT-SIGNAL-{index + 1:04d}"
+        citation_ids: list[str] = []
+        for upstream_ref in row["_upstream_evidence_refs"]:
+            citation_counter += 1
+            citation_id = f"EVD-{citation_counter:04d}"
+            citation_ids.append(citation_id)
+            evidence_references.append(
+                {
+                    "citation_id": citation_id,
+                    "signal_id": signal_id,
+                    "debt_id": row["debt_id"],
+                    "upstream_evidence_ref": upstream_ref,
+                    "reason_code": "strategic_debt_supporting_evidence",
+                }
+            )
+
+        strategic_debt_signals.append(
+            {
+                "signal_id": signal_id,
+                "debt_id": row["debt_id"],
+                "summary": row["summary"],
+                "category": row["category"],
+                "recurrence_count": row["recurrence_count"],
+                "likely_blast_radius": row["likely_blast_radius"],
+                "blast_radius_tier": row["blast_radius_tier"],
+                "priority_score": row["priority_score"],
+                "evidence_refs": citation_ids,
+                "reason_code": row["reason_code"],
+            }
+        )
+
+    decision = (
+        "mitigate_strategic_debt_signals"
+        if strategic_debt_signals
+        else "no_strategic_debt_signals_detected"
+    )
+    signal_evidence_refs = [row["citation_id"] for row in evidence_references]
+    cross_project_validation_required = any(
+        row["blast_radius_tier"] in {"cross-project", "ecosystem-wide"}
+        for row in strategic_debt_signals
+    )
+    cross_project_evidence_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
+
+    obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    if cross_project_validation_required:
+        if broad_sweep_context["cross_project"] and cross_project_evidence_refs:
+            obligations.append(
+                {
+                    "obligation_id": "OBL-DEBT-0001",
+                    "summary": (
+                        "Use Earth-sweep evidence to scope cross-project mitigation for "
+                        "prioritized strategic debt signals."
+                    ),
+                    "evidence_refs": cross_project_evidence_refs,
+                }
+            )
+        elif broad_sweep_context["cross_project"]:
+            open_risks.append(
+                {
+                    "risk_id": "RISK-DEBT-0001",
+                    "summary": (
+                        "Cross-project strategic debt mitigation is unresolved because "
+                        "Earth-sweep evidence refs are missing."
+                    ),
+                    "reason_code": _worker_w08.REASON_CODE_EARTH_SWEEP_EVIDENCE_MISSING,
+                    "evidence_refs": [],
+                }
+            )
+        else:
+            open_risks.append(
+                {
+                    "risk_id": "RISK-DEBT-0001",
+                    "summary": (
+                        "Cross-project debt blast-radius validation is unresolved because "
+                        "fewer than two projects were provided."
+                    ),
+                    "reason_code": "cross_project_context_insufficient",
+                    "evidence_refs": [],
+                }
+            )
+
+        missing_projects = list(broad_sweep_context["projects_without_evidence_refs"])
+        if broad_sweep_context["cross_project"] and missing_projects:
+            open_risks.append(
+                {
+                    "risk_id": "RISK-DEBT-0002",
+                    "summary": (
+                        "Earth-sweep evidence refs are missing for cross-project context rows: "
+                        + ", ".join(missing_projects)
+                    ),
+                    "reason_code": _worker_w08.REASON_CODE_EARTH_SWEEP_EVIDENCE_MISSING,
+                    "evidence_refs": [],
+                }
+            )
+
+    next_risk_index = len(open_risks) + 1
+    for offset, unresolved_idea in enumerate(
+        broad_sweep_context["unresolved_ideas"],
+        start=next_risk_index,
+    ):
+        open_risks.append(
+            {
+                "risk_id": f"RISK-DEBT-{offset:04d}",
+                "summary": unresolved_idea["summary"],
+                "reason_code": "unresolved_cross_project_idea",
+                "evidence_refs": list(unresolved_idea["evidence_refs"]),
+            }
+        )
+
+    open_risks.extend(_req_018_collect_context_gap_open_risks(broad_sweep_context))
+
+    recommendation_evidence_refs = _collect_unique_refs(
+        signal_evidence_refs,
+        cross_project_evidence_refs,
+        *[list(row["evidence_refs"]) for row in open_risks],
+    )
+    top_signal_id = strategic_debt_signals[0]["signal_id"] if strategic_debt_signals else ""
+
+    return {
+        "ok": True,
+        "requirement_id": REQ_018_REQUIREMENT_ID,
+        "schema_version": REQ_018_SCHEMA_VERSION,
+        "analysis_type": REQ_018_ANALYSIS_TYPE,
+        "evaluated_at": evaluated_at,
+        "analysis_anchors": list(REQ_018_ANALYSIS_ANCHORS),
+        "active_project_id": active_project_id,
+        "thresholds": dict(thresholds),
+        "max_signals": max_signals,
+        "strategic_debt_signals": strategic_debt_signals,
+        "excluded_debt_observations": excluded,
+        "evidence_references": evidence_references,
+        "recommendation": {
+            "decision": decision,
+            "rationale": (
+                "Strategic debt extraction evaluated "
+                f"{len(debt_observations)} observation(s), selected {len(strategic_debt_signals)} signal(s), "
+                f"and excluded {len(excluded)} observation(s)."
+            ),
+            "top_signal_id": top_signal_id,
+            "evidence_refs": recommendation_evidence_refs,
+            "cross_project_context": broad_sweep_context,
+            "obligations": obligations,
+            "open_risks": open_risks,
+        },
+        "totals": {
+            "debt_observations": len(debt_observations),
+            "eligible": len(eligible_candidates),
+            "signals": len(strategic_debt_signals),
+            "excluded": len(excluded),
+            "evidence_references": len(evidence_references),
+        },
+    }
+
+
+def validate_req_018_strategic_debt_signal_extraction(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be an object"]
+
+    required_top = {
+        "ok",
+        "requirement_id",
+        "schema_version",
+        "analysis_type",
+        "evaluated_at",
+        "analysis_anchors",
+        "active_project_id",
+        "thresholds",
+        "max_signals",
+        "strategic_debt_signals",
+        "excluded_debt_observations",
+        "evidence_references",
+        "recommendation",
+        "totals",
+    }
+    missing_top = sorted(required_top - set(payload.keys()))
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+
+    if payload.get("requirement_id") != REQ_018_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_018_REQUIREMENT_ID}")
+    if payload.get("schema_version") != REQ_018_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_018_SCHEMA_VERSION}")
+    if payload.get("analysis_type") != REQ_018_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_018_ANALYSIS_TYPE}")
+
+    strategic_debt_signals = payload.get("strategic_debt_signals")
+    if not isinstance(strategic_debt_signals, list):
+        errors.append("strategic_debt_signals must be a list")
+    else:
+        for index, row in enumerate(strategic_debt_signals):
+            if not isinstance(row, Mapping):
+                errors.append(f"strategic_debt_signals[{index}] must be an object")
+                continue
+            for field_name in (
+                "signal_id",
+                "debt_id",
+                "summary",
+                "category",
+                "recurrence_count",
+                "likely_blast_radius",
+                "blast_radius_tier",
+                "priority_score",
+                "evidence_refs",
+                "reason_code",
+            ):
+                if field_name not in row:
+                    errors.append(
+                        f"strategic_debt_signals[{index}] missing {field_name}"
+                    )
+
+    excluded = payload.get("excluded_debt_observations")
+    if not isinstance(excluded, list):
+        errors.append("excluded_debt_observations must be a list")
+
+    evidence_references = payload.get("evidence_references")
+    if not isinstance(evidence_references, list):
+        errors.append("evidence_references must be a list")
+
+    recommendation = payload.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("recommendation must be an object")
+    else:
+        for field_name in (
+            "decision",
+            "rationale",
+            "top_signal_id",
+            "evidence_refs",
+            "cross_project_context",
+            "obligations",
+            "open_risks",
+        ):
+            if field_name not in recommendation:
+                errors.append(f"recommendation missing {field_name}")
+        cross_project_context = recommendation.get("cross_project_context")
+        if not isinstance(cross_project_context, Mapping):
+            errors.append("recommendation.cross_project_context must be an object")
+        else:
+            for field_name in (
+                "cross_project",
+                "projects_considered",
+                "projects_with_evidence_refs",
+                "projects_without_evidence_refs",
+                "evidence_refs_by_project",
+                "earth_sweep_evidence_refs",
+                "unresolved_ideas",
+            ):
+                if field_name not in cross_project_context:
+                    errors.append(
+                        f"recommendation.cross_project_context missing {field_name}"
+                    )
+        if not isinstance(recommendation.get("obligations"), list):
+            errors.append("recommendation.obligations must be a list")
+        open_risks = recommendation.get("open_risks")
+        if not isinstance(open_risks, list):
+            errors.append("recommendation.open_risks must be a list")
+        else:
+            for index, row in enumerate(open_risks):
+                if not isinstance(row, Mapping):
+                    errors.append(f"recommendation.open_risks[{index}] must be an object")
+                    continue
+                for field_name in ("risk_id", "summary", "reason_code", "evidence_refs"):
+                    if field_name not in row:
+                        errors.append(
+                            f"recommendation.open_risks[{index}] missing {field_name}"
+                        )
+                if "evidence_refs" in row and not isinstance(row.get("evidence_refs"), list):
+                    errors.append(
+                        f"recommendation.open_risks[{index}].evidence_refs must be a list"
+                    )
+                if "reason_code" in row and not isinstance(row.get("reason_code"), str):
+                    errors.append(
+                        f"recommendation.open_risks[{index}].reason_code must be a string"
+                    )
+
+    totals = payload.get("totals")
+    if not isinstance(totals, Mapping):
+        errors.append("totals must be an object")
+    else:
+        for field_name in (
+            "debt_observations",
+            "eligible",
+            "signals",
+            "excluded",
+            "evidence_references",
+        ):
+            if field_name not in totals:
+                errors.append(f"totals missing {field_name}")
+
+    return errors
 
 
 _DATE_PATTERN = re.compile(r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})")
@@ -7223,7 +8497,26 @@ def _looks_like_req020_builder_input(payload: Mapping[str, Any]) -> bool:
     analysis_type = str(payload.get("analysis_type", "")).strip()
     if analysis_type == "risk_signal_normalization":
         return True
-    return "risk_signals" in payload
+    if "risk_signals" in payload or "risk_sources" in payload:
+        return True
+    required = {
+        "normalized_at_utc",
+        "target_project_root",
+        "earth_root",
+        "output_root",
+        "revision_identity",
+    }
+    if not required.issubset(payload.keys()):
+        return False
+    return any(
+        key in payload
+        for key in (
+            "risk_sources",
+            "target_project_evidence_refs",
+            "earth_sweep_evidence_refs",
+            "cross_project_context",
+        )
+    )
 
 
 def _looks_like_req022_builder_input(payload: Mapping[str, Any]) -> bool:
@@ -7260,6 +8553,13 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     analysis_type = str(payload.get("analysis_type", "")).strip()
     if analysis_type == "deficit_and_need_signal_extraction":
         return _worker_w02.run(payload)
+    if analysis_type == "overlap_and_conflict_detection":
+        return detect_overlap_and_conflicts(
+            payload,
+            evaluated_at=payload.get("evaluated_at"),
+        )
+    if analysis_type == REQ_018_ANALYSIS_TYPE:
+        return extract_strategic_debt_signals(payload)
     if analysis_type == "cross_project_dependency_extraction" or _looks_like_req011_builder_input(payload):
         return build_req_011_cross_project_dependency_extraction(
             target_project_root=payload.get("target_project_root"),
@@ -7276,13 +8576,25 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             revision_identity=payload.get("revision_identity"),
             execution_resource_context=payload.get("execution_resource_context"),
             execution_candidates=payload.get("execution_candidates"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            candidate_recommendations=payload.get("candidate_recommendations"),
             earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
             cross_project_context=payload.get("cross_project_context"),
+            earth_sweep_source_artifacts=payload.get("earth_sweep_source_artifacts"),
+            required_context_documents=payload.get("required_context_documents"),
         )
     if analysis_type == "risk_signal_normalization":
         return build_req_020_risk_signal_normalization(
-            risk_signals=list(payload.get("risk_signals", [])),
+            risk_signals=payload.get("risk_signals"),
             normalized_at_utc=payload.get("normalized_at_utc"),
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            cross_project_context=payload.get("cross_project_context"),
+            risk_sources=payload.get("risk_sources"),
         )
     if analysis_type == "context_confidence_scoring" or _looks_like_req022_builder_input(payload):
         return build_req_022_context_confidence_scoring(
@@ -7315,11 +8627,14 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 
     if "deficits" in payload and "target_project" in payload:
         return _worker_w02.run(payload)
+    if "debt_observations" in payload and "active_project_id" in payload:
+        return extract_strategic_debt_signals(payload)
 
     raise ValueError(
-        "unable to route run payload: expected deficit/need extraction, cross-project dependency extraction, "
-        "execution resource context ingestion, risk signal normalization, context confidence scoring, "
-        "strategy context bundle serialization, planning artifact sweep, or runtime telemetry sweep input"
+        "unable to route run payload: expected deficit/need extraction, overlap/conflict detection, "
+        "strategic debt extraction, cross-project dependency extraction, execution resource context ingestion, "
+        "risk signal normalization, context confidence scoring, strategy context bundle serialization, "
+        "planning artifact sweep, or runtime telemetry sweep input"
     )
 
 
@@ -7360,8 +8675,16 @@ def main(argv: list[str] | None = None) -> int:
             output_payload = build_req_019_execution_resource_context_ingestion(**payload)
         elif _looks_like_req020_builder_input(payload):
             output_payload = build_req_020_risk_signal_normalization(
-                risk_signals=list(payload.get("risk_signals", [])),
+                risk_signals=payload.get("risk_signals"),
                 normalized_at_utc=payload.get("normalized_at_utc"),
+                target_project_root=payload.get("target_project_root"),
+                earth_root=payload.get("earth_root"),
+                output_root=payload.get("output_root"),
+                revision_identity=payload.get("revision_identity"),
+                target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+                earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+                cross_project_context=payload.get("cross_project_context"),
+                risk_sources=payload.get("risk_sources"),
             )
         elif _looks_like_req022_builder_input(payload):
             output_payload = build_req_022_context_confidence_scoring(**payload)

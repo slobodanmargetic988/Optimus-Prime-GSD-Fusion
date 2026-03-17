@@ -1,86 +1,110 @@
 {
   "input": {
-    "risk_signals": [
+    "normalized_at_utc": "2026-03-15T10:00:00Z",
+    "target_project_root": "/opt/optimus-prime/project-root",
+    "earth_root": "/opt/optimus-prime/Earth",
+    "output_root": "/opt/optimus-prime/project-root/strategy-out",
+    "revision_identity": "rev-req020-fixture-r1",
+    "target_project_evidence_refs": [
+      "reports/optimus-prime/planning/evidence/TASK-063/TASK_EVIDENCE.json"
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-15/portfolio.json"
+    ],
+    "cross_project_context": [
       {
-        "signal_source": "blocker",
-        "reason_code": "blocking_issue_detected",
-        "summary": "Worker packet blocked by missing dependency contract.",
-        "severity": "high",
-        "occurrence_count": 2,
+        "project_id": "ground-control-hub",
+        "project_root": "/opt/optimus-prime/Earth/ground-control-hub",
         "evidence_refs": [
-          "reports/optimus-prime/planning/evidence/TASK-062/TASK_EVIDENCE.json"
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
         ],
-        "first_observed_at_utc": "2026-03-15T01:10:00Z",
-        "last_observed_at_utc": "2026-03-15T01:14:00Z"
-      },
-      {
-        "signal_source": "retry",
-        "reason_code": "retry_exhausted",
-        "summary": "Dispatch retry budget exhausted for TASK-062 worker handoff.",
-        "severity": "medium",
-        "occurrence_count": 3,
-        "evidence_refs": [
-          "reports/optimus-prime/planning/evidence/TASK-062/retry-log.json"
-        ],
-        "first_observed_at_utc": "2026-03-15T01:00:00Z",
-        "last_observed_at_utc": "2026-03-15T01:09:00Z"
-      },
-      {
-        "signal_source": "watchdog-exit",
-        "reason_code": "watchdog_timeout",
-        "summary": "Watchdog exited due to stale base branch commit age.",
-        "severity": "critical",
-        "occurrence_count": 1,
-        "evidence_refs": [
-          "reports/optimus-prime/watchdog_exit_signal.json"
-        ],
-        "first_observed_at_utc": "2026-03-15T01:20:00Z",
-        "last_observed_at_utc": "2026-03-15T01:20:00Z"
-      },
-      {
-        "signal_source": "regression",
-        "reason_code": "regression_pattern_detected",
-        "summary": "Regression pattern observed in contract test pass-rate trend.",
-        "severity": "high",
-        "occurrence_count": 2,
-        "evidence_refs": [
-          "reports/optimus-prime/regression/contract-test-trend.json"
-        ],
-        "first_observed_at_utc": "2026-03-15T00:55:00Z",
-        "last_observed_at_utc": "2026-03-15T01:18:00Z"
-      },
-      {
-        "signal_source": "blockers",
-        "reason_code": "task_blocked",
-        "summary": "Worker packet blocked by missing dependency contract.",
-        "severity": "medium",
-        "occurrence_count": 1,
-        "evidence_refs": [
-          "reports/optimus-prime/planning/evidence/TASK-062/TASK_BLOCKERS.json"
-        ],
-        "first_observed_at_utc": "2026-03-15T01:15:00Z",
-        "last_observed_at_utc": "2026-03-15T01:16:00Z"
+        "context_note": "Earth sweep context for ground-control dependencies."
       }
     ],
-    "normalized_at_utc": "2026-03-15T01:30:00Z"
+    "risk_sources": {
+      "blockers": [
+        {
+          "signal_ref": "blocker.contract-alignment",
+          "project_id": "",
+          "summary": "Blocked on contract alignment before gate review.",
+          "reason_codes": [
+            "blocked_on_contract"
+          ],
+          "evidence_refs": [
+            "EVD-BLOCKER-001"
+          ],
+          "detected_at_utc": "2026-03-15T09:55:00Z"
+        }
+      ],
+      "retries": [
+        {
+          "signal_ref": "retry.redispatch-dead-pid",
+          "project_id": "",
+          "summary": "Repeated redispatch retries observed for a worker slot.",
+          "retry_count": 4,
+          "max_retries": 5,
+          "reason_codes": [
+            "dead_pid_retry_watchdog_warning"
+          ],
+          "evidence_refs": [
+            "EVD-RETRY-001"
+          ]
+        }
+      ],
+      "watchdog_exits": [
+        {
+          "signal_ref": "watchdog.no-progress",
+          "project_id": "",
+          "summary": "No-progress watchdog triggered; build halted.",
+          "watchdog_kind": "no_progress_watchdog",
+          "triggered": true,
+          "consecutive_no_progress_cycles": 27,
+          "threshold_cycles": 25,
+          "reason_codes": [
+            "no_progress_watchdog"
+          ],
+          "evidence_refs": [
+            "EVD-WATCHDOG-001"
+          ]
+        }
+      ],
+      "regression_patterns": [
+        {
+          "signal_ref": "regression.integration-risk-normalization",
+          "project_id": "ground-control-hub",
+          "summary": "Integration regression detected across project boundary.",
+          "failing_checks": [
+            "python3 -m pytest tests/integration/test_risk-signal-normalization.py -q"
+          ],
+          "reason_codes": [
+            "integration_regression"
+          ],
+          "evidence_refs": [
+            "EVD-REGRESSION-001"
+          ],
+          "detected_at_utc": "2026-03-15T09:50:00Z"
+        }
+      ]
+    }
   },
   "expected_contract_anchors": {
     "schema_version": "req-020.risk-signal-normalization.v1",
     "requirement_id": "REQ-020",
-    "normalized_at_utc": "2026-03-15T01:30:00Z",
-    "derived_normalized_at_utc_when_omitted": "2026-03-15T01:20:00Z",
+    "normalized_at_utc": "2026-03-15T10:00:00Z",
+    "derived_normalized_at_utc_when_omitted": "1970-01-01T00:00:00Z",
     "normalized_signal_ids": [
-      "risk-signal.afa5fefa3efb",
-      "risk-signal.950141e95f9e",
-      "risk-signal.0125ca04ad38",
-      "risk-signal.5dfcf255ac50"
+      "risk-signal.1f715d8445dc",
+      "risk-signal.3bc426f80de4",
+      "risk-signal.61f27e79241a",
+      "risk-signal.f9609bde46cd"
     ],
     "canonical_reason_codes": [
-      "regression_detected",
-      "retry_limit_reached",
-      "stale_base_branch_commit",
-      "task_blocked"
+      "blocked_on_contract",
+      "dead_pid_retry_watchdog_warning",
+      "integration_regression",
+      "no_progress_watchdog"
     ],
+    "alias_pairs": [],
     "source_counts": {
       "blocker": 1,
       "regression_pattern": 1,
@@ -89,31 +113,13 @@
     },
     "severity_counts": {
       "critical": 1,
-      "high": 2,
+      "high": 1,
       "low": 0,
-      "medium": 1
+      "medium": 2
     },
-    "total_input_signals": 5,
+    "total_input_signals": 4,
     "total_normalized_signals": 4,
-    "alias_pairs": [
-      {
-        "source_reason_code": "blocking_issue_detected",
-        "normalized_reason_code": "task_blocked"
-      },
-      {
-        "source_reason_code": "regression_pattern_detected",
-        "normalized_reason_code": "regression_detected"
-      },
-      {
-        "source_reason_code": "retry_exhausted",
-        "normalized_reason_code": "retry_limit_reached"
-      },
-      {
-        "source_reason_code": "watchdog_timeout",
-        "normalized_reason_code": "stale_base_branch_commit"
-      }
-    ],
-    "canonical_input_sha256": "f0d87a544b3350fe3412028e5e2da421418f10608cd4deaa32fc2e6930acc5c4",
-    "reproducible_call_id": "req020-f0d87a544b3350fe"
+    "canonical_input_sha256": "92d12b397a01d72d3e77d6939c6af3e2e58c086986379ac8dd54d6c341dfd236",
+    "reproducible_call_id": "req020-92d12b397a01d72d"
   }
 }

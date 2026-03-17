@@ -16,12 +16,26 @@ from typing import Any, Mapping, Sequence
 try:
     from scripts import strategy_llm_pipeline_req027_035 as _req27_35
     from scripts import strategy_llm_pipeline_req036 as _req36
+    from scripts import strategy_llm_pipeline_req038_041 as _req38_41
+    from scripts import strategy_llm_pipeline_req039_047 as _req39_47
+    from scripts import strategy_llm_pipeline_req040 as _req40
+    from scripts import strategy_llm_pipeline_req042 as _req42
+    from scripts import strategy_llm_pipeline_req043 as _req43
+    from scripts import strategy_llm_pipeline_req044 as _req44
+    from scripts import strategy_llm_pipeline_req045 as _req45
 except ModuleNotFoundError:
     _repo_root = Path(__file__).resolve().parents[1]
     if str(_repo_root) not in sys.path:
         sys.path.insert(0, str(_repo_root))
     from scripts import strategy_llm_pipeline_req027_035 as _req27_35
     from scripts import strategy_llm_pipeline_req036 as _req36
+    from scripts import strategy_llm_pipeline_req038_041 as _req38_41
+    from scripts import strategy_llm_pipeline_req039_047 as _req39_47
+    from scripts import strategy_llm_pipeline_req040 as _req40
+    from scripts import strategy_llm_pipeline_req042 as _req42
+    from scripts import strategy_llm_pipeline_req043 as _req43
+    from scripts import strategy_llm_pipeline_req044 as _req44
+    from scripts import strategy_llm_pipeline_req045 as _req45
 
 TOOL = "strategy-llm-pipeline"
 TOOL_VERSION = "1.0.0"
@@ -79,6 +93,55 @@ REQ_036_HANDLING_POLICY = _req36.REQ_036_HANDLING_POLICY
 REQ_036_LLM_CALL_TRACE_SCHEMA_VERSION = _req36.REQ_036_LLM_CALL_TRACE_SCHEMA_VERSION
 REQ_036_LLM_CALL_TRACE_ROW_SCHEMA_VERSION = _req36.REQ_036_LLM_CALL_TRACE_ROW_SCHEMA_VERSION
 REQ_036_DEFAULT_LLM_CALL_TRACE_PATH = _req36.REQ_036_DEFAULT_LLM_CALL_TRACE_PATH
+REQ_038_REQUIREMENT_ID = _req38_41.REQ_038_REQUIREMENT_ID
+REQ_038_SCHEMA_VERSION = _req38_41.REQ_038_SCHEMA_VERSION
+REQ_038_SURFACE = _req38_41.REQ_038_SURFACE
+REASON_CODE_CROSS_CALL_ANALYSIS_SYNTHESIS_CONTRADICTION = (
+    _req38_41.REASON_CODE_CROSS_CALL_ANALYSIS_SYNTHESIS_CONTRADICTION
+)
+REASON_CODE_CITATION_DISCIPLINE_UNCITED_STRATEGIC_CLAIM = (
+    _req38_41.REASON_CODE_CITATION_DISCIPLINE_UNCITED_STRATEGIC_CLAIM
+)
+REQ_039_REQUIREMENT_ID = _req39_47.REQ_039_REQUIREMENT_ID
+REQ_039_SCHEMA_VERSION = _req39_47.REQ_039_SCHEMA_VERSION
+REQ_039_PROCESSING_SCHEMA_VERSION = _req39_47.REQ_039_PROCESSING_SCHEMA_VERSION
+REQ_039_ANALYSIS_TYPE = _req39_47.REQ_039_ANALYSIS_TYPE
+REQ_039_CALL_ID = _req39_47.REQ_039_CALL_ID
+REQ_040_REQUIREMENT_ID = _req40.REQ_040_REQUIREMENT_ID
+REQ_040_SCHEMA_VERSION = _req40.REQ_040_SCHEMA_VERSION
+REQ_041_REQUIREMENT_ID = _req38_41.REQ_041_REQUIREMENT_ID
+REQ_041_SCHEMA_VERSION = _req38_41.REQ_041_SCHEMA_VERSION
+REQ_041_SURFACE = _req38_41.REQ_041_SURFACE
+REQ_042_REQUIREMENT_ID = _req42.REQ_042_REQUIREMENT_ID
+REQ_042_SCHEMA_VERSION = _req42.REQ_042_SCHEMA_VERSION
+REQ_042_STRATEGY = _req42.REQ_042_STRATEGY
+REQ_043_REQUIREMENT_ID = _req43.REQ_043_REQUIREMENT_ID
+REQ_043_SCHEMA_VERSION = _req43.REQ_043_SCHEMA_VERSION
+REQ_043_ANALYSIS_TYPE = _req43.REQ_043_ANALYSIS_TYPE
+REQ_043_PROCESSING_STRATEGY = _req43.REQ_043_PROCESSING_STRATEGY
+REQ_043_REASONING_MODE = _req43.REQ_043_REASONING_MODE
+REQ_044_REQUIREMENT_ID = _req44.REQ_044_REQUIREMENT_ID
+REQ_044_SCHEMA_VERSION = _req44.REQ_044_SCHEMA_VERSION
+REQ_044_ANALYSIS_TYPE = _req44.REQ_044_ANALYSIS_TYPE
+REQ_044_PROCESSING_STRATEGY = _req44.REQ_044_PROCESSING_STRATEGY
+REQ_044_REASONING_MODE = _req44.REQ_044_REASONING_MODE
+REQ_045_REQUIREMENT_ID = _req45.REQ_045_REQUIREMENT_ID
+REQ_045_SCHEMA_VERSION = _req45.REQ_045_SCHEMA_VERSION
+REQ_045_ANALYSIS_TYPE = _req45.REQ_045_ANALYSIS_TYPE
+REQ_045_PROCESSING_STRATEGY = _req45.REQ_045_PROCESSING_STRATEGY
+REQ_045_REASONING_MODE = _req45.REQ_045_REASONING_MODE
+REQ_045_CALL_TRACE_SCHEMA_VERSION = _req45.REQ_045_CALL_TRACE_SCHEMA_VERSION
+REQ_045_REASON_CODE_ANALYSIS_SYNTHESIS_CONTRADICTION = (
+    _req45.REQ_045_REASON_CODE_ANALYSIS_SYNTHESIS_CONTRADICTION
+)
+REQ_045_REASON_CODE_UNCITED_STRATEGIC_CLAIM_BLOCKED = (
+    _req45.REQ_045_REASON_CODE_UNCITED_STRATEGIC_CLAIM_BLOCKED
+)
+REQ_047_REQUIREMENT_ID = _req39_47.REQ_047_REQUIREMENT_ID
+REQ_047_SCHEMA_VERSION = _req39_47.REQ_047_SCHEMA_VERSION
+REQ_047_PROCESSING_SCHEMA_VERSION = _req39_47.REQ_047_PROCESSING_SCHEMA_VERSION
+REQ_047_ANALYSIS_TYPE = _req39_47.REQ_047_ANALYSIS_TYPE
+REQ_047_CALL_ID = _req39_47.REQ_047_CALL_ID
 REQ_026_PROCESSING_STRATEGY = "call-1-situational-analysis"
 REQ_026_REASONING_MODE = "deterministic-broad-sweep"
 REQ_029_PROCESSING_STRATEGY = "call-4-recommendation-synthesis"
@@ -152,6 +215,7 @@ REQ_046_PRIORITY_LEVELS = ("high", "medium", "low")
 REQ_046_ROUTING_CONFLICT_REASON = "conflicting_packet_routing"
 REQ_046_OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE = "missing_earth_sweep_evidence_refs"
 REQ_046_OPEN_RISK_REASON_UNRESOLVED_IDEA = "unresolved_idea_open_risk"
+REQ_046_OPEN_RISK_REASON_UNCITED_STRATEGIC_CLAIM_BLOCKED = "uncited_strategic_claim_blocked"
 REQ_046_EARTH_SWEEP_REF_PREFIXES = ("earth-sweep/", "reports/earth/sweeps/")
 REQ_029_ALLOWED_RECOMMENDATION_SCOPES = {"local", "cross-project"}
 REQ_029_RECOMMENDATION_ID_RE = re.compile(r"^rec\.[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -214,6 +278,51 @@ validate_req_035_evidence_citation_discipline_in_reasoning_calls = (
 )
 build_req_036_cross_call_contradiction_detection = _req36.build_req_036_cross_call_contradiction_detection
 validate_req_036_cross_call_contradiction_detection = _req36.validate_req_036_cross_call_contradiction_detection
+build_req_038_recommendation_priority_calibration = _req38_41.build_req_038_recommendation_priority_calibration
+validate_req_038_recommendation_priority_calibration = (
+    _req38_41.validate_req_038_recommendation_priority_calibration
+)
+build_req_039_recommendation_rationale_quality_scoring = (
+    _req39_47.build_req_039_recommendation_rationale_quality_scoring
+)
+process_req_039_recommendation_rationale_quality_scoring = (
+    _req39_47.process_req_039_recommendation_rationale_quality_scoring
+)
+validate_req_039_recommendation_rationale_quality_scoring = (
+    _req39_47.validate_req_039_recommendation_rationale_quality_scoring
+)
+build_req_040_recommendation_feasibility_scoring = _req40.build_req_040_recommendation_feasibility_scoring
+validate_req_040_recommendation_feasibility_scoring = (
+    _req40.validate_req_040_recommendation_feasibility_scoring
+)
+build_req_041_recommendation_dependency_effect_modeling = (
+    _req38_41.build_req_041_recommendation_dependency_effect_modeling
+)
+validate_req_041_recommendation_dependency_effect_modeling = (
+    _req38_41.validate_req_041_recommendation_dependency_effect_modeling
+)
+build_req_042_existing_functionality_interaction_reasoning = (
+    _req42.build_req_042_existing_functionality_interaction_reasoning
+)
+validate_req_042_existing_functionality_interaction_reasoning = (
+    _req42.validate_req_042_existing_functionality_interaction_reasoning
+)
+build_req_043_project_obligation_reasoning = _req43.build_req_043_project_obligation_reasoning
+validate_req_043_project_obligation_reasoning = _req43.validate_req_043_project_obligation_reasoning
+build_req_044_recommendation_omission_detector = _req44.build_req_044_recommendation_omission_detector
+validate_req_044_recommendation_omission_detector = _req44.validate_req_044_recommendation_omission_detector
+build_req_045_alternative_strategic_scenario_generator = (
+    _req45.build_req_045_alternative_strategic_scenario_generator
+)
+build_req_045_llm_call_trace_rows = _req45.build_req_045_llm_call_trace_rows
+validate_req_045_alternative_strategic_scenario_generator = (
+    _req45.validate_req_045_alternative_strategic_scenario_generator
+)
+build_req_047_llm_call_trace_and_decision_ledger = _req39_47.build_req_047_llm_call_trace_and_decision_ledger
+process_req_047_llm_call_trace_and_decision_ledger = _req39_47.process_req_047_llm_call_trace_and_decision_ledger
+validate_req_047_llm_call_trace_and_decision_ledger = (
+    _req39_47.validate_req_047_llm_call_trace_and_decision_ledger
+)
 
 
 def process_req_035_evidence_citation_discipline_in_reasoning_calls(
@@ -255,6 +364,12 @@ class Req031Error(ValueError):
 
 class Req034Error(ValueError):
     """Raised when REQ-034 input is malformed."""
+
+
+Req043Error = _req43.Req043Error
+Req045Error = _req45.Req045Error
+Req044Error = _req44.Req044Error
+Req045Error = _req45.Req045Error
 
 
 def utc_now_iso() -> str:
@@ -389,6 +504,7 @@ def _normalize_cross_project_context(raw_value: Any) -> list[dict[str, Any]]:
                 "context_note": context_note,
             }
         )
+    normalized.sort(key=lambda row: (row["project_id"], row["project_root"]))
     return normalized
 
 
@@ -540,6 +656,9 @@ def _req_046_stable_id_fragment(*parts: str) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
 
+_stable_id_fragment = _req_046_stable_id_fragment
+
+
 def _req_046_priority_rank(priority: str) -> int:
     return {level: index for index, level in enumerate(REQ_046_PRIORITY_LEVELS)}[priority]
 
@@ -638,7 +757,6 @@ def _req_046_normalize_input_recommendation(raw_value: Any, *, field_name: str) 
         "evidence_refs": _normalize_string_list(
             recommendation.get("evidence_refs"),
             field_name=f"{field_name}.evidence_refs",
-            min_items=1,
         ),
     }
 
@@ -899,8 +1017,9 @@ def _req_046_build_final_strategy_synthesis(
         canonical = contributions[0]
         packet_kind_candidates = sorted({str(row["packet_kind"]) for row in contributions})
         peer_project_candidates = sorted({str(row["peer_project_id"]) for row in contributions if row["peer_project_id"]})
+        contribution_evidence_refs = _collect_unique_refs(*[list(row["evidence_refs"]) for row in contributions])
         evidence_refs = _collect_unique_refs(
-            *[list(row["evidence_refs"]) for row in contributions],
+            contribution_evidence_refs,
             sorted(obligation_refs_by_recommendation_id.get(recommendation_id, set())),
         )
         call_trace_lineage = _req_046_build_call_trace_lineage(contributions)
@@ -913,6 +1032,29 @@ def _req_046_build_final_strategy_synthesis(
             routing_conflict = True
         if not routing_conflict and packet_kind == "target-project" and peer_project_candidates:
             routing_conflict = True
+
+        if not contribution_evidence_refs:
+            open_risks.append(
+                {
+                    "open_risk_id": (
+                        "open-risk."
+                        + _req_046_stable_id_fragment(
+                            recommendation_id,
+                            REQ_046_OPEN_RISK_REASON_UNCITED_STRATEGIC_CLAIM_BLOCKED,
+                        )
+                    ),
+                    "recommendation_id": recommendation_id,
+                    "summary": canonical["summary"],
+                    "reason_code": REQ_046_OPEN_RISK_REASON_UNCITED_STRATEGIC_CLAIM_BLOCKED,
+                    "project_id": peer_project_candidates[0] if peer_project_candidates else "",
+                    "required_evidence_refs": ["missing:citation-evidence-ref"],
+                    "evidence_refs": contribution_evidence_refs,
+                    "linked_recommendation_ids": [recommendation_id],
+                    "call_trace_lineage": call_trace_lineage,
+                    "contributing_call_ids": contributing_call_ids,
+                }
+            )
+            continue
 
         if routing_conflict:
             deferred_recommendations.append(
@@ -1591,11 +1733,12 @@ def validate_req_046_final_strategy_synthesis_composer(payload: Mapping[str, Any
             if reason_code not in (
                 REQ_046_OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE,
                 REQ_046_OPEN_RISK_REASON_UNRESOLVED_IDEA,
+                REQ_046_OPEN_RISK_REASON_UNCITED_STRATEGIC_CLAIM_BLOCKED,
             ):
                 errors.append(
                     "final_strategy_synthesis.open_risks"
                     f"[{index}].reason_code must be one of: "
-                    f"{[REQ_046_OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE, REQ_046_OPEN_RISK_REASON_UNRESOLVED_IDEA]}"
+                    f"{[REQ_046_OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE, REQ_046_OPEN_RISK_REASON_UNRESOLVED_IDEA, REQ_046_OPEN_RISK_REASON_UNCITED_STRATEGIC_CLAIM_BLOCKED]}"
                 )
             if not isinstance(row.get("project_id"), str):
                 errors.append(f"final_strategy_synthesis.open_risks[{index}].project_id must be a string")
@@ -1610,6 +1753,10 @@ def validate_req_046_final_strategy_synthesis_composer(payload: Mapping[str, Any
             elif reason_code == REQ_046_OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE and not lineage_rows:
                 errors.append(
                     f"final_strategy_synthesis.open_risks[{index}].call_trace_lineage must be non-empty for missing Earth sweep evidence risks"
+                )
+            elif reason_code == REQ_046_OPEN_RISK_REASON_UNCITED_STRATEGIC_CLAIM_BLOCKED and not lineage_rows:
+                errors.append(
+                    f"final_strategy_synthesis.open_risks[{index}].call_trace_lineage must be non-empty for uncited strategic claim risks"
                 )
             if lineage_rows:
                 _validate_lineage_rows(
@@ -3808,6 +3955,9 @@ def _req_034_canonical_input(
     }
 
 
+_req034_legacy_canonical_input = _req_034_canonical_input
+
+
 def _req_034_canonical_processing_input(
     *,
     prior_call_handoffs: Sequence[Mapping[str, Any]],
@@ -4168,7 +4318,7 @@ def build_req_034_cross_call_memory_handoff_contract(
     )
     confidence = _recommendation_confidence(evidence_refs=recommendation_refs, open_risks=open_risks)
 
-    canonical_input = _req_034_canonical_input(
+    canonical_input = _req034_legacy_canonical_input(
         target_project_root=normalized_target_root,
         earth_root=normalized_earth_root,
         output_root=normalized_output_root,
@@ -4412,7 +4562,7 @@ def validate_req_034_cross_call_memory_handoff_contract(payload: Mapping[str, An
     if not isinstance(canonical_input, Mapping):
         errors.append("call_metadata.canonical_input must be an object")
     else:
-        expected_canonical_input = _req_034_canonical_input(
+        expected_canonical_input = _req034_legacy_canonical_input(
             target_project_root=_as_text(target_project.get("project_root")) if isinstance(target_project, Mapping) else "",
             earth_root=_as_text(earth_sweep.get("earth_root")) if isinstance(earth_sweep, Mapping) else "",
             output_root=_as_text(canonical_input.get("output_root")),
@@ -13473,8 +13623,51 @@ def validate_req_028_call_3_gap_and_opportunity_reasoning(payload: Mapping[str, 
     return errors
 
 def _detect_requirement(payload: Mapping[str, Any]) -> str:
+    analysis_type = _as_text(payload.get("analysis_type"))
+    surface = _as_text(payload.get("surface"))
+    requirement_id = _as_text(payload.get("requirement_id"))
+
     if payload.get("analysis_type") == REQ_046_ANALYSIS_TYPE or "validated_call_outputs" in payload:
         return REQ_046_REQUIREMENT_ID
+    if analysis_type == REQ_047_ANALYSIS_TYPE or (
+        "llm_call_trace_rows" in payload and "decision_ledger" in payload and "final_output_artifacts" in payload
+    ):
+        return REQ_047_REQUIREMENT_ID
+    if analysis_type == REQ_039_ANALYSIS_TYPE or (
+        "quality_policy" in payload and "recommendations" in payload and "now_utc" in payload
+    ):
+        return REQ_039_REQUIREMENT_ID
+    if "priority_weights" in payload and "recommendations" in payload:
+        return REQ_038_REQUIREMENT_ID
+    if requirement_id == REQ_041_REQUIREMENT_ID or surface == REQ_041_SURFACE:
+        return REQ_041_REQUIREMENT_ID
+    if (
+        "resource_constraints" in payload
+        and "dependency_readiness" in payload
+        and "repo_maturity" in payload
+        and "candidate_recommendations" in payload
+    ):
+        return REQ_040_REQUIREMENT_ID
+    if (
+        "active_project_id" in payload
+        and "existing_functionality_candidates" in payload
+        and "build_new_assessment" in payload
+    ):
+        return REQ_042_REQUIREMENT_ID
+    if analysis_type == REQ_044_ANALYSIS_TYPE or (
+        "mission_required_recommendation_classes" in payload
+        and "ecosystem_required_recommendation_classes" in payload
+        and "candidate_recommendations" in payload
+    ):
+        return REQ_044_REQUIREMENT_ID
+    if analysis_type == REQ_043_ANALYSIS_TYPE or (
+        "project_obligation_candidates" in payload and "target_project_profile" in payload
+    ):
+        return REQ_043_REQUIREMENT_ID
+    if analysis_type == REQ_045_ANALYSIS_TYPE or (
+        "scenario_candidates" in payload and "uncertainty_score" in payload and "conflict_score" in payload
+    ):
+        return REQ_045_REQUIREMENT_ID
     if payload.get("analysis_type") == REQ_035_ANALYSIS_TYPE:
         return REQ_035_REQUIREMENT_ID
     if "recommendation_drafts" in payload:
@@ -13507,14 +13700,125 @@ def _detect_requirement(payload: Mapping[str, Any]) -> str:
     if "target_project" in payload or payload.get("analysis_type") == REQ_026_ANALYSIS_TYPE:
         return REQ_026_REQUIREMENT_ID
     raise ValueError(
-        "input payload does not match REQ-025, REQ-026, REQ-027, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-033, REQ-034, REQ-035, REQ-036, REQ-037, or REQ-046 contract anchors"
+        "input payload does not match REQ-025, REQ-026, REQ-027, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, "
+        "REQ-033, REQ-034, REQ-035, REQ-036, REQ-037, REQ-038, REQ-039, REQ-040, REQ-041, REQ-042, REQ-043, "
+        "REQ-044, REQ-045, REQ-046, or REQ-047 contract anchors"
     )
 
 
-def run(payload: Mapping[str, Any]) -> dict[str, Any]:
+def run(payload: Mapping[str, Any], *, trace_root: str | Path | None = None) -> dict[str, Any]:
     requirement_id = _detect_requirement(payload)
     if requirement_id == REQ_046_REQUIREMENT_ID:
         return build_req_046_final_strategy_synthesis_composer(payload)
+    if requirement_id == REQ_047_REQUIREMENT_ID:
+        return build_req_047_llm_call_trace_and_decision_ledger(dict(payload))
+    if requirement_id == REQ_045_REQUIREMENT_ID:
+        return build_req_045_alternative_strategic_scenario_generator(
+            generated_at_utc=payload.get("generated_at_utc"),
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            strategy_goal=payload.get("strategy_goal"),
+            uncertainty_score=payload.get("uncertainty_score"),
+            conflict_score=payload.get("conflict_score"),
+            scenario_candidates=payload.get("scenario_candidates"),
+            uncertainty_signals=payload.get("uncertainty_signals"),
+            conflict_signals=payload.get("conflict_signals"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+        )
+    if requirement_id == REQ_044_REQUIREMENT_ID:
+        return build_req_044_recommendation_omission_detector(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            strategy_goal=payload.get("strategy_goal"),
+            mission_required_recommendation_classes=payload.get("mission_required_recommendation_classes"),
+            ecosystem_required_recommendation_classes=payload.get("ecosystem_required_recommendation_classes"),
+            candidate_recommendations=payload.get("candidate_recommendations"),
+            call_chain=payload.get("call_chain"),
+            strategic_claims=payload.get("strategic_claims"),
+            cross_project_context=payload.get("cross_project_context"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            call_id=_as_text(payload.get("call_id")) or None,
+            checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
+        )
+    if requirement_id == REQ_043_REQUIREMENT_ID:
+        return build_req_043_project_obligation_reasoning(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            strategy_goal=payload.get("strategy_goal"),
+            target_project_profile=payload.get("target_project_profile"),
+            project_obligation_candidates=payload.get("project_obligation_candidates"),
+            call_chain=payload.get("call_chain"),
+            strategic_claims=payload.get("strategic_claims"),
+            cross_project_context=payload.get("cross_project_context"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            call_id=_as_text(payload.get("call_id")) or None,
+            checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
+        )
+    if requirement_id == REQ_042_REQUIREMENT_ID:
+        return build_req_042_existing_functionality_interaction_reasoning(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            active_project_id=payload.get("active_project_id"),
+            capability_need=payload.get("capability_need"),
+            build_new_assessment=payload.get("build_new_assessment"),
+            existing_functionality_candidates=payload.get("existing_functionality_candidates"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            cross_project_context=payload.get("cross_project_context"),
+            strategic_claims=payload.get("strategic_claims"),
+            evaluated_at=payload.get("evaluated_at"),
+        )
+    if requirement_id == REQ_041_REQUIREMENT_ID:
+        effective_trace_root = trace_root or payload.get("trace_root")
+        return build_req_041_recommendation_dependency_effect_modeling(
+            target_project_root=payload.get("target_project_root", DEFAULT_TARGET_PROJECT_ROOT),
+            earth_root=payload.get("earth_root", DEFAULT_EARTH_ROOT),
+            output_root=payload.get("output_root", DEFAULT_OUTPUT_ROOT),
+            revision_identity=payload.get("revision_identity", _req38_41.DEFAULT_REQ_041_REVISION_ID),
+            recommendations=payload.get("recommendations"),
+            broad_sweep_context=payload.get("broad_sweep_context"),
+            modeled_at=payload.get("modeled_at"),
+            persist_llm_call_trace=bool(effective_trace_root) or bool(payload.get("persist_llm_call_trace")),
+            trace_root=effective_trace_root,
+        )
+    if requirement_id == REQ_040_REQUIREMENT_ID:
+        return build_req_040_recommendation_feasibility_scoring(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            resource_constraints=payload.get("resource_constraints"),
+            dependency_readiness=payload.get("dependency_readiness"),
+            repo_maturity=payload.get("repo_maturity"),
+            candidate_recommendations=payload.get("candidate_recommendations"),
+            llm_call_trace_path=payload.get("llm_call_trace_path", _req40.REQ_040_DEFAULT_LLM_CALL_TRACE_PATH),
+            persist_llm_call_trace=bool(payload.get("persist_llm_call_trace", True)),
+        )
+    if requirement_id == REQ_039_REQUIREMENT_ID:
+        return build_req_039_recommendation_rationale_quality_scoring(dict(payload))
+    if requirement_id == REQ_038_REQUIREMENT_ID:
+        effective_trace_root = trace_root or payload.get("trace_root")
+        return build_req_038_recommendation_priority_calibration(
+            target_project_root=payload.get("target_project_root", DEFAULT_TARGET_PROJECT_ROOT),
+            earth_root=payload.get("earth_root", DEFAULT_EARTH_ROOT),
+            output_root=payload.get("output_root", DEFAULT_OUTPUT_ROOT),
+            revision_identity=payload.get("revision_identity", _req38_41.DEFAULT_REQ_038_REVISION_ID),
+            recommendations=payload.get("recommendations"),
+            priority_weights=payload.get("priority_weights"),
+            broad_sweep_context=payload.get("broad_sweep_context"),
+            calibrated_at=payload.get("calibrated_at"),
+            persist_llm_call_trace=bool(effective_trace_root) or bool(payload.get("persist_llm_call_trace")),
+            trace_root=effective_trace_root,
+        )
     if requirement_id == REQ_036_REQUIREMENT_ID:
         return build_req_036_cross_call_contradiction_detection(**dict(payload))
     if requirement_id == REQ_035_REQUIREMENT_ID:
@@ -13696,6 +14000,24 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
     requirement_id = _as_text(payload.get("requirement_id"))
     if requirement_id == REQ_046_REQUIREMENT_ID:
         return validate_req_046_final_strategy_synthesis_composer(payload)
+    if requirement_id == REQ_047_REQUIREMENT_ID:
+        return validate_req_047_llm_call_trace_and_decision_ledger(payload)
+    if requirement_id == REQ_045_REQUIREMENT_ID:
+        return validate_req_045_alternative_strategic_scenario_generator(payload)
+    if requirement_id == REQ_044_REQUIREMENT_ID:
+        return validate_req_044_recommendation_omission_detector(payload)
+    if requirement_id == REQ_043_REQUIREMENT_ID:
+        return validate_req_043_project_obligation_reasoning(payload)
+    if requirement_id == REQ_042_REQUIREMENT_ID:
+        return validate_req_042_existing_functionality_interaction_reasoning(payload)
+    if requirement_id == REQ_041_REQUIREMENT_ID:
+        return validate_req_041_recommendation_dependency_effect_modeling(payload)
+    if requirement_id == REQ_040_REQUIREMENT_ID:
+        return validate_req_040_recommendation_feasibility_scoring(payload)
+    if requirement_id == REQ_039_REQUIREMENT_ID:
+        return validate_req_039_recommendation_rationale_quality_scoring(payload)
+    if requirement_id == REQ_038_REQUIREMENT_ID:
+        return validate_req_038_recommendation_priority_calibration(payload)
     if requirement_id == REQ_036_REQUIREMENT_ID:
         return validate_req_036_cross_call_contradiction_detection(payload)
     if requirement_id == REQ_035_REQUIREMENT_ID:
@@ -13727,11 +14049,19 @@ def _validate_output(payload: Mapping[str, Any]) -> list[str]:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Emit REQ-025, REQ-026, REQ-027, REQ-028, REQ-029, REQ-030, REQ-031, REQ-032, REQ-033, REQ-034, REQ-035, REQ-036, REQ-037, or REQ-046 strategy pipeline payloads."
+        description=(
+            "Emit REQ-025 through REQ-047 strategy pipeline payloads, including recovered "
+            "REQ-038/039/040/041/042/043/044/045/047 contract surfaces."
+        )
     )
     parser.add_argument("--input-json", required=True, help="Input JSON path or '-' for stdin.")
     parser.add_argument("--output-json", default="", help="Optional output JSON path.")
     parser.add_argument("--json-pretty", action="store_true", help="Pretty-print JSON output.")
+    parser.add_argument(
+        "--trace-root",
+        default="",
+        help="Optional absolute or relative root used when builders persist trace artifacts.",
+    )
     return parser
 
 
@@ -13745,8 +14075,20 @@ def main(argv: list[str] | None = None) -> int:
         quiet_cli = requirement_id == REQ_046_REQUIREMENT_ID
         if not quiet_cli:
             _timestamped_print(f"Starting {requirement_id} pipeline build from input source: {args.input_json}")
-        output_payload = run(input_payload)
-    except (Req026Error, Req029Error, Req030Error, Req031Error, Req034Error, ValueError, json.JSONDecodeError) as exc:
+        output_payload = run(input_payload, trace_root=args.trace_root or None)
+    except (
+        Req026Error,
+        Req029Error,
+        Req030Error,
+        Req031Error,
+        Req034Error,
+        Req043Error,
+        Req044Error,
+        Req045Error,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        detected_requirement_id = locals().get("requirement_id", "")
         if isinstance(exc, Req026Error):
             requirement_id = REQ_026_REQUIREMENT_ID
         elif isinstance(exc, Req029Error):
@@ -13757,8 +14099,14 @@ def main(argv: list[str] | None = None) -> int:
             requirement_id = REQ_031_REQUIREMENT_ID
         elif isinstance(exc, Req034Error):
             requirement_id = REQ_034_REQUIREMENT_ID
+        elif isinstance(exc, Req043Error):
+            requirement_id = REQ_043_REQUIREMENT_ID
+        elif isinstance(exc, Req044Error):
+            requirement_id = REQ_044_REQUIREMENT_ID
+        elif isinstance(exc, Req045Error):
+            requirement_id = REQ_045_REQUIREMENT_ID
         else:
-            requirement_id = ""
+            requirement_id = detected_requirement_id
         if requirement_id != REQ_046_REQUIREMENT_ID:
             _timestamped_print(f"Pipeline input processing failed: {exc}")
         error_payload = {
@@ -13797,12 +14145,12 @@ def main(argv: list[str] | None = None) -> int:
         print(serialized_error, end="")
         return 3
 
-    serialized_output = _json_dumps(output_payload, pretty=args.json_pretty)
     requirement_id = _as_text(output_payload.get("requirement_id"))
     call_metadata = output_payload.get("call_metadata")
-    if isinstance(call_metadata, Mapping):
+    if isinstance(call_metadata, Mapping) and _as_text(call_metadata.get("llm_call_trace_path")):
         trace_output_path = _write_llm_call_trace(output_payload)
         _timestamped_print(f"Wrote {requirement_id} call trace to {trace_output_path}")
+    serialized_output = _json_dumps(output_payload, pretty=args.json_pretty)
     if args.output_json:
         output_path = Path(args.output_json)
         output_path.parent.mkdir(parents=True, exist_ok=True)

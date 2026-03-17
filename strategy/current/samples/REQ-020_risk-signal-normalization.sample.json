@@ -8,104 +8,86 @@
     "regression_patterns"
   ],
   "risk_signal_normalization": {
-    "normalized_at_utc": "2026-03-15T01:30:00Z",
+    "normalized_at_utc": "2026-03-15T10:00:00Z",
     "signals": [
       {
-        "normalized_signal_id": "risk-signal.afa5fefa3efb",
+        "normalized_signal_id": "risk-signal.1f715d8445dc",
         "signal_source": "blocker",
-        "reason_code": "task_blocked",
+        "reason_code": "blocked_on_contract",
         "source_reason_codes": [
-          "blocking_issue_detected",
-          "task_blocked"
+          "blocked_on_contract"
         ],
-        "summary": "Worker packet blocked by missing dependency contract.",
-        "severity": "high",
-        "occurrence_count": 3,
-        "evidence_refs": [
-          "reports/optimus-prime/planning/evidence/TASK-062/TASK_BLOCKERS.json",
-          "reports/optimus-prime/planning/evidence/TASK-062/TASK_EVIDENCE.json"
-        ],
-        "first_observed_at_utc": "2026-03-15T01:10:00Z",
-        "last_observed_at_utc": "2026-03-15T01:16:00Z"
-      },
-      {
-        "normalized_signal_id": "risk-signal.950141e95f9e",
-        "signal_source": "regression_pattern",
-        "reason_code": "regression_detected",
-        "source_reason_codes": [
-          "regression_pattern_detected"
-        ],
-        "summary": "Regression pattern observed in contract test pass-rate trend.",
-        "severity": "high",
-        "occurrence_count": 2,
-        "evidence_refs": [
-          "reports/optimus-prime/regression/contract-test-trend.json"
-        ],
-        "first_observed_at_utc": "2026-03-15T00:55:00Z",
-        "last_observed_at_utc": "2026-03-15T01:18:00Z"
-      },
-      {
-        "normalized_signal_id": "risk-signal.0125ca04ad38",
-        "signal_source": "retry",
-        "reason_code": "retry_limit_reached",
-        "source_reason_codes": [
-          "retry_exhausted"
-        ],
-        "summary": "Dispatch retry budget exhausted for TASK-062 worker handoff.",
+        "summary": "Blocked on contract alignment before gate review.",
         "severity": "medium",
-        "occurrence_count": 3,
+        "occurrence_count": 1,
         "evidence_refs": [
-          "reports/optimus-prime/planning/evidence/TASK-062/retry-log.json"
+          "EVD-BLOCKER-001"
         ],
-        "first_observed_at_utc": "2026-03-15T01:00:00Z",
-        "last_observed_at_utc": "2026-03-15T01:09:00Z"
+        "first_observed_at_utc": "2026-03-15T09:55:00Z",
+        "last_observed_at_utc": "2026-03-15T09:55:00Z"
       },
       {
-        "normalized_signal_id": "risk-signal.5dfcf255ac50",
-        "signal_source": "watchdog_exit",
-        "reason_code": "stale_base_branch_commit",
+        "normalized_signal_id": "risk-signal.3bc426f80de4",
+        "signal_source": "regression_pattern",
+        "reason_code": "integration_regression",
         "source_reason_codes": [
-          "watchdog_timeout"
+          "integration_regression"
         ],
-        "summary": "Watchdog exited due to stale base branch commit age.",
+        "summary": "Integration regression detected across project boundary.",
+        "severity": "high",
+        "occurrence_count": 1,
+        "evidence_refs": [
+          "EVD-REGRESSION-001",
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+        ],
+        "first_observed_at_utc": "2026-03-15T09:50:00Z",
+        "last_observed_at_utc": "2026-03-15T09:50:00Z"
+      },
+      {
+        "normalized_signal_id": "risk-signal.61f27e79241a",
+        "signal_source": "retry",
+        "reason_code": "dead_pid_retry_watchdog_warning",
+        "source_reason_codes": [
+          "dead_pid_retry_watchdog_warning"
+        ],
+        "summary": "Repeated redispatch retries observed for a worker slot.",
+        "severity": "medium",
+        "occurrence_count": 1,
+        "evidence_refs": [
+          "EVD-RETRY-001"
+        ],
+        "first_observed_at_utc": "",
+        "last_observed_at_utc": ""
+      },
+      {
+        "normalized_signal_id": "risk-signal.f9609bde46cd",
+        "signal_source": "watchdog_exit",
+        "reason_code": "no_progress_watchdog",
+        "source_reason_codes": [
+          "no_progress_watchdog"
+        ],
+        "summary": "No-progress watchdog triggered; build halted.",
         "severity": "critical",
         "occurrence_count": 1,
         "evidence_refs": [
-          "reports/optimus-prime/watchdog_exit_signal.json"
+          "EVD-WATCHDOG-001"
         ],
-        "first_observed_at_utc": "2026-03-15T01:20:00Z",
-        "last_observed_at_utc": "2026-03-15T01:20:00Z"
+        "first_observed_at_utc": "",
+        "last_observed_at_utc": ""
       }
     ],
     "reason_code_taxonomy": {
       "compatibility_target": "gate_review_reason_codes",
       "canonical_reason_codes": [
-        "regression_detected",
-        "retry_limit_reached",
-        "stale_base_branch_commit",
-        "task_blocked"
+        "blocked_on_contract",
+        "dead_pid_retry_watchdog_warning",
+        "integration_regression",
+        "no_progress_watchdog"
       ],
-      "source_reason_code_aliases_applied": [
-        {
-          "source_reason_code": "blocking_issue_detected",
-          "normalized_reason_code": "task_blocked"
-        },
-        {
-          "source_reason_code": "regression_pattern_detected",
-          "normalized_reason_code": "regression_detected"
-        },
-        {
-          "source_reason_code": "retry_exhausted",
-          "normalized_reason_code": "retry_limit_reached"
-        },
-        {
-          "source_reason_code": "watchdog_timeout",
-          "normalized_reason_code": "stale_base_branch_commit"
-        }
-      ]
+      "source_reason_code_aliases_applied": []
     },
     "summary": {
-      "total_input_signals": 5,
+      "total_input_signals": 4,
       "total_normalized_signals": 4,
       "source_counts": {
         "blocker": 1,
@@ -115,9 +97,197 @@
       },
       "severity_counts": {
         "critical": 1,
-        "high": 2,
+        "high": 1,
         "low": 0,
-        "medium": 1
+        "medium": 2
+      }
+    },
+    "runtime_mode": "llm-first",
+    "execution_mode": "long-thinking",
+    "target_project_root": "/opt/optimus-prime/project-root",
+    "earth_root": "/opt/optimus-prime/Earth",
+    "output_root": "/opt/optimus-prime/project-root/strategy-out",
+    "revision_identity": "rev-req020-fixture-r1",
+    "risk_sources": {
+      "blockers": [
+        {
+          "signal_ref": "blocker.contract-alignment",
+          "signal_kind": "blocker",
+          "project_id": "",
+          "summary": "Blocked on contract alignment before gate review.",
+          "risk_level": "medium",
+          "reason_codes": [
+            "blocked_on_contract"
+          ],
+          "evidence_refs": [
+            "EVD-BLOCKER-001"
+          ],
+          "detected_at_utc": "2026-03-15T09:55:00Z",
+          "details": {}
+        }
+      ],
+      "retries": [
+        {
+          "signal_ref": "retry.redispatch-dead-pid",
+          "signal_kind": "retry",
+          "project_id": "",
+          "summary": "Repeated redispatch retries observed for a worker slot.",
+          "risk_level": "medium",
+          "reason_codes": [
+            "dead_pid_retry_watchdog_warning"
+          ],
+          "evidence_refs": [
+            "EVD-RETRY-001"
+          ],
+          "detected_at_utc": "",
+          "details": {
+            "retry_count": 4,
+            "max_retries": 5
+          }
+        }
+      ],
+      "watchdog_exits": [
+        {
+          "signal_ref": "watchdog.no-progress",
+          "signal_kind": "watchdog-exit",
+          "project_id": "",
+          "summary": "No-progress watchdog triggered; build halted.",
+          "risk_level": "critical",
+          "reason_codes": [
+            "no_progress_watchdog"
+          ],
+          "evidence_refs": [
+            "EVD-WATCHDOG-001"
+          ],
+          "detected_at_utc": "",
+          "details": {
+            "watchdog_kind": "no_progress_watchdog",
+            "triggered": true,
+            "consecutive_no_progress_cycles": 27,
+            "threshold_cycles": 25
+          }
+        }
+      ],
+      "regression_patterns": [
+        {
+          "signal_ref": "regression.integration-risk-normalization",
+          "signal_kind": "regression-pattern",
+          "project_id": "ground-control-hub",
+          "summary": "Integration regression detected across project boundary.",
+          "risk_level": "high",
+          "reason_codes": [
+            "integration_regression"
+          ],
+          "evidence_refs": [
+            "EVD-REGRESSION-001"
+          ],
+          "detected_at_utc": "2026-03-15T09:50:00Z",
+          "details": {
+            "failing_checks": [
+              "python3 -m pytest tests/integration/test_risk-signal-normalization.py -q"
+            ]
+          }
+        }
+      ]
+    },
+    "normalized_risk_signals": [
+      {
+        "risk_signal_id": "risk-signal.watchdog-exit.f9609bde46cd",
+        "signal_ref": "watchdog.no-progress",
+        "signal_kind": "watchdog-exit",
+        "project_id": "",
+        "risk_level": "critical",
+        "summary": "No-progress watchdog triggered; build halted.",
+        "reason_codes": [
+          "no_progress_watchdog"
+        ],
+        "evidence_refs": [
+          "EVD-WATCHDOG-001"
+        ],
+        "linked_cross_project_evidence_refs": [],
+        "detected_at_utc": "",
+        "details": {
+          "watchdog_kind": "no_progress_watchdog",
+          "triggered": true,
+          "consecutive_no_progress_cycles": 27,
+          "threshold_cycles": 25
+        }
+      },
+      {
+        "risk_signal_id": "risk-signal.regression-pattern.3bc426f80de4",
+        "signal_ref": "regression.integration-risk-normalization",
+        "signal_kind": "regression-pattern",
+        "project_id": "ground-control-hub",
+        "risk_level": "high",
+        "summary": "Integration regression detected across project boundary.",
+        "reason_codes": [
+          "integration_regression"
+        ],
+        "evidence_refs": [
+          "EVD-REGRESSION-001",
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+        ],
+        "linked_cross_project_evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+        ],
+        "detected_at_utc": "2026-03-15T09:50:00Z",
+        "details": {
+          "failing_checks": [
+            "python3 -m pytest tests/integration/test_risk-signal-normalization.py -q"
+          ]
+        }
+      },
+      {
+        "risk_signal_id": "risk-signal.blocker.1f715d8445dc",
+        "signal_ref": "blocker.contract-alignment",
+        "signal_kind": "blocker",
+        "project_id": "",
+        "risk_level": "medium",
+        "summary": "Blocked on contract alignment before gate review.",
+        "reason_codes": [
+          "blocked_on_contract"
+        ],
+        "evidence_refs": [
+          "EVD-BLOCKER-001"
+        ],
+        "linked_cross_project_evidence_refs": [],
+        "detected_at_utc": "2026-03-15T09:55:00Z",
+        "details": {}
+      },
+      {
+        "risk_signal_id": "risk-signal.retry.61f27e79241a",
+        "signal_ref": "retry.redispatch-dead-pid",
+        "signal_kind": "retry",
+        "project_id": "",
+        "risk_level": "medium",
+        "summary": "Repeated redispatch retries observed for a worker slot.",
+        "reason_codes": [
+          "dead_pid_retry_watchdog_warning"
+        ],
+        "evidence_refs": [
+          "EVD-RETRY-001"
+        ],
+        "linked_cross_project_evidence_refs": [],
+        "detected_at_utc": "",
+        "details": {
+          "retry_count": 4,
+          "max_retries": 5
+        }
+      }
+    ],
+    "risk_rollup": {
+      "total": 4,
+      "by_kind": {
+        "blocker": 1,
+        "regression-pattern": 1,
+        "retry": 1,
+        "watchdog-exit": 1
+      },
+      "by_risk_level": {
+        "critical": 1,
+        "high": 1,
+        "low": 0,
+        "medium": 2
       }
     }
   },
@@ -125,79 +295,302 @@
     "tool": "strategy-context-sweep",
     "tool_version": "1.0.0"
   },
-  "call_metadata": {
-    "reproducibility": "deterministic-input-fingerprint",
-    "canonical_input_sha256": "f0d87a544b3350fe3412028e5e2da421418f10608cd4deaa32fc2e6930acc5c4",
-    "reproducible_call_id": "req020-f0d87a544b3350fe",
-    "canonical_input": {
-      "risk_signals": [
+  "processing_behavior": {
+    "strategy": "risk-signal-normalization-broad-sweep",
+    "reasoning_mode": "long-thinking",
+    "heuristic_summarization_only": false,
+    "context_inputs": {
+      "normalized_at_utc": "2026-03-15T10:00:00Z",
+      "target_project": {
+        "project_root": "/opt/optimus-prime/project-root",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-063/TASK_EVIDENCE.json"
+        ]
+      },
+      "earth_sweep": {
+        "earth_root": "/opt/optimus-prime/Earth",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/portfolio.json"
+        ]
+      },
+      "cross_project_context": [
         {
-          "signal_source": "blocker",
-          "reason_code": "task_blocked",
-          "source_reason_code": "blocking_issue_detected",
-          "summary": "Worker packet blocked by missing dependency contract.",
-          "severity": "high",
-          "occurrence_count": 2,
+          "project_id": "ground-control-hub",
+          "project_root": "/opt/optimus-prime/Earth/ground-control-hub",
           "evidence_refs": [
-            "reports/optimus-prime/planning/evidence/TASK-062/TASK_EVIDENCE.json"
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
           ],
-          "first_observed_at_utc": "2026-03-15T01:10:00Z",
-          "last_observed_at_utc": "2026-03-15T01:14:00Z"
-        },
-        {
-          "signal_source": "blocker",
-          "reason_code": "task_blocked",
-          "source_reason_code": "task_blocked",
-          "summary": "Worker packet blocked by missing dependency contract.",
-          "severity": "medium",
-          "occurrence_count": 1,
-          "evidence_refs": [
-            "reports/optimus-prime/planning/evidence/TASK-062/TASK_BLOCKERS.json"
-          ],
-          "first_observed_at_utc": "2026-03-15T01:15:00Z",
-          "last_observed_at_utc": "2026-03-15T01:16:00Z"
-        },
-        {
-          "signal_source": "regression_pattern",
-          "reason_code": "regression_detected",
-          "source_reason_code": "regression_pattern_detected",
-          "summary": "Regression pattern observed in contract test pass-rate trend.",
-          "severity": "high",
-          "occurrence_count": 2,
-          "evidence_refs": [
-            "reports/optimus-prime/regression/contract-test-trend.json"
-          ],
-          "first_observed_at_utc": "2026-03-15T00:55:00Z",
-          "last_observed_at_utc": "2026-03-15T01:18:00Z"
-        },
-        {
-          "signal_source": "retry",
-          "reason_code": "retry_limit_reached",
-          "source_reason_code": "retry_exhausted",
-          "summary": "Dispatch retry budget exhausted for TASK-062 worker handoff.",
-          "severity": "medium",
-          "occurrence_count": 3,
-          "evidence_refs": [
-            "reports/optimus-prime/planning/evidence/TASK-062/retry-log.json"
-          ],
-          "first_observed_at_utc": "2026-03-15T01:00:00Z",
-          "last_observed_at_utc": "2026-03-15T01:09:00Z"
-        },
-        {
-          "signal_source": "watchdog_exit",
-          "reason_code": "stale_base_branch_commit",
-          "source_reason_code": "watchdog_timeout",
-          "summary": "Watchdog exited due to stale base branch commit age.",
-          "severity": "critical",
-          "occurrence_count": 1,
-          "evidence_refs": [
-            "reports/optimus-prime/watchdog_exit_signal.json"
-          ],
-          "first_observed_at_utc": "2026-03-15T01:20:00Z",
-          "last_observed_at_utc": "2026-03-15T01:20:00Z"
+          "context_note": "Earth sweep context for ground-control dependencies."
         }
       ],
-      "normalized_at_utc": "2026-03-15T01:30:00Z"
+      "risk_sources": {
+        "blockers": [
+          {
+            "signal_ref": "blocker.contract-alignment",
+            "signal_kind": "blocker",
+            "project_id": "",
+            "summary": "Blocked on contract alignment before gate review.",
+            "risk_level": "medium",
+            "reason_codes": [
+              "blocked_on_contract"
+            ],
+            "evidence_refs": [
+              "EVD-BLOCKER-001"
+            ],
+            "detected_at_utc": "2026-03-15T09:55:00Z",
+            "details": {}
+          }
+        ],
+        "retries": [
+          {
+            "signal_ref": "retry.redispatch-dead-pid",
+            "signal_kind": "retry",
+            "project_id": "",
+            "summary": "Repeated redispatch retries observed for a worker slot.",
+            "risk_level": "medium",
+            "reason_codes": [
+              "dead_pid_retry_watchdog_warning"
+            ],
+            "evidence_refs": [
+              "EVD-RETRY-001"
+            ],
+            "detected_at_utc": "",
+            "details": {
+              "retry_count": 4,
+              "max_retries": 5
+            }
+          }
+        ],
+        "watchdog_exits": [
+          {
+            "signal_ref": "watchdog.no-progress",
+            "signal_kind": "watchdog-exit",
+            "project_id": "",
+            "summary": "No-progress watchdog triggered; build halted.",
+            "risk_level": "critical",
+            "reason_codes": [
+              "no_progress_watchdog"
+            ],
+            "evidence_refs": [
+              "EVD-WATCHDOG-001"
+            ],
+            "detected_at_utc": "",
+            "details": {
+              "watchdog_kind": "no_progress_watchdog",
+              "triggered": true,
+              "consecutive_no_progress_cycles": 27,
+              "threshold_cycles": 25
+            }
+          }
+        ],
+        "regression_patterns": [
+          {
+            "signal_ref": "regression.integration-risk-normalization",
+            "signal_kind": "regression-pattern",
+            "project_id": "ground-control-hub",
+            "summary": "Integration regression detected across project boundary.",
+            "risk_level": "high",
+            "reason_codes": [
+              "integration_regression"
+            ],
+            "evidence_refs": [
+              "EVD-REGRESSION-001"
+            ],
+            "detected_at_utc": "2026-03-15T09:50:00Z",
+            "details": {
+              "failing_checks": [
+                "python3 -m pytest tests/integration/test_risk-signal-normalization.py -q"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "context_usage": {
+      "target_project_context_used": true,
+      "earth_sweep_context_used": true,
+      "cross_project_context_used": true,
+      "target_project_refs_used": [
+        "reports/optimus-prime/planning/evidence/TASK-063/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_refs_used": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json"
+      ],
+      "cross_project_refs_used": [
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+      ],
+      "cross_project_projects_considered": [
+        "ground-control-hub"
+      ],
+      "cross_project_projects_used": [
+        "ground-control-hub"
+      ],
+      "evidence_refs_used": [
+        "EVD-BLOCKER-001",
+        "EVD-REGRESSION-001",
+        "EVD-RETRY-001",
+        "EVD-WATCHDOG-001",
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/optimus-prime/planning/evidence/TASK-063/TASK_EVIDENCE.json"
+      ]
+    },
+    "recommendation": {
+      "decision": "pause",
+      "rationale": "Critical risk signals detected; remediate before proceeding with strategy execution. Risk counts: {'critical': 1, 'high': 1, 'low': 0, 'medium': 2}.",
+      "confidence": "high",
+      "evidence_refs": [
+        "EVD-BLOCKER-001",
+        "EVD-REGRESSION-001",
+        "EVD-RETRY-001",
+        "EVD-WATCHDOG-001",
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/optimus-prime/planning/evidence/TASK-063/TASK_EVIDENCE.json"
+      ],
+      "recommended_actions": [
+        {
+          "action_id": "mitigate-regression-pattern-cac96c092117",
+          "summary": "Mitigate high risk: Integration regression detected across project boundary.",
+          "rationale": "Risk signal normalization surfaced a high-severity risk that can affect strategy execution reliability.",
+          "action_scope": "cross-project",
+          "next_step": "Add a concrete remediation task, attach evidence refs, and rerun the relevant sweep/test to confirm risk reduction.",
+          "evidence_refs": [
+            "EVD-REGRESSION-001",
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+          ]
+        },
+        {
+          "action_id": "mitigate-watchdog-exit-dfe1e82629a8",
+          "summary": "Mitigate critical risk: No-progress watchdog triggered; build halted.",
+          "rationale": "Risk signal normalization surfaced a high-severity risk that can affect strategy execution reliability.",
+          "action_scope": "local",
+          "next_step": "Add a concrete remediation task, attach evidence refs, and rerun the relevant sweep/test to confirm risk reduction.",
+          "evidence_refs": [
+            "EVD-WATCHDOG-001"
+          ]
+        }
+      ],
+      "cross_project_obligations": [],
+      "open_risks": []
+    }
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "92d12b397a01d72d3e77d6939c6af3e2e58c086986379ac8dd54d6c341dfd236",
+    "reproducible_call_id": "req020-92d12b397a01d72d",
+    "canonical_input": {
+      "earth_root": "/opt/optimus-prime/Earth",
+      "execution_mode": "long-thinking",
+      "output_root": "/opt/optimus-prime/project-root/strategy-out",
+      "revision_identity": "rev-req020-fixture-r1",
+      "runtime_mode": "llm-first",
+      "target_project_root": "/opt/optimus-prime/project-root"
+    },
+    "processing_input_sha256": "a3406612c2d1337ae8f867c666277e9922426f93e7a916c46e26a0fa30d04cfa",
+    "processing_call_id": "req020-processing-a3406612c2d1337a",
+    "canonical_processing_input": {
+      "input_variant": "rich-risk-sources",
+      "normalized_at_utc": "2026-03-15T10:00:00Z",
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-063/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json"
+      ],
+      "cross_project_context": [
+        {
+          "project_id": "ground-control-hub",
+          "project_root": "/opt/optimus-prime/Earth/ground-control-hub",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+          ],
+          "context_note": "Earth sweep context for ground-control dependencies."
+        }
+      ],
+      "risk_sources": {
+        "blockers": [
+          {
+            "signal_ref": "blocker.contract-alignment",
+            "signal_kind": "blocker",
+            "project_id": "",
+            "summary": "Blocked on contract alignment before gate review.",
+            "risk_level": "medium",
+            "reason_codes": [
+              "blocked_on_contract"
+            ],
+            "evidence_refs": [
+              "EVD-BLOCKER-001"
+            ],
+            "detected_at_utc": "2026-03-15T09:55:00Z",
+            "details": {}
+          }
+        ],
+        "retries": [
+          {
+            "signal_ref": "retry.redispatch-dead-pid",
+            "signal_kind": "retry",
+            "project_id": "",
+            "summary": "Repeated redispatch retries observed for a worker slot.",
+            "risk_level": "medium",
+            "reason_codes": [
+              "dead_pid_retry_watchdog_warning"
+            ],
+            "evidence_refs": [
+              "EVD-RETRY-001"
+            ],
+            "detected_at_utc": "",
+            "details": {
+              "retry_count": 4,
+              "max_retries": 5
+            }
+          }
+        ],
+        "watchdog_exits": [
+          {
+            "signal_ref": "watchdog.no-progress",
+            "signal_kind": "watchdog-exit",
+            "project_id": "",
+            "summary": "No-progress watchdog triggered; build halted.",
+            "risk_level": "critical",
+            "reason_codes": [
+              "no_progress_watchdog"
+            ],
+            "evidence_refs": [
+              "EVD-WATCHDOG-001"
+            ],
+            "detected_at_utc": "",
+            "details": {
+              "watchdog_kind": "no_progress_watchdog",
+              "triggered": true,
+              "consecutive_no_progress_cycles": 27,
+              "threshold_cycles": 25
+            }
+          }
+        ],
+        "regression_patterns": [
+          {
+            "signal_ref": "regression.integration-risk-normalization",
+            "signal_kind": "regression-pattern",
+            "project_id": "ground-control-hub",
+            "summary": "Integration regression detected across project boundary.",
+            "risk_level": "high",
+            "reason_codes": [
+              "integration_regression"
+            ],
+            "evidence_refs": [
+              "EVD-REGRESSION-001"
+            ],
+            "detected_at_utc": "2026-03-15T09:50:00Z",
+            "details": {
+              "failing_checks": [
+                "python3 -m pytest tests/integration/test_risk-signal-normalization.py -q"
+              ]
+            }
+          }
+        ]
+      },
+      "legacy_risk_signals": []
     }
   }
 }
