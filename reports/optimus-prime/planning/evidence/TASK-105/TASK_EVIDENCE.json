@@ -1,0 +1,177 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-2",
+  "task_id": "TASK-105",
+  "requirement_ids": [
+    "REQ-031"
+  ],
+  "updated_at": "2026-03-16T14:45:00Z",
+  "task_kind": "implementation",
+  "dev": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-e2e-strategy-llm-pipeline-smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-105/e2e_strategy_llm_pipeline_smoke.output.txt"
+      },
+      {
+        "name": "pytest-integration-call-6-kpi-impact-estimation-reasoning",
+        "command": "python3 -m pytest tests/integration/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-105/integration_call-6-kpi-impact-estimation-reasoning.output.txt"
+      },
+      {
+        "name": "pytest-contract-call-6-kpi-impact-estimation-reasoning",
+        "command": "python3 -m pytest tests/contracts/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-105/contract_call-6-kpi-impact-estimation-reasoning.output.txt"
+      },
+      {
+        "name": "pytest-hardening-call-6-kpi-impact-estimation-reasoning",
+        "command": "python3 -m pytest tests/hardening/test_call-6-kpi-impact-estimation-reasoning_hardening.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-105/hardening_call-6-kpi-impact-estimation-reasoning.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "req031-trace-rows-serialized",
+        "status": "passed",
+        "details": "Call-6 writes one replay-stable trace row per call to strategy/current/llm_call_trace.jsonl and the copied TASK-105 trace artifact."
+      },
+      {
+        "name": "req031-replay-stable-processing-input",
+        "status": "passed",
+        "details": "Reordered recommendation, KPI, and assumption inputs preserve canonical processing input, trace rows, and emitted estimate ids."
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      {
+        "label": "strategy-llm-pipeline-source",
+        "path": "scripts/strategy_llm_pipeline.py",
+        "kind": "source"
+      },
+      {
+        "label": "req031-contract-test",
+        "path": "tests/contracts/test_call-6-kpi-impact-estimation-reasoning.py",
+        "kind": "test"
+      },
+      {
+        "label": "req031-integration-test",
+        "path": "tests/integration/test_call-6-kpi-impact-estimation-reasoning.py",
+        "kind": "test"
+      },
+      {
+        "label": "req031-hardening-test",
+        "path": "tests/hardening/test_call-6-kpi-impact-estimation-reasoning_hardening.py",
+        "kind": "test"
+      },
+      {
+        "label": "req031-call-trace-runtime",
+        "path": "strategy/current/llm_call_trace.jsonl",
+        "kind": "jsonl"
+      },
+      {
+        "label": "req031-call-trace-evidence",
+        "path": "reports/optimus-prime/planning/evidence/TASK-105/call-6-kpi-impact-estimation-trace.jsonl",
+        "kind": "jsonl"
+      },
+      {
+        "label": "req031-call-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-105/call-6-kpi-impact-estimation-reasoning.output.json",
+        "kind": "json"
+      }
+    ]
+  },
+  "test": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-e2e-strategy-llm-pipeline-smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.13s",
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-105/e2e_strategy_llm_pipeline_smoke.output.txt"
+      },
+      {
+        "name": "pytest-integration-call-6-kpi-impact-estimation-reasoning",
+        "command": "python3 -m pytest tests/integration/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s",
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-105/integration_call-6-kpi-impact-estimation-reasoning.output.txt"
+      },
+      {
+        "name": "pytest-contract-call-6-kpi-impact-estimation-reasoning",
+        "command": "python3 -m pytest tests/contracts/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.08s",
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-105/contract_call-6-kpi-impact-estimation-reasoning.output.txt"
+      },
+      {
+        "name": "pytest-hardening-call-6-kpi-impact-estimation-reasoning",
+        "command": "python3 -m pytest tests/hardening/test_call-6-kpi-impact-estimation-reasoning_hardening.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s",
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-105/hardening_call-6-kpi-impact-estimation-reasoning.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "call-trace-artifacts-recorded",
+        "status": "passed",
+        "details": "TASK_EVIDENCE references both strategy/current/llm_call_trace.jsonl and the copied TASK-105 call trace artifact."
+      }
+    ],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": [
+      {
+        "label": "pytest-e2e-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-105/e2e_strategy_llm_pipeline_smoke.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "pytest-integration-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-105/integration_call-6-kpi-impact-estimation-reasoning.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "pytest-contract-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-105/contract_call-6-kpi-impact-estimation-reasoning.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "pytest-hardening-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-105/hardening_call-6-kpi-impact-estimation-reasoning.output.txt",
+        "kind": "text"
+      }
+    ]
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "passed",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "acceptance_checks_passed",
+      "call_trace_artifacts_recorded",
+      "deterministic_replay_verified"
+    ]
+  }
+}

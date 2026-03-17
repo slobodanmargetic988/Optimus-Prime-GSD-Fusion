@@ -1,81 +1,149 @@
 #!/usr/bin/env python3
-"""Contract/data-model surfaces for strategy LLM pipeline calls."""
+"""REQ-025, REQ-026, REQ-029, REQ-030, and REQ-031 contract/data-model surface for strategy LLM pipeline flows."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
+
+TOOL = "strategy-llm-pipeline"
+TOOL_VERSION = "1.0.0"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+REQ_025_REQUIREMENT_ID = "REQ-025"
+REQ_025_SCHEMA_VERSION = "req-025.multi-call-strategy-pipeline-planner.v1"
+REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION = "req-025.llm-call-trace-row.v1"
+REQ_026_REQUIREMENT_ID = "REQ-026"
+REQ_026_SCHEMA_VERSION = "req-026.call-1-situational-analysis-reasoning.v1"
+REQ_026_LLM_CALL_TRACE_SCHEMA_VERSION = "req-026.llm-call-trace-row.v1"
+REQ_026_ANALYSIS_TYPE = "call_1_situational_analysis_reasoning"
+REQ_029_REQUIREMENT_ID = "REQ-029"
+REQ_029_SCHEMA_VERSION = "req-029.call-4-recommendation-synthesis.v1"
+REQ_029_LLM_CALL_TRACE_SCHEMA_VERSION = "req-029.llm-call-trace-row.v1"
+REQ_029_ANALYSIS_TYPE = "call_4_recommendation_synthesis"
+REQ_030_REQUIREMENT_ID = "REQ-030"
+REQ_030_SCHEMA_VERSION = "req-030.call-5-sequencing-and-lane-design-reasoning.v1"
+REQ_030_LLM_CALL_TRACE_SCHEMA_VERSION = "req-030.llm-call-trace-row.v1"
+REQ_030_ANALYSIS_TYPE = "call_5_sequencing_and_lane_design_reasoning"
+REQ_031_REQUIREMENT_ID = "REQ-031"
+REQ_031_SCHEMA_VERSION = "req-031.call-6-kpi-impact-estimation-reasoning.v1"
+REQ_031_LLM_CALL_TRACE_SCHEMA_VERSION = "req-031.llm-call-trace-row.v1"
+REQ_031_ANALYSIS_TYPE = "call_6_kpi_impact_estimation_reasoning"
+REQ_034_REQUIREMENT_ID = "REQ-034"
+REQ_034_SCHEMA_VERSION = "req-034.cross-call-memory-handoff-contract.v1"
+REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION = "req-034.llm-call-trace-row.v1"
+REQ_034_ANALYSIS_TYPE = "cross_call_memory_handoff_contract"
+REQ_026_PROCESSING_STRATEGY = "call-1-situational-analysis"
+REQ_026_REASONING_MODE = "deterministic-broad-sweep"
+REQ_029_PROCESSING_STRATEGY = "call-4-recommendation-synthesis"
+REQ_029_REASONING_MODE = "deterministic-replay-synthesis"
+REQ_030_PROCESSING_STRATEGY = "call-5-sequencing-and-lane-design-reasoning"
+REQ_030_REASONING_MODE = "deterministic-lane-replay-planning"
+REQ_031_PROCESSING_STRATEGY = "call-6-kpi-impact-estimation-reasoning"
+REQ_031_REASONING_MODE = "deterministic-kpi-impact-replay-estimation"
+REQ_034_PROCESSING_STRATEGY = "cross-call-memory-handoff"
+REQ_034_REASONING_MODE = "deterministic-bounded-memory-replay"
+RUNTIME_MODE = "llm-first"
+EXECUTION_MODE = "long-thinking"
+PIPELINE_STRATEGY = "multi-call-strategy-pipeline-planner"
+MIN_CALL_DEPTH = 1
+MAX_CALL_DEPTH = 8
+DEFAULT_CALL_DEPTH = 4
+LLM_CALL_TRACE_RELATIVE_PATH = "strategy/current/llm_call_trace.jsonl"
+REQ_026_ALLOWED_PLANNING_STATUSES = {"ready", "partial", "blocked"}
+REQ_026_ALLOWED_RUNTIME_STATUSES = {"healthy", "degraded", "blocked"}
+REQ_026_ALLOWED_RECOMMENDATION_SCOPES = {"local", "cross-project"}
+REQ_029_ALLOWED_RECOMMENDATION_SCOPES = {"local", "cross-project"}
+REQ_029_RECOMMENDATION_ID_RE = re.compile(r"^rec\.[a-z0-9]+(?:-[a-z0-9]+)*$")
+REQ_030_ALLOWED_LANE_SCOPES = {"local", "cross-project"}
+REQ_030_RECOMMENDATION_ID_RE = re.compile(r"^rec\.[a-z0-9]+(?:-[a-z0-9]+)*$")
+REQ_030_LANE_ID_RE = re.compile(r"^lane\.[a-z0-9]+(?:-[a-z0-9]+)*$")
+REQ_034_MEMORY_ID_RE = re.compile(r"^memory\.[a-z0-9]+(?:-[a-z0-9]+)*$")
+REQ_034_ALLOWED_MEMORY_SCOPES = {"local", "cross-project"}
+REQ_034_MAX_MEMORY_ITEMS_PER_CALL = 3
+REQ_031_ALLOWED_ADOPTION_STATUSES = {"planned", "conditional", "pilot"}
+REQ_031_ALLOWED_CONFIDENCE = {"high", "medium", "low"}
+REQ_031_ALLOWED_DIRECTIONS = {"increase", "decrease"}
+REQ_031_KPI_ID_RE = re.compile(r"^kpi\.[a-z0-9]+(?:-[a-z0-9]+)*$")
+REQ_031_ESTIMATE_ID_RE = re.compile(r"^estimate::rec\.[a-z0-9]+(?:-[a-z0-9]+)*::kpi\.[a-z0-9]+(?:-[a-z0-9]+)*$")
+REQ_031_CALL_OBJECTIVES = {
+    "call-1": "Assess target-project state and evidence anchors required for later strategy reasoning.",
+    "call-2": "Refine implementation constraints into deterministic execution-planning inputs.",
+    "call-3": "Validate dependency and evidence readiness before recommendation promotion.",
+    "call-4": "Synthesize evidence-backed recommendation drafts from earlier call outputs.",
+    "call-5": "Sequence recommendation adoption lanes for replay-stable branch-head execution.",
+    "call-6": "Estimate KPI impact from lane adoption using evidence-backed assumptions and explicit caveats.",
+}
+
+DEFAULT_STAGE_BLUEPRINTS = (
+    {
+        "purpose": "Frame REQ-025 strategy objective and evidence boundaries.",
+        "expected_output": "strategy_scope_frame",
+    },
+    {
+        "purpose": "Expand multi-call options for heavy-thinking execution.",
+        "expected_output": "candidate_reasoning_paths",
+    },
+    {
+        "purpose": "Resolve call dependencies and strict evidence coverage.",
+        "expected_output": "dependency_checked_pipeline",
+    },
+    {
+        "purpose": "Finalize executable pipeline with explicit per-call outputs.",
+        "expected_output": "final_pipeline_plan",
+    },
+)
+
+LOG_ROOT = Path("/Users/slobodan/projects/LOGS")
+LOG_PATH = LOG_ROOT / "strategy_llm_pipeline.log"
+LOG_BUDGET_CHECK_STAMP = LOG_ROOT / ".log_budget_check.strategy_llm_pipeline"
+LOG_BUDGET_CHECK_INTERVAL_SECONDS = 15 * 60
+LOG_BUDGET_MAX_BYTES = 3 * 1024 * 1024 * 1024
 
 
-REQ_046_SCHEMA_VERSION = "req-046.final-strategy-synthesis-composer.v1"
-REQ_046_REQUIREMENT_ID = "REQ-046"
-REQ_046_ANALYSIS_TYPE = "final_strategy_synthesis_composer"
-REQ_046_CALL_ID = "final-strategy-synthesis"
-_PACKET_KINDS = ("target-project", "cross-project")
-_PRIORITY_LEVELS = ("high", "medium", "low")
-_ROUTING_CONFLICT_REASON = "conflicting_packet_routing"
-_OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE = "missing_earth_sweep_evidence_refs"
-_OPEN_RISK_REASON_UNRESOLVED_IDEA = "unresolved_idea_open_risk"
-_EARTH_SWEEP_REF_PREFIXES = ("earth-sweep/", "reports/earth/sweeps/")
-_LOG_BUDGET_MAX_BYTES = 3 * 1024 * 1024 * 1024
-_LOG_BUDGET_CHECK_INTERVAL_SECONDS = 15 * 60
+class Req026Error(ValueError):
+    """Raised when REQ-026 input is malformed."""
 
 
-def _utc_timestamp() -> str:
+class Req029Error(ValueError):
+    """Raised when REQ-029 input is malformed."""
+
+
+class Req030Error(ValueError):
+    """Raised when REQ-030 input is malformed."""
+
+
+class Req031Error(ValueError):
+    """Raised when REQ-031 input is malformed."""
+
+
+class Req034Error(ValueError):
+    """Raised when REQ-034 input is malformed."""
+
+
+def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _format_ts_line(message: str, *, now_utc: str | None = None) -> str:
-    stamp = now_utc.strip() if isinstance(now_utc, str) and now_utc.strip() else _utc_timestamp()
-    return f"[{stamp}] {message}"
+def _as_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
-def _default_log_dir() -> Path:
-    return Path.home() / "projects" / "LOGS"
-
-
-def _log_path() -> Path:
-    return _default_log_dir() / "strategy_llm_pipeline.log"
-
-
-def _log_budget_check_stamp() -> Path:
-    return _default_log_dir() / ".log_budget_check.strategy_llm_pipeline"
-
-
-def _maintain_log_budget() -> None:
-    log_dir = _default_log_dir()
-    stamp = _log_budget_check_stamp()
-    now = time.time()
-    try:
-        if stamp.exists() and now - stamp.stat().st_mtime < _LOG_BUDGET_CHECK_INTERVAL_SECONDS:
-            return
-        log_dir.mkdir(parents=True, exist_ok=True)
-        for candidate in log_dir.glob("*.log"):
-            if candidate.stat().st_size <= _LOG_BUDGET_MAX_BYTES:
-                continue
-            candidate.write_text("", encoding="utf-8")
-        stamp.touch()
-    except OSError:
-        return
-
-
-def _emit_debug(message: str, *, now_utc: str | None = None) -> None:
-    line = _format_ts_line(message, now_utc=now_utc)
-    print(line, file=sys.stderr)
-    try:
-        _maintain_log_budget()
-        log_file = _log_path()
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        with log_file.open("a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
-    except OSError:
-        return
+def _require_text(value: Any, *, field_name: str) -> str:
+    text = _as_text(value)
+    if not text:
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return text
 
 
 def _require_mapping(value: Any, *, field_name: str) -> Mapping[str, Any]:
@@ -84,669 +152,836 @@ def _require_mapping(value: Any, *, field_name: str) -> Mapping[str, Any]:
     return value
 
 
-def _require_nonempty_text(value: Any, *, field_name: str) -> str:
-    if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a string")
-    text = value.strip()
-    if not text:
-        raise ValueError(f"{field_name} must be a non-empty string")
-    return text
+def _require_number(value: Any, *, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be a number")
+    return float(value)
 
 
-def _normalize_root(raw_path: Any, *, field_name: str) -> str:
-    normalized = str(Path(_require_nonempty_text(raw_path, field_name=field_name)).expanduser().resolve())
+def _normalize_root(value: Any, *, field_name: str) -> str:
+    normalized = str(Path(_require_text(value, field_name=field_name)).expanduser().resolve())
     if not normalized.startswith("/"):
         raise ValueError(f"{field_name} must normalize to an absolute path")
     return normalized
 
 
-def _normalize_string_list(raw_value: Any, *, field_name: str, allow_empty: bool = True) -> list[str]:
-    if raw_value is None:
-        if allow_empty:
-            return []
-        raise ValueError(f"{field_name} must be a non-empty list of strings")
-    if not isinstance(raw_value, list):
-        raise ValueError(f"{field_name} must be a list of strings")
-    normalized: set[str] = set()
-    for index, item in enumerate(raw_value):
-        normalized.add(_require_nonempty_text(item, field_name=f"{field_name}[{index}]"))
-    values = sorted(normalized)
-    if not allow_empty and not values:
-        raise ValueError(f"{field_name} must be a non-empty list of strings")
-    return values
-
-
-def _normalize_positive_int(raw_value: Any, *, field_name: str) -> int:
-    if isinstance(raw_value, bool) or not isinstance(raw_value, int):
-        raise ValueError(f"{field_name} must be a positive integer")
-    if raw_value < 1:
-        raise ValueError(f"{field_name} must be a positive integer")
+def _normalize_call_depth(raw_value: Any) -> int:
+    if isinstance(raw_value, bool):
+        raise ValueError("call_depth must be an integer")
+    if not isinstance(raw_value, int):
+        raise ValueError("call_depth must be an integer")
+    if raw_value < MIN_CALL_DEPTH or raw_value > MAX_CALL_DEPTH:
+        raise ValueError(f"call_depth must be between {MIN_CALL_DEPTH} and {MAX_CALL_DEPTH}")
     return raw_value
 
 
-def _stable_id_fragment(*parts: str) -> str:
-    raw = "|".join(parts)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
-
-
-def _collect_unique_refs(*ref_groups: list[str]) -> list[str]:
-    refs: set[str] = set()
-    for group in ref_groups:
-        refs.update(group)
-    return sorted(refs)
-
-
-def _is_earth_sweep_ref(value: str) -> bool:
-    ref = str(value).strip().lower()
-    return any(ref.startswith(prefix) for prefix in _EARTH_SWEEP_REF_PREFIXES)
-
-
-def _priority_rank(priority: str) -> int:
-    return {level: index for index, level in enumerate(_PRIORITY_LEVELS)}[priority]
-
-
-def _normalize_target_project(raw_value: Any) -> dict[str, str]:
-    target_project = _require_mapping(raw_value, field_name="target_project")
-    expected_keys = {"project_id", "project_root"}
-    unexpected = sorted(set(target_project.keys()) - expected_keys)
-    if unexpected:
-        raise ValueError(f"target_project has unexpected keys: {unexpected}")
-    return {
-        "project_id": _require_nonempty_text(target_project.get("project_id"), field_name="target_project.project_id"),
-        "project_root": _normalize_root(target_project.get("project_root"), field_name="target_project.project_root"),
-    }
-
-
-def _normalize_call_trace(raw_value: Any, *, field_name: str) -> dict[str, str]:
-    call_trace = _require_mapping(raw_value, field_name=field_name)
-    expected_keys = {"trace_id", "trace_ref", "artifact_ref", "checked_at_utc"}
-    unexpected = sorted(set(call_trace.keys()) - expected_keys)
-    if unexpected:
-        raise ValueError(f"{field_name} has unexpected keys: {unexpected}")
-    return {
-        "trace_id": _require_nonempty_text(call_trace.get("trace_id"), field_name=f"{field_name}.trace_id"),
-        "trace_ref": _require_nonempty_text(call_trace.get("trace_ref"), field_name=f"{field_name}.trace_ref"),
-        "artifact_ref": _require_nonempty_text(call_trace.get("artifact_ref"), field_name=f"{field_name}.artifact_ref"),
-        "checked_at_utc": _require_nonempty_text(
-            call_trace.get("checked_at_utc"),
-            field_name=f"{field_name}.checked_at_utc",
-        ),
-    }
-
-
-def _normalize_input_recommendation(raw_value: Any, *, field_name: str) -> dict[str, Any]:
-    recommendation = _require_mapping(raw_value, field_name=field_name)
-    expected_keys = {
-        "recommendation_id",
-        "summary",
-        "rationale",
-        "packet_kind",
-        "peer_project_id",
-        "lane",
-        "sequence_hint",
-        "priority",
-        "evidence_refs",
-    }
-    unexpected = sorted(set(recommendation.keys()) - expected_keys)
-    if unexpected:
-        raise ValueError(f"{field_name} has unexpected keys: {unexpected}")
-
-    packet_kind = _require_nonempty_text(recommendation.get("packet_kind"), field_name=f"{field_name}.packet_kind").lower()
-    if packet_kind not in _PACKET_KINDS:
-        raise ValueError(f"{field_name}.packet_kind must be one of: {list(_PACKET_KINDS)}")
-
-    peer_project_id = ""
-    if recommendation.get("peer_project_id") is not None:
-        peer_project_id = _require_nonempty_text(
-            recommendation.get("peer_project_id"),
-            field_name=f"{field_name}.peer_project_id",
-        )
-    if packet_kind == "cross-project" and not peer_project_id:
-        raise ValueError(f"{field_name}.peer_project_id must be set when packet_kind is cross-project")
-    if packet_kind == "target-project" and peer_project_id:
-        raise ValueError(f"{field_name}.peer_project_id must be empty when packet_kind is target-project")
-
-    priority = _require_nonempty_text(
-        recommendation.get("priority") if recommendation.get("priority") is not None else "medium",
-        field_name=f"{field_name}.priority",
-    ).lower()
-    if priority not in _PRIORITY_LEVELS:
-        raise ValueError(f"{field_name}.priority must be one of: {list(_PRIORITY_LEVELS)}")
-
-    return {
-        "recommendation_id": _require_nonempty_text(
-            recommendation.get("recommendation_id"),
-            field_name=f"{field_name}.recommendation_id",
-        ),
-        "summary": _require_nonempty_text(recommendation.get("summary"), field_name=f"{field_name}.summary"),
-        "rationale": _require_nonempty_text(recommendation.get("rationale"), field_name=f"{field_name}.rationale"),
-        "packet_kind": packet_kind,
-        "peer_project_id": peer_project_id,
-        "lane": _require_nonempty_text(recommendation.get("lane"), field_name=f"{field_name}.lane"),
-        "sequence_hint": _normalize_positive_int(
-            recommendation.get("sequence_hint"),
-            field_name=f"{field_name}.sequence_hint",
-        ),
-        "priority": priority,
-        "evidence_refs": _normalize_string_list(
-            recommendation.get("evidence_refs"),
-            field_name=f"{field_name}.evidence_refs",
-            allow_empty=False,
-        ),
-    }
-
-
-def _normalize_validated_call_outputs(raw_value: Any) -> list[dict[str, Any]]:
-    if not isinstance(raw_value, list) or not raw_value:
-        raise ValueError("validated_call_outputs must be a non-empty list")
-
-    normalized_calls: list[dict[str, Any]] = []
-    seen_trace_ids: set[str] = set()
-    for index, item in enumerate(raw_value):
-        field_name = f"validated_call_outputs[{index}]"
-        call_output = _require_mapping(item, field_name=field_name)
-        expected_keys = {"requirement_id", "call_id", "call_status", "call_trace", "recommendations"}
-        unexpected = sorted(set(call_output.keys()) - expected_keys)
-        if unexpected:
-            raise ValueError(f"{field_name} has unexpected keys: {unexpected}")
-
-        call_status = _require_nonempty_text(
-            call_output.get("call_status") if call_output.get("call_status") is not None else "validated",
-            field_name=f"{field_name}.call_status",
-        ).lower()
-        if call_status != "validated":
-            raise ValueError(f"{field_name}.call_status must be validated")
-
-        call_trace = _normalize_call_trace(call_output.get("call_trace"), field_name=f"{field_name}.call_trace")
-        if call_trace["trace_id"] in seen_trace_ids:
-            raise ValueError(f"{field_name}.call_trace.trace_id duplicates {call_trace['trace_id']}")
-        seen_trace_ids.add(call_trace["trace_id"])
-
-        raw_recommendations = call_output.get("recommendations")
-        if not isinstance(raw_recommendations, list) or not raw_recommendations:
-            raise ValueError(f"{field_name}.recommendations must be a non-empty list")
-        recommendations: list[dict[str, Any]] = []
-        seen_recommendation_ids: set[str] = set()
-        for recommendation_index, recommendation in enumerate(raw_recommendations):
-            normalized = _normalize_input_recommendation(
-                recommendation,
-                field_name=f"{field_name}.recommendations[{recommendation_index}]",
-            )
-            recommendation_id = normalized["recommendation_id"]
-            if recommendation_id in seen_recommendation_ids:
-                raise ValueError(
-                    f"{field_name}.recommendations[{recommendation_index}].recommendation_id duplicates {recommendation_id}"
-                )
-            seen_recommendation_ids.add(recommendation_id)
-            recommendations.append(normalized)
-
-        recommendations.sort(
-            key=lambda row: (
-                row["sequence_hint"],
-                _priority_rank(row["priority"]),
-                row["recommendation_id"],
-            )
-        )
-        normalized_calls.append(
-            {
-                "requirement_id": _require_nonempty_text(
-                    call_output.get("requirement_id"),
-                    field_name=f"{field_name}.requirement_id",
-                ),
-                "call_id": _require_nonempty_text(call_output.get("call_id"), field_name=f"{field_name}.call_id"),
-                "call_status": call_status,
-                "call_trace": call_trace,
-                "recommendations": recommendations,
-            }
-        )
-
-    normalized_calls.sort(
-        key=lambda row: (
-            row["call_id"],
-            row["requirement_id"],
-            row["call_trace"]["trace_id"],
-        )
-    )
-    return normalized_calls
-
-
-def _normalize_broad_sweep_context(raw_value: Any) -> dict[str, Any]:
+def _normalize_string_list(raw_value: Any, *, field_name: str, min_items: int = 0) -> list[str]:
     if raw_value is None:
-        return {
-            "earth_sweep_evidence_refs": [],
-            "projects_considered": [],
-            "cross_project_obligations": [],
-            "unresolved_ideas": [],
-        }
+        raw_seq: Sequence[Any] = []
+    else:
+        if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+            raise ValueError(f"{field_name} must be an array of non-empty strings")
+        raw_seq = raw_value
 
-    broad_sweep_context = _require_mapping(raw_value, field_name="broad_sweep_context")
-    earth_sweep_evidence_refs = _normalize_string_list(
-        broad_sweep_context.get("earth_sweep_evidence_refs"),
-        field_name="broad_sweep_context.earth_sweep_evidence_refs",
-    )
-    projects_considered = set(
-        _normalize_string_list(
-            broad_sweep_context.get("projects_considered"),
-            field_name="broad_sweep_context.projects_considered",
-        )
-    )
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw_seq):
+        text = _require_text(item, field_name=f"{field_name}[{index}]")
+        if text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    if len(normalized) < min_items:
+        raise ValueError(f"{field_name} must contain at least {min_items} item(s)")
+    return sorted(normalized)
 
-    cross_project_obligations_raw = broad_sweep_context.get("cross_project_obligations")
-    if cross_project_obligations_raw is None:
-        cross_project_obligations_raw = []
-    if not isinstance(cross_project_obligations_raw, list):
-        raise ValueError("broad_sweep_context.cross_project_obligations must be a list")
-    cross_project_obligations: list[dict[str, Any]] = []
-    for index, item in enumerate(cross_project_obligations_raw):
-        field_name = f"broad_sweep_context.cross_project_obligations[{index}]"
-        row = _require_mapping(item, field_name=field_name)
-        target_project_id = ""
-        if row.get("target_project_id") is not None:
-            target_project_id = _require_nonempty_text(row.get("target_project_id"), field_name=f"{field_name}.target_project_id")
-            projects_considered.add(target_project_id)
-        recommendation_ids = _normalize_string_list(
-            row.get("recommendation_ids"),
-            field_name=f"{field_name}.recommendation_ids",
+
+def _collect_unique_refs(*ref_groups: Sequence[Any]) -> list[str]:
+    seen: set[str] = set()
+    for refs in ref_groups:
+        for raw_ref in refs:
+            ref = _as_text(raw_ref)
+            if ref:
+                seen.add(ref)
+    return sorted(seen)
+
+
+def _dedupe_preserving_order(values: Sequence[Any]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        value = _as_text(raw_value)
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def _is_earth_evidence_ref(ref: str) -> bool:
+    return _as_text(ref).startswith("reports/earth/")
+
+
+def _normalize_action_scope(raw_value: Any, *, field_name: str) -> str:
+    if raw_value is None:
+        return "local"
+    scope = _as_text(raw_value).lower()
+    if scope not in {"local", "cross-project"}:
+        raise ValueError(f"{field_name} must be either 'local' or 'cross-project'")
+    return scope
+
+
+def _normalize_cross_project_context(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError("cross_project_context must be an array when provided")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"cross_project_context[{index}] must be an object")
+        project_id = _require_text(item.get("project_id"), field_name=f"cross_project_context[{index}].project_id")
+        project_root = _normalize_root(item.get("project_root"), field_name=f"cross_project_context[{index}].project_root")
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"cross_project_context[{index}].evidence_refs",
         )
-        obligation_refs = _normalize_string_list(
-            row.get("earth_sweep_evidence_refs"),
-            field_name=f"{field_name}.earth_sweep_evidence_refs",
+        context_note = _require_text(
+            item.get("context_note") if item.get("context_note") is not None else "No context note supplied.",
+            field_name=f"cross_project_context[{index}].context_note",
         )
-        cross_project_obligations.append(
+        normalized.append(
             {
-                "target_project_id": target_project_id,
-                "recommendation_ids": recommendation_ids,
-                "earth_sweep_evidence_refs": obligation_refs,
+                "project_id": project_id,
+                "project_root": project_root,
+                "evidence_refs": evidence_refs,
+                "context_note": context_note,
             }
         )
-    cross_project_obligations.sort(
-        key=lambda row: (
-            row["target_project_id"],
-            ",".join(row["recommendation_ids"]),
-            ",".join(row["earth_sweep_evidence_refs"]),
-        )
-    )
+    normalized.sort(key=lambda row: (row["project_id"], row["project_root"], row["context_note"]))
+    return normalized
 
-    unresolved_ideas_raw = broad_sweep_context.get("unresolved_ideas")
-    if unresolved_ideas_raw is None:
-        unresolved_ideas_raw = []
-    if not isinstance(unresolved_ideas_raw, list):
-        raise ValueError("broad_sweep_context.unresolved_ideas must be a list")
-    unresolved_ideas: list[dict[str, Any]] = []
-    for index, item in enumerate(unresolved_ideas_raw):
-        field_name = f"broad_sweep_context.unresolved_ideas[{index}]"
-        row = _require_mapping(item, field_name=field_name)
-        summary = _require_nonempty_text(row.get("summary"), field_name=f"{field_name}.summary")
-        target_project_id = ""
-        if row.get("target_project_id") is not None:
-            target_project_id = _require_nonempty_text(row.get("target_project_id"), field_name=f"{field_name}.target_project_id")
-            projects_considered.add(target_project_id)
-        recommendation_ids = _normalize_string_list(
-            row.get("recommendation_ids"),
-            field_name=f"{field_name}.recommendation_ids",
+
+def _normalize_candidate_recommendations(raw_value: Any) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError("candidate_recommendations must be an array when provided")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"candidate_recommendations[{index}] must be an object")
+        action_id = (
+            _require_text(item.get("action_id"), field_name=f"candidate_recommendations[{index}].action_id")
+            if item.get("action_id") is not None
+            else f"action-{index + 1:02d}"
         )
-        idea_refs = _normalize_string_list(
-            row.get("earth_sweep_evidence_refs"),
-            field_name=f"{field_name}.earth_sweep_evidence_refs",
+        summary = _require_text(item.get("summary"), field_name=f"candidate_recommendations[{index}].summary")
+        rationale = _require_text(
+            item.get("rationale") if item.get("rationale") is not None else "No rationale supplied.",
+            field_name=f"candidate_recommendations[{index}].rationale",
         )
-        idea_id = _require_nonempty_text(row.get("idea_id"), field_name=f"{field_name}.idea_id") if row.get("idea_id") else ""
-        if not idea_id:
-            idea_id = f"idea.{_stable_id_fragment(summary, target_project_id, '|'.join(recommendation_ids), '|'.join(idea_refs))}"
-        unresolved_ideas.append(
+        action_scope = _normalize_action_scope(
+            item.get("action_scope"),
+            field_name=f"candidate_recommendations[{index}].action_scope",
+        )
+        requires_earth_evidence = bool(item.get("requires_earth_evidence", action_scope == "cross-project"))
+        project_id = _as_text(item.get("project_id"))
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"candidate_recommendations[{index}].evidence_refs",
+            min_items=1,
+        )
+        next_step = _require_text(
+            item.get("next_step")
+            if item.get("next_step") is not None
+            else f"Validate '{action_id}' under deterministic long-thinking execution.",
+            field_name=f"candidate_recommendations[{index}].next_step",
+        )
+        normalized.append(
             {
-                "idea_id": idea_id,
+                "action_id": action_id,
                 "summary": summary,
-                "target_project_id": target_project_id,
-                "recommendation_ids": recommendation_ids,
-                "earth_sweep_evidence_refs": idea_refs,
+                "rationale": rationale,
+                "action_scope": action_scope,
+                "requires_earth_evidence": requires_earth_evidence,
+                "project_id": project_id,
+                "evidence_refs": evidence_refs,
+                "next_step": next_step,
             }
         )
-    unresolved_ideas.sort(key=lambda row: row["idea_id"])
+    normalized.sort(key=lambda row: row["action_id"])
+    return normalized
 
+
+def _normalize_strategic_claims(raw_value: Any, *, call_depth: int) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError("strategic_claims must be an array when provided")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"strategic_claims[{index}] must be an object")
+        claim_id = _require_text(item.get("claim_id"), field_name=f"strategic_claims[{index}].claim_id")
+        phase = _require_text(item.get("phase"), field_name=f"strategic_claims[{index}].phase").lower()
+        summary = _require_text(item.get("summary"), field_name=f"strategic_claims[{index}].summary")
+        position = _require_text(item.get("position"), field_name=f"strategic_claims[{index}].position")
+        source_call_sequence = item.get("source_call_sequence")
+        if isinstance(source_call_sequence, bool) or not isinstance(source_call_sequence, int):
+            raise ValueError(f"strategic_claims[{index}].source_call_sequence must be an integer")
+        if source_call_sequence < 1 or source_call_sequence > call_depth:
+            raise ValueError(f"strategic_claims[{index}].source_call_sequence must be between 1 and {call_depth}")
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            field_name=f"strategic_claims[{index}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "claim_id": claim_id,
+                "phase": phase,
+                "summary": summary,
+                "position": position,
+                "source_call_sequence": source_call_sequence,
+                "evidence_refs": evidence_refs,
+            }
+        )
+    normalized.sort(
+        key=lambda row: (
+            row["claim_id"],
+            row["phase"],
+            row["source_call_sequence"],
+            row["position"],
+            row["summary"],
+        )
+    )
+    return normalized
+
+
+def _default_stage_blueprint(index: int) -> dict[str, str]:
+    if index < len(DEFAULT_STAGE_BLUEPRINTS):
+        row = DEFAULT_STAGE_BLUEPRINTS[index]
+        return {"purpose": row["purpose"], "expected_output": row["expected_output"]}
+    stage_num = index + 1
     return {
-        "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
-        "projects_considered": sorted(projects_considered),
-        "cross_project_obligations": cross_project_obligations,
-        "unresolved_ideas": unresolved_ideas,
+        "purpose": f"Execute reasoning pass {stage_num} with strict evidence traceability.",
+        "expected_output": f"intermediate_output_{stage_num:02d}",
     }
 
 
-def _lineage_sort_key(row: Mapping[str, Any]) -> tuple[str, str, str]:
-    return (str(row["call_id"]), str(row["requirement_id"]), str(row["trace_id"]))
+def _normalize_stage_blueprints(raw_value: Any, *, call_depth: int) -> list[dict[str, str]]:
+    if raw_value is None:
+        return [_default_stage_blueprint(index) for index in range(call_depth)]
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes, bytearray)):
+        raise ValueError("stage_blueprints must be an array when provided")
+    if len(raw_value) < call_depth:
+        raise ValueError("stage_blueprints must include at least call_depth entries")
+
+    normalized: list[dict[str, str]] = []
+    for index in range(call_depth):
+        row = raw_value[index]
+        if not isinstance(row, Mapping):
+            raise ValueError(f"stage_blueprints[{index}] must be an object")
+        normalized.append(
+            {
+                "purpose": _require_text(row.get("purpose"), field_name=f"stage_blueprints[{index}].purpose"),
+                "expected_output": _require_text(
+                    row.get("expected_output"),
+                    field_name=f"stage_blueprints[{index}].expected_output",
+                ),
+            }
+        )
+    return normalized
 
 
-def _contribution_sort_key(row: Mapping[str, Any]) -> tuple[int, int, str, str, str]:
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _canonical_digest(payload: Any) -> str:
+    raw = _canonical_json(payload)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _build_call_id(
+    *,
+    revision_identity: str,
+    strategy_goal: str,
+    sequence: int,
+    purpose: str,
+    expected_output: str,
+) -> str:
+    material = "|".join(
+        [
+            revision_identity,
+            strategy_goal,
+            str(sequence),
+            purpose,
+            expected_output,
+        ]
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:10]
+    return f"req025-call-{sequence:02d}-{digest}"
+
+
+def _canonical_call_input(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_depth: int,
+) -> dict[str, Any]:
+    return {
+        "runtime_mode": RUNTIME_MODE,
+        "execution_mode": EXECUTION_MODE,
+        "target_project_root": target_project_root,
+        "earth_root": earth_root,
+        "output_root": output_root,
+        "revision_identity": revision_identity,
+        "strategy_goal": strategy_goal,
+        "call_depth": call_depth,
+    }
+
+
+def _recommendation_decision(*, recommended_actions: list[dict[str, Any]], open_risks: list[dict[str, Any]]) -> str:
+    if recommended_actions and not open_risks:
+        return "proceed"
+    if recommended_actions and open_risks:
+        return "proceed-with-open-risks"
+    if open_risks:
+        if all(row.get("reason_code") == "missing_earth_sweep_evidence_refs" for row in open_risks):
+            return "collect-earth-evidence"
+        return "resolve-strategy-gaps"
+    return "insufficient-context"
+
+
+def _recommendation_rationale(*, decision: str) -> str:
+    if decision == "proceed":
+        return "Broad-sweep context evidence is sufficient for immediate multi-call execution."
+    if decision == "proceed-with-open-risks":
+        return "Some recommendation paths are evidence-backed while unresolved ideas remain open risks."
+    if decision == "collect-earth-evidence":
+        return "Cross-project ideas require Earth-sweep evidence before obligations can be committed."
+    if decision == "resolve-strategy-gaps":
+        return "Contradictory or uncited strategy claims must be resolved before planner outputs can be promoted."
+    return "No evidence-backed recommendation actions were supplied for this strategy run."
+
+
+def _recommendation_confidence(*, evidence_refs: list[str], open_risks: list[dict[str, Any]]) -> str:
+    if not evidence_refs:
+        return "low"
+    if open_risks:
+        return "medium"
+    return "high"
+
+
+def _canonical_processing_input(
+    *,
+    evidence_refs: list[str],
+    stage_blueprints: list[dict[str, str]],
+    call_depth: int,
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    candidate_recommendations: list[dict[str, Any]],
+    strategic_claims: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "call_depth": call_depth,
+        "required_evidence_refs": list(evidence_refs),
+        "target_project_evidence_refs": list(target_project_evidence_refs),
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "cross_project_context": [
+            {
+                "project_id": row["project_id"],
+                "project_root": row["project_root"],
+                "evidence_refs": list(row["evidence_refs"]),
+                "context_note": row["context_note"],
+            }
+            for row in cross_project_context
+        ],
+        "candidate_recommendations": [
+            {
+                "action_id": row["action_id"],
+                "summary": row["summary"],
+                "rationale": row["rationale"],
+                "action_scope": row["action_scope"],
+                "requires_earth_evidence": row["requires_earth_evidence"],
+                "project_id": row["project_id"],
+                "evidence_refs": list(row["evidence_refs"]),
+                "next_step": row["next_step"],
+            }
+            for row in candidate_recommendations
+        ],
+        "strategic_claims": [
+            {
+                "claim_id": row["claim_id"],
+                "phase": row["phase"],
+                "summary": row["summary"],
+                "position": row["position"],
+                "source_call_sequence": row["source_call_sequence"],
+                "evidence_refs": list(row["evidence_refs"]),
+            }
+            for row in strategic_claims
+        ],
+        "stage_blueprints": [{"purpose": row["purpose"], "expected_output": row["expected_output"]} for row in stage_blueprints],
+    }
+
+
+def _build_call_output_ref(*, plan_id: str, call_id: str, expected_output: str) -> str:
+    return f"{plan_id}::call::{call_id}::output::{expected_output}"
+
+
+def _build_trace_handoff_summary(
+    *,
+    sequence: int,
+    expected_output: str,
+    output_ref: str,
+    input_ref_count: int,
+    next_call_id: str,
+    recommendation_decision: str,
+) -> str:
+    if next_call_id:
+        return (
+            f"Call {sequence} hands off {expected_output} via {output_ref} to {next_call_id} "
+            f"after consuming {input_ref_count} input refs."
+        )
     return (
-        int(row["sequence_hint"]),
-        _priority_rank(str(row["priority"])),
-        str(row["call_id"]),
-        str(row["requirement_id"]),
-        str(row["call_trace"]["trace_id"]),
+        f"Call {sequence} hands off {expected_output} via {output_ref} as the terminal planner output "
+        f"with recommendation decision {recommendation_decision}."
     )
 
 
-def _build_call_trace_lineage(contributions: list[dict[str, Any]]) -> list[dict[str, str]]:
-    rows = [
-        {
-            "call_id": str(row["call_id"]),
-            "requirement_id": str(row["requirement_id"]),
-            "trace_id": str(row["call_trace"]["trace_id"]),
-            "trace_ref": str(row["call_trace"]["trace_ref"]),
-            "artifact_ref": str(row["call_trace"]["artifact_ref"]),
-            "checked_at_utc": str(row["call_trace"]["checked_at_utc"]),
-        }
-        for row in contributions
-    ]
-    rows.sort(key=_lineage_sort_key)
-    return rows
-
-
-def _build_final_strategy_synthesis(
+def _build_llm_call_trace_rows(
     *,
-    target_project: Mapping[str, str],
-    validated_call_outputs: list[dict[str, Any]],
-    broad_sweep_context: Mapping[str, Any],
-) -> dict[str, Any]:
-    context_earth_refs = list(broad_sweep_context.get("earth_sweep_evidence_refs") or [])
-    context_earth_ref_set = set(context_earth_refs)
-    obligation_refs_by_recommendation_id: dict[str, set[str]] = {}
-    obligation_projects_by_recommendation_id: dict[str, set[str]] = {}
-    for row in broad_sweep_context.get("cross_project_obligations") or []:
-        if not isinstance(row, Mapping):
-            continue
-        recommendation_ids = [str(item) for item in row.get("recommendation_ids") or [] if str(item).strip()]
-        obligation_refs = [str(item) for item in row.get("earth_sweep_evidence_refs") or [] if str(item).strip()]
-        target_project_id = str(row.get("target_project_id") or "").strip()
-        for recommendation_id in recommendation_ids:
-            obligation_refs_by_recommendation_id.setdefault(recommendation_id, set()).update(obligation_refs)
-            if target_project_id:
-                obligation_projects_by_recommendation_id.setdefault(recommendation_id, set()).add(target_project_id)
-
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for call_output in validated_call_outputs:
-        for recommendation in call_output["recommendations"]:
-            grouped.setdefault(recommendation["recommendation_id"], []).append(
-                {
-                    **recommendation,
-                    "call_id": call_output["call_id"],
-                    "requirement_id": call_output["requirement_id"],
-                    "call_trace": call_output["call_trace"],
-                }
-            )
-
-    final_recommendations: list[dict[str, Any]] = []
-    deferred_recommendations: list[dict[str, Any]] = []
-    open_risks: list[dict[str, Any]] = []
-
-    for recommendation_id in sorted(grouped):
-        contributions = sorted(grouped[recommendation_id], key=_contribution_sort_key)
-        canonical = contributions[0]
-        packet_kind_candidates = sorted({str(row["packet_kind"]) for row in contributions})
-        peer_project_candidates = sorted({str(row["peer_project_id"]) for row in contributions if row["peer_project_id"]})
-        evidence_refs = _collect_unique_refs(
-            *[list(row["evidence_refs"]) for row in contributions],
-            sorted(obligation_refs_by_recommendation_id.get(recommendation_id, set())),
+    plan_id: str,
+    processing_call_id: str,
+    required_evidence_refs: Sequence[str],
+    calls: Sequence[Mapping[str, Any]],
+    recommendation_decision: str,
+) -> list[dict[str, Any]]:
+    output_ref_by_call_id: dict[str, str] = {}
+    for call in calls:
+        call_id = _require_text(call.get("call_id"), field_name="pipeline_plan.calls[].call_id")
+        expected_output = _require_text(call.get("expected_output"), field_name="pipeline_plan.calls[].expected_output")
+        output_ref_by_call_id[call_id] = _build_call_output_ref(
+            plan_id=plan_id,
+            call_id=call_id,
+            expected_output=expected_output,
         )
-        call_trace_lineage = _build_call_trace_lineage(contributions)
-        contributing_call_ids = sorted({str(row["call_id"]) for row in contributions})
-        contributing_requirement_ids = sorted({str(row["requirement_id"]) for row in contributions})
 
-        packet_kind = packet_kind_candidates[0]
-        routing_conflict = len(packet_kind_candidates) != 1
-        if not routing_conflict and packet_kind == "cross-project" and len(peer_project_candidates) != 1:
-            routing_conflict = True
-        if not routing_conflict and packet_kind == "target-project" and peer_project_candidates:
-            routing_conflict = True
+    trace_rows: list[dict[str, Any]] = []
+    for index, call in enumerate(calls):
+        call_id = _require_text(call.get("call_id"), field_name=f"pipeline_plan.calls[{index}].call_id")
+        sequence = call.get("sequence")
+        if not isinstance(sequence, int):
+            raise ValueError(f"pipeline_plan.calls[{index}].sequence must be an integer")
+        call_objective = _require_text(call.get("purpose"), field_name=f"pipeline_plan.calls[{index}].purpose")
+        expected_output = _require_text(
+            call.get("expected_output"),
+            field_name=f"pipeline_plan.calls[{index}].expected_output",
+        )
+        depends_on = [
+            _require_text(dep_call_id, field_name=f"pipeline_plan.calls[{index}].depends_on[{dep_index}]")
+            for dep_index, dep_call_id in enumerate(call.get("depends_on", []))
+        ]
+        dependency_output_refs = [output_ref_by_call_id[dep_call_id] for dep_call_id in depends_on]
+        input_refs = list(required_evidence_refs) + dependency_output_refs
+        output_ref = output_ref_by_call_id[call_id]
+        next_call_id = ""
+        if index + 1 < len(calls):
+            next_call_id = _as_text(calls[index + 1].get("call_id"))
+        trace_rows.append(
+            {
+                "schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+                "requirement_id": REQ_025_REQUIREMENT_ID,
+                "plan_id": plan_id,
+                "processing_call_id": processing_call_id,
+                "call_id": call_id,
+                "sequence": sequence,
+                "call_objective": call_objective,
+                "depends_on": depends_on,
+                "expected_output": expected_output,
+                "input_refs": input_refs,
+                "output_refs": [output_ref],
+                "handoff_summary": _build_trace_handoff_summary(
+                    sequence=sequence,
+                    expected_output=expected_output,
+                    output_ref=output_ref,
+                    input_ref_count=len(input_refs),
+                    next_call_id=next_call_id,
+                    recommendation_decision=recommendation_decision,
+                ),
+            }
+        )
+    return trace_rows
 
-        if routing_conflict:
-            deferred_recommendations.append(
+
+def _build_req_025_processing_behavior(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    call_depth: int,
+    pipeline_plan: Mapping[str, Any],
+    target_project_evidence_refs: list[str],
+    earth_sweep_evidence_refs: list[str],
+    cross_project_context: list[dict[str, Any]],
+    candidate_recommendations: list[dict[str, Any]],
+    strategic_claims: list[dict[str, Any]],
+) -> dict[str, Any]:
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    recommended_actions: list[dict[str, Any]] = []
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    plan_id = _require_text(pipeline_plan.get("plan_id"), field_name="pipeline_plan.plan_id")
+    available_citation_refs = set(
+        _collect_unique_refs(
+            target_project_evidence_refs,
+            earth_sweep_evidence_refs,
+            cross_project_refs,
+            list(pipeline_plan.get("required_evidence_refs", [])),
+        )
+    )
+    output_ref_by_sequence: dict[int, str] = {}
+    for call in pipeline_plan.get("calls", []):
+        if not isinstance(call, Mapping):
+            continue
+        sequence = call.get("sequence")
+        if not isinstance(sequence, int):
+            continue
+        output_ref_by_sequence[sequence] = _build_call_output_ref(
+            plan_id=plan_id,
+            call_id=_require_text(call.get("call_id"), field_name=f"pipeline_plan.calls[{sequence}].call_id"),
+            expected_output=_require_text(
+                call.get("expected_output"),
+                field_name=f"pipeline_plan.calls[{sequence}].expected_output",
+            ),
+        )
+
+    claim_rows_by_id: dict[str, list[dict[str, Any]]] = {}
+    for claim in strategic_claims:
+        claim_rows_by_id.setdefault(claim["claim_id"], []).append(claim)
+        citation_refs = list(claim["evidence_refs"])
+        source_output_ref = output_ref_by_sequence.get(claim["source_call_sequence"], "")
+        if not citation_refs or not set(citation_refs).issubset(available_citation_refs):
+            open_risks.append(
                 {
-                    "recommendation_id": recommendation_id,
-                    "summary": canonical["summary"],
-                    "deferred_reason_code": _ROUTING_CONFLICT_REASON,
-                    "packet_kind_candidates": packet_kind_candidates,
-                    "peer_project_candidates": peer_project_candidates,
-                    "evidence_refs": evidence_refs,
-                    "call_trace_lineage": call_trace_lineage,
-                    "contributing_call_ids": contributing_call_ids,
+                    "risk_id": f"risk-claim-{claim['claim_id']}-citation",
+                    "summary": claim["summary"],
+                    "reason_code": "uncited_strategic_claim",
+                    "required_evidence_refs": _collect_unique_refs([source_output_ref], citation_refs),
+                }
+            )
+
+    for claim_id, claim_rows in claim_rows_by_id.items():
+        analysis_rows = [row for row in claim_rows if row["phase"] == "analysis"]
+        synthesis_rows = [row for row in claim_rows if row["phase"] == "synthesis"]
+        contradiction_row: dict[str, Any] | None = None
+        for analysis_row in analysis_rows:
+            for synthesis_row in synthesis_rows:
+                if analysis_row["position"] == synthesis_row["position"]:
+                    continue
+                contradiction_row = {
+                    "summary": synthesis_row["summary"],
+                    "required_evidence_refs": _collect_unique_refs(
+                        [output_ref_by_sequence.get(analysis_row["source_call_sequence"], "")],
+                        [output_ref_by_sequence.get(synthesis_row["source_call_sequence"], "")],
+                        analysis_row["evidence_refs"],
+                        synthesis_row["evidence_refs"],
+                    ),
+                }
+                break
+            if contradiction_row is not None:
+                break
+        if contradiction_row is not None:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim_id}-contradiction",
+                    "summary": contradiction_row["summary"],
+                    "reason_code": "cross_call_contradiction",
+                    "required_evidence_refs": contradiction_row["required_evidence_refs"],
+                }
+            )
+
+    for candidate in candidate_recommendations:
+        action = {
+            "action_id": candidate["action_id"],
+            "summary": candidate["summary"],
+            "rationale": candidate["rationale"],
+            "action_scope": candidate["action_scope"],
+            "next_step": candidate["next_step"],
+            "evidence_refs": list(candidate["evidence_refs"]),
+        }
+        candidate_earth_refs = _collect_unique_refs(
+            [ref for ref in candidate["evidence_refs"] if _is_earth_evidence_ref(ref)],
+            earth_sweep_evidence_refs,
+        )
+        uncited_candidate_refs = sorted(set(candidate["evidence_refs"]) - available_citation_refs)
+        if uncited_candidate_refs:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{candidate['action_id']}-citation",
+                    "summary": candidate["summary"],
+                    "reason_code": "uncited_strategic_claim",
+                    "required_evidence_refs": list(uncited_candidate_refs),
                 }
             )
             continue
-
-        if packet_kind == "cross-project":
-            has_earth_sweep_evidence = any(
-                _is_earth_sweep_ref(ref) or ref in context_earth_ref_set for ref in evidence_refs
-            )
-            if not has_earth_sweep_evidence:
-                required_evidence_refs = sorted(obligation_refs_by_recommendation_id.get(recommendation_id, set()))
-                if not required_evidence_refs:
-                    required_evidence_refs = list(context_earth_refs)
-                if not required_evidence_refs:
-                    required_evidence_refs = ["missing:earth-sweep-evidence-ref"]
-                linked_project_candidates = sorted(obligation_projects_by_recommendation_id.get(recommendation_id, set()))
-                open_risks.append(
+        if candidate["requires_earth_evidence"]:
+            if candidate_earth_refs:
+                obligation_project_id = candidate["project_id"] or (
+                    cross_project_context[0]["project_id"] if cross_project_context else "earth"
+                )
+                cross_project_obligations.append(
                     {
-                        "open_risk_id": f"open-risk.{_stable_id_fragment(recommendation_id, _OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE)}",
-                        "recommendation_id": recommendation_id,
-                        "summary": canonical["summary"],
-                        "reason_code": _OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE,
-                        "project_id": (
-                            peer_project_candidates[0]
-                            if peer_project_candidates
-                            else (linked_project_candidates[0] if linked_project_candidates else "")
-                        ),
-                        "required_evidence_refs": required_evidence_refs,
-                        "evidence_refs": evidence_refs,
-                        "linked_recommendation_ids": [recommendation_id],
-                        "call_trace_lineage": call_trace_lineage,
-                        "contributing_call_ids": contributing_call_ids,
+                        "obligation_id": f"obligation-{candidate['action_id']}",
+                        "project_id": obligation_project_id,
+                        "summary": candidate["summary"],
+                        "evidence_refs": _collect_unique_refs(candidate["evidence_refs"], candidate_earth_refs),
                     }
                 )
-                continue
-
-        final_recommendations.append(
-            {
-                "recommendation_id": recommendation_id,
-                "summary": canonical["summary"],
-                "rationale": canonical["rationale"],
-                "packet_kind": packet_kind,
-                "peer_project_id": peer_project_candidates[0] if peer_project_candidates else "",
-                "lane": canonical["lane"],
-                "sequence_hint": canonical["sequence_hint"],
-                "priority": canonical["priority"],
-                "evidence_refs": evidence_refs,
-                "call_trace_lineage": call_trace_lineage,
-                "contributing_call_ids": contributing_call_ids,
-                "contributing_requirement_ids": contributing_requirement_ids,
-                "supporting_call_count": len(call_trace_lineage),
-                "strategy_packet_input_id": "",
-            }
-        )
-
-    final_recommendations.sort(
-        key=lambda row: (
-            row["sequence_hint"],
-            _priority_rank(str(row["priority"])),
-            row["packet_kind"],
-            row["peer_project_id"],
-            row["recommendation_id"],
-        )
-    )
-    deferred_recommendations.sort(key=lambda row: row["recommendation_id"])
-
-    for idea in broad_sweep_context.get("unresolved_ideas") or []:
-        if not isinstance(idea, Mapping):
+                recommended_actions.append(action)
+            else:
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{candidate['action_id']}",
+                        "summary": candidate["summary"],
+                        "reason_code": "missing_earth_sweep_evidence_refs",
+                        "required_evidence_refs": list(candidate["evidence_refs"]),
+                    }
+                )
             continue
-        idea_id = str(idea.get("idea_id") or "").strip()
-        summary = str(idea.get("summary") or "").strip()
-        if not idea_id or not summary:
-            continue
-        required_evidence_refs = _collect_unique_refs(
-            list(idea.get("earth_sweep_evidence_refs") or []),
-            list(context_earth_refs),
-        )
-        if not required_evidence_refs:
-            required_evidence_refs = ["missing:earth-sweep-evidence-ref"]
-        open_risks.append(
-            {
-                "open_risk_id": f"open-risk.{_stable_id_fragment(idea_id, _OPEN_RISK_REASON_UNRESOLVED_IDEA)}",
-                "recommendation_id": idea_id,
-                "summary": summary,
-                "reason_code": _OPEN_RISK_REASON_UNRESOLVED_IDEA,
-                "project_id": str(idea.get("target_project_id") or ""),
-                "required_evidence_refs": required_evidence_refs,
-                "evidence_refs": list(idea.get("earth_sweep_evidence_refs") or []),
-                "linked_recommendation_ids": list(idea.get("recommendation_ids") or []),
-                "call_trace_lineage": [],
-                "contributing_call_ids": [],
-            }
-        )
+        recommended_actions.append(action)
 
-    open_risks.sort(
-        key=lambda row: (
-            row["reason_code"],
-            row["project_id"],
-            row["recommendation_id"],
-            row["open_risk_id"],
-        )
+    recommended_actions.sort(key=lambda row: row["action_id"])
+    cross_project_obligations.sort(key=lambda row: row["obligation_id"])
+    open_risks.sort(key=lambda row: row["risk_id"])
+
+    recommendation_refs = _collect_unique_refs(
+        target_project_evidence_refs,
+        earth_sweep_evidence_refs,
+        cross_project_refs,
+        list(pipeline_plan.get("required_evidence_refs", [])),
+        *[row["evidence_refs"] for row in recommended_actions],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["required_evidence_refs"] for row in open_risks],
     )
-
-    packet_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
-    for recommendation in final_recommendations:
-        group_key = (
-            str(recommendation["packet_kind"]),
-            str(recommendation["peer_project_id"]),
-            str(recommendation["lane"]),
-        )
-        packet_groups.setdefault(group_key, []).append(recommendation)
-
-    strategy_packet_inputs: list[dict[str, Any]] = []
-    for packet_kind, peer_project_id, lane in sorted(packet_groups):
-        recommendations = sorted(
-            packet_groups[(packet_kind, peer_project_id, lane)],
-            key=lambda row: (
-                row["sequence_hint"],
-                _priority_rank(str(row["priority"])),
-                row["recommendation_id"],
-            ),
-        )
-        packet_input_id = f"pkt.{_stable_id_fragment(packet_kind, peer_project_id or target_project['project_id'], lane)}"
-        evidence_refs = _collect_unique_refs(*[list(row["evidence_refs"]) for row in recommendations])
-        strategy_packet_inputs.append(
-            {
-                "packet_input_id": packet_input_id,
-                "packet_kind": packet_kind,
-                "target_project_id": str(target_project["project_id"]),
-                "peer_project_id": peer_project_id,
-                "lane": lane,
-                "recommendation_ids": [str(row["recommendation_id"]) for row in recommendations],
-                "recommendation_count": len(recommendations),
-                "earliest_sequence_hint": min(int(row["sequence_hint"]) for row in recommendations),
-                "evidence_refs": evidence_refs,
-            }
-        )
-        for recommendation in recommendations:
-            recommendation["strategy_packet_input_id"] = packet_input_id
-
-    usage_projects_considered = _collect_unique_refs(
-        list(broad_sweep_context.get("projects_considered") or []),
-        [str(row["peer_project_id"]) for row in final_recommendations if str(row["packet_kind"]) == "cross-project"],
-        [str(row["project_id"]) for row in open_risks if str(row["project_id"]).strip()],
-    )
-    recommendation_ids_with_context = sorted(obligation_refs_by_recommendation_id)
+    decision = _recommendation_decision(recommended_actions=recommended_actions, open_risks=open_risks)
 
     return {
-        "final_recommendations": final_recommendations,
-        "deferred_recommendations": deferred_recommendations,
-        "open_risks": open_risks,
-        "strategy_packet_inputs": strategy_packet_inputs,
-        "cross_project_context_usage": {
-            "cross_project_context_provided": bool(
-                context_earth_refs
-                or broad_sweep_context.get("projects_considered")
-                or broad_sweep_context.get("cross_project_obligations")
-                or broad_sweep_context.get("unresolved_ideas")
-            ),
-            "cross_project_context_used": bool(
-                recommendation_ids_with_context
-                or any(str(row["packet_kind"]) == "cross-project" for row in final_recommendations)
-                or open_risks
-            ),
-            "projects_considered": usage_projects_considered,
-            "earth_sweep_evidence_refs_considered": context_earth_refs,
-            "cross_project_obligation_count": len(broad_sweep_context.get("cross_project_obligations") or []),
-            "unresolved_idea_count": len(broad_sweep_context.get("unresolved_ideas") or []),
-            "recommendation_ids_with_context": recommendation_ids_with_context,
+        "strategy": PIPELINE_STRATEGY,
+        "reasoning_mode": EXECUTION_MODE,
+        "strict_evidence_discipline": True,
+        "heuristic_summarization_only": False,
+        "context_inputs": {
+            "target_project": {
+                "project_root": target_project_root,
+                "evidence_refs": list(target_project_evidence_refs),
+            },
+            "earth_sweep": {
+                "earth_root": earth_root,
+                "evidence_refs": list(earth_sweep_evidence_refs),
+            },
+            "cross_project_context": list(cross_project_context),
+            "candidate_recommendations": list(candidate_recommendations),
+            "strategic_claims": list(strategic_claims),
         },
+        "context_usage": {
+            "target_project_context_used": bool(target_project_evidence_refs),
+            "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+            "cross_project_context_used": bool(cross_project_context),
+            "target_project_refs_used": list(target_project_evidence_refs),
+            "earth_sweep_refs_used": list(earth_sweep_evidence_refs),
+            "cross_project_refs_used": cross_project_refs,
+            "cross_project_projects_considered": sorted({row["project_id"] for row in cross_project_context}),
+            "evidence_refs_used": recommendation_refs,
+        },
+        "pipeline_plan": dict(pipeline_plan),
+        "recommendation": {
+            "decision": decision,
+            "rationale": _recommendation_rationale(decision=decision),
+            "confidence": _recommendation_confidence(evidence_refs=recommendation_refs, open_risks=open_risks),
+            "evidence_refs": recommendation_refs,
+            "recommended_actions": recommended_actions,
+            "cross_project_obligations": cross_project_obligations,
+            "open_risks": open_risks,
+        },
+        "summary": (
+            f"Planned {call_depth} deterministic calls with broad-sweep context inputs, explicit dependencies, "
+            "required evidence refs, and recommendation outputs."
+        ),
     }
 
 
-def build_req_046_final_strategy_synthesis_composer(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Build normalized REQ-046 payload for final strategy synthesis composition."""
-    raw = _require_mapping(payload, field_name="payload")
-    analysis_type = str(raw.get("analysis_type") or "").strip()
-    if analysis_type and analysis_type != REQ_046_ANALYSIS_TYPE:
-        raise ValueError(f"analysis_type must be {REQ_046_ANALYSIS_TYPE}")
-    checked_at_utc = _require_nonempty_text(raw.get("now_utc"), field_name="now_utc")
-
-    target_project = _normalize_target_project(raw.get("target_project"))
-    validated_call_outputs = _normalize_validated_call_outputs(raw.get("validated_call_outputs"))
-    broad_sweep_context = _normalize_broad_sweep_context(raw.get("broad_sweep_context"))
-    synthesis = _build_final_strategy_synthesis(
-        target_project=target_project,
-        validated_call_outputs=validated_call_outputs,
-        broad_sweep_context=broad_sweep_context,
+def build_req_025_multi_call_strategy_pipeline_planner(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_depth: int = DEFAULT_CALL_DEPTH,
+    evidence_refs: Sequence[Any] | None = None,
+    stage_blueprints: Sequence[Mapping[str, Any]] | None = None,
+    target_project_evidence_refs: Sequence[Any] | None = None,
+    earth_sweep_evidence_refs: Sequence[Any] | None = None,
+    cross_project_context: Sequence[Mapping[str, Any]] | None = None,
+    candidate_recommendations: Sequence[Mapping[str, Any]] | None = None,
+    strategic_claims: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the REQ-025 multi-call strategy pipeline planner payload."""
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_text(revision_identity, field_name="revision_identity")
+    normalized_strategy_goal = _require_text(strategy_goal, field_name="strategy_goal")
+    normalized_call_depth = _normalize_call_depth(call_depth)
+    normalized_evidence_refs = _normalize_string_list(evidence_refs, field_name="evidence_refs", min_items=1)
+    normalized_stage_blueprints = _normalize_stage_blueprints(stage_blueprints, call_depth=normalized_call_depth)
+    default_target_refs = [ref for ref in normalized_evidence_refs if not _is_earth_evidence_ref(ref)]
+    default_earth_refs = [ref for ref in normalized_evidence_refs if _is_earth_evidence_ref(ref)]
+    normalized_target_project_evidence_refs = (
+        _normalize_string_list(target_project_evidence_refs, field_name="target_project_evidence_refs")
+        if target_project_evidence_refs is not None
+        else default_target_refs
     )
+    normalized_earth_sweep_evidence_refs = (
+        _normalize_string_list(earth_sweep_evidence_refs, field_name="earth_sweep_evidence_refs")
+        if earth_sweep_evidence_refs is not None
+        else default_earth_refs
+    )
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
+    normalized_candidate_recommendations = _normalize_candidate_recommendations(candidate_recommendations)
+    normalized_strategic_claims = _normalize_strategic_claims(strategic_claims, call_depth=normalized_call_depth)
 
-    output_payload = {
-        "ok": True,
-        "schema_version": REQ_046_SCHEMA_VERSION,
-        "requirement_id": REQ_046_REQUIREMENT_ID,
-        "analysis_type": REQ_046_ANALYSIS_TYPE,
-        "call_id": REQ_046_CALL_ID,
-        "checked_at_utc": checked_at_utc,
-        "target_project": target_project,
-        "final_strategy_synthesis": synthesis,
-        "totals": {
-            "validated_calls": len(validated_call_outputs),
-            "candidate_recommendations": sum(len(row["recommendations"]) for row in validated_call_outputs),
-            "final_recommendations": len(synthesis["final_recommendations"]),
-            "deferred_recommendations": len(synthesis["deferred_recommendations"]),
-            "open_risks": len(synthesis["open_risks"]),
-            "strategy_packet_inputs": len(synthesis["strategy_packet_inputs"]),
-            "call_trace_lineage_rows": sum(
-                len(row["call_trace_lineage"])
-                for row in (
-                    list(synthesis["final_recommendations"])
-                    + list(synthesis["deferred_recommendations"])
-                    + list(synthesis["open_risks"])
-                )
-            ),
+    calls: list[dict[str, Any]] = []
+    for index, stage in enumerate(normalized_stage_blueprints):
+        sequence = index + 1
+        call_id = _build_call_id(
+            revision_identity=normalized_revision_identity,
+            strategy_goal=normalized_strategy_goal,
+            sequence=sequence,
+            purpose=stage["purpose"],
+            expected_output=stage["expected_output"],
+        )
+        depends_on: list[str] = []
+        if calls:
+            depends_on = [calls[-1]["call_id"]]
+        calls.append(
+            {
+                "call_id": call_id,
+                "sequence": sequence,
+                "purpose": stage["purpose"],
+                "depends_on": depends_on,
+                "expected_output": stage["expected_output"],
+                "evidence_refs": list(normalized_evidence_refs),
+            }
+        )
+
+    dependency_edges: list[dict[str, str]] = []
+    for call in calls:
+        for upstream_id in call["depends_on"]:
+            dependency_edges.append({"from_call_id": upstream_id, "to_call_id": call["call_id"]})
+
+    canonical_input = _canonical_call_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+        strategy_goal=normalized_strategy_goal,
+        call_depth=normalized_call_depth,
+    )
+    canonical_input_sha = _canonical_digest(canonical_input)
+
+    canonical_processing_input = _canonical_processing_input(
+        evidence_refs=normalized_evidence_refs,
+        stage_blueprints=normalized_stage_blueprints,
+        call_depth=normalized_call_depth,
+        target_project_evidence_refs=normalized_target_project_evidence_refs,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
+        candidate_recommendations=normalized_candidate_recommendations,
+        strategic_claims=normalized_strategic_claims,
+    )
+    processing_sha = _canonical_digest(canonical_processing_input)
+
+    pipeline_plan = {
+        "plan_id": f"req025-plan-{processing_sha[:16]}",
+        "planner_mode": "multi-call-reasoning-chain",
+        "total_calls": normalized_call_depth,
+        "required_evidence_refs": list(normalized_evidence_refs),
+        "calls": calls,
+        "dependency_edges": dependency_edges,
+        "terminal_expected_output": calls[-1]["expected_output"],
+    }
+    processing_behavior = _build_req_025_processing_behavior(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        call_depth=normalized_call_depth,
+        pipeline_plan=pipeline_plan,
+        target_project_evidence_refs=normalized_target_project_evidence_refs,
+        earth_sweep_evidence_refs=normalized_earth_sweep_evidence_refs,
+        cross_project_context=normalized_cross_project_context,
+        candidate_recommendations=normalized_candidate_recommendations,
+        strategic_claims=normalized_strategic_claims,
+    )
+    processing_call_id = f"req025-processing-{processing_sha[:16]}"
+    llm_call_trace_rows = _build_llm_call_trace_rows(
+        plan_id=pipeline_plan["plan_id"],
+        processing_call_id=processing_call_id,
+        required_evidence_refs=pipeline_plan["required_evidence_refs"],
+        calls=pipeline_plan["calls"],
+        recommendation_decision=_as_text(processing_behavior["recommendation"]["decision"]),
+    )
+    llm_call_trace_sha = _canonical_digest(llm_call_trace_rows)
+
+    return {
+        "schema_version": REQ_025_SCHEMA_VERSION,
+        "requirement_id": REQ_025_REQUIREMENT_ID,
+        "multi_call_strategy_pipeline_planner_entrypoint": {
+            "runtime_mode": RUNTIME_MODE,
+            "execution_mode": EXECUTION_MODE,
+            "target_project_root": normalized_target_root,
+            "earth_root": normalized_earth_root,
+            "output_root": normalized_output_root,
+            "revision_identity": normalized_revision_identity,
+            "strategy_goal": normalized_strategy_goal,
+            "call_depth": normalized_call_depth,
+        },
+        "processing_behavior": processing_behavior,
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": canonical_input_sha,
+            "reproducible_call_id": f"req025-{canonical_input_sha[:16]}",
+            "canonical_input": canonical_input,
+            "processing_input_sha256": processing_sha,
+            "processing_call_id": processing_call_id,
+            "canonical_processing_input": canonical_processing_input,
+            "llm_call_trace_schema_version": REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": llm_call_trace_sha,
+            "llm_call_trace_rows": llm_call_trace_rows,
         },
     }
 
-    errors = validate_req_046_final_strategy_synthesis_composer(output_payload)
-    if errors:
-        raise ValueError(f"built REQ-046 payload failed validation: {errors}")
-    return output_payload
 
-
-def validate_req_046_final_strategy_synthesis_composer(payload: Mapping[str, Any]) -> list[str]:
-    """Validate REQ-046 final strategy synthesis composer payload shape."""
+def validate_req_025_multi_call_strategy_pipeline_planner(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-025 payload shape and deterministic metadata."""
     errors: list[str] = []
     if not isinstance(payload, Mapping):
         return ["payload must be a JSON object"]
 
     required_top = {
-        "ok",
         "schema_version",
         "requirement_id",
-        "analysis_type",
-        "call_id",
-        "checked_at_utc",
-        "target_project",
-        "final_strategy_synthesis",
-        "totals",
+        "multi_call_strategy_pipeline_planner_entrypoint",
+        "processing_behavior",
+        "call_metadata",
     }
     top_keys = set(payload.keys())
     missing_top = sorted(required_top - top_keys)
@@ -756,570 +991,5078 @@ def validate_req_046_final_strategy_synthesis_composer(payload: Mapping[str, Any
     if unexpected_top:
         errors.append(f"unexpected top-level keys: {unexpected_top}")
 
-    if payload.get("ok") is not True:
-        errors.append("ok must be true")
-    if payload.get("schema_version") != REQ_046_SCHEMA_VERSION:
-        errors.append(f"schema_version must be {REQ_046_SCHEMA_VERSION}")
-    if payload.get("requirement_id") != REQ_046_REQUIREMENT_ID:
-        errors.append(f"requirement_id must be {REQ_046_REQUIREMENT_ID}")
-    if payload.get("analysis_type") != REQ_046_ANALYSIS_TYPE:
-        errors.append(f"analysis_type must be {REQ_046_ANALYSIS_TYPE}")
-    if payload.get("call_id") != REQ_046_CALL_ID:
-        errors.append(f"call_id must be {REQ_046_CALL_ID}")
-    if not isinstance(payload.get("checked_at_utc"), str) or not str(payload.get("checked_at_utc")).strip():
-        errors.append("checked_at_utc must be a non-empty string")
+    if payload.get("schema_version") != REQ_025_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_025_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_025_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_025_REQUIREMENT_ID}")
 
-    target_project = payload.get("target_project")
-    target_project_id = ""
-    if not isinstance(target_project, Mapping):
-        errors.append("target_project must be an object")
-    else:
-        expected_target_keys = {"project_id", "project_root"}
-        target_keys = set(target_project.keys())
-        missing_target = sorted(expected_target_keys - target_keys)
-        if missing_target:
-            errors.append(f"target_project missing keys: {missing_target}")
-        unexpected_target = sorted(target_keys - expected_target_keys)
-        if unexpected_target:
-            errors.append(f"target_project has unexpected keys: {unexpected_target}")
-        target_project_id = str(target_project.get("project_id") or "")
-        if not target_project_id:
-            errors.append("target_project.project_id must be a non-empty string")
-        project_root = target_project.get("project_root")
-        if not isinstance(project_root, str) or not project_root.strip():
-            errors.append("target_project.project_root must be a non-empty string")
-        elif not project_root.startswith("/"):
-            errors.append("target_project.project_root must be an absolute path")
+    entrypoint = payload.get("multi_call_strategy_pipeline_planner_entrypoint")
+    if not isinstance(entrypoint, Mapping):
+        errors.append("multi_call_strategy_pipeline_planner_entrypoint must be an object")
+        return errors
+    required_entrypoint = {
+        "runtime_mode",
+        "execution_mode",
+        "target_project_root",
+        "earth_root",
+        "output_root",
+        "revision_identity",
+        "strategy_goal",
+        "call_depth",
+    }
+    entrypoint_keys = set(entrypoint.keys())
+    missing_entrypoint = sorted(required_entrypoint - entrypoint_keys)
+    if missing_entrypoint:
+        errors.append(f"multi_call_strategy_pipeline_planner_entrypoint missing keys: {missing_entrypoint}")
+    unexpected_entrypoint = sorted(entrypoint_keys - required_entrypoint)
+    if unexpected_entrypoint:
+        errors.append(f"multi_call_strategy_pipeline_planner_entrypoint unexpected keys: {unexpected_entrypoint}")
 
-    synthesis = payload.get("final_strategy_synthesis")
-    packet_input_ids: set[str] = set()
-    if not isinstance(synthesis, Mapping):
-        errors.append("final_strategy_synthesis must be an object")
+    if entrypoint.get("runtime_mode") != RUNTIME_MODE:
+        errors.append(f"multi_call_strategy_pipeline_planner_entrypoint.runtime_mode must be {RUNTIME_MODE}")
+    if entrypoint.get("execution_mode") != EXECUTION_MODE:
+        errors.append(f"multi_call_strategy_pipeline_planner_entrypoint.execution_mode must be {EXECUTION_MODE}")
+    for root_field in ("target_project_root", "earth_root", "output_root"):
+        root_value = entrypoint.get(root_field)
+        if not isinstance(root_value, str) or not root_value.strip():
+            errors.append(f"{root_field} must be a non-empty string")
+        elif not root_value.startswith("/"):
+            errors.append(f"{root_field} must be an absolute path")
+
+    revision_identity = entrypoint.get("revision_identity")
+    strategy_goal = entrypoint.get("strategy_goal")
+    if not isinstance(revision_identity, str) or not revision_identity.strip():
+        errors.append("revision_identity must be a non-empty string")
+    if not isinstance(strategy_goal, str) or not strategy_goal.strip():
+        errors.append("strategy_goal must be a non-empty string")
+
+    call_depth = entrypoint.get("call_depth")
+    if not isinstance(call_depth, int):
+        errors.append("call_depth must be an integer")
+        call_depth = DEFAULT_CALL_DEPTH
+    elif call_depth < MIN_CALL_DEPTH or call_depth > MAX_CALL_DEPTH:
+        errors.append(f"call_depth must be between {MIN_CALL_DEPTH} and {MAX_CALL_DEPTH}")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
         return errors
 
-    expected_synthesis_keys = {
-        "final_recommendations",
-        "deferred_recommendations",
-        "open_risks",
-        "strategy_packet_inputs",
-        "cross_project_context_usage",
+    required_processing = {
+        "strategy",
+        "reasoning_mode",
+        "strict_evidence_discipline",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "pipeline_plan",
+        "recommendation",
+        "summary",
     }
-    synthesis_keys = set(synthesis.keys())
-    missing_synthesis = sorted(expected_synthesis_keys - synthesis_keys)
-    if missing_synthesis:
-        errors.append(f"final_strategy_synthesis missing keys: {missing_synthesis}")
-    unexpected_synthesis = sorted(synthesis_keys - expected_synthesis_keys)
-    if unexpected_synthesis:
-        errors.append(f"final_strategy_synthesis has unexpected keys: {unexpected_synthesis}")
+    processing_keys = set(processing_behavior.keys())
+    missing_processing = sorted(required_processing - processing_keys)
+    if missing_processing:
+        errors.append(f"processing_behavior missing keys: {missing_processing}")
+    unexpected_processing = sorted(processing_keys - required_processing)
+    if unexpected_processing:
+        errors.append(f"processing_behavior unexpected keys: {unexpected_processing}")
 
-    strategy_packet_inputs = synthesis.get("strategy_packet_inputs")
-    if not isinstance(strategy_packet_inputs, list):
-        errors.append("final_strategy_synthesis.strategy_packet_inputs must be a list")
-        strategy_packet_inputs = []
+    if processing_behavior.get("strategy") != PIPELINE_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {PIPELINE_STRATEGY}")
+    if processing_behavior.get("reasoning_mode") != EXECUTION_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {EXECUTION_MODE}")
+    if processing_behavior.get("strict_evidence_discipline") is not True:
+        errors.append("processing_behavior.strict_evidence_discipline must be true")
+    if processing_behavior.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    target_project_refs_from_context: list[str] = []
+    earth_sweep_refs_from_context: list[str] = []
+    normalized_cross_project_context_for_digest: list[dict[str, Any]] = []
+    normalized_candidate_recommendations_for_digest: list[dict[str, Any]] = []
+    normalized_strategic_claims_for_digest: list[dict[str, Any]] = []
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
     else:
-        for index, row in enumerate(strategy_packet_inputs):
-            if not isinstance(row, Mapping):
-                errors.append(f"final_strategy_synthesis.strategy_packet_inputs[{index}] must be an object")
-                continue
-            expected_keys = {
-                "packet_input_id",
-                "packet_kind",
-                "target_project_id",
-                "peer_project_id",
-                "lane",
-                "recommendation_ids",
-                "recommendation_count",
-                "earliest_sequence_hint",
-                "evidence_refs",
-            }
-            row_keys = set(row.keys())
-            missing_keys = sorted(expected_keys - row_keys)
-            if missing_keys:
+        target_project_context = context_inputs.get("target_project")
+        if not isinstance(target_project_context, Mapping):
+            errors.append("processing_behavior.context_inputs.target_project must be an object")
+        else:
+            if target_project_context.get("project_root") != entrypoint.get("target_project_root"):
                 errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}] missing keys: {missing_keys}"
+                    "processing_behavior.context_inputs.target_project.project_root must match entrypoint.target_project_root"
                 )
-            unexpected_keys = sorted(row_keys - expected_keys)
-            if unexpected_keys:
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}] has unexpected keys: {unexpected_keys}"
-                )
-            packet_input_id = row.get("packet_input_id")
-            if not isinstance(packet_input_id, str) or not packet_input_id.startswith("pkt."):
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].packet_input_id must be like pkt.<id>"
-                )
-            elif packet_input_id in packet_input_ids:
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].packet_input_id must be unique"
-                )
+            target_refs = target_project_context.get("evidence_refs")
+            if not isinstance(target_refs, list):
+                errors.append("processing_behavior.context_inputs.target_project.evidence_refs must be a list")
             else:
-                packet_input_ids.add(packet_input_id)
-            packet_kind = row.get("packet_kind")
-            if packet_kind not in _PACKET_KINDS:
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].packet_kind must be one of: {list(_PACKET_KINDS)}"
-                )
-            target_project_id_value = row.get("target_project_id")
-            if not isinstance(target_project_id_value, str) or not target_project_id_value.strip():
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].target_project_id must be a non-empty string"
-                )
-            elif target_project_id and target_project_id_value != target_project_id:
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].target_project_id must match target_project.project_id"
-                )
-            peer_project_id = row.get("peer_project_id")
-            if not isinstance(peer_project_id, str):
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].peer_project_id must be a string"
-                )
-            elif packet_kind == "cross-project" and not peer_project_id.strip():
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].peer_project_id must be set for cross-project packets"
-                )
-            elif packet_kind == "target-project" and peer_project_id.strip():
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].peer_project_id must be empty for target-project packets"
-                )
-            if not isinstance(row.get("lane"), str) or not str(row.get("lane")).strip():
-                errors.append(f"final_strategy_synthesis.strategy_packet_inputs[{index}].lane must be a non-empty string")
-            recommendation_ids = row.get("recommendation_ids")
-            if not isinstance(recommendation_ids, list) or not recommendation_ids:
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].recommendation_ids must be a non-empty list"
-                )
-            recommendation_count = row.get("recommendation_count")
-            if not isinstance(recommendation_count, int) or recommendation_count < 1:
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].recommendation_count must be a positive integer"
-                )
-            elif isinstance(recommendation_ids, list) and recommendation_count != len(recommendation_ids):
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].recommendation_count must match recommendation_ids length"
-                )
-            earliest_sequence_hint = row.get("earliest_sequence_hint")
-            if not isinstance(earliest_sequence_hint, int) or earliest_sequence_hint < 1:
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].earliest_sequence_hint must be a positive integer"
-                )
-            evidence_refs = row.get("evidence_refs")
-            if not isinstance(evidence_refs, list) or not evidence_refs:
-                errors.append(
-                    f"final_strategy_synthesis.strategy_packet_inputs[{index}].evidence_refs must be a non-empty list"
-                )
+                target_project_refs_from_context = sorted({_as_text(ref) for ref in target_refs if _as_text(ref)})
 
-    def _validate_lineage_rows(rows: Any, *, field_name: str) -> None:
-        if not isinstance(rows, list) or not rows:
-            errors.append(f"{field_name} must be a non-empty list")
-            return
-        seen_trace_ids: set[str] = set()
-        for index, row in enumerate(rows):
-            if not isinstance(row, Mapping):
-                errors.append(f"{field_name}[{index}] must be an object")
-                continue
-            expected_keys = {"call_id", "requirement_id", "trace_id", "trace_ref", "artifact_ref", "checked_at_utc"}
-            row_keys = set(row.keys())
-            missing_keys = sorted(expected_keys - row_keys)
-            if missing_keys:
-                errors.append(f"{field_name}[{index}] missing keys: {missing_keys}")
-            unexpected_keys = sorted(row_keys - expected_keys)
-            if unexpected_keys:
-                errors.append(f"{field_name}[{index}] has unexpected keys: {unexpected_keys}")
-            trace_id = row.get("trace_id")
-            if not isinstance(trace_id, str) or not trace_id.strip():
-                errors.append(f"{field_name}[{index}].trace_id must be a non-empty string")
-            elif trace_id in seen_trace_ids:
-                errors.append(f"{field_name}[{index}].trace_id must be unique within the lineage list")
+        earth_sweep_context = context_inputs.get("earth_sweep")
+        if not isinstance(earth_sweep_context, Mapping):
+            errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+        else:
+            if earth_sweep_context.get("earth_root") != entrypoint.get("earth_root"):
+                errors.append("processing_behavior.context_inputs.earth_sweep.earth_root must match entrypoint.earth_root")
+            earth_refs = earth_sweep_context.get("evidence_refs")
+            if not isinstance(earth_refs, list):
+                errors.append("processing_behavior.context_inputs.earth_sweep.evidence_refs must be a list")
             else:
-                seen_trace_ids.add(trace_id)
-            for key in ("call_id", "requirement_id", "trace_ref", "artifact_ref", "checked_at_utc"):
-                value = row.get(key)
-                if not isinstance(value, str) or not value.strip():
-                    errors.append(f"{field_name}[{index}].{key} must be a non-empty string")
+                earth_sweep_refs_from_context = sorted({_as_text(ref) for ref in earth_refs if _as_text(ref)})
 
-    final_recommendations = synthesis.get("final_recommendations")
-    seen_final_ids: set[str] = set()
-    referenced_packet_input_ids: set[str] = set()
-    if not isinstance(final_recommendations, list):
-        errors.append("final_strategy_synthesis.final_recommendations must be a list")
-        final_recommendations = []
-    else:
-        for index, row in enumerate(final_recommendations):
-            if not isinstance(row, Mapping):
-                errors.append(f"final_strategy_synthesis.final_recommendations[{index}] must be an object")
-                continue
-            expected_keys = {
-                "recommendation_id",
-                "summary",
-                "rationale",
-                "packet_kind",
-                "peer_project_id",
-                "lane",
-                "sequence_hint",
-                "priority",
-                "evidence_refs",
-                "call_trace_lineage",
-                "contributing_call_ids",
-                "contributing_requirement_ids",
-                "supporting_call_count",
-                "strategy_packet_input_id",
-            }
-            row_keys = set(row.keys())
-            missing_keys = sorted(expected_keys - row_keys)
-            if missing_keys:
-                errors.append(f"final_strategy_synthesis.final_recommendations[{index}] missing keys: {missing_keys}")
-            unexpected_keys = sorted(row_keys - expected_keys)
-            if unexpected_keys:
-                errors.append(f"final_strategy_synthesis.final_recommendations[{index}] has unexpected keys: {unexpected_keys}")
-            recommendation_id = row.get("recommendation_id")
-            if not isinstance(recommendation_id, str) or not recommendation_id.strip():
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].recommendation_id must be a non-empty string"
-                )
-            elif recommendation_id in seen_final_ids:
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].recommendation_id must be unique"
-                )
-            else:
-                seen_final_ids.add(recommendation_id)
-            for key in ("summary", "rationale", "lane"):
-                value = row.get(key)
-                if not isinstance(value, str) or not value.strip():
-                    errors.append(f"final_strategy_synthesis.final_recommendations[{index}].{key} must be a non-empty string")
-            packet_kind = row.get("packet_kind")
-            if packet_kind not in _PACKET_KINDS:
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].packet_kind must be one of: {list(_PACKET_KINDS)}"
-                )
-            peer_project_id = row.get("peer_project_id")
-            if not isinstance(peer_project_id, str):
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].peer_project_id must be a string"
-                )
-            elif packet_kind == "cross-project" and not peer_project_id.strip():
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].peer_project_id must be set for cross-project recommendations"
-                )
-            elif packet_kind == "target-project" and peer_project_id.strip():
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].peer_project_id must be empty for target-project recommendations"
-                )
-            sequence_hint = row.get("sequence_hint")
-            if not isinstance(sequence_hint, int) or sequence_hint < 1:
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].sequence_hint must be a positive integer"
-                )
-            priority = row.get("priority")
-            if priority not in _PRIORITY_LEVELS:
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].priority must be one of: {list(_PRIORITY_LEVELS)}"
-                )
-            evidence_refs = row.get("evidence_refs")
-            if not isinstance(evidence_refs, list) or not evidence_refs:
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].evidence_refs must be a non-empty list"
-                )
-            _validate_lineage_rows(
-                row.get("call_trace_lineage"),
-                field_name=f"final_strategy_synthesis.final_recommendations[{index}].call_trace_lineage",
-            )
-            contributing_call_ids = row.get("contributing_call_ids")
-            if not isinstance(contributing_call_ids, list) or not contributing_call_ids:
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].contributing_call_ids must be a non-empty list"
-                )
-            contributing_requirement_ids = row.get("contributing_requirement_ids")
-            if not isinstance(contributing_requirement_ids, list) or not contributing_requirement_ids:
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].contributing_requirement_ids must be a non-empty list"
-                )
-            supporting_call_count = row.get("supporting_call_count")
-            lineage_rows = row.get("call_trace_lineage") if isinstance(row.get("call_trace_lineage"), list) else []
-            if not isinstance(supporting_call_count, int) or supporting_call_count < 1:
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].supporting_call_count must be a positive integer"
-                )
-            elif lineage_rows and supporting_call_count != len(lineage_rows):
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].supporting_call_count must match call_trace_lineage length"
-                )
-            strategy_packet_input_id = row.get("strategy_packet_input_id")
-            if not isinstance(strategy_packet_input_id, str) or not strategy_packet_input_id.startswith("pkt."):
-                errors.append(
-                    f"final_strategy_synthesis.final_recommendations[{index}].strategy_packet_input_id must be like pkt.<id>"
-                )
-            else:
-                referenced_packet_input_ids.add(strategy_packet_input_id)
-
-    deferred_recommendations = synthesis.get("deferred_recommendations")
-    seen_deferred_ids: set[str] = set()
-    if not isinstance(deferred_recommendations, list):
-        errors.append("final_strategy_synthesis.deferred_recommendations must be a list")
-        deferred_recommendations = []
-    else:
-        for index, row in enumerate(deferred_recommendations):
-            if not isinstance(row, Mapping):
-                errors.append(f"final_strategy_synthesis.deferred_recommendations[{index}] must be an object")
-                continue
-            expected_keys = {
-                "recommendation_id",
-                "summary",
-                "deferred_reason_code",
-                "packet_kind_candidates",
-                "peer_project_candidates",
-                "evidence_refs",
-                "call_trace_lineage",
-                "contributing_call_ids",
-            }
-            row_keys = set(row.keys())
-            missing_keys = sorted(expected_keys - row_keys)
-            if missing_keys:
-                errors.append(
-                    f"final_strategy_synthesis.deferred_recommendations[{index}] missing keys: {missing_keys}"
-                )
-            unexpected_keys = sorted(row_keys - expected_keys)
-            if unexpected_keys:
-                errors.append(
-                    f"final_strategy_synthesis.deferred_recommendations[{index}] has unexpected keys: {unexpected_keys}"
-                )
-            recommendation_id = row.get("recommendation_id")
-            if not isinstance(recommendation_id, str) or not recommendation_id.strip():
-                errors.append(
-                    f"final_strategy_synthesis.deferred_recommendations[{index}].recommendation_id must be a non-empty string"
-                )
-            elif recommendation_id in seen_deferred_ids or recommendation_id in seen_final_ids:
-                errors.append(
-                    f"final_strategy_synthesis.deferred_recommendations[{index}].recommendation_id must be unique across synthesis output"
-                )
-            else:
-                seen_deferred_ids.add(recommendation_id)
-            if not isinstance(row.get("summary"), str) or not str(row.get("summary")).strip():
-                errors.append(
-                    f"final_strategy_synthesis.deferred_recommendations[{index}].summary must be a non-empty string"
-                )
-            if row.get("deferred_reason_code") != _ROUTING_CONFLICT_REASON:
-                errors.append(
-                    f"final_strategy_synthesis.deferred_recommendations[{index}].deferred_reason_code must be {_ROUTING_CONFLICT_REASON}"
-                )
-            for key in ("packet_kind_candidates", "peer_project_candidates", "evidence_refs", "contributing_call_ids"):
-                value = row.get(key)
-                if not isinstance(value, list):
+        cross_project_context = context_inputs.get("cross_project_context")
+        if not isinstance(cross_project_context, list):
+            errors.append("processing_behavior.context_inputs.cross_project_context must be a list")
+        else:
+            for index, row in enumerate(cross_project_context):
+                if not isinstance(row, Mapping):
+                    errors.append(f"processing_behavior.context_inputs.cross_project_context[{index}] must be an object")
+                    continue
+                project_id = _as_text(row.get("project_id"))
+                project_root = _as_text(row.get("project_root"))
+                context_note = _as_text(row.get("context_note"))
+                evidence_refs = row.get("evidence_refs")
+                if not project_id:
                     errors.append(
-                        f"final_strategy_synthesis.deferred_recommendations[{index}].{key} must be a list"
+                        f"processing_behavior.context_inputs.cross_project_context[{index}].project_id must be non-empty"
                     )
-            _validate_lineage_rows(
-                row.get("call_trace_lineage"),
-                field_name=f"final_strategy_synthesis.deferred_recommendations[{index}].call_trace_lineage",
+                if not project_root or not project_root.startswith("/"):
+                    errors.append(
+                        f"processing_behavior.context_inputs.cross_project_context[{index}].project_root must be absolute"
+                    )
+                if not context_note:
+                    errors.append(
+                        f"processing_behavior.context_inputs.cross_project_context[{index}].context_note must be non-empty"
+                    )
+                if not isinstance(evidence_refs, list):
+                    errors.append(
+                        f"processing_behavior.context_inputs.cross_project_context[{index}].evidence_refs must be a list"
+                    )
+                    evidence_refs = []
+                normalized_cross_project_context_for_digest.append(
+                    {
+                        "project_id": project_id,
+                        "project_root": project_root,
+                        "evidence_refs": sorted({_as_text(ref) for ref in evidence_refs if _as_text(ref)}),
+                        "context_note": context_note,
+                    }
+                )
+            normalized_cross_project_context_for_digest.sort(
+                key=lambda row: (row["project_id"], row["project_root"], row["context_note"])
             )
 
-    open_risks = synthesis.get("open_risks")
-    seen_open_risk_ids: set[str] = set()
-    if not isinstance(open_risks, list):
-        errors.append("final_strategy_synthesis.open_risks must be a list")
-        open_risks = []
-    else:
-        for index, row in enumerate(open_risks):
-            if not isinstance(row, Mapping):
-                errors.append(f"final_strategy_synthesis.open_risks[{index}] must be an object")
-                continue
-            expected_keys = {
-                "open_risk_id",
-                "recommendation_id",
-                "summary",
-                "reason_code",
-                "project_id",
-                "required_evidence_refs",
-                "evidence_refs",
-                "linked_recommendation_ids",
-                "call_trace_lineage",
-                "contributing_call_ids",
-            }
-            row_keys = set(row.keys())
-            missing_keys = sorted(expected_keys - row_keys)
-            if missing_keys:
-                errors.append(f"final_strategy_synthesis.open_risks[{index}] missing keys: {missing_keys}")
-            unexpected_keys = sorted(row_keys - expected_keys)
-            if unexpected_keys:
-                errors.append(f"final_strategy_synthesis.open_risks[{index}] has unexpected keys: {unexpected_keys}")
-
-            open_risk_id = row.get("open_risk_id")
-            if not isinstance(open_risk_id, str) or not open_risk_id.strip():
-                errors.append(f"final_strategy_synthesis.open_risks[{index}].open_risk_id must be a non-empty string")
-            elif open_risk_id in seen_open_risk_ids:
-                errors.append(f"final_strategy_synthesis.open_risks[{index}].open_risk_id must be unique")
-            else:
-                seen_open_risk_ids.add(open_risk_id)
-
-            recommendation_id = row.get("recommendation_id")
-            if not isinstance(recommendation_id, str) or not recommendation_id.strip():
-                errors.append(
-                    f"final_strategy_synthesis.open_risks[{index}].recommendation_id must be a non-empty string"
-                )
-            if not isinstance(row.get("summary"), str) or not str(row.get("summary")).strip():
-                errors.append(f"final_strategy_synthesis.open_risks[{index}].summary must be a non-empty string")
-            reason_code = row.get("reason_code")
-            if reason_code not in (
-                _OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE,
-                _OPEN_RISK_REASON_UNRESOLVED_IDEA,
-            ):
-                errors.append(
-                    "final_strategy_synthesis.open_risks"
-                    f"[{index}].reason_code must be one of: "
-                    f"{[_OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE, _OPEN_RISK_REASON_UNRESOLVED_IDEA]}"
-                )
-            if not isinstance(row.get("project_id"), str):
-                errors.append(f"final_strategy_synthesis.open_risks[{index}].project_id must be a string")
-            for key in ("required_evidence_refs", "evidence_refs", "linked_recommendation_ids", "contributing_call_ids"):
-                if not isinstance(row.get(key), list):
-                    errors.append(f"final_strategy_synthesis.open_risks[{index}].{key} must be a list")
-
-            lineage_rows = row.get("call_trace_lineage")
-            if not isinstance(lineage_rows, list):
-                errors.append(f"final_strategy_synthesis.open_risks[{index}].call_trace_lineage must be a list")
-                lineage_rows = []
-            elif reason_code == _OPEN_RISK_REASON_MISSING_EARTH_SWEEP_EVIDENCE and not lineage_rows:
-                errors.append(
-                    f"final_strategy_synthesis.open_risks[{index}].call_trace_lineage must be non-empty for missing Earth sweep evidence risks"
-                )
-            if lineage_rows:
-                _validate_lineage_rows(
-                    lineage_rows,
-                    field_name=f"final_strategy_synthesis.open_risks[{index}].call_trace_lineage",
-                )
-
-    cross_project_context_usage = synthesis.get("cross_project_context_usage")
-    if not isinstance(cross_project_context_usage, Mapping):
-        errors.append("final_strategy_synthesis.cross_project_context_usage must be an object")
-    else:
-        expected_usage_keys = {
-            "cross_project_context_provided",
-            "cross_project_context_used",
-            "projects_considered",
-            "earth_sweep_evidence_refs_considered",
-            "cross_project_obligation_count",
-            "unresolved_idea_count",
-            "recommendation_ids_with_context",
-        }
-        usage_keys = set(cross_project_context_usage.keys())
-        missing_usage = sorted(expected_usage_keys - usage_keys)
-        if missing_usage:
-            errors.append(f"final_strategy_synthesis.cross_project_context_usage missing keys: {missing_usage}")
-        unexpected_usage = sorted(usage_keys - expected_usage_keys)
-        if unexpected_usage:
-            errors.append(f"final_strategy_synthesis.cross_project_context_usage has unexpected keys: {unexpected_usage}")
-        if not isinstance(cross_project_context_usage.get("cross_project_context_provided"), bool):
-            errors.append("final_strategy_synthesis.cross_project_context_usage.cross_project_context_provided must be a boolean")
-        if not isinstance(cross_project_context_usage.get("cross_project_context_used"), bool):
-            errors.append("final_strategy_synthesis.cross_project_context_usage.cross_project_context_used must be a boolean")
-        for key in (
-            "projects_considered",
-            "earth_sweep_evidence_refs_considered",
-            "recommendation_ids_with_context",
-        ):
-            value = cross_project_context_usage.get(key)
-            if not isinstance(value, list):
-                errors.append(f"final_strategy_synthesis.cross_project_context_usage.{key} must be a list")
-        for key in ("cross_project_obligation_count", "unresolved_idea_count"):
-            value = cross_project_context_usage.get(key)
-            if not isinstance(value, int) or value < 0:
-                errors.append(
-                    f"final_strategy_synthesis.cross_project_context_usage.{key} must be a non-negative integer"
-                )
-
-    if packet_input_ids and referenced_packet_input_ids != packet_input_ids:
-        errors.append(
-            "final_strategy_synthesis.final_recommendations.strategy_packet_input_id values must cover all strategy_packet_inputs"
-        )
-
-    totals = payload.get("totals")
-    if not isinstance(totals, Mapping):
-        errors.append("totals must be an object")
-    else:
-        expected_total_keys = {
-            "validated_calls",
-            "candidate_recommendations",
-            "final_recommendations",
-            "deferred_recommendations",
-            "open_risks",
-            "strategy_packet_inputs",
-            "call_trace_lineage_rows",
-        }
-        total_keys = set(totals.keys())
-        missing_totals = sorted(expected_total_keys - total_keys)
-        if missing_totals:
-            errors.append(f"totals missing keys: {missing_totals}")
-        unexpected_totals = sorted(total_keys - expected_total_keys)
-        if unexpected_totals:
-            errors.append(f"totals has unexpected keys: {unexpected_totals}")
-        for key in expected_total_keys:
-            value = totals.get(key)
-            if not isinstance(value, int) or value < 0:
-                errors.append(f"totals.{key} must be a non-negative integer")
-
-        if totals.get("final_recommendations") != len(final_recommendations):
-            errors.append("totals.final_recommendations must match synthesized final recommendations count")
-        if totals.get("deferred_recommendations") != len(deferred_recommendations):
-            errors.append("totals.deferred_recommendations must match synthesized deferred recommendations count")
-        if totals.get("open_risks") != len(open_risks):
-            errors.append("totals.open_risks must match synthesized open risk count")
-        if totals.get("strategy_packet_inputs") != len(strategy_packet_inputs):
-            errors.append("totals.strategy_packet_inputs must match synthesized packet input count")
-
-        expected_lineage_rows = 0
-        unique_trace_ids: set[str] = set()
-        for collection in (final_recommendations, deferred_recommendations, open_risks):
-            for row in collection:
-                if isinstance(row, Mapping) and isinstance(row.get("call_trace_lineage"), list):
-                    expected_lineage_rows += len(row["call_trace_lineage"])
-                    unique_trace_ids.update(
-                        str(lineage_row.get("trace_id"))
-                        for lineage_row in row["call_trace_lineage"]
-                        if isinstance(lineage_row, Mapping) and str(lineage_row.get("trace_id") or "").strip()
+        candidate_recommendations = context_inputs.get("candidate_recommendations")
+        if not isinstance(candidate_recommendations, list):
+            errors.append("processing_behavior.context_inputs.candidate_recommendations must be a list")
+        else:
+            for index, row in enumerate(candidate_recommendations):
+                if not isinstance(row, Mapping):
+                    errors.append(
+                        f"processing_behavior.context_inputs.candidate_recommendations[{index}] must be an object"
                     )
-        if totals.get("call_trace_lineage_rows") != expected_lineage_rows:
-            errors.append("totals.call_trace_lineage_rows must match all synthesized lineage rows")
-        if totals.get("candidate_recommendations") != expected_lineage_rows:
-            errors.append("totals.candidate_recommendations must match all synthesized candidate recommendation rows")
-        if totals.get("validated_calls") != len(unique_trace_ids):
-            errors.append("totals.validated_calls must match unique call trace lineage rows")
+                    continue
+                action_id = _as_text(row.get("action_id"))
+                summary = _as_text(row.get("summary"))
+                rationale = _as_text(row.get("rationale"))
+                action_scope = _as_text(row.get("action_scope")).lower()
+                requires_earth_evidence = bool(row.get("requires_earth_evidence"))
+                project_id = _as_text(row.get("project_id"))
+                next_step = _as_text(row.get("next_step"))
+                evidence_refs = row.get("evidence_refs")
+                if not action_id:
+                    errors.append(
+                        f"processing_behavior.context_inputs.candidate_recommendations[{index}].action_id must be non-empty"
+                    )
+                if not summary:
+                    errors.append(
+                        f"processing_behavior.context_inputs.candidate_recommendations[{index}].summary must be non-empty"
+                    )
+                if not rationale:
+                    errors.append(
+                        f"processing_behavior.context_inputs.candidate_recommendations[{index}].rationale must be non-empty"
+                    )
+                if action_scope not in {"local", "cross-project"}:
+                    errors.append(
+                        f"processing_behavior.context_inputs.candidate_recommendations[{index}].action_scope must be local or cross-project"
+                    )
+                if not next_step:
+                    errors.append(
+                        f"processing_behavior.context_inputs.candidate_recommendations[{index}].next_step must be non-empty"
+                    )
+                if not isinstance(evidence_refs, list):
+                    errors.append(
+                        f"processing_behavior.context_inputs.candidate_recommendations[{index}].evidence_refs must be a list"
+                    )
+                    evidence_refs = []
+                normalized_candidate_recommendations_for_digest.append(
+                    {
+                        "action_id": action_id,
+                        "summary": summary,
+                        "rationale": rationale,
+                        "action_scope": action_scope if action_scope in {"local", "cross-project"} else "local",
+                        "requires_earth_evidence": requires_earth_evidence,
+                        "project_id": project_id,
+                        "evidence_refs": sorted({_as_text(ref) for ref in evidence_refs if _as_text(ref)}),
+                        "next_step": next_step,
+                    }
+                )
+            normalized_candidate_recommendations_for_digest.sort(key=lambda row: row["action_id"])
+
+        strategic_claims = context_inputs.get("strategic_claims")
+        if not isinstance(strategic_claims, list):
+            errors.append("processing_behavior.context_inputs.strategic_claims must be a list")
+        else:
+            for index, row in enumerate(strategic_claims):
+                if not isinstance(row, Mapping):
+                    errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}] must be an object")
+                    continue
+                claim_id = _as_text(row.get("claim_id"))
+                phase = _as_text(row.get("phase")).lower()
+                summary = _as_text(row.get("summary"))
+                position = _as_text(row.get("position"))
+                source_call_sequence = row.get("source_call_sequence")
+                evidence_refs = row.get("evidence_refs")
+                if not claim_id:
+                    errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}].claim_id must be non-empty")
+                if not phase:
+                    errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}].phase must be non-empty")
+                if not summary:
+                    errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}].summary must be non-empty")
+                if not position:
+                    errors.append(f"processing_behavior.context_inputs.strategic_claims[{index}].position must be non-empty")
+                if isinstance(source_call_sequence, bool) or not isinstance(source_call_sequence, int):
+                    errors.append(
+                        f"processing_behavior.context_inputs.strategic_claims[{index}].source_call_sequence must be an integer"
+                    )
+                    source_call_sequence = 0
+                if not isinstance(evidence_refs, list):
+                    errors.append(
+                        f"processing_behavior.context_inputs.strategic_claims[{index}].evidence_refs must be a list"
+                    )
+                    evidence_refs = []
+                normalized_strategic_claims_for_digest.append(
+                    {
+                        "claim_id": claim_id,
+                        "phase": phase,
+                        "summary": summary,
+                        "position": position,
+                        "source_call_sequence": source_call_sequence,
+                        "evidence_refs": sorted({_as_text(ref) for ref in evidence_refs if _as_text(ref)}),
+                    }
+                )
+            normalized_strategic_claims_for_digest.sort(
+                key=lambda row: (
+                    row["claim_id"],
+                    row["phase"],
+                    row["source_call_sequence"],
+                    row["position"],
+                    row["summary"],
+                )
+            )
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        for key in (
+            "target_project_context_used",
+            "earth_sweep_context_used",
+            "cross_project_context_used",
+            "target_project_refs_used",
+            "earth_sweep_refs_used",
+            "cross_project_refs_used",
+            "cross_project_projects_considered",
+            "evidence_refs_used",
+        ):
+            if key not in context_usage:
+                errors.append(f"processing_behavior.context_usage missing keys: ['{key}']")
+
+    recommendation = processing_behavior.get("recommendation")
+    recommendation_evidence_refs: list[str] = []
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        required_recommendation = {
+            "decision",
+            "rationale",
+            "confidence",
+            "evidence_refs",
+            "recommended_actions",
+            "cross_project_obligations",
+            "open_risks",
+        }
+        recommendation_keys = set(recommendation.keys())
+        missing_recommendation = sorted(required_recommendation - recommendation_keys)
+        if missing_recommendation:
+            errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+        if not isinstance(recommendation.get("evidence_refs"), list):
+            errors.append("processing_behavior.recommendation.evidence_refs must be a list")
+        else:
+            recommendation_evidence_refs = sorted(
+                {_as_text(ref) for ref in recommendation.get("evidence_refs", []) if _as_text(ref)}
+            )
+        if not isinstance(recommendation.get("recommended_actions"), list):
+            errors.append("processing_behavior.recommendation.recommended_actions must be a list")
+        obligations = recommendation.get("cross_project_obligations")
+        earth_ref_set = {ref for ref in earth_sweep_refs_from_context if _is_earth_evidence_ref(ref)}
+        if not isinstance(obligations, list):
+            errors.append("processing_behavior.recommendation.cross_project_obligations must be a list")
+            obligations = []
+        if obligations and not earth_ref_set:
+            errors.append(
+                "processing_behavior.recommendation.cross_project_obligations must be empty without earth_sweep evidence refs"
+            )
+        for index, obligation in enumerate(obligations):
+            if not isinstance(obligation, Mapping):
+                errors.append(f"processing_behavior.recommendation.cross_project_obligations[{index}] must be an object")
+                continue
+            evidence_refs = obligation.get("evidence_refs")
+            if not isinstance(evidence_refs, list) or not evidence_refs:
+                errors.append(
+                    f"processing_behavior.recommendation.cross_project_obligations[{index}].evidence_refs must be non-empty list"
+                )
+                continue
+            obligation_ref_set = {_as_text(ref) for ref in evidence_refs if _as_text(ref)}
+            if earth_ref_set and not obligation_ref_set.intersection(earth_ref_set):
+                errors.append(
+                    f"processing_behavior.recommendation.cross_project_obligations[{index}] must include earth_sweep evidence refs"
+                )
+        open_risks = recommendation.get("open_risks")
+        if not isinstance(open_risks, list):
+            errors.append("processing_behavior.recommendation.open_risks must be a list")
+
+    pipeline_plan = processing_behavior.get("pipeline_plan")
+    if not isinstance(pipeline_plan, Mapping):
+        errors.append("processing_behavior.pipeline_plan must be an object")
+        return errors
+
+    required_plan = {
+        "plan_id",
+        "planner_mode",
+        "total_calls",
+        "required_evidence_refs",
+        "calls",
+        "dependency_edges",
+        "terminal_expected_output",
+    }
+    plan_keys = set(pipeline_plan.keys())
+    missing_plan = sorted(required_plan - plan_keys)
+    if missing_plan:
+        errors.append(f"processing_behavior.pipeline_plan missing keys: {missing_plan}")
+    unexpected_plan = sorted(plan_keys - required_plan)
+    if unexpected_plan:
+        errors.append(f"processing_behavior.pipeline_plan unexpected keys: {unexpected_plan}")
+
+    if pipeline_plan.get("planner_mode") != "multi-call-reasoning-chain":
+        errors.append("processing_behavior.pipeline_plan.planner_mode must be multi-call-reasoning-chain")
+    total_calls = pipeline_plan.get("total_calls")
+    if total_calls != call_depth:
+        errors.append("processing_behavior.pipeline_plan.total_calls must mirror entrypoint.call_depth")
+
+    required_evidence_refs = pipeline_plan.get("required_evidence_refs")
+    if not isinstance(required_evidence_refs, list) or not required_evidence_refs:
+        errors.append("processing_behavior.pipeline_plan.required_evidence_refs must be a non-empty array")
+        required_evidence_refs = []
+
+    calls = pipeline_plan.get("calls")
+    call_rows: list[Mapping[str, Any]] = []
+    if not isinstance(calls, list):
+        errors.append("processing_behavior.pipeline_plan.calls must be an array")
+    else:
+        if len(calls) != call_depth:
+            errors.append("processing_behavior.pipeline_plan.calls length must match call_depth")
+        prior_call_ids: list[str] = []
+        expected_dependency_edges: list[dict[str, str]] = []
+        for index, row in enumerate(calls):
+            if not isinstance(row, Mapping):
+                errors.append(f"processing_behavior.pipeline_plan.calls[{index}] must be an object")
+                continue
+            call_rows.append(row)
+            sequence = row.get("sequence")
+            if sequence != index + 1:
+                errors.append(f"processing_behavior.pipeline_plan.calls[{index}].sequence must be {index + 1}")
+            call_id = row.get("call_id")
+            purpose = row.get("purpose")
+            expected_output = row.get("expected_output")
+            if not isinstance(call_id, str) or not call_id.strip():
+                errors.append(f"processing_behavior.pipeline_plan.calls[{index}].call_id must be non-empty")
+            if not isinstance(purpose, str) or not purpose.strip():
+                errors.append(f"processing_behavior.pipeline_plan.calls[{index}].purpose must be non-empty")
+            if not isinstance(expected_output, str) or not expected_output.strip():
+                errors.append(f"processing_behavior.pipeline_plan.calls[{index}].expected_output must be non-empty")
+            if isinstance(call_id, str) and isinstance(purpose, str) and isinstance(expected_output, str):
+                if isinstance(revision_identity, str) and isinstance(strategy_goal, str):
+                    expected_call_id = _build_call_id(
+                        revision_identity=revision_identity.strip(),
+                        strategy_goal=strategy_goal.strip(),
+                        sequence=index + 1,
+                        purpose=purpose.strip(),
+                        expected_output=expected_output.strip(),
+                    )
+                    if call_id != expected_call_id:
+                        errors.append(f"processing_behavior.pipeline_plan.calls[{index}].call_id is not reproducible")
+
+            depends_on = row.get("depends_on")
+            if not isinstance(depends_on, list):
+                errors.append(f"processing_behavior.pipeline_plan.calls[{index}].depends_on must be an array")
+                depends_on = []
+            if index == 0 and depends_on:
+                errors.append("processing_behavior.pipeline_plan.calls[0].depends_on must be empty")
+            if index > 0 and not depends_on:
+                errors.append(f"processing_behavior.pipeline_plan.calls[{index}].depends_on must not be empty")
+            for dep_index, upstream_call_id in enumerate(depends_on):
+                if not isinstance(upstream_call_id, str) or not upstream_call_id.strip():
+                    errors.append(
+                        f"processing_behavior.pipeline_plan.calls[{index}].depends_on[{dep_index}] must be non-empty string"
+                    )
+                    continue
+                if upstream_call_id not in prior_call_ids:
+                    errors.append(
+                        f"processing_behavior.pipeline_plan.calls[{index}].depends_on[{dep_index}] must reference an earlier call_id"
+                    )
+                if isinstance(call_id, str) and call_id.strip():
+                    expected_dependency_edges.append({"from_call_id": upstream_call_id, "to_call_id": call_id})
+
+            row_evidence_refs = row.get("evidence_refs")
+            if not isinstance(row_evidence_refs, list) or not row_evidence_refs:
+                errors.append(f"processing_behavior.pipeline_plan.calls[{index}].evidence_refs must be a non-empty array")
+            elif sorted(set(_as_text(ref) for ref in row_evidence_refs if _as_text(ref))) != sorted(required_evidence_refs):
+                errors.append(
+                    f"processing_behavior.pipeline_plan.calls[{index}].evidence_refs must match required_evidence_refs"
+                )
+
+            if isinstance(call_id, str) and call_id.strip():
+                prior_call_ids.append(call_id)
+
+        terminal_expected_output = pipeline_plan.get("terminal_expected_output")
+        if call_rows and isinstance(terminal_expected_output, str):
+            final_output = _as_text(call_rows[-1].get("expected_output"))
+            if terminal_expected_output != final_output:
+                errors.append("processing_behavior.pipeline_plan.terminal_expected_output must match final call expected_output")
+
+        dependency_edges = pipeline_plan.get("dependency_edges")
+        if not isinstance(dependency_edges, list):
+            errors.append("processing_behavior.pipeline_plan.dependency_edges must be an array")
+        elif dependency_edges != expected_dependency_edges:
+            errors.append("processing_behavior.pipeline_plan.dependency_edges must mirror call dependency links")
+
+    missing_required_refs = sorted(set(required_evidence_refs) - set(recommendation_evidence_refs))
+    if missing_required_refs:
+        errors.append("processing_behavior.recommendation.evidence_refs must include required_evidence_refs")
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+
+    required_metadata = {
+        "reproducibility",
+        "canonical_input_sha256",
+        "reproducible_call_id",
+        "canonical_input",
+        "processing_input_sha256",
+        "processing_call_id",
+        "canonical_processing_input",
+        "llm_call_trace_schema_version",
+        "llm_call_trace_path",
+        "llm_call_trace_sha256",
+        "llm_call_trace_rows",
+    }
+    metadata_keys = set(metadata.keys())
+    missing_metadata = sorted(required_metadata - metadata_keys)
+    if missing_metadata:
+        errors.append(f"call_metadata missing keys: {missing_metadata}")
+    unexpected_metadata = sorted(metadata_keys - required_metadata)
+    if unexpected_metadata:
+        errors.append(f"call_metadata unexpected keys: {unexpected_metadata}")
+
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+        return errors
+
+    expected_canonical_input = _canonical_call_input(
+        target_project_root=_as_text(entrypoint.get("target_project_root")),
+        earth_root=_as_text(entrypoint.get("earth_root")),
+        output_root=_as_text(entrypoint.get("output_root")),
+        revision_identity=_as_text(entrypoint.get("revision_identity")),
+        strategy_goal=_as_text(entrypoint.get("strategy_goal")),
+        call_depth=int(call_depth),
+    )
+    if dict(canonical_input) != expected_canonical_input:
+        errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+
+    expected_input_sha = _canonical_digest(expected_canonical_input)
+    if metadata.get("canonical_input_sha256") != expected_input_sha:
+        errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+    if metadata.get("reproducible_call_id") != f"req025-{expected_input_sha[:16]}":
+        errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+        return errors
+
+    stage_blueprints: list[dict[str, str]] = []
+    for index, row in enumerate(call_rows):
+        purpose = _as_text(row.get("purpose"))
+        expected_output = _as_text(row.get("expected_output"))
+        if not purpose or not expected_output:
+            continue
+        stage_blueprints.append({"purpose": purpose, "expected_output": expected_output})
+
+    expected_processing_input = _canonical_processing_input(
+        evidence_refs=sorted(set(_as_text(ref) for ref in required_evidence_refs if _as_text(ref))),
+        stage_blueprints=stage_blueprints,
+        call_depth=int(call_depth),
+        target_project_evidence_refs=target_project_refs_from_context,
+        earth_sweep_evidence_refs=earth_sweep_refs_from_context,
+        cross_project_context=normalized_cross_project_context_for_digest,
+        candidate_recommendations=normalized_candidate_recommendations_for_digest,
+        strategic_claims=normalized_strategic_claims_for_digest,
+    )
+    if dict(canonical_processing_input) != expected_processing_input:
+        errors.append("call_metadata.canonical_processing_input must mirror pipeline plan inputs")
+
+    expected_processing_sha = _canonical_digest(expected_processing_input)
+    if metadata.get("processing_input_sha256") != expected_processing_sha:
+        errors.append("call_metadata.processing_input_sha256 does not match processing input")
+    expected_processing_call_id = f"req025-processing-{expected_processing_sha[:16]}"
+    if metadata.get("processing_call_id") != expected_processing_call_id:
+        errors.append("call_metadata.processing_call_id does not match processing digest")
+    if pipeline_plan.get("plan_id") != f"req025-plan-{expected_processing_sha[:16]}":
+        errors.append("processing_behavior.pipeline_plan.plan_id must derive from processing digest")
+
+    if metadata.get("llm_call_trace_schema_version") != REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION:
+        errors.append(
+            f"call_metadata.llm_call_trace_schema_version must be {REQ_025_LLM_CALL_TRACE_SCHEMA_VERSION}"
+        )
+    if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+        errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+    llm_call_trace_rows = metadata.get("llm_call_trace_rows")
+    if not isinstance(llm_call_trace_rows, list):
+        errors.append("call_metadata.llm_call_trace_rows must be a list")
+        llm_call_trace_rows = []
+    expected_trace_rows: list[dict[str, Any]] = []
+    try:
+        expected_trace_rows = _build_llm_call_trace_rows(
+            plan_id=_as_text(pipeline_plan.get("plan_id")),
+            processing_call_id=expected_processing_call_id,
+            required_evidence_refs=sorted(set(_as_text(ref) for ref in required_evidence_refs if _as_text(ref))),
+            calls=call_rows,
+            recommendation_decision=_as_text(recommendation.get("decision")) if isinstance(recommendation, Mapping) else "",
+        )
+    except ValueError as exc:
+        errors.append(f"call_metadata.llm_call_trace_rows could not be reconstructed: {exc}")
+    else:
+        if llm_call_trace_rows != expected_trace_rows:
+            errors.append("call_metadata.llm_call_trace_rows must mirror the deterministic per-call trace rows")
+        expected_trace_sha = _canonical_digest(expected_trace_rows)
+        if metadata.get("llm_call_trace_sha256") != expected_trace_sha:
+            errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
 
     return errors
 
 
+def _req_029_normalize_call_chain(
+    value: Any,
+    *,
+    field_name: str = "call_chain",
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req029Error(f"{field_name} must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_sequences: set[int] = set()
+    seen_call_ids: set[str] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        sequence = row.get("sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            raise Req029Error(f"{field_name}[{index}].sequence must be an integer")
+        if sequence < 1:
+            raise Req029Error(f"{field_name}[{index}].sequence must be >= 1")
+        if sequence in seen_sequences:
+            raise Req029Error(f"{field_name}[{index}].sequence must be unique")
+        seen_sequences.add(sequence)
+
+        call_id = _require_text(row.get("call_id"), field_name=f"{field_name}[{index}].call_id")
+        if call_id in seen_call_ids:
+            raise Req029Error(f"{field_name}[{index}].call_id must be unique")
+        seen_call_ids.add(call_id)
+
+        normalized.append(
+            {
+                "sequence": sequence,
+                "call_id": call_id,
+                "phase": _require_text(row.get("phase"), field_name=f"{field_name}[{index}].phase"),
+                "output_ref": _require_text(row.get("output_ref"), field_name=f"{field_name}[{index}].output_ref"),
+            }
+        )
+
+    normalized.sort(key=lambda row: row["sequence"])
+    expected_sequences = list(range(1, len(normalized) + 1))
+    actual_sequences = [row["sequence"] for row in normalized]
+    if actual_sequences != expected_sequences:
+        raise Req029Error(f"{field_name}.sequence must be contiguous starting at 1")
+    if len(normalized) < 4:
+        raise Req029Error(f"{field_name} must include at least 4 calls for Call-4 synthesis")
+    return normalized
+
+
+def _req_029_slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "recommendation"
+
+
+def _req_029_recommendation_id_from_candidate(row: Mapping[str, Any], *, index: int) -> str:
+    provided = _as_text(row.get("recommendation_id"))
+    if provided:
+        if not REQ_029_RECOMMENDATION_ID_RE.match(provided):
+            raise Req029Error(
+                f"candidate_recommendations[{index}].recommendation_id must match {REQ_029_RECOMMENDATION_ID_RE.pattern}"
+            )
+        return provided
+
+    summary = _require_text(row.get("summary"), field_name=f"candidate_recommendations[{index}].summary")
+    return f"rec.{_req_029_slugify(summary)}"
+
+
+def _req_029_normalize_candidate_recommendations(
+    value: Any,
+    *,
+    field_name: str = "candidate_recommendations",
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req029Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        recommendation_id = _req_029_recommendation_id_from_candidate(row, index=index)
+        if recommendation_id in seen_ids:
+            raise Req029Error(f"{field_name}[{index}].recommendation_id must be unique")
+        seen_ids.add(recommendation_id)
+
+        recommendation_scope = _require_text(
+            row.get("recommendation_scope"),
+            field_name=f"{field_name}[{index}].recommendation_scope",
+        ).lower()
+        if recommendation_scope not in REQ_029_ALLOWED_RECOMMENDATION_SCOPES:
+            raise Req029Error(
+                f"{field_name}[{index}].recommendation_scope must be one of {sorted(REQ_029_ALLOWED_RECOMMENDATION_SCOPES)}"
+            )
+
+        project_id = _as_text(row.get("project_id"))
+        if recommendation_scope == "cross-project":
+            project_id = _require_text(project_id, field_name=f"{field_name}[{index}].project_id")
+        else:
+            project_id = ""
+
+        requires_earth_evidence = row.get("requires_earth_evidence")
+        if requires_earth_evidence is None:
+            requires_earth_evidence = recommendation_scope == "cross-project"
+        if not isinstance(requires_earth_evidence, bool):
+            raise Req029Error(f"{field_name}[{index}].requires_earth_evidence must be a boolean")
+
+        synthesized_from_call_sequence = row.get("synthesized_from_call_sequence")
+        if isinstance(synthesized_from_call_sequence, bool) or not isinstance(synthesized_from_call_sequence, int):
+            raise Req029Error(f"{field_name}[{index}].synthesized_from_call_sequence must be an integer")
+
+        normalized.append(
+            {
+                "recommendation_id": recommendation_id,
+                "summary": _require_text(row.get("summary"), field_name=f"{field_name}[{index}].summary"),
+                "rationale": _require_text(row.get("rationale"), field_name=f"{field_name}[{index}].rationale"),
+                "impact": _require_text(row.get("impact"), field_name=f"{field_name}[{index}].impact"),
+                "risk": _require_text(row.get("risk"), field_name=f"{field_name}[{index}].risk"),
+                "recommendation_scope": recommendation_scope,
+                "project_id": project_id,
+                "requires_earth_evidence": requires_earth_evidence,
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                    min_items=1,
+                ),
+                "next_step": _require_text(row.get("next_step"), field_name=f"{field_name}[{index}].next_step"),
+                "synthesized_from_call_sequence": synthesized_from_call_sequence,
+            }
+        )
+
+    normalized.sort(key=lambda row: row["recommendation_id"])
+    return normalized
+
+
+def _req_029_normalize_strategic_claims(
+    value: Any,
+    *,
+    field_name: str = "strategic_claims",
+    call_depth: int,
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req029Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        source_call_sequence = row.get("source_call_sequence")
+        if isinstance(source_call_sequence, bool) or not isinstance(source_call_sequence, int):
+            raise Req029Error(f"{field_name}[{index}].source_call_sequence must be an integer")
+        if source_call_sequence < 1 or source_call_sequence > call_depth:
+            raise Req029Error(f"{field_name}[{index}].source_call_sequence must be between 1 and {call_depth}")
+        normalized.append(
+            {
+                "claim_id": _require_text(row.get("claim_id"), field_name=f"{field_name}[{index}].claim_id"),
+                "phase": _require_text(row.get("phase"), field_name=f"{field_name}[{index}].phase").lower(),
+                "summary": _require_text(row.get("summary"), field_name=f"{field_name}[{index}].summary"),
+                "position": _require_text(row.get("position"), field_name=f"{field_name}[{index}].position"),
+                "source_call_sequence": source_call_sequence,
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                ),
+            }
+        )
+
+    normalized.sort(
+        key=lambda row: (
+            row["claim_id"],
+            row["phase"],
+            row["source_call_sequence"],
+            row["position"],
+            row["summary"],
+        )
+    )
+    return normalized
+
+
+def _req_029_build_trace_rows(
+    *,
+    synthesis_call_id: str,
+    call_chain: Sequence[Mapping[str, Any]],
+    recommendation_ids: Sequence[str],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    output_ref_by_sequence = {int(row["sequence"]): str(row["output_ref"]) for row in call_chain}
+    prior_output_refs: list[str] = []
+    for row in call_chain:
+        sequence = int(row["sequence"])
+        call_id = str(row["call_id"])
+        output_ref = str(row["output_ref"])
+        input_refs = list(prior_output_refs)
+        if sequence == 4:
+            input_refs = list(prior_output_refs)
+        rows.append(
+            {
+                "schema_version": REQ_029_LLM_CALL_TRACE_SCHEMA_VERSION,
+                "requirement_id": REQ_029_REQUIREMENT_ID,
+                "processing_call_id": synthesis_call_id,
+                "call_id": call_id,
+                "sequence": sequence,
+                "call_objective": str(row["phase"]),
+                "input_refs": input_refs,
+                "output_refs": [output_ref],
+                "handoff_summary": (
+                    f"Call {sequence} supplies {output_ref}."
+                    if sequence < 4
+                    else f"Call 4 synthesizes recommendation_drafts for {len(recommendation_ids)} recommendation(s)."
+                ),
+            }
+        )
+        if output_ref_by_sequence.get(sequence):
+            prior_output_refs.append(output_ref)
+    return rows
+
+
+def _req_029_canonical_input(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_id: str,
+    checked_at_utc: str,
+) -> dict[str, Any]:
+    return {
+        "runtime_mode": RUNTIME_MODE,
+        "execution_mode": EXECUTION_MODE,
+        "target_project_root": target_project_root,
+        "earth_root": earth_root,
+        "output_root": output_root,
+        "revision_identity": revision_identity,
+        "strategy_goal": strategy_goal,
+        "analysis_type": REQ_029_ANALYSIS_TYPE,
+        "call_id": call_id,
+        "checked_at_utc": checked_at_utc,
+    }
+
+
+def _req_029_canonical_processing_input(
+    *,
+    call_chain: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[str],
+    earth_sweep_evidence_refs: Sequence[str],
+    cross_project_context: Sequence[Mapping[str, Any]],
+    candidate_recommendations: Sequence[Mapping[str, Any]],
+    strategic_claims: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "call_chain": [dict(row) for row in call_chain],
+        "target_project_evidence_refs": list(target_project_evidence_refs),
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "cross_project_context": [dict(row) for row in cross_project_context],
+        "candidate_recommendations": [dict(row) for row in candidate_recommendations],
+        "strategic_claims": [dict(row) for row in strategic_claims],
+    }
+
+
+def build_req_029_call_4_recommendation_synthesis(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_chain: Sequence[Mapping[str, Any]],
+    candidate_recommendations: Sequence[Mapping[str, Any]],
+    strategic_claims: Sequence[Mapping[str, Any]] | None = None,
+    cross_project_context: Sequence[Mapping[str, Any]] | None = None,
+    target_project_evidence_refs: Sequence[Any] | None = None,
+    earth_sweep_evidence_refs: Sequence[Any] | None = None,
+    call_id: str = "call-4",
+    checked_at_utc: str | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_text(revision_identity, field_name="revision_identity")
+    normalized_strategy_goal = _require_text(strategy_goal, field_name="strategy_goal")
+    normalized_call_id = _require_text(call_id, field_name="call_id")
+    normalized_checked_at_utc = _require_text(checked_at_utc or utc_now_iso(), field_name="checked_at_utc")
+    normalized_call_chain = _req_029_normalize_call_chain(call_chain)
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
+    normalized_candidate_recommendations = _req_029_normalize_candidate_recommendations(candidate_recommendations)
+    normalized_strategic_claims = _req_029_normalize_strategic_claims(
+        strategic_claims,
+        call_depth=len(normalized_call_chain),
+    )
+
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in normalized_cross_project_context])
+    available_citation_refs = set(
+        _collect_unique_refs(
+            normalized_target_refs,
+            normalized_earth_refs,
+            cross_project_refs,
+            [row["output_ref"] for row in normalized_call_chain],
+        )
+    )
+    output_ref_by_sequence = {int(row["sequence"]): str(row["output_ref"]) for row in normalized_call_chain}
+    context_by_project = {str(row["project_id"]): row for row in normalized_cross_project_context}
+
+    blocked_ids: set[str] = set()
+    open_risks: list[dict[str, Any]] = []
+    claim_rows_by_id: dict[str, list[dict[str, Any]]] = {}
+    for claim in normalized_strategic_claims:
+        claim_rows_by_id.setdefault(str(claim["claim_id"]), []).append(claim)
+        source_output_ref = output_ref_by_sequence.get(int(claim["source_call_sequence"]), "")
+        citation_refs = list(claim["evidence_refs"])
+        if not citation_refs or not set(citation_refs).issubset(available_citation_refs):
+            risk_id = f"risk-claim-{claim['claim_id']}-citation"
+            open_risks.append(
+                {
+                    "risk_id": risk_id,
+                    "reason_code": "uncited_strategic_claim",
+                    "summary": str(claim["summary"]),
+                    "required_evidence_refs": _collect_unique_refs([source_output_ref], citation_refs),
+                }
+            )
+
+    for claim_id, claim_rows in claim_rows_by_id.items():
+        analysis_rows = [row for row in claim_rows if row["phase"] == "analysis"]
+        synthesis_rows = [row for row in claim_rows if row["phase"] == "synthesis"]
+        contradiction_found = False
+        for analysis_row in analysis_rows:
+            for synthesis_row in synthesis_rows:
+                if analysis_row["position"] == synthesis_row["position"]:
+                    continue
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-claim-{claim_id}-contradiction",
+                        "reason_code": "cross_call_contradiction",
+                        "summary": str(synthesis_row["summary"]),
+                        "required_evidence_refs": _collect_unique_refs(
+                            [output_ref_by_sequence.get(int(analysis_row["source_call_sequence"]), "")],
+                            [output_ref_by_sequence.get(int(synthesis_row["source_call_sequence"]), "")],
+                            analysis_row["evidence_refs"],
+                            synthesis_row["evidence_refs"],
+                        ),
+                    }
+                )
+                contradiction_found = True
+                break
+            if contradiction_found:
+                break
+
+    recommendation_drafts: list[dict[str, Any]] = []
+    for row in normalized_candidate_recommendations:
+        recommendation_id = str(row["recommendation_id"])
+        source_output_ref = output_ref_by_sequence.get(int(row["synthesized_from_call_sequence"]), "")
+        uncited_refs = sorted(set(row["evidence_refs"]) - available_citation_refs)
+        if uncited_refs:
+            blocked_ids.add(recommendation_id)
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{recommendation_id}-citation",
+                    "reason_code": "uncited_strategic_claim",
+                    "summary": str(row["summary"]),
+                    "required_evidence_refs": _collect_unique_refs([source_output_ref], uncited_refs),
+                }
+            )
+            continue
+
+        project_context = context_by_project.get(str(row["project_id"]))
+        project_evidence_refs = list(project_context["evidence_refs"]) if project_context else []
+        if row["recommendation_scope"] == "cross-project":
+            if row["requires_earth_evidence"] and not normalized_earth_refs:
+                blocked_ids.add(recommendation_id)
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{recommendation_id}-earth-evidence",
+                        "reason_code": "missing_earth_sweep_evidence_refs",
+                        "summary": str(row["summary"]),
+                        "required_evidence_refs": _collect_unique_refs([source_output_ref], row["evidence_refs"]),
+                    }
+                )
+                continue
+            if project_context is None:
+                blocked_ids.add(recommendation_id)
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{recommendation_id}-context",
+                        "reason_code": "missing_cross_project_context",
+                        "summary": str(row["summary"]),
+                        "required_evidence_refs": _collect_unique_refs([source_output_ref], row["evidence_refs"]),
+                    }
+                )
+                continue
+
+        recommendation_drafts.append(
+            {
+                "recommendation_id": recommendation_id,
+                "summary": str(row["summary"]),
+                "rationale": str(row["rationale"]),
+                "impact": str(row["impact"]),
+                "risk": str(row["risk"]),
+                "recommendation_scope": str(row["recommendation_scope"]),
+                "project_id": str(row["project_id"]),
+                "next_step": str(row["next_step"]),
+                "synthesized_from_call_sequence": int(row["synthesized_from_call_sequence"]),
+                "source_output_ref": source_output_ref,
+                "evidence_refs": _collect_unique_refs(
+                    [source_output_ref],
+                    row["evidence_refs"],
+                    project_evidence_refs,
+                    normalized_earth_refs if row["recommendation_scope"] == "cross-project" else [],
+                ),
+            }
+        )
+
+    recommendation_drafts.sort(key=lambda row: row["recommendation_id"])
+    open_risks.sort(key=lambda row: row["risk_id"])
+
+    evidence_refs = _collect_unique_refs(
+        normalized_target_refs,
+        normalized_earth_refs,
+        cross_project_refs,
+        [row["output_ref"] for row in normalized_call_chain],
+        *[row["evidence_refs"] for row in recommendation_drafts],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    if recommendation_drafts and not open_risks:
+        decision = "proceed"
+    elif recommendation_drafts and open_risks:
+        decision = "proceed-with-open-risks"
+    elif open_risks:
+        decision = "blocked"
+    else:
+        decision = "insufficient-context"
+    confidence = "high" if recommendation_drafts and not open_risks else "medium" if recommendation_drafts else "low"
+
+    canonical_input = _req_029_canonical_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+        strategy_goal=normalized_strategy_goal,
+        call_id=normalized_call_id,
+        checked_at_utc=normalized_checked_at_utc,
+    )
+    canonical_processing_input = _req_029_canonical_processing_input(
+        call_chain=normalized_call_chain,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_project_context,
+        candidate_recommendations=normalized_candidate_recommendations,
+        strategic_claims=normalized_strategic_claims,
+    )
+    processing_sha = _canonical_digest(canonical_processing_input)
+    processing_call_id = f"req029-processing-{processing_sha[:16]}"
+    llm_call_trace_rows = _req_029_build_trace_rows(
+        synthesis_call_id=processing_call_id,
+        call_chain=normalized_call_chain,
+        recommendation_ids=[str(row["recommendation_id"]) for row in recommendation_drafts],
+    )
+
+    return {
+        "schema_version": REQ_029_SCHEMA_VERSION,
+        "requirement_id": REQ_029_REQUIREMENT_ID,
+        "analysis_type": REQ_029_ANALYSIS_TYPE,
+        "call_id": normalized_call_id,
+        "checked_at_utc": normalized_checked_at_utc,
+        "processing_behavior": {
+            "strategy": REQ_029_PROCESSING_STRATEGY,
+            "reasoning_mode": REQ_029_REASONING_MODE,
+            "strict_evidence_discipline": True,
+            "context_inputs": {
+                "call_chain": [dict(row) for row in normalized_call_chain],
+                "target_project": {
+                    "project_root": normalized_target_root,
+                    "evidence_refs": list(normalized_target_refs),
+                },
+                "earth_sweep": {
+                    "earth_root": normalized_earth_root,
+                    "evidence_refs": list(normalized_earth_refs),
+                },
+                "cross_project_context": [dict(row) for row in normalized_cross_project_context],
+                "candidate_recommendations": [dict(row) for row in normalized_candidate_recommendations],
+                "strategic_claims": [dict(row) for row in normalized_strategic_claims],
+            },
+            "context_usage": {
+                "call_ids_considered": [str(row["call_id"]) for row in normalized_call_chain],
+                "candidate_recommendation_ids_considered": [
+                    str(row["recommendation_id"]) for row in normalized_candidate_recommendations
+                ],
+                "emitted_recommendation_ids": [str(row["recommendation_id"]) for row in recommendation_drafts],
+                "blocked_recommendation_ids": sorted(blocked_ids),
+                "open_risk_ids_emitted": [str(row["risk_id"]) for row in open_risks],
+                "evidence_refs_used": list(evidence_refs),
+            },
+            "recommendation": {
+                "decision": decision,
+                "rationale": (
+                    f"drafts={len(recommendation_drafts)} open_risks={len(open_risks)} "
+                    f"blocked={len(blocked_ids)}"
+                ),
+                "confidence": confidence,
+                "evidence_refs": list(evidence_refs),
+                "recommendation_drafts": recommendation_drafts,
+                "open_risks": open_risks,
+            },
+        },
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input": canonical_input,
+            "canonical_input_sha256": _canonical_digest(canonical_input),
+            "reproducible_call_id": f"req029-{_canonical_digest(canonical_input)[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+            "processing_input_sha256": processing_sha,
+            "processing_call_id": processing_call_id,
+            "llm_call_trace_schema_version": REQ_029_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": _canonical_digest(llm_call_trace_rows),
+            "llm_call_trace_rows": llm_call_trace_rows,
+        },
+    }
+
+
+def validate_req_029_call_4_recommendation_synthesis(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    if payload.get("schema_version") != REQ_029_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_029_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_029_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_029_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_029_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_029_ANALYSIS_TYPE}")
+    if not _as_text(payload.get("call_id")):
+        errors.append("call_id is required")
+    if not _as_text(payload.get("checked_at_utc")):
+        errors.append("checked_at_utc is required")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+    if processing_behavior.get("strategy") != REQ_029_PROCESSING_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_029_PROCESSING_STRATEGY}")
+    if processing_behavior.get("reasoning_mode") != REQ_029_REASONING_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {REQ_029_REASONING_MODE}")
+    if processing_behavior.get("strict_evidence_discipline") is not True:
+        errors.append("processing_behavior.strict_evidence_discipline must be true")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    normalized_call_chain: list[dict[str, Any]] = []
+    normalized_target_refs: list[str] = []
+    normalized_earth_refs: list[str] = []
+    normalized_cross_project_context: list[dict[str, Any]] = []
+    normalized_candidate_recommendations: list[dict[str, Any]] = []
+    normalized_strategic_claims: list[dict[str, Any]] = []
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        return errors
+    try:
+        normalized_call_chain = _req_029_normalize_call_chain(context_inputs.get("call_chain"))
+    except Req029Error as exc:
+        errors.append(str(exc))
+    target_project = context_inputs.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("processing_behavior.context_inputs.target_project must be an object")
+    else:
+        normalized_target_refs = sorted(
+            {_as_text(ref) for ref in target_project.get("evidence_refs", []) if _as_text(ref)}
+        )
+    earth_sweep = context_inputs.get("earth_sweep")
+    if not isinstance(earth_sweep, Mapping):
+        errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+    else:
+        normalized_earth_refs = sorted(
+            {_as_text(ref) for ref in earth_sweep.get("evidence_refs", []) if _as_text(ref)}
+        )
+    try:
+        normalized_cross_project_context = _normalize_cross_project_context(context_inputs.get("cross_project_context"))
+    except ValueError as exc:
+        errors.append(str(exc))
+    try:
+        normalized_candidate_recommendations = _req_029_normalize_candidate_recommendations(
+            context_inputs.get("candidate_recommendations")
+        )
+    except Req029Error as exc:
+        errors.append(str(exc))
+    try:
+        normalized_strategic_claims = _req_029_normalize_strategic_claims(
+            context_inputs.get("strategic_claims"),
+            call_depth=len(normalized_call_chain) if normalized_call_chain else 4,
+        )
+    except Req029Error as exc:
+        errors.append(str(exc))
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+        return errors
+    if not isinstance(recommendation.get("evidence_refs"), list):
+        errors.append("processing_behavior.recommendation.evidence_refs must be a list")
+    recommendation_drafts = recommendation.get("recommendation_drafts")
+    if not isinstance(recommendation_drafts, list):
+        errors.append("processing_behavior.recommendation.recommendation_drafts must be a list")
+        recommendation_drafts = []
+    previous_id = ""
+    for index, row in enumerate(recommendation_drafts):
+        if not isinstance(row, Mapping):
+            errors.append(f"processing_behavior.recommendation.recommendation_drafts[{index}] must be an object")
+            continue
+        recommendation_id = _as_text(row.get("recommendation_id"))
+        if not REQ_029_RECOMMENDATION_ID_RE.match(recommendation_id):
+            errors.append(
+                f"processing_behavior.recommendation.recommendation_drafts[{index}].recommendation_id must match {REQ_029_RECOMMENDATION_ID_RE.pattern}"
+            )
+        if previous_id and recommendation_id < previous_id:
+            errors.append("processing_behavior.recommendation.recommendation_drafts must be sorted by recommendation_id")
+        previous_id = recommendation_id
+        for field_name in ("summary", "rationale", "impact", "risk", "next_step", "source_output_ref"):
+            if not _as_text(row.get(field_name)):
+                errors.append(
+                    f"processing_behavior.recommendation.recommendation_drafts[{index}].{field_name} is required"
+                )
+        if not isinstance(row.get("evidence_refs"), list) or not row.get("evidence_refs"):
+            errors.append(
+                f"processing_behavior.recommendation.recommendation_drafts[{index}].evidence_refs must be non-empty list"
+            )
+
+    open_risks = recommendation.get("open_risks")
+    if not isinstance(open_risks, list):
+        errors.append("processing_behavior.recommendation.open_risks must be a list")
+        open_risks = []
+    for index, row in enumerate(open_risks):
+        if not isinstance(row, Mapping):
+            errors.append(f"processing_behavior.recommendation.open_risks[{index}] must be an object")
+            continue
+        if not _as_text(row.get("risk_id")):
+            errors.append(f"processing_behavior.recommendation.open_risks[{index}].risk_id is required")
+        if not _as_text(row.get("reason_code")):
+            errors.append(f"processing_behavior.recommendation.open_risks[{index}].reason_code is required")
+        if not isinstance(row.get("required_evidence_refs"), list) or not row.get("required_evidence_refs"):
+            errors.append(
+                f"processing_behavior.recommendation.open_risks[{index}].required_evidence_refs must be non-empty list"
+            )
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+    else:
+        expected_canonical_input = _req_029_canonical_input(
+            target_project_root=_as_text(context_inputs.get("target_project", {}).get("project_root"))
+            if isinstance(context_inputs.get("target_project"), Mapping)
+            else "",
+            earth_root=_as_text(context_inputs.get("earth_sweep", {}).get("earth_root"))
+            if isinstance(context_inputs.get("earth_sweep"), Mapping)
+            else "",
+            output_root=_as_text(canonical_input.get("output_root")),
+            revision_identity=_as_text(canonical_input.get("revision_identity")),
+            strategy_goal=_as_text(canonical_input.get("strategy_goal")),
+            call_id=_as_text(payload.get("call_id")),
+            checked_at_utc=_as_text(payload.get("checked_at_utc")),
+        )
+        if dict(canonical_input) != expected_canonical_input:
+            errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+        expected_input_sha = _canonical_digest(expected_canonical_input)
+        if metadata.get("canonical_input_sha256") != expected_input_sha:
+            errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+        if metadata.get("reproducible_call_id") != f"req029-{expected_input_sha[:16]}":
+            errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+    else:
+        expected_processing_input = _req_029_canonical_processing_input(
+            call_chain=normalized_call_chain,
+            target_project_evidence_refs=normalized_target_refs,
+            earth_sweep_evidence_refs=normalized_earth_refs,
+            cross_project_context=normalized_cross_project_context,
+            candidate_recommendations=normalized_candidate_recommendations,
+            strategic_claims=normalized_strategic_claims,
+        )
+        if dict(canonical_processing_input) != expected_processing_input:
+            errors.append("call_metadata.canonical_processing_input must mirror normalized synthesis inputs")
+        expected_processing_sha = _canonical_digest(expected_processing_input)
+        if metadata.get("processing_input_sha256") != expected_processing_sha:
+            errors.append("call_metadata.processing_input_sha256 does not match processing input")
+        if metadata.get("processing_call_id") != f"req029-processing-{expected_processing_sha[:16]}":
+            errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    if metadata.get("llm_call_trace_schema_version") != REQ_029_LLM_CALL_TRACE_SCHEMA_VERSION:
+        errors.append(
+            f"call_metadata.llm_call_trace_schema_version must be {REQ_029_LLM_CALL_TRACE_SCHEMA_VERSION}"
+        )
+    if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+        errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+    llm_call_trace_rows = metadata.get("llm_call_trace_rows")
+    if not isinstance(llm_call_trace_rows, list):
+        errors.append("call_metadata.llm_call_trace_rows must be a list")
+    else:
+        expected_trace_rows = _req_029_build_trace_rows(
+            synthesis_call_id=_as_text(metadata.get("processing_call_id")),
+            call_chain=normalized_call_chain,
+            recommendation_ids=[_as_text(row.get("recommendation_id")) for row in recommendation_drafts if isinstance(row, Mapping)],
+        )
+        if llm_call_trace_rows != expected_trace_rows:
+            errors.append("call_metadata.llm_call_trace_rows must mirror deterministic trace rows")
+        if metadata.get("llm_call_trace_sha256") != _canonical_digest(expected_trace_rows):
+            errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
+
+    return errors
+
+
+def _req_034_handoff_ref(*, output_ref: str) -> str:
+    return f"{output_ref}::memory_handoff"
+
+
+def _req_034_contract_output_ref(*, call_id: str) -> str:
+    return f"{REQ_034_REQUIREMENT_ID}::call::{call_id}::output::memory_handoff_contract"
+
+
+def _req_034_normalize_memory_items(
+    value: Any,
+    *,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req034Error(f"{field_name} must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        memory_id = _require_text(row.get("memory_id"), field_name=f"{field_name}[{index}].memory_id")
+        if not REQ_034_MEMORY_ID_RE.match(memory_id):
+            raise Req034Error(
+                f"{field_name}[{index}].memory_id must match {REQ_034_MEMORY_ID_RE.pattern}"
+            )
+        if memory_id in seen_ids:
+            raise Req034Error(f"{field_name}[{index}].memory_id must be unique within a handoff")
+        seen_ids.add(memory_id)
+        project_scope = _require_text(
+            row.get("project_scope"),
+            field_name=f"{field_name}[{index}].project_scope",
+        ).lower()
+        if project_scope not in REQ_034_ALLOWED_MEMORY_SCOPES:
+            raise Req034Error(
+                f"{field_name}[{index}].project_scope must be one of {sorted(REQ_034_ALLOWED_MEMORY_SCOPES)}"
+            )
+        project_id = _as_text(row.get("project_id"))
+        if project_scope == "cross-project":
+            project_id = _require_text(project_id, field_name=f"{field_name}[{index}].project_id")
+        else:
+            project_id = ""
+        normalized.append(
+            {
+                "memory_id": memory_id,
+                "summary": _require_text(row.get("summary"), field_name=f"{field_name}[{index}].summary"),
+                "category": _require_text(row.get("category"), field_name=f"{field_name}[{index}].category"),
+                "position": _require_text(row.get("position"), field_name=f"{field_name}[{index}].position"),
+                "project_scope": project_scope,
+                "project_id": project_id,
+                "citation_refs": _normalize_string_list(
+                    row.get("citation_refs"),
+                    field_name=f"{field_name}[{index}].citation_refs",
+                    min_items=1,
+                ),
+            }
+        )
+    normalized.sort(key=lambda row: (row["memory_id"], row["position"], row["summary"], row["project_id"]))
+    return normalized
+
+
+def _req_034_normalize_prior_call_handoffs(
+    value: Any,
+    *,
+    field_name: str = "prior_call_handoffs",
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req034Error(f"{field_name} must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_sequences: set[int] = set()
+    seen_call_ids: set[str] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        sequence = row.get("sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            raise Req034Error(f"{field_name}[{index}].sequence must be an integer")
+        if sequence < 1:
+            raise Req034Error(f"{field_name}[{index}].sequence must be >= 1")
+        if sequence in seen_sequences:
+            raise Req034Error(f"{field_name}[{index}].sequence must be unique")
+        seen_sequences.add(sequence)
+        call_id = _require_text(row.get("call_id"), field_name=f"{field_name}[{index}].call_id")
+        if call_id in seen_call_ids:
+            raise Req034Error(f"{field_name}[{index}].call_id must be unique")
+        seen_call_ids.add(call_id)
+        normalized.append(
+            {
+                "sequence": sequence,
+                "call_id": call_id,
+                "phase": _require_text(row.get("phase"), field_name=f"{field_name}[{index}].phase"),
+                "output_ref": _require_text(row.get("output_ref"), field_name=f"{field_name}[{index}].output_ref"),
+                "memory_items": _req_034_normalize_memory_items(
+                    row.get("memory_items"),
+                    field_name=f"{field_name}[{index}].memory_items",
+                ),
+            }
+        )
+
+    normalized.sort(key=lambda row: row["sequence"])
+    expected_sequences = list(range(1, len(normalized) + 1))
+    if [row["sequence"] for row in normalized] != expected_sequences:
+        raise Req034Error(f"{field_name}.sequence must be contiguous starting at 1")
+    if len(normalized) < 2:
+        raise Req034Error(f"{field_name} must include at least 2 prior calls")
+    return normalized
+
+
+def _req_034_normalize_candidate_recommendations(
+    value: Any,
+    *,
+    field_name: str = "candidate_recommendations",
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req034Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        recommendation_id = _req_029_recommendation_id_from_candidate(row, index=index)
+        if recommendation_id in seen_ids:
+            raise Req034Error(f"{field_name}[{index}].recommendation_id must be unique")
+        seen_ids.add(recommendation_id)
+        recommendation_scope = _require_text(
+            row.get("recommendation_scope"),
+            field_name=f"{field_name}[{index}].recommendation_scope",
+        ).lower()
+        if recommendation_scope not in REQ_029_ALLOWED_RECOMMENDATION_SCOPES:
+            raise Req034Error(
+                f"{field_name}[{index}].recommendation_scope must be one of {sorted(REQ_029_ALLOWED_RECOMMENDATION_SCOPES)}"
+            )
+        project_id = _as_text(row.get("project_id"))
+        if recommendation_scope == "cross-project":
+            project_id = _require_text(project_id, field_name=f"{field_name}[{index}].project_id")
+        else:
+            project_id = ""
+        requires_earth_evidence = row.get("requires_earth_evidence")
+        if requires_earth_evidence is None:
+            requires_earth_evidence = recommendation_scope == "cross-project"
+        if not isinstance(requires_earth_evidence, bool):
+            raise Req034Error(f"{field_name}[{index}].requires_earth_evidence must be a boolean")
+        synthesized_from_call_sequence = row.get("synthesized_from_call_sequence")
+        if isinstance(synthesized_from_call_sequence, bool) or not isinstance(synthesized_from_call_sequence, int):
+            raise Req034Error(f"{field_name}[{index}].synthesized_from_call_sequence must be an integer")
+        memory_anchor_ids = _normalize_string_list(
+            row.get("memory_anchor_ids"),
+            field_name=f"{field_name}[{index}].memory_anchor_ids",
+            min_items=1,
+        )
+        for memory_id in memory_anchor_ids:
+            if not REQ_034_MEMORY_ID_RE.match(memory_id):
+                raise Req034Error(
+                    f"{field_name}[{index}].memory_anchor_ids entries must match {REQ_034_MEMORY_ID_RE.pattern}"
+                )
+        normalized.append(
+            {
+                "recommendation_id": recommendation_id,
+                "summary": _require_text(row.get("summary"), field_name=f"{field_name}[{index}].summary"),
+                "rationale": _require_text(row.get("rationale"), field_name=f"{field_name}[{index}].rationale"),
+                "recommendation_scope": recommendation_scope,
+                "project_id": project_id,
+                "requires_earth_evidence": requires_earth_evidence,
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                    min_items=1,
+                ),
+                "next_step": _require_text(row.get("next_step"), field_name=f"{field_name}[{index}].next_step"),
+                "synthesized_from_call_sequence": synthesized_from_call_sequence,
+                "memory_anchor_ids": memory_anchor_ids,
+            }
+        )
+    normalized.sort(key=lambda row: row["recommendation_id"])
+    return normalized
+
+
+def _req_034_canonical_input(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_id: str,
+    checked_at_utc: str,
+) -> dict[str, Any]:
+    return {
+        "runtime_mode": RUNTIME_MODE,
+        "execution_mode": EXECUTION_MODE,
+        "target_project_root": target_project_root,
+        "earth_root": earth_root,
+        "output_root": output_root,
+        "revision_identity": revision_identity,
+        "strategy_goal": strategy_goal,
+        "analysis_type": REQ_034_ANALYSIS_TYPE,
+        "call_id": call_id,
+        "checked_at_utc": checked_at_utc,
+    }
+
+
+def _req_034_canonical_processing_input(
+    *,
+    prior_call_handoffs: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[str],
+    earth_sweep_evidence_refs: Sequence[str],
+    cross_project_context: Sequence[Mapping[str, Any]],
+    candidate_recommendations: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "prior_call_handoffs": [dict(row) for row in prior_call_handoffs],
+        "target_project_evidence_refs": list(target_project_evidence_refs),
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "cross_project_context": [dict(row) for row in cross_project_context],
+        "candidate_recommendations": [dict(row) for row in candidate_recommendations],
+    }
+
+
+def _req_034_build_trace_rows(
+    *,
+    processing_call_id: str,
+    call_id: str,
+    prior_call_handoffs: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[str],
+    earth_sweep_evidence_refs: Sequence[str],
+    cross_project_context: Sequence[Mapping[str, Any]],
+    candidate_recommendations: Sequence[Mapping[str, Any]],
+    active_memory_count: int,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    prior_handoff_refs: list[str] = []
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in cross_project_context])
+    for row in prior_call_handoffs:
+        output_ref = str(row["output_ref"])
+        handoff_ref = _req_034_handoff_ref(output_ref=output_ref)
+        rows.append(
+            {
+                "schema_version": REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION,
+                "requirement_id": REQ_034_REQUIREMENT_ID,
+                "processing_call_id": processing_call_id,
+                "call_id": str(row["call_id"]),
+                "sequence": int(row["sequence"]),
+                "call_objective": str(row["phase"]),
+                "input_refs": list(prior_handoff_refs),
+                "output_refs": [output_ref, handoff_ref],
+                "handoff_summary": (
+                    f"Call {int(row['sequence'])} hands off "
+                    f"{min(len(row['memory_items']), REQ_034_MAX_MEMORY_ITEMS_PER_CALL)} bounded memory item(s) "
+                    f"via {handoff_ref}."
+                ),
+            }
+        )
+        prior_handoff_refs.append(handoff_ref)
+
+    final_sequence = len(prior_call_handoffs) + 1
+    final_output_ref = _req_034_contract_output_ref(call_id=call_id)
+    final_input_refs = _dedupe_preserving_order(
+        prior_handoff_refs
+        + list(target_project_evidence_refs)
+        + list(earth_sweep_evidence_refs)
+        + list(cross_project_refs)
+        + [ref for row in candidate_recommendations for ref in row["evidence_refs"]]
+    )
+    rows.append(
+        {
+            "schema_version": REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "requirement_id": REQ_034_REQUIREMENT_ID,
+            "processing_call_id": processing_call_id,
+            "call_id": call_id,
+            "sequence": final_sequence,
+            "call_objective": REQ_034_ANALYSIS_TYPE,
+            "input_refs": final_input_refs,
+            "output_refs": [final_output_ref],
+            "handoff_summary": (
+                f"Call {final_sequence} emits memory_handoff_contract with {len(prior_call_handoffs)} "
+                f"prior handoff(s) and {active_memory_count} active memory item(s)."
+            ),
+        }
+    )
+    return rows
+
+
+def build_req_034_cross_call_memory_handoff_contract(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    prior_call_handoffs: Sequence[Mapping[str, Any]],
+    candidate_recommendations: Sequence[Mapping[str, Any]],
+    cross_project_context: Sequence[Mapping[str, Any]] | None = None,
+    target_project_evidence_refs: Sequence[Any] | None = None,
+    earth_sweep_evidence_refs: Sequence[Any] | None = None,
+    call_id: str = "call-memory-handoff",
+    checked_at_utc: str | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_text(revision_identity, field_name="revision_identity")
+    normalized_strategy_goal = _require_text(strategy_goal, field_name="strategy_goal")
+    normalized_call_id = _require_text(call_id, field_name="call_id")
+    normalized_checked_at_utc = _require_text(checked_at_utc or utc_now_iso(), field_name="checked_at_utc")
+    normalized_prior_call_handoffs = _req_034_normalize_prior_call_handoffs(prior_call_handoffs)
+    normalized_candidate_recommendations = _req_034_normalize_candidate_recommendations(candidate_recommendations)
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in normalized_cross_project_context])
+    base_available_refs = set(
+        _collect_unique_refs(
+            normalized_target_refs,
+            normalized_earth_refs,
+            cross_project_refs,
+            [row["output_ref"] for row in normalized_prior_call_handoffs],
+        )
+    )
+    context_by_project = {str(row["project_id"]): row for row in normalized_cross_project_context}
+    contract_output_ref = _req_034_contract_output_ref(call_id=normalized_call_id)
+
+    open_risks: list[dict[str, Any]] = []
+    memory_handoffs: list[dict[str, Any]] = []
+    memory_rows_by_id: dict[str, list[dict[str, Any]]] = {}
+    handoff_refs: list[str] = []
+
+    for row in normalized_prior_call_handoffs:
+        bounded_memory_items = list(row["memory_items"][:REQ_034_MAX_MEMORY_ITEMS_PER_CALL])
+        handoff_ref = _req_034_handoff_ref(output_ref=str(row["output_ref"]))
+        handoff_refs.append(handoff_ref)
+        emitted_memory_items: list[dict[str, Any]] = []
+        handoff_citation_refs = _collect_unique_refs(*[item["citation_refs"] for item in bounded_memory_items])
+        for item in bounded_memory_items:
+            supported = True
+            uncited_refs = sorted(set(item["citation_refs"]) - base_available_refs)
+            if uncited_refs:
+                supported = False
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{item['memory_id']}-citation",
+                        "reason_code": "uncited_memory_claim",
+                        "summary": item["summary"],
+                        "required_evidence_refs": _collect_unique_refs([row["output_ref"]], uncited_refs),
+                    }
+                )
+            if item["project_scope"] == "cross-project":
+                if item["project_id"] not in context_by_project:
+                    supported = False
+                    open_risks.append(
+                        {
+                            "risk_id": f"risk-{item['memory_id']}-context",
+                            "reason_code": "missing_cross_project_context",
+                            "summary": item["summary"],
+                            "required_evidence_refs": _collect_unique_refs([row["output_ref"]], item["citation_refs"]),
+                        }
+                    )
+                if not any(_is_earth_evidence_ref(ref) for ref in item["citation_refs"]):
+                    supported = False
+                    open_risks.append(
+                        {
+                            "risk_id": f"risk-{item['memory_id']}-earth-evidence",
+                            "reason_code": "missing_earth_sweep_evidence_refs",
+                            "summary": item["summary"],
+                            "required_evidence_refs": _collect_unique_refs([row["output_ref"]], item["citation_refs"]),
+                        }
+                    )
+            emitted_memory_items.append(
+                {
+                    "memory_id": item["memory_id"],
+                    "summary": item["summary"],
+                    "category": item["category"],
+                    "position": item["position"],
+                    "project_scope": item["project_scope"],
+                    "project_id": item["project_id"],
+                    "citation_refs": list(item["citation_refs"]),
+                    "supported": supported,
+                }
+            )
+            memory_rows_by_id.setdefault(item["memory_id"], []).append(
+                {
+                    "memory_id": item["memory_id"],
+                    "summary": item["summary"],
+                    "position": item["position"],
+                    "project_scope": item["project_scope"],
+                    "project_id": item["project_id"],
+                    "citation_refs": list(item["citation_refs"]),
+                    "source_call_sequence": int(row["sequence"]),
+                    "source_call_id": str(row["call_id"]),
+                    "source_output_ref": str(row["output_ref"]),
+                    "handoff_ref": handoff_ref,
+                    "supported": supported,
+                }
+            )
+        memory_handoffs.append(
+            {
+                "source_call_sequence": int(row["sequence"]),
+                "source_call_id": str(row["call_id"]),
+                "phase": str(row["phase"]),
+                "source_output_ref": str(row["output_ref"]),
+                "handoff_ref": handoff_ref,
+                "bounded_item_count": len(bounded_memory_items),
+                "truncated_item_count": max(0, len(row["memory_items"]) - len(bounded_memory_items)),
+                "citation_refs": handoff_citation_refs,
+                "memory_items": emitted_memory_items,
+            }
+        )
+
+    suppressed_memory_ids: set[str] = set()
+    active_memory_by_id: dict[str, dict[str, Any]] = {}
+    for memory_id, rows in memory_rows_by_id.items():
+        supported_rows = [row for row in rows if row["supported"]]
+        if not supported_rows:
+            suppressed_memory_ids.add(memory_id)
+            continue
+        supported_rows.sort(key=lambda row: row["source_call_sequence"])
+        if len({str(row["position"]) for row in supported_rows}) > 1:
+            suppressed_memory_ids.add(memory_id)
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{memory_id}-contradiction",
+                    "reason_code": "cross_call_contradiction",
+                    "summary": supported_rows[-1]["summary"],
+                    "required_evidence_refs": _collect_unique_refs(
+                        [row["source_output_ref"] for row in supported_rows],
+                        *[row["citation_refs"] for row in supported_rows],
+                    ),
+                }
+            )
+            continue
+        active_memory_by_id[memory_id] = supported_rows[-1]
+
+    recommended_actions: list[dict[str, Any]] = []
+    cross_project_obligations: list[dict[str, Any]] = []
+    blocked_recommendation_ids: set[str] = set()
+    available_recommendation_refs = set(
+        _collect_unique_refs(
+            normalized_target_refs,
+            normalized_earth_refs,
+            cross_project_refs,
+            [row["output_ref"] for row in normalized_prior_call_handoffs],
+            handoff_refs,
+            *[row["citation_refs"] for row in active_memory_by_id.values()],
+        )
+    )
+    for row in normalized_candidate_recommendations:
+        recommendation_id = str(row["recommendation_id"])
+        blocked_reason_code = ""
+        missing_anchor_ids = [memory_id for memory_id in row["memory_anchor_ids"] if memory_id not in active_memory_by_id]
+        contradicted_anchor_ids = [memory_id for memory_id in row["memory_anchor_ids"] if memory_id in suppressed_memory_ids]
+        active_anchor_rows = [
+            active_memory_by_id[memory_id]
+            for memory_id in row["memory_anchor_ids"]
+            if memory_id in active_memory_by_id
+        ]
+        all_anchor_rows = [
+            anchor_row
+            for memory_id in row["memory_anchor_ids"]
+            for anchor_row in memory_rows_by_id.get(memory_id, [])
+        ]
+        blocked_anchor_evidence_refs = _collect_unique_refs(
+            *[
+                anchor_row["citation_refs"]
+                for anchor_row in all_anchor_rows
+            ]
+        )
+        blocked_anchor_output_refs = _collect_unique_refs(
+            [anchor_row["source_output_ref"] for anchor_row in all_anchor_rows]
+        )
+        anchor_evidence_refs = _collect_unique_refs(*[anchor_row["citation_refs"] for anchor_row in active_anchor_rows])
+        anchor_output_refs = _collect_unique_refs([anchor_row["source_output_ref"] for anchor_row in active_anchor_rows])
+        uncited_refs = sorted(set(row["evidence_refs"]) - available_recommendation_refs)
+        if contradicted_anchor_ids:
+            blocked_reason_code = "cross_call_contradiction"
+        elif missing_anchor_ids:
+            blocked_reason_code = "missing_memory_handoff"
+        elif uncited_refs:
+            blocked_reason_code = "uncited_strategic_claim"
+        elif row["recommendation_scope"] == "cross-project" and row["requires_earth_evidence"] and not normalized_earth_refs:
+            blocked_reason_code = "missing_earth_sweep_evidence_refs"
+        elif row["recommendation_scope"] == "cross-project" and row["project_id"] not in context_by_project:
+            blocked_reason_code = "missing_cross_project_context"
+
+        if blocked_reason_code:
+            blocked_recommendation_ids.add(recommendation_id)
+            required_refs = _collect_unique_refs(
+                [contract_output_ref],
+                blocked_anchor_output_refs,
+                row["evidence_refs"],
+                blocked_anchor_evidence_refs,
+            )
+            if uncited_refs:
+                required_refs = _collect_unique_refs([contract_output_ref], blocked_anchor_output_refs, uncited_refs)
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{recommendation_id}",
+                    "reason_code": blocked_reason_code,
+                    "summary": row["summary"],
+                    "required_evidence_refs": required_refs,
+                }
+            )
+            continue
+
+        action = {
+            "recommendation_id": recommendation_id,
+            "summary": str(row["summary"]),
+            "rationale": str(row["rationale"]),
+            "next_step": str(row["next_step"]),
+            "memory_anchor_ids": list(row["memory_anchor_ids"]),
+            "source_output_refs": anchor_output_refs,
+            "evidence_refs": _collect_unique_refs(anchor_output_refs, row["evidence_refs"], anchor_evidence_refs),
+        }
+        if row["recommendation_scope"] == "cross-project":
+            project_context = context_by_project[str(row["project_id"])]
+            cross_project_obligations.append(
+                {
+                    "obligation_id": f"obligation-{recommendation_id}",
+                    "project_id": str(row["project_id"]),
+                    **action,
+                    "evidence_refs": _collect_unique_refs(
+                        action["evidence_refs"],
+                        project_context["evidence_refs"],
+                        normalized_earth_refs,
+                    ),
+                }
+            )
+            continue
+        recommended_actions.append(action)
+
+    recommended_actions.sort(key=lambda row: row["recommendation_id"])
+    cross_project_obligations.sort(key=lambda row: row["obligation_id"])
+    memory_handoffs.sort(key=lambda row: (row["source_call_sequence"], row["source_call_id"]))
+    open_risks.sort(key=lambda row: row["risk_id"])
+    active_memory_ids = sorted(active_memory_by_id)
+
+    recommendation_refs = _collect_unique_refs(
+        normalized_target_refs,
+        normalized_earth_refs,
+        cross_project_refs,
+        [row["output_ref"] for row in normalized_prior_call_handoffs],
+        handoff_refs,
+        *[row["citation_refs"] for row in active_memory_by_id.values()],
+        *[row["evidence_refs"] for row in recommended_actions],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    promoted_actions: list[dict[str, Any]] = list(recommended_actions) + list(cross_project_obligations)
+    decision = _recommendation_decision(recommended_actions=promoted_actions, open_risks=open_risks)
+    rationale = (
+        f"handoffs={len(memory_handoffs)} active_memory={len(active_memory_ids)} "
+        f"local={len(recommended_actions)} obligations={len(cross_project_obligations)} "
+        f"open_risks={len(open_risks)}"
+    )
+    confidence = _recommendation_confidence(evidence_refs=recommendation_refs, open_risks=open_risks)
+
+    canonical_input = _req_034_canonical_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+        strategy_goal=normalized_strategy_goal,
+        call_id=normalized_call_id,
+        checked_at_utc=normalized_checked_at_utc,
+    )
+    canonical_processing_input = _req_034_canonical_processing_input(
+        prior_call_handoffs=normalized_prior_call_handoffs,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_project_context,
+        candidate_recommendations=normalized_candidate_recommendations,
+    )
+    processing_sha = _canonical_digest(canonical_processing_input)
+    processing_call_id = f"req034-processing-{processing_sha[:16]}"
+    llm_call_trace_rows = _req_034_build_trace_rows(
+        processing_call_id=processing_call_id,
+        call_id=normalized_call_id,
+        prior_call_handoffs=normalized_prior_call_handoffs,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_project_context,
+        candidate_recommendations=normalized_candidate_recommendations,
+        active_memory_count=len(active_memory_ids),
+    )
+
+    return {
+        "schema_version": REQ_034_SCHEMA_VERSION,
+        "requirement_id": REQ_034_REQUIREMENT_ID,
+        "analysis_type": REQ_034_ANALYSIS_TYPE,
+        "call_id": normalized_call_id,
+        "checked_at_utc": normalized_checked_at_utc,
+        "processing_behavior": {
+            "strategy": REQ_034_PROCESSING_STRATEGY,
+            "reasoning_mode": REQ_034_REASONING_MODE,
+            "bounded_context": True,
+            "context_inputs": {
+                "target_project": {
+                    "project_root": normalized_target_root,
+                    "evidence_refs": list(normalized_target_refs),
+                },
+                "earth_sweep": {
+                    "earth_root": normalized_earth_root,
+                    "evidence_refs": list(normalized_earth_refs),
+                },
+                "prior_call_handoffs": [dict(row) for row in normalized_prior_call_handoffs],
+                "cross_project_context": [dict(row) for row in normalized_cross_project_context],
+                "candidate_recommendations": [dict(row) for row in normalized_candidate_recommendations],
+            },
+            "context_usage": {
+                "prior_call_handoffs_used": bool(normalized_prior_call_handoffs),
+                "bounded_context_used": True,
+                "earth_sweep_context_used": bool(normalized_earth_refs),
+                "cross_project_context_used": bool(normalized_cross_project_context),
+                "prior_call_ids_considered": [str(row["call_id"]) for row in normalized_prior_call_handoffs],
+                "handoff_refs_emitted": list(handoff_refs),
+                "cross_project_projects_considered": sorted(
+                    {str(row["project_id"]) for row in normalized_cross_project_context}
+                ),
+                "candidate_recommendation_ids_considered": [
+                    str(row["recommendation_id"]) for row in normalized_candidate_recommendations
+                ],
+                "active_memory_ids": active_memory_ids,
+                "suppressed_memory_ids": sorted(suppressed_memory_ids),
+                "recommended_action_ids_emitted": [
+                    str(row["recommendation_id"]) for row in recommended_actions
+                ],
+                "cross_project_obligation_ids_emitted": [
+                    str(row["obligation_id"]) for row in cross_project_obligations
+                ],
+                "open_risk_ids_emitted": [str(row["risk_id"]) for row in open_risks],
+                "evidence_refs_used": list(recommendation_refs),
+            },
+            "handoff_contract": {
+                "memory_window_per_call": REQ_034_MAX_MEMORY_ITEMS_PER_CALL,
+                "contract_output_ref": contract_output_ref,
+                "active_memory_ids": active_memory_ids,
+                "suppressed_memory_ids": sorted(suppressed_memory_ids),
+                "handoff_count": len(memory_handoffs),
+            },
+            "recommendation": {
+                "decision": decision,
+                "rationale": rationale,
+                "confidence": confidence,
+                "evidence_refs": list(recommendation_refs),
+                "memory_handoffs": memory_handoffs,
+                "recommended_actions": recommended_actions,
+                "cross_project_obligations": cross_project_obligations,
+                "open_risks": open_risks,
+            },
+        },
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input": canonical_input,
+            "canonical_input_sha256": _canonical_digest(canonical_input),
+            "reproducible_call_id": f"req034-{_canonical_digest(canonical_input)[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+            "processing_input_sha256": processing_sha,
+            "processing_call_id": processing_call_id,
+            "llm_call_trace_schema_version": REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": _canonical_digest(llm_call_trace_rows),
+            "llm_call_trace_rows": llm_call_trace_rows,
+        },
+    }
+
+
+def validate_req_034_cross_call_memory_handoff_contract(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    if payload.get("schema_version") != REQ_034_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_034_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_034_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_034_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_034_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_034_ANALYSIS_TYPE}")
+    if not _as_text(payload.get("call_id")):
+        errors.append("call_id is required")
+    if not _as_text(payload.get("checked_at_utc")):
+        errors.append("checked_at_utc is required")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        return errors + ["processing_behavior must be an object"]
+    if processing_behavior.get("strategy") != REQ_034_PROCESSING_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_034_PROCESSING_STRATEGY}")
+    if processing_behavior.get("reasoning_mode") != REQ_034_REASONING_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {REQ_034_REASONING_MODE}")
+    if processing_behavior.get("bounded_context") is not True:
+        errors.append("processing_behavior.bounded_context must be true")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    normalized_prior_call_handoffs: list[dict[str, Any]] = []
+    normalized_target_refs: list[str] = []
+    normalized_earth_refs: list[str] = []
+    normalized_cross_project_context: list[dict[str, Any]] = []
+    normalized_candidate_recommendations: list[dict[str, Any]] = []
+    if not isinstance(context_inputs, Mapping):
+        return errors + ["processing_behavior.context_inputs must be an object"]
+    target_project = context_inputs.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("processing_behavior.context_inputs.target_project must be an object")
+    else:
+        normalized_target_refs = sorted(
+            {_as_text(ref) for ref in target_project.get("evidence_refs", []) if _as_text(ref)}
+        )
+    earth_sweep = context_inputs.get("earth_sweep")
+    if not isinstance(earth_sweep, Mapping):
+        errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+    else:
+        normalized_earth_refs = sorted(
+            {_as_text(ref) for ref in earth_sweep.get("evidence_refs", []) if _as_text(ref)}
+        )
+    try:
+        normalized_prior_call_handoffs = _req_034_normalize_prior_call_handoffs(context_inputs.get("prior_call_handoffs"))
+    except Req034Error as exc:
+        errors.append(str(exc))
+    try:
+        normalized_cross_project_context = _normalize_cross_project_context(context_inputs.get("cross_project_context"))
+    except ValueError as exc:
+        errors.append(str(exc))
+    try:
+        normalized_candidate_recommendations = _req_034_normalize_candidate_recommendations(
+            context_inputs.get("candidate_recommendations")
+        )
+    except Req034Error as exc:
+        errors.append(str(exc))
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        for key in (
+            "prior_call_handoffs_used",
+            "bounded_context_used",
+            "earth_sweep_context_used",
+            "cross_project_context_used",
+        ):
+            if not isinstance(context_usage.get(key), bool):
+                errors.append(f"processing_behavior.context_usage.{key} must be a boolean")
+        for key in (
+            "prior_call_ids_considered",
+            "handoff_refs_emitted",
+            "cross_project_projects_considered",
+            "candidate_recommendation_ids_considered",
+            "active_memory_ids",
+            "suppressed_memory_ids",
+            "recommended_action_ids_emitted",
+            "cross_project_obligation_ids_emitted",
+            "open_risk_ids_emitted",
+            "evidence_refs_used",
+        ):
+            value = context_usage.get(key)
+            if not isinstance(value, list) or any(not _as_text(item) for item in value):
+                errors.append(f"processing_behavior.context_usage.{key} must be a string array")
+
+    handoff_contract = processing_behavior.get("handoff_contract")
+    if not isinstance(handoff_contract, Mapping):
+        errors.append("processing_behavior.handoff_contract must be an object")
+    else:
+        if handoff_contract.get("memory_window_per_call") != REQ_034_MAX_MEMORY_ITEMS_PER_CALL:
+            errors.append(
+                f"processing_behavior.handoff_contract.memory_window_per_call must be {REQ_034_MAX_MEMORY_ITEMS_PER_CALL}"
+            )
+        if not _as_text(handoff_contract.get("contract_output_ref")):
+            errors.append("processing_behavior.handoff_contract.contract_output_ref is required")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        return errors + ["processing_behavior.recommendation must be an object"]
+    required_recommendation_keys = {
+        "decision",
+        "rationale",
+        "confidence",
+        "evidence_refs",
+        "memory_handoffs",
+        "recommended_actions",
+        "cross_project_obligations",
+        "open_risks",
+    }
+    missing_recommendation_keys = sorted(required_recommendation_keys - set(recommendation.keys()))
+    if missing_recommendation_keys:
+        errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation_keys}")
+    if not isinstance(recommendation.get("evidence_refs"), list) or not recommendation.get("evidence_refs"):
+        errors.append("processing_behavior.recommendation.evidence_refs must be a non-empty list")
+    for key in ("memory_handoffs", "recommended_actions", "cross_project_obligations", "open_risks"):
+        if not isinstance(recommendation.get(key), list):
+            errors.append(f"processing_behavior.recommendation.{key} must be a list")
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        return errors + ["call_metadata must be an object"]
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+    else:
+        expected_canonical_input = _req_034_canonical_input(
+            target_project_root=_as_text(target_project.get("project_root")) if isinstance(target_project, Mapping) else "",
+            earth_root=_as_text(earth_sweep.get("earth_root")) if isinstance(earth_sweep, Mapping) else "",
+            output_root=_as_text(canonical_input.get("output_root")),
+            revision_identity=_as_text(canonical_input.get("revision_identity")),
+            strategy_goal=_as_text(canonical_input.get("strategy_goal")),
+            call_id=_as_text(payload.get("call_id")),
+            checked_at_utc=_as_text(payload.get("checked_at_utc")),
+        )
+        if dict(canonical_input) != expected_canonical_input:
+            errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+        expected_input_sha = _canonical_digest(expected_canonical_input)
+        if metadata.get("canonical_input_sha256") != expected_input_sha:
+            errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+        if metadata.get("reproducible_call_id") != f"req034-{expected_input_sha[:16]}":
+            errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+    else:
+        expected_processing_input = _req_034_canonical_processing_input(
+            prior_call_handoffs=normalized_prior_call_handoffs,
+            target_project_evidence_refs=normalized_target_refs,
+            earth_sweep_evidence_refs=normalized_earth_refs,
+            cross_project_context=normalized_cross_project_context,
+            candidate_recommendations=normalized_candidate_recommendations,
+        )
+        if dict(canonical_processing_input) != expected_processing_input:
+            errors.append("call_metadata.canonical_processing_input must mirror normalized handoff inputs")
+        expected_processing_sha = _canonical_digest(expected_processing_input)
+        if metadata.get("processing_input_sha256") != expected_processing_sha:
+            errors.append("call_metadata.processing_input_sha256 does not match processing input")
+        if metadata.get("processing_call_id") != f"req034-processing-{expected_processing_sha[:16]}":
+            errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    if metadata.get("llm_call_trace_schema_version") != REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION:
+        errors.append(
+            f"call_metadata.llm_call_trace_schema_version must be {REQ_034_LLM_CALL_TRACE_SCHEMA_VERSION}"
+        )
+    if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+        errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+    llm_call_trace_rows = metadata.get("llm_call_trace_rows")
+    if not isinstance(llm_call_trace_rows, list):
+        errors.append("call_metadata.llm_call_trace_rows must be a list")
+    else:
+        expected_trace_rows = _req_034_build_trace_rows(
+            processing_call_id=_as_text(metadata.get("processing_call_id")),
+            call_id=_as_text(payload.get("call_id")),
+            prior_call_handoffs=normalized_prior_call_handoffs,
+            target_project_evidence_refs=normalized_target_refs,
+            earth_sweep_evidence_refs=normalized_earth_refs,
+            cross_project_context=normalized_cross_project_context,
+            candidate_recommendations=normalized_candidate_recommendations,
+            active_memory_count=len(context_usage.get("active_memory_ids", []))
+            if isinstance(context_usage, Mapping) and isinstance(context_usage.get("active_memory_ids"), list)
+            else 0,
+        )
+        if llm_call_trace_rows != expected_trace_rows:
+            errors.append("call_metadata.llm_call_trace_rows must mirror deterministic trace rows")
+        if metadata.get("llm_call_trace_sha256") != _canonical_digest(expected_trace_rows):
+            errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
+
+    return errors
+
+
+def _req_030_normalize_call_chain(
+    value: Any,
+    *,
+    field_name: str = "call_chain",
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req030Error(f"{field_name} must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_sequences: set[int] = set()
+    seen_call_ids: set[str] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        sequence = row.get("sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            raise Req030Error(f"{field_name}[{index}].sequence must be an integer")
+        if sequence < 1:
+            raise Req030Error(f"{field_name}[{index}].sequence must be >= 1")
+        if sequence in seen_sequences:
+            raise Req030Error(f"{field_name}[{index}].sequence must be unique")
+        seen_sequences.add(sequence)
+
+        call_id = _require_text(row.get("call_id"), field_name=f"{field_name}[{index}].call_id")
+        if call_id in seen_call_ids:
+            raise Req030Error(f"{field_name}[{index}].call_id must be unique")
+        seen_call_ids.add(call_id)
+
+        normalized.append(
+            {
+                "sequence": sequence,
+                "call_id": call_id,
+                "phase": _require_text(row.get("phase"), field_name=f"{field_name}[{index}].phase"),
+                "output_ref": _require_text(row.get("output_ref"), field_name=f"{field_name}[{index}].output_ref"),
+            }
+        )
+
+    normalized.sort(key=lambda row: row["sequence"])
+    expected_sequences = list(range(1, len(normalized) + 1))
+    actual_sequences = [row["sequence"] for row in normalized]
+    if actual_sequences != expected_sequences:
+        raise Req030Error(f"{field_name}.sequence must be contiguous starting at 1")
+    if len(normalized) < 5:
+        raise Req030Error(f"{field_name} must include at least 5 calls for Call-5 sequencing")
+    return normalized
+
+
+def _req_030_lane_id_from_candidate(row: Mapping[str, Any], *, index: int) -> str:
+    provided = _as_text(row.get("lane_id"))
+    if provided:
+        if not REQ_030_LANE_ID_RE.match(provided):
+            raise Req030Error(
+                f"candidate_lane_designs[{index}].lane_id must match {REQ_030_LANE_ID_RE.pattern}"
+            )
+        return provided
+
+    summary = _require_text(row.get("summary"), field_name=f"candidate_lane_designs[{index}].summary")
+    return f"lane.{_req_029_slugify(summary)}"
+
+
+def _req_030_recommendation_id_from_candidate(row: Mapping[str, Any], *, index: int) -> str:
+    recommendation_id = _require_text(
+        row.get("recommendation_id"),
+        field_name=f"candidate_lane_designs[{index}].recommendation_id",
+    )
+    if not REQ_030_RECOMMENDATION_ID_RE.match(recommendation_id):
+        raise Req030Error(
+            f"candidate_lane_designs[{index}].recommendation_id must match {REQ_030_RECOMMENDATION_ID_RE.pattern}"
+        )
+    return recommendation_id
+
+
+def _req_030_normalize_candidate_lane_designs(
+    value: Any,
+    *,
+    field_name: str = "candidate_lane_designs",
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req030Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    seen_lane_ids: set[str] = set()
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        lane_id = _req_030_lane_id_from_candidate(row, index=index)
+        if lane_id in seen_lane_ids:
+            raise Req030Error(f"{field_name}[{index}].lane_id must be unique")
+        seen_lane_ids.add(lane_id)
+
+        recommendation_id = _req_030_recommendation_id_from_candidate(row, index=index)
+        lane_scope = _require_text(row.get("lane_scope"), field_name=f"{field_name}[{index}].lane_scope").lower()
+        if lane_scope not in REQ_030_ALLOWED_LANE_SCOPES:
+            raise Req030Error(f"{field_name}[{index}].lane_scope must be one of {sorted(REQ_030_ALLOWED_LANE_SCOPES)}")
+
+        project_id = _as_text(row.get("project_id"))
+        if lane_scope == "cross-project":
+            project_id = _require_text(project_id, field_name=f"{field_name}[{index}].project_id")
+        else:
+            project_id = ""
+
+        requires_earth_evidence = row.get("requires_earth_evidence")
+        if requires_earth_evidence is None:
+            requires_earth_evidence = lane_scope == "cross-project"
+        if not isinstance(requires_earth_evidence, bool):
+            raise Req030Error(f"{field_name}[{index}].requires_earth_evidence must be a boolean")
+
+        synthesized_from_call_sequence = row.get("synthesized_from_call_sequence")
+        if isinstance(synthesized_from_call_sequence, bool) or not isinstance(synthesized_from_call_sequence, int):
+            raise Req030Error(f"{field_name}[{index}].synthesized_from_call_sequence must be an integer")
+
+        lane_order = row.get("lane_order")
+        if isinstance(lane_order, bool) or not isinstance(lane_order, int):
+            raise Req030Error(f"{field_name}[{index}].lane_order must be an integer")
+        if lane_order < 1:
+            raise Req030Error(f"{field_name}[{index}].lane_order must be >= 1")
+
+        normalized.append(
+            {
+                "lane_id": lane_id,
+                "recommendation_id": recommendation_id,
+                "summary": _require_text(row.get("summary"), field_name=f"{field_name}[{index}].summary"),
+                "rationale": _require_text(row.get("rationale"), field_name=f"{field_name}[{index}].rationale"),
+                "sequencing_rationale": _require_text(
+                    row.get("sequencing_rationale"),
+                    field_name=f"{field_name}[{index}].sequencing_rationale",
+                ),
+                "lane_order": lane_order,
+                "lane_scope": lane_scope,
+                "project_id": project_id,
+                "requires_earth_evidence": requires_earth_evidence,
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                    min_items=1,
+                ),
+                "next_step": _require_text(row.get("next_step"), field_name=f"{field_name}[{index}].next_step"),
+                "synthesized_from_call_sequence": synthesized_from_call_sequence,
+            }
+        )
+
+    normalized.sort(key=lambda row: (row["lane_order"], row["recommendation_id"], row["lane_id"]))
+    return normalized
+
+
+def _req_030_normalize_strategic_claims(
+    value: Any,
+    *,
+    field_name: str = "strategic_claims",
+    call_depth: int,
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req030Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        source_call_sequence = row.get("source_call_sequence")
+        if isinstance(source_call_sequence, bool) or not isinstance(source_call_sequence, int):
+            raise Req030Error(f"{field_name}[{index}].source_call_sequence must be an integer")
+        if source_call_sequence < 1 or source_call_sequence > call_depth:
+            raise Req030Error(f"{field_name}[{index}].source_call_sequence must be between 1 and {call_depth}")
+        normalized.append(
+            {
+                "claim_id": _require_text(row.get("claim_id"), field_name=f"{field_name}[{index}].claim_id"),
+                "phase": _require_text(row.get("phase"), field_name=f"{field_name}[{index}].phase").lower(),
+                "summary": _require_text(row.get("summary"), field_name=f"{field_name}[{index}].summary"),
+                "position": _require_text(row.get("position"), field_name=f"{field_name}[{index}].position"),
+                "source_call_sequence": source_call_sequence,
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                ),
+            }
+        )
+
+    normalized.sort(
+        key=lambda row: (
+            row["claim_id"],
+            row["phase"],
+            row["source_call_sequence"],
+            row["position"],
+            row["summary"],
+        )
+    )
+    return normalized
+
+
+def _req_030_build_trace_rows(
+    *,
+    synthesis_call_id: str,
+    call_chain: Sequence[Mapping[str, Any]],
+    recommendation_ids: Sequence[str],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    prior_output_refs: list[str] = []
+    for row in call_chain:
+        sequence = int(row["sequence"])
+        call_id = str(row["call_id"])
+        output_ref = str(row["output_ref"])
+        rows.append(
+            {
+                "schema_version": REQ_030_LLM_CALL_TRACE_SCHEMA_VERSION,
+                "requirement_id": REQ_030_REQUIREMENT_ID,
+                "processing_call_id": synthesis_call_id,
+                "call_id": call_id,
+                "sequence": sequence,
+                "call_objective": str(row["phase"]),
+                "input_refs": list(prior_output_refs),
+                "output_refs": [output_ref],
+                "handoff_summary": (
+                    f"Call {sequence} supplies {output_ref}."
+                    if sequence < 5
+                    else f"Call 5 emits lane_blueprints for {len(recommendation_ids)} recommendation(s)."
+                ),
+            }
+        )
+        prior_output_refs.append(output_ref)
+    return rows
+
+
+def _req_030_canonical_input(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_id: str,
+    checked_at_utc: str,
+) -> dict[str, Any]:
+    return {
+        "runtime_mode": RUNTIME_MODE,
+        "execution_mode": EXECUTION_MODE,
+        "target_project_root": target_project_root,
+        "earth_root": earth_root,
+        "output_root": output_root,
+        "revision_identity": revision_identity,
+        "strategy_goal": strategy_goal,
+        "analysis_type": REQ_030_ANALYSIS_TYPE,
+        "call_id": call_id,
+        "checked_at_utc": checked_at_utc,
+    }
+
+
+def _req_030_canonical_processing_input(
+    *,
+    call_chain: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[str],
+    earth_sweep_evidence_refs: Sequence[str],
+    cross_project_context: Sequence[Mapping[str, Any]],
+    candidate_lane_designs: Sequence[Mapping[str, Any]],
+    strategic_claims: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "call_chain": [dict(row) for row in call_chain],
+        "target_project_evidence_refs": list(target_project_evidence_refs),
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "cross_project_context": [dict(row) for row in cross_project_context],
+        "candidate_lane_designs": [dict(row) for row in candidate_lane_designs],
+        "strategic_claims": [dict(row) for row in strategic_claims],
+    }
+
+
+def build_req_030_call_5_sequencing_and_lane_design_reasoning(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_chain: Sequence[Mapping[str, Any]],
+    candidate_lane_designs: Sequence[Mapping[str, Any]],
+    strategic_claims: Sequence[Mapping[str, Any]] | None = None,
+    cross_project_context: Sequence[Mapping[str, Any]] | None = None,
+    target_project_evidence_refs: Sequence[Any] | None = None,
+    earth_sweep_evidence_refs: Sequence[Any] | None = None,
+    call_id: str = "call-5",
+    checked_at_utc: str | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_text(revision_identity, field_name="revision_identity")
+    normalized_strategy_goal = _require_text(strategy_goal, field_name="strategy_goal")
+    normalized_call_id = _require_text(call_id, field_name="call_id")
+    normalized_checked_at_utc = _require_text(checked_at_utc or utc_now_iso(), field_name="checked_at_utc")
+    normalized_call_chain = _req_030_normalize_call_chain(call_chain)
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_cross_project_context = _normalize_cross_project_context(cross_project_context)
+    normalized_candidate_lane_designs = _req_030_normalize_candidate_lane_designs(candidate_lane_designs)
+    normalized_strategic_claims = _req_030_normalize_strategic_claims(
+        strategic_claims,
+        call_depth=len(normalized_call_chain),
+    )
+
+    cross_project_refs = _collect_unique_refs(*[row["evidence_refs"] for row in normalized_cross_project_context])
+    available_citation_refs = set(
+        _collect_unique_refs(
+            normalized_target_refs,
+            normalized_earth_refs,
+            cross_project_refs,
+            [row["output_ref"] for row in normalized_call_chain],
+        )
+    )
+    output_ref_by_sequence = {int(row["sequence"]): str(row["output_ref"]) for row in normalized_call_chain}
+    context_by_project = {str(row["project_id"]): row for row in normalized_cross_project_context}
+
+    blocked_ids: set[str] = set()
+    open_risks: list[dict[str, Any]] = []
+    claim_rows_by_id: dict[str, list[dict[str, Any]]] = {}
+    for claim in normalized_strategic_claims:
+        claim_rows_by_id.setdefault(str(claim["claim_id"]), []).append(claim)
+        source_output_ref = output_ref_by_sequence.get(int(claim["source_call_sequence"]), "")
+        citation_refs = list(claim["evidence_refs"])
+        if not citation_refs or not set(citation_refs).issubset(available_citation_refs):
+            open_risks.append(
+                {
+                    "risk_id": f"risk-claim-{claim['claim_id']}-citation",
+                    "reason_code": "uncited_strategic_claim",
+                    "summary": str(claim["summary"]),
+                    "required_evidence_refs": _collect_unique_refs([source_output_ref], citation_refs),
+                }
+            )
+
+    for claim_id, claim_rows in claim_rows_by_id.items():
+        analysis_rows = [row for row in claim_rows if row["phase"] == "analysis"]
+        synthesis_rows = [row for row in claim_rows if row["phase"] == "synthesis"]
+        contradiction_found = False
+        for analysis_row in analysis_rows:
+            for synthesis_row in synthesis_rows:
+                if analysis_row["position"] == synthesis_row["position"]:
+                    continue
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-claim-{claim_id}-contradiction",
+                        "reason_code": "cross_call_contradiction",
+                        "summary": str(synthesis_row["summary"]),
+                        "required_evidence_refs": _collect_unique_refs(
+                            [output_ref_by_sequence.get(int(analysis_row["source_call_sequence"]), "")],
+                            [output_ref_by_sequence.get(int(synthesis_row["source_call_sequence"]), "")],
+                            analysis_row["evidence_refs"],
+                            synthesis_row["evidence_refs"],
+                        ),
+                    }
+                )
+                contradiction_found = True
+                break
+            if contradiction_found:
+                break
+
+    lane_blueprints: list[dict[str, Any]] = []
+    for row in normalized_candidate_lane_designs:
+        recommendation_id = str(row["recommendation_id"])
+        source_output_ref = output_ref_by_sequence.get(int(row["synthesized_from_call_sequence"]), "")
+        uncited_refs = sorted(set(row["evidence_refs"]) - available_citation_refs)
+        if uncited_refs:
+            blocked_ids.add(recommendation_id)
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{recommendation_id}-citation",
+                    "reason_code": "uncited_strategic_claim",
+                    "summary": str(row["summary"]),
+                    "required_evidence_refs": _collect_unique_refs([source_output_ref], uncited_refs),
+                }
+            )
+            continue
+
+        project_context = context_by_project.get(str(row["project_id"]))
+        project_evidence_refs = list(project_context["evidence_refs"]) if project_context else []
+        if row["lane_scope"] == "cross-project":
+            if row["requires_earth_evidence"] and not normalized_earth_refs:
+                blocked_ids.add(recommendation_id)
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{recommendation_id}-earth-evidence",
+                        "reason_code": "missing_earth_sweep_evidence_refs",
+                        "summary": str(row["summary"]),
+                        "required_evidence_refs": _collect_unique_refs([source_output_ref], row["evidence_refs"]),
+                    }
+                )
+                continue
+            if project_context is None:
+                blocked_ids.add(recommendation_id)
+                open_risks.append(
+                    {
+                        "risk_id": f"risk-{recommendation_id}-context",
+                        "reason_code": "missing_cross_project_context",
+                        "summary": str(row["summary"]),
+                        "required_evidence_refs": _collect_unique_refs([source_output_ref], row["evidence_refs"]),
+                    }
+                )
+                continue
+
+        lane_blueprints.append(
+            {
+                "lane_id": str(row["lane_id"]),
+                "recommendation_id": recommendation_id,
+                "summary": str(row["summary"]),
+                "rationale": str(row["rationale"]),
+                "sequencing_rationale": str(row["sequencing_rationale"]),
+                "lane_order": int(row["lane_order"]),
+                "lane_scope": str(row["lane_scope"]),
+                "project_id": str(row["project_id"]),
+                "next_step": str(row["next_step"]),
+                "synthesized_from_call_sequence": int(row["synthesized_from_call_sequence"]),
+                "source_output_ref": source_output_ref,
+                "evidence_refs": _collect_unique_refs(
+                    [source_output_ref],
+                    row["evidence_refs"],
+                    project_evidence_refs,
+                    normalized_earth_refs if row["lane_scope"] == "cross-project" else [],
+                ),
+            }
+        )
+
+    lane_blueprints.sort(key=lambda row: (row["lane_order"], row["recommendation_id"], row["lane_id"]))
+    open_risks.sort(key=lambda row: row["risk_id"])
+
+    emitted_recommendation_ids = _dedupe_preserving_order(row["recommendation_id"] for row in lane_blueprints)
+    evidence_refs = _collect_unique_refs(
+        normalized_target_refs,
+        normalized_earth_refs,
+        cross_project_refs,
+        [row["output_ref"] for row in normalized_call_chain],
+        *[row["evidence_refs"] for row in lane_blueprints],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    if lane_blueprints and not open_risks:
+        decision = "proceed"
+    elif lane_blueprints and open_risks:
+        decision = "proceed-with-open-risks"
+    elif open_risks:
+        decision = "blocked"
+    else:
+        decision = "insufficient-context"
+    confidence = "high" if lane_blueprints and not open_risks else "medium" if lane_blueprints else "low"
+
+    canonical_input = _req_030_canonical_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+        strategy_goal=normalized_strategy_goal,
+        call_id=normalized_call_id,
+        checked_at_utc=normalized_checked_at_utc,
+    )
+    canonical_processing_input = _req_030_canonical_processing_input(
+        call_chain=normalized_call_chain,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        cross_project_context=normalized_cross_project_context,
+        candidate_lane_designs=normalized_candidate_lane_designs,
+        strategic_claims=normalized_strategic_claims,
+    )
+    processing_sha = _canonical_digest(canonical_processing_input)
+    processing_call_id = f"req030-processing-{processing_sha[:16]}"
+    llm_call_trace_rows = _req_030_build_trace_rows(
+        synthesis_call_id=processing_call_id,
+        call_chain=normalized_call_chain,
+        recommendation_ids=emitted_recommendation_ids,
+    )
+
+    return {
+        "schema_version": REQ_030_SCHEMA_VERSION,
+        "requirement_id": REQ_030_REQUIREMENT_ID,
+        "analysis_type": REQ_030_ANALYSIS_TYPE,
+        "call_id": normalized_call_id,
+        "checked_at_utc": normalized_checked_at_utc,
+        "processing_behavior": {
+            "strategy": REQ_030_PROCESSING_STRATEGY,
+            "reasoning_mode": REQ_030_REASONING_MODE,
+            "strict_evidence_discipline": True,
+            "context_inputs": {
+                "call_chain": [dict(row) for row in normalized_call_chain],
+                "target_project": {
+                    "project_root": normalized_target_root,
+                    "evidence_refs": list(normalized_target_refs),
+                },
+                "earth_sweep": {
+                    "earth_root": normalized_earth_root,
+                    "evidence_refs": list(normalized_earth_refs),
+                },
+                "cross_project_context": [dict(row) for row in normalized_cross_project_context],
+                "candidate_lane_designs": [dict(row) for row in normalized_candidate_lane_designs],
+                "strategic_claims": [dict(row) for row in normalized_strategic_claims],
+            },
+            "context_usage": {
+                "call_ids_considered": [str(row["call_id"]) for row in normalized_call_chain],
+                "candidate_recommendation_ids_considered": _dedupe_preserving_order(
+                    row["recommendation_id"] for row in normalized_candidate_lane_designs
+                ),
+                "emitted_recommendation_ids": emitted_recommendation_ids,
+                "emitted_lane_ids": [str(row["lane_id"]) for row in lane_blueprints],
+                "blocked_recommendation_ids": sorted(blocked_ids),
+                "open_risk_ids_emitted": [str(row["risk_id"]) for row in open_risks],
+                "evidence_refs_used": list(evidence_refs),
+            },
+            "lane_design": {
+                "decision": decision,
+                "rationale": (
+                    f"lane_blueprints={len(lane_blueprints)} open_risks={len(open_risks)} "
+                    f"blocked={len(blocked_ids)}"
+                ),
+                "confidence": confidence,
+                "evidence_refs": list(evidence_refs),
+                "lane_blueprints": lane_blueprints,
+                "open_risks": open_risks,
+            },
+        },
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input": canonical_input,
+            "canonical_input_sha256": _canonical_digest(canonical_input),
+            "reproducible_call_id": f"req030-{_canonical_digest(canonical_input)[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+            "processing_input_sha256": processing_sha,
+            "processing_call_id": processing_call_id,
+            "llm_call_trace_schema_version": REQ_030_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": _canonical_digest(llm_call_trace_rows),
+            "llm_call_trace_rows": llm_call_trace_rows,
+        },
+    }
+
+
+def validate_req_030_call_5_sequencing_and_lane_design_reasoning(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    if payload.get("schema_version") != REQ_030_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_030_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_030_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_030_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_030_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_030_ANALYSIS_TYPE}")
+    if not _as_text(payload.get("call_id")):
+        errors.append("call_id is required")
+    if not _as_text(payload.get("checked_at_utc")):
+        errors.append("checked_at_utc is required")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+    if processing_behavior.get("strategy") != REQ_030_PROCESSING_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_030_PROCESSING_STRATEGY}")
+    if processing_behavior.get("reasoning_mode") != REQ_030_REASONING_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {REQ_030_REASONING_MODE}")
+    if processing_behavior.get("strict_evidence_discipline") is not True:
+        errors.append("processing_behavior.strict_evidence_discipline must be true")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    normalized_call_chain: list[dict[str, Any]] = []
+    normalized_target_refs: list[str] = []
+    normalized_earth_refs: list[str] = []
+    normalized_cross_project_context: list[dict[str, Any]] = []
+    normalized_candidate_lane_designs: list[dict[str, Any]] = []
+    normalized_strategic_claims: list[dict[str, Any]] = []
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        return errors
+    try:
+        normalized_call_chain = _req_030_normalize_call_chain(context_inputs.get("call_chain"))
+    except Req030Error as exc:
+        errors.append(str(exc))
+    target_project = context_inputs.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("processing_behavior.context_inputs.target_project must be an object")
+    else:
+        normalized_target_refs = sorted(
+            {_as_text(ref) for ref in target_project.get("evidence_refs", []) if _as_text(ref)}
+        )
+    earth_sweep = context_inputs.get("earth_sweep")
+    if not isinstance(earth_sweep, Mapping):
+        errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+    else:
+        normalized_earth_refs = sorted(
+            {_as_text(ref) for ref in earth_sweep.get("evidence_refs", []) if _as_text(ref)}
+        )
+    try:
+        normalized_cross_project_context = _normalize_cross_project_context(context_inputs.get("cross_project_context"))
+    except ValueError as exc:
+        errors.append(str(exc))
+    try:
+        normalized_candidate_lane_designs = _req_030_normalize_candidate_lane_designs(
+            context_inputs.get("candidate_lane_designs")
+        )
+    except Req030Error as exc:
+        errors.append(str(exc))
+    try:
+        normalized_strategic_claims = _req_030_normalize_strategic_claims(
+            context_inputs.get("strategic_claims"),
+            call_depth=len(normalized_call_chain) if normalized_call_chain else 5,
+        )
+    except Req030Error as exc:
+        errors.append(str(exc))
+
+    lane_design = processing_behavior.get("lane_design")
+    if not isinstance(lane_design, Mapping):
+        errors.append("processing_behavior.lane_design must be an object")
+        return errors
+    if not isinstance(lane_design.get("evidence_refs"), list):
+        errors.append("processing_behavior.lane_design.evidence_refs must be a list")
+    lane_blueprints = lane_design.get("lane_blueprints")
+    if not isinstance(lane_blueprints, list):
+        errors.append("processing_behavior.lane_design.lane_blueprints must be a list")
+        lane_blueprints = []
+    previous_sort_key: tuple[int, str, str] | None = None
+    for index, row in enumerate(lane_blueprints):
+        if not isinstance(row, Mapping):
+            errors.append(f"processing_behavior.lane_design.lane_blueprints[{index}] must be an object")
+            continue
+        lane_id = _as_text(row.get("lane_id"))
+        recommendation_id = _as_text(row.get("recommendation_id"))
+        if not REQ_030_LANE_ID_RE.match(lane_id):
+            errors.append(
+                f"processing_behavior.lane_design.lane_blueprints[{index}].lane_id must match {REQ_030_LANE_ID_RE.pattern}"
+            )
+        if not REQ_030_RECOMMENDATION_ID_RE.match(recommendation_id):
+            errors.append(
+                "processing_behavior.lane_design.lane_blueprints"
+                f"[{index}].recommendation_id must match {REQ_030_RECOMMENDATION_ID_RE.pattern}"
+            )
+        lane_order = row.get("lane_order")
+        if isinstance(lane_order, bool) or not isinstance(lane_order, int):
+            errors.append(f"processing_behavior.lane_design.lane_blueprints[{index}].lane_order must be an integer")
+            lane_order = 0
+        current_sort_key = (lane_order, recommendation_id, lane_id)
+        if previous_sort_key is not None and current_sort_key < previous_sort_key:
+            errors.append("processing_behavior.lane_design.lane_blueprints must be sorted deterministically")
+        previous_sort_key = current_sort_key
+        for field_name in ("summary", "rationale", "sequencing_rationale", "next_step", "source_output_ref"):
+            if not _as_text(row.get(field_name)):
+                errors.append(f"processing_behavior.lane_design.lane_blueprints[{index}].{field_name} is required")
+        if not isinstance(row.get("evidence_refs"), list) or not row.get("evidence_refs"):
+            errors.append(
+                f"processing_behavior.lane_design.lane_blueprints[{index}].evidence_refs must be non-empty list"
+            )
+
+    open_risks = lane_design.get("open_risks")
+    if not isinstance(open_risks, list):
+        errors.append("processing_behavior.lane_design.open_risks must be a list")
+        open_risks = []
+    for index, row in enumerate(open_risks):
+        if not isinstance(row, Mapping):
+            errors.append(f"processing_behavior.lane_design.open_risks[{index}] must be an object")
+            continue
+        if not _as_text(row.get("risk_id")):
+            errors.append(f"processing_behavior.lane_design.open_risks[{index}].risk_id is required")
+        if not _as_text(row.get("reason_code")):
+            errors.append(f"processing_behavior.lane_design.open_risks[{index}].reason_code is required")
+        if not isinstance(row.get("required_evidence_refs"), list) or not row.get("required_evidence_refs"):
+            errors.append(
+                f"processing_behavior.lane_design.open_risks[{index}].required_evidence_refs must be non-empty list"
+            )
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+    else:
+        expected_canonical_input = _req_030_canonical_input(
+            target_project_root=_as_text(context_inputs.get("target_project", {}).get("project_root"))
+            if isinstance(context_inputs.get("target_project"), Mapping)
+            else "",
+            earth_root=_as_text(context_inputs.get("earth_sweep", {}).get("earth_root"))
+            if isinstance(context_inputs.get("earth_sweep"), Mapping)
+            else "",
+            output_root=_as_text(canonical_input.get("output_root")),
+            revision_identity=_as_text(canonical_input.get("revision_identity")),
+            strategy_goal=_as_text(canonical_input.get("strategy_goal")),
+            call_id=_as_text(payload.get("call_id")),
+            checked_at_utc=_as_text(payload.get("checked_at_utc")),
+        )
+        if dict(canonical_input) != expected_canonical_input:
+            errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+        expected_input_sha = _canonical_digest(expected_canonical_input)
+        if metadata.get("canonical_input_sha256") != expected_input_sha:
+            errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+        if metadata.get("reproducible_call_id") != f"req030-{expected_input_sha[:16]}":
+            errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+    else:
+        expected_processing_input = _req_030_canonical_processing_input(
+            call_chain=normalized_call_chain,
+            target_project_evidence_refs=normalized_target_refs,
+            earth_sweep_evidence_refs=normalized_earth_refs,
+            cross_project_context=normalized_cross_project_context,
+            candidate_lane_designs=normalized_candidate_lane_designs,
+            strategic_claims=normalized_strategic_claims,
+        )
+        if dict(canonical_processing_input) != expected_processing_input:
+            errors.append("call_metadata.canonical_processing_input must mirror normalized lane-design inputs")
+        expected_processing_sha = _canonical_digest(expected_processing_input)
+        if metadata.get("processing_input_sha256") != expected_processing_sha:
+            errors.append("call_metadata.processing_input_sha256 does not match processing input")
+        if metadata.get("processing_call_id") != f"req030-processing-{expected_processing_sha[:16]}":
+            errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    if metadata.get("llm_call_trace_schema_version") != REQ_030_LLM_CALL_TRACE_SCHEMA_VERSION:
+        errors.append(
+            f"call_metadata.llm_call_trace_schema_version must be {REQ_030_LLM_CALL_TRACE_SCHEMA_VERSION}"
+        )
+    if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+        errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+    llm_call_trace_rows = metadata.get("llm_call_trace_rows")
+    if not isinstance(llm_call_trace_rows, list):
+        errors.append("call_metadata.llm_call_trace_rows must be a list")
+    else:
+        expected_trace_rows = _req_030_build_trace_rows(
+            synthesis_call_id=_as_text(metadata.get("processing_call_id")),
+            call_chain=normalized_call_chain,
+            recommendation_ids=_dedupe_preserving_order(
+                _as_text(row.get("recommendation_id")) for row in lane_blueprints if isinstance(row, Mapping)
+            ),
+        )
+        if llm_call_trace_rows != expected_trace_rows:
+            errors.append("call_metadata.llm_call_trace_rows must mirror deterministic trace rows")
+        if metadata.get("llm_call_trace_sha256") != _canonical_digest(expected_trace_rows):
+            errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
+
+    return errors
+
+
+def _req_031_estimate_id(*, recommendation_id: str, kpi_id: str) -> str:
+    return f"estimate::{recommendation_id}::{kpi_id}"
+
+
+def _req_031_normalize_call_chain(
+    value: Any,
+    *,
+    field_name: str = "call_chain",
+) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req031Error(f"{field_name} must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_call_ids: set[str] = set()
+    for index, raw_row in enumerate(value):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        sequence = row.get("sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            raise Req031Error(f"{field_name}[{index}].sequence must be an integer")
+        expected_sequence = index + 1
+        if sequence != expected_sequence:
+            raise Req031Error(f"{field_name}[{index}].sequence must be {expected_sequence}")
+
+        call_id = _require_text(row.get("call_id"), field_name=f"{field_name}[{index}].call_id")
+        expected_call_id = f"call-{expected_sequence}"
+        if call_id != expected_call_id:
+            raise Req031Error(f"{field_name}[{index}].call_id must be {expected_call_id}")
+        if call_id in seen_call_ids:
+            raise Req031Error(f"{field_name}[{index}].call_id must be unique")
+        seen_call_ids.add(call_id)
+
+        normalized.append(
+            {
+                "sequence": sequence,
+                "call_id": call_id,
+                "phase": _require_text(row.get("phase"), field_name=f"{field_name}[{index}].phase"),
+                "output_ref": _require_text(row.get("output_ref"), field_name=f"{field_name}[{index}].output_ref"),
+            }
+        )
+
+    if len(normalized) != 6:
+        raise Req031Error(f"{field_name} must contain exactly 6 rows for Call-6 KPI estimation")
+    return normalized
+
+
+def _req_031_normalize_recommendation_adoptions(
+    value: Any,
+    *,
+    field_name: str = "recommendation_adoptions",
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req031Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        recommendation_id = _require_text(
+            row.get("recommendation_id"),
+            field_name=f"{field_name}[{index}].recommendation_id",
+        )
+        if not REQ_029_RECOMMENDATION_ID_RE.match(recommendation_id):
+            raise Req031Error(
+                f"{field_name}[{index}].recommendation_id must match {REQ_029_RECOMMENDATION_ID_RE.pattern}"
+            )
+        if recommendation_id in seen_ids:
+            raise Req031Error(f"{field_name}[{index}].recommendation_id must be unique")
+        seen_ids.add(recommendation_id)
+
+        adoption_status = _require_text(
+            row.get("adoption_status"),
+            field_name=f"{field_name}[{index}].adoption_status",
+        ).lower()
+        if adoption_status not in REQ_031_ALLOWED_ADOPTION_STATUSES:
+            raise Req031Error(
+                f"{field_name}[{index}].adoption_status must be one of {sorted(REQ_031_ALLOWED_ADOPTION_STATUSES)}"
+            )
+
+        project_id = _as_text(row.get("project_id"))
+        requires_earth_evidence = row.get("requires_earth_evidence")
+        if requires_earth_evidence is None:
+            requires_earth_evidence = bool(project_id)
+        if not isinstance(requires_earth_evidence, bool):
+            raise Req031Error(f"{field_name}[{index}].requires_earth_evidence must be a boolean")
+
+        normalized.append(
+            {
+                "recommendation_id": recommendation_id,
+                "summary": _require_text(row.get("summary"), field_name=f"{field_name}[{index}].summary"),
+                "adoption_status": adoption_status,
+                "adoption_window": _require_text(
+                    row.get("adoption_window"),
+                    field_name=f"{field_name}[{index}].adoption_window",
+                ),
+                "project_id": project_id,
+                "requires_earth_evidence": requires_earth_evidence,
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                    min_items=1,
+                ),
+            }
+        )
+
+    if not normalized:
+        raise Req031Error(f"{field_name} must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: row["recommendation_id"])
+    return normalized
+
+
+def _req_031_normalize_kpi_definitions(
+    value: Any,
+    *,
+    field_name: str = "kpi_definitions",
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req031Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        kpi_id = _require_text(row.get("kpi_id"), field_name=f"{field_name}[{index}].kpi_id")
+        if not REQ_031_KPI_ID_RE.match(kpi_id):
+            raise Req031Error(f"{field_name}[{index}].kpi_id must match {REQ_031_KPI_ID_RE.pattern}")
+        if kpi_id in seen_ids:
+            raise Req031Error(f"{field_name}[{index}].kpi_id must be unique")
+        seen_ids.add(kpi_id)
+
+        desired_direction = _require_text(
+            row.get("desired_direction"),
+            field_name=f"{field_name}[{index}].desired_direction",
+        ).lower()
+        if desired_direction not in REQ_031_ALLOWED_DIRECTIONS:
+            raise Req031Error(
+                f"{field_name}[{index}].desired_direction must be one of {sorted(REQ_031_ALLOWED_DIRECTIONS)}"
+            )
+
+        normalized.append(
+            {
+                "kpi_id": kpi_id,
+                "kpi_name": _require_text(row.get("kpi_name"), field_name=f"{field_name}[{index}].kpi_name"),
+                "baseline_value": _require_number(
+                    row.get("baseline_value"),
+                    field_name=f"{field_name}[{index}].baseline_value",
+                ),
+                "unit": _require_text(row.get("unit"), field_name=f"{field_name}[{index}].unit"),
+                "desired_direction": desired_direction,
+                "evidence_refs": _normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                    min_items=1,
+                ),
+            }
+        )
+
+    if not normalized:
+        raise Req031Error(f"{field_name} must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: row["kpi_id"])
+    return normalized
+
+
+def _req_031_normalize_impact_assumptions(
+    value: Any,
+    *,
+    recommendation_ids: set[str],
+    kpi_ids: set[str],
+    available_evidence_refs: set[str],
+    field_name: str = "impact_assumptions",
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req031Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        recommendation_id = _require_text(
+            row.get("recommendation_id"),
+            field_name=f"{field_name}[{index}].recommendation_id",
+        )
+        if recommendation_id not in recommendation_ids:
+            raise Req031Error(f"{field_name}[{index}].recommendation_id must reference recommendation_adoptions")
+        kpi_id = _require_text(row.get("kpi_id"), field_name=f"{field_name}[{index}].kpi_id")
+        if kpi_id not in kpi_ids:
+            raise Req031Error(f"{field_name}[{index}].kpi_id must reference kpi_definitions")
+
+        pair = (recommendation_id, kpi_id)
+        if pair in seen_pairs:
+            raise Req031Error(
+                f"{field_name}[{index}] duplicates recommendation_id/kpi_id pair {recommendation_id}/{kpi_id}"
+            )
+        seen_pairs.add(pair)
+
+        expected_movement_lower = _require_number(
+            row.get("expected_movement_lower"),
+            field_name=f"{field_name}[{index}].expected_movement_lower",
+        )
+        expected_movement_upper = _require_number(
+            row.get("expected_movement_upper"),
+            field_name=f"{field_name}[{index}].expected_movement_upper",
+        )
+        if expected_movement_lower > expected_movement_upper:
+            raise Req031Error(
+                f"{field_name}[{index}].expected_movement_lower must be <= expected_movement_upper"
+            )
+
+        confidence = _require_text(
+            row.get("confidence"),
+            field_name=f"{field_name}[{index}].confidence",
+        ).lower()
+        if confidence not in REQ_031_ALLOWED_CONFIDENCE:
+            raise Req031Error(
+                f"{field_name}[{index}].confidence must be one of {sorted(REQ_031_ALLOWED_CONFIDENCE)}"
+            )
+
+        evidence_refs = _normalize_string_list(
+            row.get("evidence_refs"),
+            field_name=f"{field_name}[{index}].evidence_refs",
+            min_items=1,
+        )
+        missing_refs = sorted(set(evidence_refs) - available_evidence_refs)
+        if missing_refs:
+            raise Req031Error(
+                f"{field_name}[{index}].evidence_refs must stay within available evidence refs; missing {missing_refs}"
+            )
+
+        normalized.append(
+            {
+                "recommendation_id": recommendation_id,
+                "kpi_id": kpi_id,
+                "expected_movement_lower": expected_movement_lower,
+                "expected_movement_upper": expected_movement_upper,
+                "reasoning_summary": _require_text(
+                    row.get("reasoning_summary"),
+                    field_name=f"{field_name}[{index}].reasoning_summary",
+                ),
+                "confidence": confidence,
+                "caveats": _normalize_string_list(
+                    row.get("caveats"),
+                    field_name=f"{field_name}[{index}].caveats",
+                    min_items=1,
+                ),
+                "evidence_backed_assumptions": _normalize_string_list(
+                    row.get("evidence_backed_assumptions"),
+                    field_name=f"{field_name}[{index}].evidence_backed_assumptions",
+                    min_items=1,
+                ),
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    if not normalized:
+        raise Req031Error(f"{field_name} must contain at least 1 item(s)")
+    normalized.sort(key=lambda row: (row["recommendation_id"], row["kpi_id"]))
+    return normalized
+
+
+def _req_031_build_trace_rows(
+    *,
+    processing_call_id: str,
+    call_chain: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[str],
+    earth_sweep_evidence_refs: Sequence[str],
+    estimate_ids: Sequence[str],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    base_input_refs = _collect_unique_refs(target_project_evidence_refs, earth_sweep_evidence_refs)
+    prior_output_refs: list[str] = []
+    for row in call_chain:
+        sequence = int(row["sequence"])
+        call_id = str(row["call_id"])
+        output_ref = str(row["output_ref"])
+        input_refs = _collect_unique_refs(base_input_refs, prior_output_refs)
+        next_call_id = f"call-{sequence + 1}" if sequence < len(call_chain) else ""
+        handoff_summary = (
+            f"Call {sequence} hands off {output_ref} to {next_call_id} after consuming {len(input_refs)} input ref(s)."
+            if next_call_id
+            else (
+                f"Call 6 emits kpi_estimates via {output_ref} for {len(estimate_ids)} recommendation/KPI pair(s)."
+            )
+        )
+        rows.append(
+            {
+                "schema_version": REQ_031_LLM_CALL_TRACE_SCHEMA_VERSION,
+                "requirement_id": REQ_031_REQUIREMENT_ID,
+                "processing_call_id": processing_call_id,
+                "call_id": call_id,
+                "sequence": sequence,
+                "call_objective": REQ_031_CALL_OBJECTIVES.get(call_id, str(row["phase"])),
+                "input_refs": input_refs,
+                "output_refs": [output_ref],
+                "handoff_summary": handoff_summary,
+            }
+        )
+        prior_output_refs.append(output_ref)
+    return rows
+
+
+def _req_031_canonical_input(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_id: str,
+    checked_at_utc: str,
+) -> dict[str, Any]:
+    return {
+        "runtime_mode": RUNTIME_MODE,
+        "execution_mode": EXECUTION_MODE,
+        "target_project_root": target_project_root,
+        "earth_root": earth_root,
+        "output_root": output_root,
+        "revision_identity": revision_identity,
+        "strategy_goal": strategy_goal,
+        "analysis_type": REQ_031_ANALYSIS_TYPE,
+        "call_id": call_id,
+        "checked_at_utc": checked_at_utc,
+    }
+
+
+def _req_031_canonical_processing_input(
+    *,
+    call_chain: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[str],
+    earth_sweep_evidence_refs: Sequence[str],
+    recommendation_adoptions: Sequence[Mapping[str, Any]],
+    kpi_definitions: Sequence[Mapping[str, Any]],
+    impact_assumptions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "call_chain": [dict(row) for row in call_chain],
+        "target_project_evidence_refs": list(target_project_evidence_refs),
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "recommendation_adoptions": [dict(row) for row in recommendation_adoptions],
+        "kpi_definitions": [dict(row) for row in kpi_definitions],
+        "impact_assumptions": [dict(row) for row in impact_assumptions],
+    }
+
+
+def build_req_031_call_6_kpi_impact_estimation_reasoning(
+    *,
+    target_project_root: str,
+    earth_root: str,
+    output_root: str,
+    revision_identity: str,
+    strategy_goal: str,
+    call_chain: Sequence[Mapping[str, Any]],
+    recommendation_adoptions: Sequence[Mapping[str, Any]],
+    kpi_definitions: Sequence[Mapping[str, Any]],
+    impact_assumptions: Sequence[Mapping[str, Any]],
+    target_project_evidence_refs: Sequence[Any] | None = None,
+    earth_sweep_evidence_refs: Sequence[Any] | None = None,
+    call_id: str = "call-6",
+    checked_at_utc: str | None = None,
+) -> dict[str, Any]:
+    normalized_target_root = _normalize_root(target_project_root, field_name="target_project_root")
+    normalized_earth_root = _normalize_root(earth_root, field_name="earth_root")
+    normalized_output_root = _normalize_root(output_root, field_name="output_root")
+    normalized_revision_identity = _require_text(revision_identity, field_name="revision_identity")
+    normalized_strategy_goal = _require_text(strategy_goal, field_name="strategy_goal")
+    normalized_call_id = _require_text(call_id, field_name="call_id")
+    normalized_checked_at_utc = _require_text(checked_at_utc or utc_now_iso(), field_name="checked_at_utc")
+    normalized_call_chain = _req_031_normalize_call_chain(call_chain)
+    normalized_target_refs = _normalize_string_list(
+        target_project_evidence_refs,
+        field_name="target_project_evidence_refs",
+        min_items=1,
+    )
+    normalized_earth_refs = _normalize_string_list(
+        earth_sweep_evidence_refs,
+        field_name="earth_sweep_evidence_refs",
+    )
+    normalized_recommendation_adoptions = _req_031_normalize_recommendation_adoptions(recommendation_adoptions)
+    normalized_kpi_definitions = _req_031_normalize_kpi_definitions(kpi_definitions)
+
+    base_available_evidence_refs = set(
+        _collect_unique_refs(
+            normalized_target_refs,
+            normalized_earth_refs,
+            [row["output_ref"] for row in normalized_call_chain],
+            *[row["evidence_refs"] for row in normalized_recommendation_adoptions],
+            *[row["evidence_refs"] for row in normalized_kpi_definitions],
+        )
+    )
+    normalized_impact_assumptions = _req_031_normalize_impact_assumptions(
+        impact_assumptions,
+        recommendation_ids={row["recommendation_id"] for row in normalized_recommendation_adoptions},
+        kpi_ids={row["kpi_id"] for row in normalized_kpi_definitions},
+        available_evidence_refs=base_available_evidence_refs,
+    )
+
+    adoption_by_id = {str(row["recommendation_id"]): row for row in normalized_recommendation_adoptions}
+    kpi_by_id = {str(row["kpi_id"]): row for row in normalized_kpi_definitions}
+    output_ref_by_sequence = {int(row["sequence"]): str(row["output_ref"]) for row in normalized_call_chain}
+    call_5_output_ref = output_ref_by_sequence[5]
+
+    blocked_recommendation_ids: set[str] = set()
+    open_risks: list[dict[str, Any]] = []
+    kpi_estimates: list[dict[str, Any]] = []
+    for row in normalized_impact_assumptions:
+        recommendation = adoption_by_id[str(row["recommendation_id"])]
+        kpi = kpi_by_id[str(row["kpi_id"])]
+        recommendation_id = str(recommendation["recommendation_id"])
+        if recommendation["requires_earth_evidence"] and not normalized_earth_refs:
+            blocked_recommendation_ids.add(recommendation_id)
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{recommendation_id}-earth-evidence",
+                    "reason_code": "missing_earth_sweep_evidence_refs",
+                    "summary": str(recommendation["summary"]),
+                    "required_evidence_refs": _collect_unique_refs(
+                        [call_5_output_ref],
+                        recommendation["evidence_refs"],
+                        row["evidence_refs"],
+                    ),
+                }
+            )
+            continue
+
+        desired_direction = str(kpi["desired_direction"])
+        lower = float(row["expected_movement_lower"])
+        upper = float(row["expected_movement_upper"])
+        if desired_direction == "increase" and lower < 0:
+            raise Req031Error(
+                f"impact_assumptions for {recommendation_id}/{kpi['kpi_id']} must stay non-negative for increase KPIs"
+            )
+        if desired_direction == "decrease" and upper > 0:
+            raise Req031Error(
+                f"impact_assumptions for {recommendation_id}/{kpi['kpi_id']} must stay non-positive for decrease KPIs"
+            )
+
+        baseline_value = float(kpi["baseline_value"])
+        estimated_post_adoption_range = {
+            "lower": baseline_value + lower,
+            "upper": baseline_value + upper,
+        }
+        estimate_id = _req_031_estimate_id(recommendation_id=recommendation_id, kpi_id=str(kpi["kpi_id"]))
+        kpi_estimates.append(
+            {
+                "estimate_id": estimate_id,
+                "recommendation_id": recommendation_id,
+                "recommendation_summary": str(recommendation["summary"]),
+                "kpi_id": str(kpi["kpi_id"]),
+                "kpi_name": str(kpi["kpi_name"]),
+                "baseline_value": baseline_value,
+                "unit": str(kpi["unit"]),
+                "desired_direction": desired_direction,
+                "adoption_status": str(recommendation["adoption_status"]),
+                "adoption_window": str(recommendation["adoption_window"]),
+                "expected_movement": {
+                    "lower": lower,
+                    "upper": upper,
+                },
+                "estimated_post_adoption_range": estimated_post_adoption_range,
+                "reasoning_summary": str(row["reasoning_summary"]),
+                "confidence": str(row["confidence"]),
+                "caveats": list(row["caveats"]),
+                "evidence_backed_assumptions": list(row["evidence_backed_assumptions"]),
+                "evidence_refs": _collect_unique_refs(
+                    recommendation["evidence_refs"],
+                    kpi["evidence_refs"],
+                    row["evidence_refs"],
+                    [call_5_output_ref],
+                ),
+            }
+        )
+
+    kpi_estimates.sort(key=lambda row: (row["recommendation_id"], row["kpi_id"], row["estimate_id"]))
+    open_risks.sort(key=lambda row: row["risk_id"])
+    estimate_ids = [str(row["estimate_id"]) for row in kpi_estimates]
+    low_confidence_estimate_ids = [
+        str(row["estimate_id"]) for row in kpi_estimates if str(row["confidence"]) == "low"
+    ]
+    evidence_refs = _collect_unique_refs(
+        normalized_target_refs,
+        normalized_earth_refs,
+        [row["output_ref"] for row in normalized_call_chain],
+        *[row["evidence_refs"] for row in kpi_estimates],
+        *[row["required_evidence_refs"] for row in open_risks],
+    )
+    if kpi_estimates and not open_risks:
+        decision = "proceed"
+    elif kpi_estimates and open_risks:
+        decision = "proceed-with-open-risks"
+    elif open_risks:
+        decision = "blocked"
+    else:
+        decision = "insufficient-context"
+    confidence = (
+        "high"
+        if kpi_estimates and not low_confidence_estimate_ids and not open_risks
+        else "medium"
+        if kpi_estimates
+        else "low"
+    )
+
+    canonical_input = _req_031_canonical_input(
+        target_project_root=normalized_target_root,
+        earth_root=normalized_earth_root,
+        output_root=normalized_output_root,
+        revision_identity=normalized_revision_identity,
+        strategy_goal=normalized_strategy_goal,
+        call_id=normalized_call_id,
+        checked_at_utc=normalized_checked_at_utc,
+    )
+    canonical_processing_input = _req_031_canonical_processing_input(
+        call_chain=normalized_call_chain,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        recommendation_adoptions=normalized_recommendation_adoptions,
+        kpi_definitions=normalized_kpi_definitions,
+        impact_assumptions=normalized_impact_assumptions,
+    )
+    processing_sha = _canonical_digest(canonical_processing_input)
+    processing_call_id = f"req031-processing-{processing_sha[:16]}"
+    llm_call_trace_rows = _req_031_build_trace_rows(
+        processing_call_id=processing_call_id,
+        call_chain=normalized_call_chain,
+        target_project_evidence_refs=normalized_target_refs,
+        earth_sweep_evidence_refs=normalized_earth_refs,
+        estimate_ids=estimate_ids,
+    )
+
+    return {
+        "schema_version": REQ_031_SCHEMA_VERSION,
+        "requirement_id": REQ_031_REQUIREMENT_ID,
+        "analysis_type": REQ_031_ANALYSIS_TYPE,
+        "call_id": normalized_call_id,
+        "checked_at_utc": normalized_checked_at_utc,
+        "processing_behavior": {
+            "strategy": REQ_031_PROCESSING_STRATEGY,
+            "reasoning_mode": REQ_031_REASONING_MODE,
+            "strict_evidence_discipline": True,
+            "context_inputs": {
+                "call_chain": [dict(row) for row in normalized_call_chain],
+                "target_project": {
+                    "project_root": normalized_target_root,
+                    "evidence_refs": list(normalized_target_refs),
+                },
+                "earth_sweep": {
+                    "earth_root": normalized_earth_root,
+                    "evidence_refs": list(normalized_earth_refs),
+                },
+                "recommendation_adoptions": [dict(row) for row in normalized_recommendation_adoptions],
+                "kpi_definitions": [dict(row) for row in normalized_kpi_definitions],
+                "impact_assumptions": [dict(row) for row in normalized_impact_assumptions],
+            },
+            "context_usage": {
+                "call_ids_considered": [str(row["call_id"]) for row in normalized_call_chain],
+                "recommendation_ids_considered": [
+                    str(row["recommendation_id"]) for row in normalized_recommendation_adoptions
+                ],
+                "kpi_ids_considered": [str(row["kpi_id"]) for row in normalized_kpi_definitions],
+                "estimate_ids_emitted": estimate_ids,
+                "low_confidence_estimate_ids": low_confidence_estimate_ids,
+                "blocked_recommendation_ids": sorted(blocked_recommendation_ids),
+                "open_risk_ids_emitted": [str(row["risk_id"]) for row in open_risks],
+                "evidence_refs_used": list(evidence_refs),
+            },
+            "kpi_impact_estimation": {
+                "decision": decision,
+                "rationale": (
+                    f"estimates={len(kpi_estimates)} open_risks={len(open_risks)} "
+                    f"blocked={len(blocked_recommendation_ids)} low_confidence={len(low_confidence_estimate_ids)}"
+                ),
+                "confidence": confidence,
+                "evidence_refs": list(evidence_refs),
+                "kpi_estimates": kpi_estimates,
+                "open_risks": open_risks,
+            },
+        },
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input": canonical_input,
+            "canonical_input_sha256": _canonical_digest(canonical_input),
+            "reproducible_call_id": f"req031-{_canonical_digest(canonical_input)[:16]}",
+            "canonical_processing_input": canonical_processing_input,
+            "processing_input_sha256": processing_sha,
+            "processing_call_id": processing_call_id,
+            "llm_call_trace_schema_version": REQ_031_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": _canonical_digest(llm_call_trace_rows),
+            "llm_call_trace_rows": llm_call_trace_rows,
+        },
+    }
+
+
+def validate_req_031_call_6_kpi_impact_estimation_reasoning(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be a JSON object"]
+
+    if payload.get("schema_version") != REQ_031_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_031_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_031_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_031_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_031_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_031_ANALYSIS_TYPE}")
+    if _as_text(payload.get("call_id")) != "call-6":
+        errors.append("call_id must be call-6")
+    if not _as_text(payload.get("checked_at_utc")):
+        errors.append("checked_at_utc is required")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        return errors
+    if processing_behavior.get("strategy") != REQ_031_PROCESSING_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_031_PROCESSING_STRATEGY}")
+    if processing_behavior.get("reasoning_mode") != REQ_031_REASONING_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {REQ_031_REASONING_MODE}")
+    if processing_behavior.get("strict_evidence_discipline") is not True:
+        errors.append("processing_behavior.strict_evidence_discipline must be true")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    normalized_call_chain: list[dict[str, Any]] = []
+    normalized_target_refs: list[str] = []
+    normalized_earth_refs: list[str] = []
+    normalized_recommendation_adoptions: list[dict[str, Any]] = []
+    normalized_kpi_definitions: list[dict[str, Any]] = []
+    normalized_impact_assumptions: list[dict[str, Any]] = []
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        return errors
+    try:
+        normalized_call_chain = _req_031_normalize_call_chain(context_inputs.get("call_chain"))
+    except Req031Error as exc:
+        errors.append(str(exc))
+    target_project = context_inputs.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("processing_behavior.context_inputs.target_project must be an object")
+    else:
+        normalized_target_refs = sorted(
+            {_as_text(ref) for ref in target_project.get("evidence_refs", []) if _as_text(ref)}
+        )
+        if not _as_text(target_project.get("project_root")):
+            errors.append("processing_behavior.context_inputs.target_project.project_root is required")
+    earth_sweep = context_inputs.get("earth_sweep")
+    if not isinstance(earth_sweep, Mapping):
+        errors.append("processing_behavior.context_inputs.earth_sweep must be an object")
+    else:
+        normalized_earth_refs = sorted(
+            {_as_text(ref) for ref in earth_sweep.get("evidence_refs", []) if _as_text(ref)}
+        )
+        if not _as_text(earth_sweep.get("earth_root")):
+            errors.append("processing_behavior.context_inputs.earth_sweep.earth_root is required")
+    try:
+        normalized_recommendation_adoptions = _req_031_normalize_recommendation_adoptions(
+            context_inputs.get("recommendation_adoptions")
+        )
+    except Req031Error as exc:
+        errors.append(str(exc))
+    try:
+        normalized_kpi_definitions = _req_031_normalize_kpi_definitions(context_inputs.get("kpi_definitions"))
+    except Req031Error as exc:
+        errors.append(str(exc))
+    available_evidence_refs = set(
+        _collect_unique_refs(
+            normalized_target_refs,
+            normalized_earth_refs,
+            [row["output_ref"] for row in normalized_call_chain],
+            *[row["evidence_refs"] for row in normalized_recommendation_adoptions],
+            *[row["evidence_refs"] for row in normalized_kpi_definitions],
+        )
+    )
+    try:
+        normalized_impact_assumptions = _req_031_normalize_impact_assumptions(
+            context_inputs.get("impact_assumptions"),
+            recommendation_ids={row["recommendation_id"] for row in normalized_recommendation_adoptions},
+            kpi_ids={row["kpi_id"] for row in normalized_kpi_definitions},
+            available_evidence_refs=available_evidence_refs,
+        )
+    except Req031Error as exc:
+        errors.append(str(exc))
+
+    estimation = processing_behavior.get("kpi_impact_estimation")
+    if not isinstance(estimation, Mapping):
+        errors.append("processing_behavior.kpi_impact_estimation must be an object")
+        return errors
+    if not isinstance(estimation.get("evidence_refs"), list):
+        errors.append("processing_behavior.kpi_impact_estimation.evidence_refs must be a list")
+    kpi_estimates = estimation.get("kpi_estimates")
+    if not isinstance(kpi_estimates, list):
+        errors.append("processing_behavior.kpi_impact_estimation.kpi_estimates must be a list")
+        kpi_estimates = []
+    for index, row in enumerate(kpi_estimates):
+        if not isinstance(row, Mapping):
+            errors.append(f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}] must be an object")
+            continue
+        estimate_id = _as_text(row.get("estimate_id"))
+        if not REQ_031_ESTIMATE_ID_RE.match(estimate_id):
+            errors.append(
+                "processing_behavior.kpi_impact_estimation.kpi_estimates"
+                f"[{index}].estimate_id must match {REQ_031_ESTIMATE_ID_RE.pattern}"
+            )
+        if not REQ_029_RECOMMENDATION_ID_RE.match(_as_text(row.get("recommendation_id"))):
+            errors.append(
+                f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].recommendation_id must be valid"
+            )
+        if not REQ_031_KPI_ID_RE.match(_as_text(row.get("kpi_id"))):
+            errors.append(f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].kpi_id must be valid")
+        if not _as_text(row.get("recommendation_summary")):
+            errors.append(
+                f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].recommendation_summary is required"
+            )
+        if not _as_text(row.get("kpi_name")):
+            errors.append(f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].kpi_name is required")
+        baseline_value = row.get("baseline_value")
+        if isinstance(baseline_value, bool) or not isinstance(baseline_value, (int, float)):
+            errors.append(
+                f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].baseline_value must be numeric"
+            )
+        if _as_text(row.get("desired_direction")) not in REQ_031_ALLOWED_DIRECTIONS:
+            errors.append(
+                f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].desired_direction must be valid"
+            )
+        if _as_text(row.get("adoption_status")) not in REQ_031_ALLOWED_ADOPTION_STATUSES:
+            errors.append(
+                f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].adoption_status must be valid"
+            )
+        if _as_text(row.get("confidence")) not in REQ_031_ALLOWED_CONFIDENCE:
+            errors.append(
+                f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].confidence must be valid"
+            )
+        if not isinstance(row.get("expected_movement"), Mapping):
+            errors.append(
+                f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].expected_movement must be an object"
+            )
+        if not isinstance(row.get("estimated_post_adoption_range"), Mapping):
+            errors.append(
+                "processing_behavior.kpi_impact_estimation.kpi_estimates"
+                f"[{index}].estimated_post_adoption_range must be an object"
+            )
+        if not _as_text(row.get("reasoning_summary")):
+            errors.append(
+                f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].reasoning_summary is required"
+            )
+        if not isinstance(row.get("caveats"), list) or not row.get("caveats"):
+            errors.append(f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].caveats must be non-empty")
+        if (
+            not isinstance(row.get("evidence_backed_assumptions"), list)
+            or not row.get("evidence_backed_assumptions")
+        ):
+            errors.append(
+                "processing_behavior.kpi_impact_estimation.kpi_estimates"
+                f"[{index}].evidence_backed_assumptions must be non-empty"
+            )
+        if not isinstance(row.get("evidence_refs"), list) or not row.get("evidence_refs"):
+            errors.append(
+                f"processing_behavior.kpi_impact_estimation.kpi_estimates[{index}].evidence_refs must be non-empty"
+            )
+
+    open_risks = estimation.get("open_risks")
+    if not isinstance(open_risks, list):
+        errors.append("processing_behavior.kpi_impact_estimation.open_risks must be a list")
+        open_risks = []
+    for index, row in enumerate(open_risks):
+        if not isinstance(row, Mapping):
+            errors.append(f"processing_behavior.kpi_impact_estimation.open_risks[{index}] must be an object")
+            continue
+        if not _as_text(row.get("risk_id")):
+            errors.append(f"processing_behavior.kpi_impact_estimation.open_risks[{index}].risk_id is required")
+        if not _as_text(row.get("reason_code")):
+            errors.append(f"processing_behavior.kpi_impact_estimation.open_risks[{index}].reason_code is required")
+        if not isinstance(row.get("required_evidence_refs"), list) or not row.get("required_evidence_refs"):
+            errors.append(
+                "processing_behavior.kpi_impact_estimation.open_risks"
+                f"[{index}].required_evidence_refs must be non-empty"
+            )
+
+    usage = processing_behavior.get("context_usage")
+    if not isinstance(usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        for key in (
+            "call_ids_considered",
+            "recommendation_ids_considered",
+            "kpi_ids_considered",
+            "estimate_ids_emitted",
+            "low_confidence_estimate_ids",
+            "blocked_recommendation_ids",
+            "open_risk_ids_emitted",
+            "evidence_refs_used",
+        ):
+            value = usage.get(key)
+            if not isinstance(value, list) or any(not _as_text(item) for item in value):
+                errors.append(f"processing_behavior.context_usage.{key} must be a string array")
+
+    metadata = payload.get("call_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("call_metadata must be an object")
+        return errors
+    if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+        errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+    canonical_input = metadata.get("canonical_input")
+    if not isinstance(canonical_input, Mapping):
+        errors.append("call_metadata.canonical_input must be an object")
+    else:
+        expected_canonical_input = _req_031_canonical_input(
+            target_project_root=_as_text(context_inputs.get("target_project", {}).get("project_root"))
+            if isinstance(context_inputs.get("target_project"), Mapping)
+            else "",
+            earth_root=_as_text(context_inputs.get("earth_sweep", {}).get("earth_root"))
+            if isinstance(context_inputs.get("earth_sweep"), Mapping)
+            else "",
+            output_root=_as_text(canonical_input.get("output_root")),
+            revision_identity=_as_text(canonical_input.get("revision_identity")),
+            strategy_goal=_as_text(canonical_input.get("strategy_goal")),
+            call_id=_as_text(payload.get("call_id")),
+            checked_at_utc=_as_text(payload.get("checked_at_utc")),
+        )
+        if dict(canonical_input) != expected_canonical_input:
+            errors.append("call_metadata.canonical_input must mirror normalized invocation anchors")
+        expected_input_sha = _canonical_digest(expected_canonical_input)
+        if metadata.get("canonical_input_sha256") != expected_input_sha:
+            errors.append("call_metadata.canonical_input_sha256 does not match canonical input")
+        if metadata.get("reproducible_call_id") != f"req031-{expected_input_sha[:16]}":
+            errors.append("call_metadata.reproducible_call_id does not match canonical digest")
+
+    canonical_processing_input = metadata.get("canonical_processing_input")
+    if not isinstance(canonical_processing_input, Mapping):
+        errors.append("call_metadata.canonical_processing_input must be an object")
+    else:
+        expected_processing_input = _req_031_canonical_processing_input(
+            call_chain=normalized_call_chain,
+            target_project_evidence_refs=normalized_target_refs,
+            earth_sweep_evidence_refs=normalized_earth_refs,
+            recommendation_adoptions=normalized_recommendation_adoptions,
+            kpi_definitions=normalized_kpi_definitions,
+            impact_assumptions=normalized_impact_assumptions,
+        )
+        if dict(canonical_processing_input) != expected_processing_input:
+            errors.append("call_metadata.canonical_processing_input must mirror normalized estimation inputs")
+        expected_processing_sha = _canonical_digest(expected_processing_input)
+        if metadata.get("processing_input_sha256") != expected_processing_sha:
+            errors.append("call_metadata.processing_input_sha256 does not match processing input")
+        if metadata.get("processing_call_id") != f"req031-processing-{expected_processing_sha[:16]}":
+            errors.append("call_metadata.processing_call_id does not match processing digest")
+
+    if metadata.get("llm_call_trace_schema_version") != REQ_031_LLM_CALL_TRACE_SCHEMA_VERSION:
+        errors.append(
+            f"call_metadata.llm_call_trace_schema_version must be {REQ_031_LLM_CALL_TRACE_SCHEMA_VERSION}"
+        )
+    if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+        errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+    llm_call_trace_rows = metadata.get("llm_call_trace_rows")
+    if not isinstance(llm_call_trace_rows, list):
+        errors.append("call_metadata.llm_call_trace_rows must be a list")
+    else:
+        expected_trace_rows = _req_031_build_trace_rows(
+            processing_call_id=_as_text(metadata.get("processing_call_id")),
+            call_chain=normalized_call_chain,
+            target_project_evidence_refs=normalized_target_refs,
+            earth_sweep_evidence_refs=normalized_earth_refs,
+            estimate_ids=[_as_text(row.get("estimate_id")) for row in kpi_estimates if isinstance(row, Mapping)],
+        )
+        if llm_call_trace_rows != expected_trace_rows:
+            errors.append("call_metadata.llm_call_trace_rows must mirror deterministic trace rows")
+        if metadata.get("llm_call_trace_sha256") != _canonical_digest(expected_trace_rows):
+            errors.append("call_metadata.llm_call_trace_sha256 does not match llm_call_trace_rows")
+
+    return errors
+
+
+def _req_026_normalize_anchor(value: Any, *, field_name: str) -> dict[str, Any]:
+    if isinstance(value, str):
+        text = _require_text(value, field_name=field_name)
+        return {"text": text, "source": "inline", "authoritative": True}
+
+    anchor = _require_mapping(value, field_name=field_name)
+    source = _as_text(anchor.get("source")) or "inline"
+    return {
+        "text": _require_text(anchor.get("text"), field_name=f"{field_name}.text"),
+        "source": source,
+        "authoritative": True,
+    }
+
+
+def _req_026_normalize_string_list(
+    value: Any,
+    *,
+    field_name: str,
+    min_items: int = 0,
+) -> list[str]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req026Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(rows):
+        text = _require_text(item, field_name=f"{field_name}[{index}]")
+        if text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    if len(normalized) < min_items:
+        raise Req026Error(f"{field_name} must contain at least {min_items} item(s)")
+    return normalized
+
+
+def _req_026_dedupe_preserving_order(rows: Sequence[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row in seen:
+            continue
+        seen.add(row)
+        deduped.append(row)
+    return deduped
+
+
+def _req_026_normalize_unknown_item(
+    value: Any,
+    *,
+    field_name: str,
+    category: str,
+) -> dict[str, str]:
+    if isinstance(value, str):
+        question = _require_text(value, field_name=field_name)
+        why_it_matters = (
+            "Call-2 needs a stable planning baseline before turning this assessment into implementation work."
+            if category == "planning"
+            else "Call-2 needs current runtime certainty before promoting execution assumptions."
+        )
+        return {"question": question, "why_it_matters": why_it_matters}
+
+    row = _require_mapping(value, field_name=field_name)
+    return {
+        "question": _require_text(row.get("question"), field_name=f"{field_name}.question"),
+        "why_it_matters": _require_text(row.get("why_it_matters"), field_name=f"{field_name}.why_it_matters"),
+    }
+
+
+def _req_026_normalize_evidence_artifacts(
+    payload: Any,
+    *,
+    field_name: str,
+    category: str,
+    allowed_statuses: set[str],
+) -> list[dict[str, Any]]:
+    container = _require_mapping(payload, field_name=field_name)
+    rows = container.get("artifacts")
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
+        raise Req026Error(f"{field_name}.artifacts must be an array")
+    if not rows:
+        raise Req026Error(f"{field_name}.artifacts must contain at least one artifact")
+
+    artifacts: list[dict[str, Any]] = []
+    seen_artifact_ids: set[str] = set()
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}.artifacts[{index}]")
+        artifact_id = _require_text(
+            row.get("artifact_id"),
+            field_name=f"{field_name}.artifacts[{index}].artifact_id",
+        )
+        if artifact_id in seen_artifact_ids:
+            raise Req026Error(f"{field_name}.artifacts[{index}].artifact_id duplicates {artifact_id}")
+        seen_artifact_ids.add(artifact_id)
+
+        status = _require_text(
+            row.get("status"),
+            field_name=f"{field_name}.artifacts[{index}].status",
+        ).lower()
+        if status not in allowed_statuses:
+            raise Req026Error(
+                f"{field_name}.artifacts[{index}].status must be one of {sorted(allowed_statuses)}"
+            )
+
+        unknowns_value = row.get("unknowns", [])
+        if not isinstance(unknowns_value, Sequence) or isinstance(unknowns_value, (str, bytes, bytearray)):
+            raise Req026Error(f"{field_name}.artifacts[{index}].unknowns must be an array")
+
+        artifacts.append(
+            {
+                "artifact_id": artifact_id,
+                "summary": _require_text(
+                    row.get("summary"),
+                    field_name=f"{field_name}.artifacts[{index}].summary",
+                ),
+                "status": status,
+                "source_ref": _require_text(
+                    row.get("source_ref"),
+                    field_name=f"{field_name}.artifacts[{index}].source_ref",
+                ),
+                "signals": _req_026_normalize_string_list(
+                    row.get("signals"),
+                    field_name=f"{field_name}.artifacts[{index}].signals",
+                    min_items=1,
+                ),
+                "unknowns": [
+                    _req_026_normalize_unknown_item(
+                        item,
+                        field_name=f"{field_name}.artifacts[{index}].unknowns[{unknown_index}]",
+                        category=category,
+                    )
+                    for unknown_index, item in enumerate(unknowns_value)
+                ],
+            }
+        )
+    return artifacts
+
+
+def _req_026_normalize_cross_project_context(
+    value: Any,
+    *,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req026Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    seen_project_ids: set[str] = set()
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        project_id = _require_text(row.get("project_id"), field_name=f"{field_name}[{index}].project_id")
+        if project_id in seen_project_ids:
+            raise Req026Error(f"{field_name}[{index}].project_id must be unique")
+        seen_project_ids.add(project_id)
+        normalized.append(
+            {
+                "project_id": project_id,
+                "project_root": _require_text(
+                    row.get("project_root"),
+                    field_name=f"{field_name}[{index}].project_root",
+                ),
+                "evidence_refs": _req_026_normalize_string_list(
+                    row.get("evidence_refs", []),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                ),
+                "context_note": _require_text(
+                    row.get("context_note"),
+                    field_name=f"{field_name}[{index}].context_note",
+                ),
+            }
+        )
+    return normalized
+
+
+def _req_026_normalize_candidate_recommendations(
+    value: Any,
+    *,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    if value is None:
+        rows: Sequence[Any] = []
+    else:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            raise Req026Error(f"{field_name} must be an array")
+        rows = value
+
+    normalized: list[dict[str, Any]] = []
+    seen_recommendation_ids: set[str] = set()
+    for index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field_name=f"{field_name}[{index}]")
+        recommendation_id = _require_text(
+            row.get("recommendation_id"),
+            field_name=f"{field_name}[{index}].recommendation_id",
+        )
+        if recommendation_id in seen_recommendation_ids:
+            raise Req026Error(f"{field_name}[{index}].recommendation_id must be unique")
+        seen_recommendation_ids.add(recommendation_id)
+
+        recommendation_scope = _require_text(
+            row.get("recommendation_scope"),
+            field_name=f"{field_name}[{index}].recommendation_scope",
+        ).lower()
+        if recommendation_scope not in REQ_026_ALLOWED_RECOMMENDATION_SCOPES:
+            raise Req026Error(
+                f"{field_name}[{index}].recommendation_scope must be one of "
+                f"{sorted(REQ_026_ALLOWED_RECOMMENDATION_SCOPES)}"
+            )
+
+        project_id = _as_text(row.get("project_id"))
+        if recommendation_scope == "cross-project":
+            project_id = _require_text(project_id, field_name=f"{field_name}[{index}].project_id")
+        else:
+            project_id = ""
+
+        requires_earth_evidence = row.get("requires_earth_evidence")
+        if requires_earth_evidence is None:
+            requires_earth_evidence = recommendation_scope == "cross-project"
+        if not isinstance(requires_earth_evidence, bool):
+            raise Req026Error(f"{field_name}[{index}].requires_earth_evidence must be a boolean")
+
+        normalized.append(
+            {
+                "recommendation_id": recommendation_id,
+                "summary": _require_text(
+                    row.get("summary"),
+                    field_name=f"{field_name}[{index}].summary",
+                ),
+                "rationale": _require_text(
+                    row.get("rationale"),
+                    field_name=f"{field_name}[{index}].rationale",
+                ),
+                "recommendation_scope": recommendation_scope,
+                "project_id": project_id,
+                "requires_earth_evidence": requires_earth_evidence,
+                "evidence_refs": _req_026_normalize_string_list(
+                    row.get("evidence_refs"),
+                    field_name=f"{field_name}[{index}].evidence_refs",
+                    min_items=1,
+                ),
+                "next_step": _require_text(
+                    row.get("next_step"),
+                    field_name=f"{field_name}[{index}].next_step",
+                ),
+            }
+        )
+    return normalized
+
+
+def _req_026_normalize_broad_sweep_context(value: Any, *, field_name: str) -> dict[str, Any]:
+    if value is None:
+        container: Mapping[str, Any] = {}
+    else:
+        container = _require_mapping(value, field_name=field_name)
+    return {
+        "earth_sweep_evidence_refs": _req_026_normalize_string_list(
+            container.get("earth_sweep_evidence_refs", []),
+            field_name=f"{field_name}.earth_sweep_evidence_refs",
+        ),
+        "cross_project_context": _req_026_normalize_cross_project_context(
+            container.get("cross_project_context", []),
+            field_name=f"{field_name}.cross_project_context",
+        ),
+        "candidate_recommendations": _req_026_normalize_candidate_recommendations(
+            container.get("candidate_recommendations", []),
+            field_name=f"{field_name}.candidate_recommendations",
+        ),
+    }
+
+
+def _req_026_evidence_status(artifacts: Sequence[Mapping[str, Any]], *, category: str) -> str:
+    statuses = {str(row["status"]) for row in artifacts}
+    if "blocked" in statuses:
+        return "blocked"
+    if category == "planning":
+        if "partial" in statuses:
+            return "partial"
+        return "ready"
+    if "degraded" in statuses:
+        return "degraded"
+    return "healthy"
+
+
+def _req_026_collect_state_details(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> tuple[list[str], list[str], list[str]]:
+    artifact_ids: list[str] = []
+    source_refs: list[str] = []
+    key_signals: list[str] = []
+    seen_source_refs: set[str] = set()
+    seen_signals: set[str] = set()
+
+    for row in artifacts:
+        artifact_ids.append(str(row["artifact_id"]))
+        source_ref = str(row["source_ref"])
+        if source_ref not in seen_source_refs:
+            seen_source_refs.add(source_ref)
+            source_refs.append(source_ref)
+        for signal in row["signals"]:
+            if signal not in seen_signals:
+                seen_signals.add(signal)
+                key_signals.append(signal)
+    return artifact_ids, source_refs, key_signals
+
+
+def _req_026_assessment_status(*, planning_status: str, runtime_status: str) -> str:
+    if planning_status == "blocked" or runtime_status == "blocked":
+        return "blocked"
+    if planning_status == "partial" or runtime_status == "degraded":
+        return "needs-follow-up"
+    return "grounded"
+
+
+def _req_026_build_state_summary(
+    *,
+    project_id: str,
+    planning_status: str,
+    runtime_status: str,
+    unknown_count: int,
+) -> str:
+    return (
+        f"{project_id} remains anchored to mission and scope, planning evidence is {planning_status}, "
+        f"runtime evidence is {runtime_status}, and {unknown_count} explicit unknown(s) must be resolved in later calls."
+    )
+
+
+def _req_026_build_unknowns(
+    *,
+    planning_artifacts: Sequence[Mapping[str, Any]],
+    runtime_artifacts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    unknowns: list[dict[str, Any]] = []
+    ordinal = 1
+    for category, artifacts in (("planning", planning_artifacts), ("runtime", runtime_artifacts)):
+        for artifact in artifacts:
+            for unknown in artifact["unknowns"]:
+                unknowns.append(
+                    {
+                        "unknown_id": f"unknown.{ordinal:03d}",
+                        "category": category,
+                        "question": unknown["question"],
+                        "why_it_matters": unknown["why_it_matters"],
+                        "must_be_resolved_by": "call-2",
+                        "provenance": {
+                            "evidence_type": category,
+                            "artifact_id": artifact["artifact_id"],
+                            "source_ref": artifact["source_ref"],
+                        },
+                    }
+                )
+                ordinal += 1
+    if not unknowns:
+        raise Req026Error("at least one explicit unknown is required for Call-1 situational analysis")
+    return unknowns
+
+
+def _req_026_build_cross_project_context_summary(
+    *,
+    earth_sweep_evidence_refs: Sequence[str],
+    cross_project_context: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    projects_considered = [str(row["project_id"]) for row in cross_project_context]
+    projects_with_evidence_refs = [
+        str(row["project_id"]) for row in cross_project_context if row.get("evidence_refs")
+    ]
+    projects_without_evidence_refs = [
+        str(row["project_id"]) for row in cross_project_context if not row.get("evidence_refs")
+    ]
+    evidence_refs_by_project = {
+        str(row["project_id"]): list(row.get("evidence_refs", []))
+        for row in cross_project_context
+    }
+    return {
+        "cross_project": bool(cross_project_context),
+        "projects_considered": projects_considered,
+        "projects_with_evidence_refs": projects_with_evidence_refs,
+        "projects_without_evidence_refs": projects_without_evidence_refs,
+        "earth_sweep_evidence_refs": list(earth_sweep_evidence_refs),
+        "evidence_refs_by_project": evidence_refs_by_project,
+    }
+
+
+def _req_026_build_processing_behavior(
+    *,
+    broad_sweep_context: Mapping[str, Any],
+    planning_refs: Sequence[str],
+    runtime_refs: Sequence[str],
+    assessment_status: str,
+    unknowns: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    earth_sweep_evidence_refs = list(broad_sweep_context["earth_sweep_evidence_refs"])
+    cross_project_context = list(broad_sweep_context["cross_project_context"])
+    candidate_recommendations = list(broad_sweep_context["candidate_recommendations"])
+    context_by_project = {
+        str(row["project_id"]): row for row in cross_project_context
+    }
+
+    recommended_next_actions: list[dict[str, Any]] = []
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+
+    for row in candidate_recommendations:
+        recommendation_id = str(row["recommendation_id"])
+        if row["recommendation_scope"] == "local":
+            recommended_next_actions.append(
+                {
+                    "recommendation_id": recommendation_id,
+                    "summary": row["summary"],
+                    "rationale": row["rationale"],
+                    "next_step": row["next_step"],
+                    "evidence_refs": list(row["evidence_refs"]),
+                }
+            )
+            continue
+
+        project_id = str(row["project_id"])
+        project_context = context_by_project.get(project_id)
+        project_evidence_refs = list(project_context.get("evidence_refs", [])) if project_context else []
+
+        missing_reason_codes: list[str] = []
+        if row["requires_earth_evidence"] and not earth_sweep_evidence_refs:
+            missing_reason_codes.append("missing_earth_sweep_evidence_refs")
+        if project_context is None:
+            missing_reason_codes.append("missing_cross_project_context")
+        elif not project_evidence_refs:
+            missing_reason_codes.append("missing_cross_project_context_evidence_refs")
+
+        if missing_reason_codes:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{recommendation_id}",
+                    "reason_code": ",".join(missing_reason_codes),
+                    "summary": row["summary"],
+                    "required_evidence_refs": _req_026_dedupe_preserving_order(
+                        list(row["evidence_refs"]) + project_evidence_refs
+                    ),
+                }
+            )
+            continue
+
+        cross_project_obligations.append(
+            {
+                "obligation_id": f"obligation-{recommendation_id}",
+                "project_id": project_id,
+                "summary": row["summary"],
+                "rationale": row["rationale"],
+                "next_step": row["next_step"],
+                "evidence_refs": _req_026_dedupe_preserving_order(
+                    list(earth_sweep_evidence_refs) + project_evidence_refs + list(row["evidence_refs"])
+                ),
+            }
+        )
+
+    if assessment_status == "blocked":
+        decision = "hold"
+        confidence = "low"
+    elif open_risks:
+        decision = "proceed-with-open-risks"
+        confidence = "low" if assessment_status == "needs-follow-up" else "medium"
+    elif assessment_status == "needs-follow-up":
+        decision = "proceed-with-caution"
+        confidence = "medium"
+    else:
+        decision = "proceed"
+        confidence = "high"
+
+    evidence_refs = _req_026_dedupe_preserving_order(
+        list(planning_refs)
+        + list(runtime_refs)
+        + list(earth_sweep_evidence_refs)
+        + [ref for row in recommended_next_actions for ref in row["evidence_refs"]]
+        + [ref for row in cross_project_obligations for ref in row["evidence_refs"]]
+        + [ref for row in open_risks for ref in row["required_evidence_refs"]]
+    )
+
+    return {
+        "strategy": REQ_026_PROCESSING_STRATEGY,
+        "reasoning_mode": REQ_026_REASONING_MODE,
+        "context_inputs": {
+            "broad_sweep_context": {
+                "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+                "cross_project_context": cross_project_context,
+                "candidate_recommendations": candidate_recommendations,
+            }
+        },
+        "context_usage": {
+            "broad_sweep_context_used": bool(
+                earth_sweep_evidence_refs or cross_project_context or candidate_recommendations
+            ),
+            "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+            "cross_project_context_used": bool(cross_project_context),
+            "earth_sweep_evidence_refs_used": earth_sweep_evidence_refs,
+            "cross_project_projects_considered": [str(row["project_id"]) for row in cross_project_context],
+            "cross_project_projects_with_evidence_refs": [
+                str(row["project_id"]) for row in cross_project_context if row.get("evidence_refs")
+            ],
+            "cross_project_projects_without_evidence_refs": [
+                str(row["project_id"]) for row in cross_project_context if not row.get("evidence_refs")
+            ],
+            "candidate_recommendation_ids_considered": [
+                str(row["recommendation_id"]) for row in candidate_recommendations
+            ],
+            "local_recommendation_ids_emitted": [
+                str(row["recommendation_id"]) for row in recommended_next_actions
+            ],
+            "cross_project_obligation_ids_emitted": [
+                str(row["obligation_id"]) for row in cross_project_obligations
+            ],
+            "open_risk_ids_emitted": [str(row["risk_id"]) for row in open_risks],
+            "unknown_ids_for_later_calls": [str(row["unknown_id"]) for row in unknowns],
+        },
+        "recommendation": {
+            "decision": decision,
+            "rationale": (
+                f"assessment={assessment_status} unknowns={len(unknowns)} "
+                f"local={len(recommended_next_actions)} obligations={len(cross_project_obligations)} "
+                f"open_risks={len(open_risks)}"
+            ),
+            "confidence": confidence,
+            "evidence_refs": evidence_refs,
+            "recommended_next_actions": recommended_next_actions,
+            "cross_project_context": _req_026_build_cross_project_context_summary(
+                earth_sweep_evidence_refs=earth_sweep_evidence_refs,
+                cross_project_context=cross_project_context,
+            ),
+            "cross_project_obligations": cross_project_obligations,
+            "open_risks": open_risks,
+        },
+    }
+
+
+def _req_026_canonical_input(
+    *,
+    project_id: str,
+    mission: Mapping[str, Any],
+    scope: Mapping[str, Any],
+    planning_artifacts: Sequence[Mapping[str, Any]],
+    runtime_artifacts: Sequence[Mapping[str, Any]],
+    broad_sweep_context: Mapping[str, Any],
+    call_id: str,
+    checked_at_utc: str,
+) -> dict[str, Any]:
+    return {
+        "requirement_id": REQ_026_REQUIREMENT_ID,
+        "analysis_type": REQ_026_ANALYSIS_TYPE,
+        "call_id": call_id,
+        "checked_at_utc": checked_at_utc,
+        "target_project": {
+            "project_id": project_id,
+            "mission": dict(mission),
+            "scope": dict(scope),
+        },
+        "planning_evidence": {"artifacts": [dict(row) for row in planning_artifacts]},
+        "runtime_evidence": {"artifacts": [dict(row) for row in runtime_artifacts]},
+        "broad_sweep_context": {
+            "earth_sweep_evidence_refs": list(broad_sweep_context["earth_sweep_evidence_refs"]),
+            "cross_project_context": [dict(row) for row in broad_sweep_context["cross_project_context"]],
+            "candidate_recommendations": [dict(row) for row in broad_sweep_context["candidate_recommendations"]],
+        },
+    }
+
+
+def _req_026_trace_output_ref(*, call_id: str) -> str:
+    return f"{REQ_026_REQUIREMENT_ID}::call::{call_id}::output::situational_analysis"
+
+
+def _build_req_026_llm_call_trace_rows(
+    *,
+    processing_call_id: str,
+    call_id: str,
+    mission_source: str,
+    scope_source: str,
+    planning_refs: Sequence[str],
+    runtime_refs: Sequence[str],
+    broad_sweep_context: Mapping[str, Any],
+    unknowns: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    input_refs = _req_026_dedupe_preserving_order(
+        [mission_source, scope_source]
+        + list(planning_refs)
+        + list(runtime_refs)
+        + list(broad_sweep_context["earth_sweep_evidence_refs"])
+        + [
+            ref
+            for row in broad_sweep_context["cross_project_context"]
+            for ref in row.get("evidence_refs", [])
+        ]
+        + [
+            ref
+            for row in broad_sweep_context["candidate_recommendations"]
+            for ref in row.get("evidence_refs", [])
+        ]
+    )
+    output_ref = _req_026_trace_output_ref(call_id=call_id)
+    return [
+        {
+            "schema_version": REQ_026_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "requirement_id": REQ_026_REQUIREMENT_ID,
+            "processing_call_id": processing_call_id,
+            "call_id": call_id,
+            "sequence": 1,
+            "call_objective": (
+                "Assess target project state from mission, scope, planning evidence, runtime evidence, "
+                "and explicit unknowns for later calls."
+            ),
+            "input_refs": input_refs,
+            "output_refs": [output_ref],
+            "handoff_summary": (
+                f"Call 1 hands off situational_analysis via {output_ref} with {len(unknowns)} "
+                "explicit unknown(s) for later calls."
+            ),
+        }
+    ]
+
+
+def build_req_026_call_1_situational_analysis_reasoning(
+    *,
+    target_project: Mapping[str, Any],
+    planning_evidence: Mapping[str, Any],
+    runtime_evidence: Mapping[str, Any],
+    broad_sweep_context: Mapping[str, Any] | None = None,
+    analysis_type: str = REQ_026_ANALYSIS_TYPE,
+    call_id: str = "call-1",
+    checked_at_utc: str | None = None,
+) -> dict[str, Any]:
+    if analysis_type != REQ_026_ANALYSIS_TYPE:
+        raise Req026Error(f"analysis_type must be {REQ_026_ANALYSIS_TYPE}")
+
+    project = _require_mapping(target_project, field_name="target_project")
+    project_id = _require_text(project.get("project_id"), field_name="target_project.project_id")
+    mission = _req_026_normalize_anchor(project.get("mission"), field_name="target_project.mission")
+    scope = _req_026_normalize_anchor(project.get("scope"), field_name="target_project.scope")
+
+    planning_artifacts = _req_026_normalize_evidence_artifacts(
+        planning_evidence,
+        field_name="planning_evidence",
+        category="planning",
+        allowed_statuses=REQ_026_ALLOWED_PLANNING_STATUSES,
+    )
+    runtime_artifacts = _req_026_normalize_evidence_artifacts(
+        runtime_evidence,
+        field_name="runtime_evidence",
+        category="runtime",
+        allowed_statuses=REQ_026_ALLOWED_RUNTIME_STATUSES,
+    )
+    normalized_broad_sweep_context = _req_026_normalize_broad_sweep_context(
+        broad_sweep_context,
+        field_name="broad_sweep_context",
+    )
+
+    normalized_checked_at_utc = _require_text(checked_at_utc or utc_now_iso(), field_name="checked_at_utc")
+    planning_status = _req_026_evidence_status(planning_artifacts, category="planning")
+    runtime_status = _req_026_evidence_status(runtime_artifacts, category="runtime")
+    unknowns = _req_026_build_unknowns(
+        planning_artifacts=planning_artifacts,
+        runtime_artifacts=runtime_artifacts,
+    )
+    overall_status = _req_026_assessment_status(
+        planning_status=planning_status,
+        runtime_status=runtime_status,
+    )
+
+    planning_artifact_ids, planning_refs, planning_signals = _req_026_collect_state_details(planning_artifacts)
+    runtime_artifact_ids, runtime_refs, runtime_signals = _req_026_collect_state_details(runtime_artifacts)
+    evidence_basis = planning_artifact_ids + runtime_artifact_ids
+    processing_behavior = _req_026_build_processing_behavior(
+        broad_sweep_context=normalized_broad_sweep_context,
+        planning_refs=planning_refs,
+        runtime_refs=runtime_refs,
+        assessment_status=overall_status,
+        unknowns=unknowns,
+    )
+
+    canonical_input = _req_026_canonical_input(
+        project_id=project_id,
+        mission=mission,
+        scope=scope,
+        planning_artifacts=planning_artifacts,
+        runtime_artifacts=runtime_artifacts,
+        broad_sweep_context=normalized_broad_sweep_context,
+        call_id=call_id,
+        checked_at_utc=normalized_checked_at_utc,
+    )
+    canonical_input_sha = _canonical_digest(canonical_input)
+    processing_call_id = f"req026-processing-{canonical_input_sha[:16]}"
+    llm_call_trace_rows = _build_req_026_llm_call_trace_rows(
+        processing_call_id=processing_call_id,
+        call_id=call_id,
+        mission_source=str(mission["source"]),
+        scope_source=str(scope["source"]),
+        planning_refs=planning_refs,
+        runtime_refs=runtime_refs,
+        broad_sweep_context=normalized_broad_sweep_context,
+        unknowns=unknowns,
+    )
+    llm_call_trace_sha = _canonical_digest(llm_call_trace_rows)
+
+    return {
+        "ok": True,
+        "tool": TOOL,
+        "tool_version": TOOL_VERSION,
+        "schema_version": REQ_026_SCHEMA_VERSION,
+        "requirement_id": REQ_026_REQUIREMENT_ID,
+        "analysis_type": REQ_026_ANALYSIS_TYPE,
+        "call_id": call_id,
+        "checked_at_utc": normalized_checked_at_utc,
+        "situational_analysis": {
+            "target_project": {
+                "project_id": project_id,
+                "mission": mission,
+                "scope": scope,
+                "anchor_summary": f"Mission: {mission['text']} Scope: {scope['text']}",
+            },
+            "planning_state": {
+                "status": planning_status,
+                "artifact_ids": planning_artifact_ids,
+                "evidence_refs": planning_refs,
+                "key_signals": planning_signals,
+            },
+            "runtime_state": {
+                "status": runtime_status,
+                "artifact_ids": runtime_artifact_ids,
+                "evidence_refs": runtime_refs,
+                "key_signals": runtime_signals,
+            },
+            "reasoning": {
+                "assessment_status": overall_status,
+                "anchor_set": ["mission", "scope", "planning_evidence", "runtime_evidence"],
+                "state_summary": _req_026_build_state_summary(
+                    project_id=project_id,
+                    planning_status=planning_status,
+                    runtime_status=runtime_status,
+                    unknown_count=len(unknowns),
+                ),
+                "evidence_basis": evidence_basis,
+                "follow_up_required": True,
+            },
+        },
+        "processing_behavior": processing_behavior,
+        "unknowns": unknowns,
+        "source": {
+            "planning_artifact_count": len(planning_artifacts),
+            "runtime_artifact_count": len(runtime_artifacts),
+            "mission_source": mission["source"],
+            "scope_source": scope["source"],
+            "earth_sweep_evidence_count": len(normalized_broad_sweep_context["earth_sweep_evidence_refs"]),
+            "cross_project_context_count": len(normalized_broad_sweep_context["cross_project_context"]),
+            "candidate_recommendation_count": len(normalized_broad_sweep_context["candidate_recommendations"]),
+        },
+        "call_metadata": {
+            "reproducibility": "deterministic-input-fingerprint",
+            "canonical_input_sha256": canonical_input_sha,
+            "reproducible_call_id": f"req026-{canonical_input_sha[:16]}",
+            "canonical_input": canonical_input,
+            "processing_call_id": processing_call_id,
+            "llm_call_trace_schema_version": REQ_026_LLM_CALL_TRACE_SCHEMA_VERSION,
+            "llm_call_trace_path": LLM_CALL_TRACE_RELATIVE_PATH,
+            "llm_call_trace_sha256": llm_call_trace_sha,
+            "llm_call_trace_rows": llm_call_trace_rows,
+        },
+    }
+
+
+def validate_req_026_call_1_situational_analysis_reasoning(payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+
+    if payload.get("ok") is not True:
+        errors.append("ok must be true")
+    if payload.get("tool") != TOOL:
+        errors.append(f"tool must be {TOOL}")
+    if payload.get("tool_version") != TOOL_VERSION:
+        errors.append(f"tool_version must be {TOOL_VERSION}")
+    if payload.get("schema_version") != REQ_026_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_026_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_026_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_026_REQUIREMENT_ID}")
+    if payload.get("analysis_type") != REQ_026_ANALYSIS_TYPE:
+        errors.append(f"analysis_type must be {REQ_026_ANALYSIS_TYPE}")
+    if payload.get("call_id") != "call-1":
+        errors.append("call_id must be call-1")
+    if not _as_text(payload.get("checked_at_utc")):
+        errors.append("checked_at_utc is required")
+
+    situational_analysis = payload.get("situational_analysis")
+    if not isinstance(situational_analysis, Mapping):
+        errors.append("situational_analysis must be an object")
+        situational_analysis = {}
+
+    target_project = situational_analysis.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("situational_analysis.target_project must be an object")
+        target_project = {}
+    if not _as_text(target_project.get("project_id")):
+        errors.append("situational_analysis.target_project.project_id is required")
+    for anchor_name in ("mission", "scope"):
+        anchor = target_project.get(anchor_name)
+        if not isinstance(anchor, Mapping):
+            errors.append(f"situational_analysis.target_project.{anchor_name} must be an object")
+            continue
+        if not _as_text(anchor.get("text")):
+            errors.append(f"situational_analysis.target_project.{anchor_name}.text is required")
+        if not _as_text(anchor.get("source")):
+            errors.append(f"situational_analysis.target_project.{anchor_name}.source is required")
+        if anchor.get("authoritative") is not True:
+            errors.append(f"situational_analysis.target_project.{anchor_name}.authoritative must be true")
+    if not _as_text(target_project.get("anchor_summary")):
+        errors.append("situational_analysis.target_project.anchor_summary is required")
+
+    for section_name, allowed_statuses in (
+        ("planning_state", REQ_026_ALLOWED_PLANNING_STATUSES),
+        ("runtime_state", REQ_026_ALLOWED_RUNTIME_STATUSES),
+    ):
+        section = situational_analysis.get(section_name)
+        if not isinstance(section, Mapping):
+            errors.append(f"situational_analysis.{section_name} must be an object")
+            continue
+        status = _as_text(section.get("status"))
+        if status not in allowed_statuses:
+            errors.append(f"situational_analysis.{section_name}.status must be one of {sorted(allowed_statuses)}")
+        for key in ("artifact_ids", "evidence_refs", "key_signals"):
+            value = section.get(key)
+            if not isinstance(value, list) or not value or any(not _as_text(item) for item in value):
+                errors.append(f"situational_analysis.{section_name}.{key} must be a non-empty string array")
+
+    reasoning = situational_analysis.get("reasoning")
+    if not isinstance(reasoning, Mapping):
+        errors.append("situational_analysis.reasoning must be an object")
+        reasoning = {}
+    if _as_text(reasoning.get("assessment_status")) not in {"grounded", "needs-follow-up", "blocked"}:
+        errors.append("situational_analysis.reasoning.assessment_status must be grounded, needs-follow-up, or blocked")
+    if reasoning.get("anchor_set") != ["mission", "scope", "planning_evidence", "runtime_evidence"]:
+        errors.append("situational_analysis.reasoning.anchor_set must match the canonical anchor set")
+    if not _as_text(reasoning.get("state_summary")):
+        errors.append("situational_analysis.reasoning.state_summary is required")
+    evidence_basis = reasoning.get("evidence_basis")
+    if not isinstance(evidence_basis, list) or not evidence_basis or any(not _as_text(item) for item in evidence_basis):
+        errors.append("situational_analysis.reasoning.evidence_basis must be a non-empty string array")
+    if reasoning.get("follow_up_required") is not True:
+        errors.append("situational_analysis.reasoning.follow_up_required must be true")
+
+    processing_behavior = payload.get("processing_behavior")
+    if not isinstance(processing_behavior, Mapping):
+        errors.append("processing_behavior must be an object")
+        processing_behavior = {}
+    if processing_behavior.get("strategy") != REQ_026_PROCESSING_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_026_PROCESSING_STRATEGY}")
+    if processing_behavior.get("reasoning_mode") != REQ_026_REASONING_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {REQ_026_REASONING_MODE}")
+
+    context_inputs = processing_behavior.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+        context_inputs = {}
+    broad_sweep_context = context_inputs.get("broad_sweep_context")
+    if not isinstance(broad_sweep_context, Mapping):
+        errors.append("processing_behavior.context_inputs.broad_sweep_context must be an object")
+        broad_sweep_context = {}
+    for key in ("earth_sweep_evidence_refs", "cross_project_context", "candidate_recommendations"):
+        if not isinstance(broad_sweep_context.get(key), list):
+            errors.append(f"processing_behavior.context_inputs.broad_sweep_context.{key} must be an array")
+
+    context_usage = processing_behavior.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+        context_usage = {}
+    for key in ("broad_sweep_context_used", "earth_sweep_context_used", "cross_project_context_used"):
+        if not isinstance(context_usage.get(key), bool):
+            errors.append(f"processing_behavior.context_usage.{key} must be a boolean")
+    for key in (
+        "earth_sweep_evidence_refs_used",
+        "cross_project_projects_considered",
+        "cross_project_projects_with_evidence_refs",
+        "cross_project_projects_without_evidence_refs",
+        "candidate_recommendation_ids_considered",
+        "local_recommendation_ids_emitted",
+        "cross_project_obligation_ids_emitted",
+        "open_risk_ids_emitted",
+        "unknown_ids_for_later_calls",
+    ):
+        value = context_usage.get(key)
+        if not isinstance(value, list) or any(not _as_text(item) for item in value):
+            errors.append(f"processing_behavior.context_usage.{key} must be a string array")
+
+    recommendation = processing_behavior.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+        recommendation = {}
+    if _as_text(recommendation.get("decision")) not in {
+        "proceed",
+        "proceed-with-caution",
+        "proceed-with-open-risks",
+        "hold",
+    }:
+        errors.append(
+            "processing_behavior.recommendation.decision must be proceed, proceed-with-caution, "
+            "proceed-with-open-risks, or hold"
+        )
+    if not _as_text(recommendation.get("rationale")):
+        errors.append("processing_behavior.recommendation.rationale is required")
+    if _as_text(recommendation.get("confidence")) not in {"high", "medium", "low"}:
+        errors.append("processing_behavior.recommendation.confidence must be high, medium, or low")
+    recommendation_refs = recommendation.get("evidence_refs")
+    if not isinstance(recommendation_refs, list) or not recommendation_refs or any(not _as_text(item) for item in recommendation_refs):
+        errors.append("processing_behavior.recommendation.evidence_refs must be a non-empty string array")
+
+    unknowns = payload.get("unknowns")
+    if not isinstance(unknowns, list) or not unknowns:
+        errors.append("unknowns must be a non-empty array")
+        unknowns = []
+    seen_unknown_ids: set[str] = set()
+    for index, row in enumerate(unknowns):
+        if not isinstance(row, Mapping):
+            errors.append(f"unknowns[{index}] must be an object")
+            continue
+        unknown_id = _as_text(row.get("unknown_id"))
+        if not unknown_id:
+            errors.append(f"unknowns[{index}].unknown_id is required")
+        elif unknown_id in seen_unknown_ids:
+            errors.append(f"unknowns[{index}].unknown_id duplicates {unknown_id}")
+        else:
+            seen_unknown_ids.add(unknown_id)
+        if _as_text(row.get("category")) not in {"planning", "runtime"}:
+            errors.append(f"unknowns[{index}].category must be planning or runtime")
+        if not _as_text(row.get("question")):
+            errors.append(f"unknowns[{index}].question is required")
+        if not _as_text(row.get("why_it_matters")):
+            errors.append(f"unknowns[{index}].why_it_matters is required")
+        if row.get("must_be_resolved_by") != "call-2":
+            errors.append(f"unknowns[{index}].must_be_resolved_by must be call-2")
+        provenance = row.get("provenance")
+        if not isinstance(provenance, Mapping):
+            errors.append(f"unknowns[{index}].provenance must be an object")
+            continue
+        if _as_text(provenance.get("evidence_type")) not in {"planning", "runtime"}:
+            errors.append(f"unknowns[{index}].provenance.evidence_type must be planning or runtime")
+        if not _as_text(provenance.get("artifact_id")):
+            errors.append(f"unknowns[{index}].provenance.artifact_id is required")
+        if not _as_text(provenance.get("source_ref")):
+            errors.append(f"unknowns[{index}].provenance.source_ref is required")
+
+    source = payload.get("source")
+    if not isinstance(source, Mapping):
+        errors.append("source must be an object")
+        source = {}
+    for key in ("planning_artifact_count", "runtime_artifact_count"):
+        value = source.get(key)
+        if not isinstance(value, int) or value <= 0:
+            errors.append(f"source.{key} must be a positive integer")
+    for key in (
+        "earth_sweep_evidence_count",
+        "cross_project_context_count",
+        "candidate_recommendation_count",
+    ):
+        value = source.get(key)
+        if not isinstance(value, int) or value < 0:
+            errors.append(f"source.{key} must be a non-negative integer")
+    if not _as_text(source.get("mission_source")):
+        errors.append("source.mission_source is required")
+    if not _as_text(source.get("scope_source")):
+        errors.append("source.scope_source is required")
+
+    metadata = payload.get("call_metadata")
+    if metadata is not None:
+        if not isinstance(metadata, Mapping):
+            errors.append("call_metadata must be an object")
+        else:
+            if metadata.get("reproducibility") != "deterministic-input-fingerprint":
+                errors.append("call_metadata.reproducibility must be deterministic-input-fingerprint")
+            if metadata.get("llm_call_trace_schema_version") != REQ_026_LLM_CALL_TRACE_SCHEMA_VERSION:
+                errors.append(
+                    f"call_metadata.llm_call_trace_schema_version must be {REQ_026_LLM_CALL_TRACE_SCHEMA_VERSION}"
+                )
+            if metadata.get("llm_call_trace_path") != LLM_CALL_TRACE_RELATIVE_PATH:
+                errors.append(f"call_metadata.llm_call_trace_path must be {LLM_CALL_TRACE_RELATIVE_PATH}")
+            rows = metadata.get("llm_call_trace_rows")
+            if not isinstance(rows, list) or len(rows) != 1:
+                errors.append("call_metadata.llm_call_trace_rows must contain exactly one row")
+            else:
+                row = rows[0]
+                if not isinstance(row, Mapping):
+                    errors.append("call_metadata.llm_call_trace_rows[0] must be an object")
+                else:
+                    if not _as_text(row.get("call_objective")):
+                        errors.append("call_metadata.llm_call_trace_rows[0].call_objective is required")
+                    for key in ("input_refs", "output_refs"):
+                        value = row.get(key)
+                        if not isinstance(value, list) or not value or any(not _as_text(item) for item in value):
+                            errors.append(
+                                f"call_metadata.llm_call_trace_rows[0].{key} must be a non-empty string array"
+                            )
+                    if not _as_text(row.get("handoff_summary")):
+                        errors.append("call_metadata.llm_call_trace_rows[0].handoff_summary is required")
+
+    return errors
+
+
+def _json_dumps(payload: Mapping[str, Any], *, pretty: bool) -> str:
+    if pretty:
+        return json.dumps(payload, indent=2, sort_keys=False) + "\n"
+    return json.dumps(payload, separators=(",", ":"), sort_keys=False) + "\n"
+
+
+def _jsonl_dumps(rows: Sequence[Mapping[str, Any]]) -> str:
+    return "".join(f"{_canonical_json(row)}\n" for row in rows)
+
+
+def _write_llm_call_trace(payload: Mapping[str, Any]) -> Path:
+    metadata = _require_mapping(payload.get("call_metadata"), field_name="call_metadata")
+    trace_path = REPO_ROOT / _require_text(metadata.get("llm_call_trace_path"), field_name="call_metadata.llm_call_trace_path")
+    trace_rows = metadata.get("llm_call_trace_rows")
+    if not isinstance(trace_rows, Sequence) or isinstance(trace_rows, (str, bytes, bytearray)):
+        raise ValueError("call_metadata.llm_call_trace_rows must be an array before trace serialization")
+    serialized_rows = _jsonl_dumps([_require_mapping(row, field_name=f"llm_call_trace_rows[{index}]") for index, row in enumerate(trace_rows)])
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_path.write_text(serialized_rows, encoding="utf-8")
+    return trace_path
+
+
+def _enforce_log_budget(log_root: Path) -> None:
+    log_root.mkdir(parents=True, exist_ok=True)
+    now_epoch = time.time()
+    if LOG_BUDGET_CHECK_STAMP.exists():
+        last_checked = LOG_BUDGET_CHECK_STAMP.stat().st_mtime
+        if (now_epoch - last_checked) < LOG_BUDGET_CHECK_INTERVAL_SECONDS:
+            return
+
+    log_files = [path for path in log_root.rglob("*") if path.is_file() and path != LOG_BUDGET_CHECK_STAMP]
+    total_bytes = sum(path.stat().st_size for path in log_files)
+    if total_bytes > LOG_BUDGET_MAX_BYTES:
+        for path in sorted(log_files, key=lambda item: item.stat().st_mtime):
+            original_size = path.stat().st_size
+            if original_size <= 0:
+                continue
+            path.write_text("", encoding="utf-8")
+            total_bytes -= original_size
+            if total_bytes <= LOG_BUDGET_MAX_BYTES:
+                break
+    LOG_BUDGET_CHECK_STAMP.touch()
+
+
+def _timestamped_print(message: str) -> None:
+    line = f"[{TOOL} {utc_now_iso()}] {message}"
+    print(line, file=sys.stderr, flush=True)
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
+def _parse_cli_input(input_path: str) -> Mapping[str, Any]:
+    raw = sys.stdin.read() if input_path == "-" else Path(input_path).read_text(encoding="utf-8")
+    payload = json.loads(raw)
+    return _require_mapping(payload, field_name="input payload")
+
+
+def _detect_requirement(payload: Mapping[str, Any]) -> str:
+    if payload.get("analysis_type") == REQ_031_ANALYSIS_TYPE or "impact_assumptions" in payload:
+        return REQ_031_REQUIREMENT_ID
+    if payload.get("analysis_type") == REQ_030_ANALYSIS_TYPE or "candidate_lane_designs" in payload:
+        return REQ_030_REQUIREMENT_ID
+    if payload.get("analysis_type") == REQ_034_ANALYSIS_TYPE or "prior_call_handoffs" in payload:
+        return REQ_034_REQUIREMENT_ID
+    if payload.get("analysis_type") == REQ_029_ANALYSIS_TYPE or "call_chain" in payload:
+        return REQ_029_REQUIREMENT_ID
+    if "target_project_root" in payload:
+        return REQ_025_REQUIREMENT_ID
+    if "target_project" in payload or payload.get("analysis_type") == REQ_026_ANALYSIS_TYPE:
+        return REQ_026_REQUIREMENT_ID
+    raise ValueError(
+        "input payload does not match REQ-025, REQ-026, REQ-029, REQ-030, REQ-031, or REQ-034 contract anchors"
+    )
+
+
 def run(payload: Mapping[str, Any]) -> dict[str, Any]:
-    analysis_type = str(payload.get("analysis_type") or "").strip()
-    if analysis_type != REQ_046_ANALYSIS_TYPE:
-        raise ValueError(f"analysis_type must be {REQ_046_ANALYSIS_TYPE}")
-    return build_req_046_final_strategy_synthesis_composer(payload)
+    requirement_id = _detect_requirement(payload)
+    if requirement_id == REQ_031_REQUIREMENT_ID:
+        return build_req_031_call_6_kpi_impact_estimation_reasoning(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            strategy_goal=payload.get("strategy_goal"),
+            call_chain=payload.get("call_chain"),
+            recommendation_adoptions=payload.get("recommendation_adoptions"),
+            kpi_definitions=payload.get("kpi_definitions"),
+            impact_assumptions=payload.get("impact_assumptions"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            call_id=_as_text(payload.get("call_id")) or "call-6",
+            checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
+        )
+    if requirement_id == REQ_030_REQUIREMENT_ID:
+        return build_req_030_call_5_sequencing_and_lane_design_reasoning(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            strategy_goal=payload.get("strategy_goal"),
+            call_chain=payload.get("call_chain"),
+            candidate_lane_designs=payload.get("candidate_lane_designs"),
+            strategic_claims=payload.get("strategic_claims"),
+            cross_project_context=payload.get("cross_project_context"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            call_id=_as_text(payload.get("call_id")) or "call-5",
+            checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
+        )
+    if requirement_id == REQ_034_REQUIREMENT_ID:
+        return build_req_034_cross_call_memory_handoff_contract(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            strategy_goal=payload.get("strategy_goal"),
+            prior_call_handoffs=payload.get("prior_call_handoffs"),
+            candidate_recommendations=payload.get("candidate_recommendations"),
+            cross_project_context=payload.get("cross_project_context"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            call_id=_as_text(payload.get("call_id")) or "call-memory-handoff",
+            checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
+        )
+    if requirement_id == REQ_029_REQUIREMENT_ID:
+        return build_req_029_call_4_recommendation_synthesis(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            strategy_goal=payload.get("strategy_goal"),
+            call_chain=payload.get("call_chain"),
+            candidate_recommendations=payload.get("candidate_recommendations"),
+            strategic_claims=payload.get("strategic_claims"),
+            cross_project_context=payload.get("cross_project_context"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            call_id=_as_text(payload.get("call_id")) or "call-4",
+            checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
+        )
+    if requirement_id == REQ_025_REQUIREMENT_ID:
+        return build_req_025_multi_call_strategy_pipeline_planner(
+            target_project_root=payload.get("target_project_root"),
+            earth_root=payload.get("earth_root"),
+            output_root=payload.get("output_root"),
+            revision_identity=payload.get("revision_identity"),
+            strategy_goal=payload.get("strategy_goal"),
+            call_depth=payload.get("call_depth", DEFAULT_CALL_DEPTH),
+            evidence_refs=payload.get("evidence_refs"),
+            stage_blueprints=payload.get("stage_blueprints"),
+            target_project_evidence_refs=payload.get("target_project_evidence_refs"),
+            earth_sweep_evidence_refs=payload.get("earth_sweep_evidence_refs"),
+            cross_project_context=payload.get("cross_project_context"),
+            candidate_recommendations=payload.get("candidate_recommendations"),
+            strategic_claims=payload.get("strategic_claims"),
+        )
+    return build_req_026_call_1_situational_analysis_reasoning(
+        target_project=_require_mapping(payload.get("target_project"), field_name="input.target_project"),
+        planning_evidence=_require_mapping(payload.get("planning_evidence"), field_name="input.planning_evidence"),
+        runtime_evidence=_require_mapping(payload.get("runtime_evidence"), field_name="input.runtime_evidence"),
+        broad_sweep_context=payload.get("broad_sweep_context"),
+        analysis_type=_as_text(payload.get("analysis_type")) or REQ_026_ANALYSIS_TYPE,
+        call_id=_as_text(payload.get("call_id")) or "call-1",
+        checked_at_utc=_as_text(payload.get("checked_at_utc")) or None,
+    )
+
+
+def _validate_output(payload: Mapping[str, Any]) -> list[str]:
+    requirement_id = _as_text(payload.get("requirement_id"))
+    if requirement_id == REQ_031_REQUIREMENT_ID:
+        return validate_req_031_call_6_kpi_impact_estimation_reasoning(payload)
+    if requirement_id == REQ_030_REQUIREMENT_ID:
+        return validate_req_030_call_5_sequencing_and_lane_design_reasoning(payload)
+    if requirement_id == REQ_034_REQUIREMENT_ID:
+        return validate_req_034_cross_call_memory_handoff_contract(payload)
+    if requirement_id == REQ_029_REQUIREMENT_ID:
+        return validate_req_029_call_4_recommendation_synthesis(payload)
+    if requirement_id == REQ_025_REQUIREMENT_ID:
+        return validate_req_025_multi_call_strategy_pipeline_planner(payload)
+    if requirement_id == REQ_026_REQUIREMENT_ID:
+        return validate_req_026_call_1_situational_analysis_reasoning(payload)
+    return [f"unsupported requirement_id {requirement_id or '<missing>'}"]
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Emit REQ-025, REQ-026, REQ-029, REQ-030, REQ-031, or REQ-034 strategy pipeline payloads."
+    )
+    parser.add_argument("--input-json", required=True, help="Input JSON path or '-' for stdin.")
+    parser.add_argument("--output-json", default="", help="Optional output JSON path.")
+    parser.add_argument("--json-pretty", action="store_true", help="Pretty-print JSON output.")
+    return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Emit REQ-046 final strategy synthesis composer payload.")
-    parser.add_argument("--input-json", required=True, help='Input payload path or "-" for stdin.')
-    parser.add_argument("--output-json", default="-", help='Output path or "-" for stdout.')
-    parser.add_argument("--json-pretty", action="store_true", help="Pretty-print JSON output.")
-    args = parser.parse_args(argv)
+    args = _build_arg_parser().parse_args(argv)
+    _enforce_log_budget(LOG_ROOT)
 
     try:
-        if args.input_json == "-":
-            payload = json.loads(sys.stdin.read())
+        input_payload = _parse_cli_input(args.input_json)
+        requirement_id = _detect_requirement(input_payload)
+        _timestamped_print(f"Starting {requirement_id} pipeline build from input source: {args.input_json}")
+        output_payload = run(input_payload)
+    except (Req026Error, Req029Error, Req030Error, Req031Error, Req034Error, ValueError, json.JSONDecodeError) as exc:
+        if isinstance(exc, Req026Error):
+            requirement_id = REQ_026_REQUIREMENT_ID
+        elif isinstance(exc, Req029Error):
+            requirement_id = REQ_029_REQUIREMENT_ID
+        elif isinstance(exc, Req030Error):
+            requirement_id = REQ_030_REQUIREMENT_ID
+        elif isinstance(exc, Req031Error):
+            requirement_id = REQ_031_REQUIREMENT_ID
+        elif isinstance(exc, Req034Error):
+            requirement_id = REQ_034_REQUIREMENT_ID
         else:
-            payload = json.loads(Path(args.input_json).read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("input payload must be a JSON object")
+            requirement_id = ""
+        _timestamped_print(f"Pipeline input processing failed: {exc}")
+        error_payload = {
+            "ok": False,
+            "tool": TOOL,
+            "tool_version": TOOL_VERSION,
+            "requirement_id": requirement_id,
+            "reason_code": "input_error",
+            "message": str(exc),
+            "timestamp_utc": utc_now_iso(),
+        }
+        serialized_error = _json_dumps(error_payload, pretty=True)
+        if args.output_json:
+            Path(args.output_json).write_text(serialized_error, encoding="utf-8")
+        print(serialized_error, end="")
+        return 2
 
-        output_payload = run(payload)
-        rendered = json.dumps(output_payload, indent=2 if args.json_pretty else None, sort_keys=False)
-        if args.output_json == "-":
-            print(rendered)
-        else:
-            output_path = Path(args.output_json)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(rendered + "\n", encoding="utf-8")
-        return 0
-    except Exception as exc:  # pragma: no cover - CLI error path exercised indirectly.
-        _emit_debug(f"REQ-046 CLI failed: {exc}")
-        return 1
+    validation_errors = _validate_output(output_payload)
+    if validation_errors:
+        requirement_id = _as_text(output_payload.get("requirement_id"))
+        _timestamped_print(f"{requirement_id or 'strategy-pipeline'} produced invalid deterministic payload.")
+        error_payload = {
+            "ok": False,
+            "tool": TOOL,
+            "tool_version": TOOL_VERSION,
+            "requirement_id": requirement_id,
+            "reason_code": "validation_error",
+            "message": "Payload failed deterministic validation checks.",
+            "validation_errors": validation_errors,
+            "timestamp_utc": utc_now_iso(),
+        }
+        serialized_error = _json_dumps(error_payload, pretty=True)
+        if args.output_json:
+            Path(args.output_json).write_text(serialized_error, encoding="utf-8")
+        print(serialized_error, end="")
+        return 3
+
+    serialized_output = _json_dumps(output_payload, pretty=args.json_pretty)
+    trace_output_path = _write_llm_call_trace(output_payload)
+    requirement_id = _as_text(output_payload.get("requirement_id"))
+    _timestamped_print(f"Wrote {requirement_id} call trace to {trace_output_path}")
+    if args.output_json:
+        output_path = Path(args.output_json)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(serialized_output, encoding="utf-8")
+        _timestamped_print(f"Wrote {requirement_id} pipeline payload to {output_path}")
+    else:
+        _timestamped_print(f"{requirement_id} pipeline payload generated successfully and emitted to stdout.")
+    print(serialized_output, end="")
+    return 0
 
 
 if __name__ == "__main__":

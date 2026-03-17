@@ -1,0 +1,206 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-2",
+  "task_id": "TASK-118",
+  "requirement_ids": [
+    "REQ-034"
+  ],
+  "updated_at": "2026-03-16T09:40:25Z",
+  "task_kind": "implementation",
+  "dev": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-contract-cross-call-memory-handoff-contract-run-1",
+        "command": "python3 -m pytest tests/contracts/test_cross-call-memory-handoff-contract.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/contract_cross-call-memory-handoff-contract_run_1.output.txt"
+      },
+      {
+        "name": "pytest-integration-cross-call-memory-handoff-contract-run-1",
+        "command": "python3 -m pytest tests/integration/test_cross-call-memory-handoff-contract.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/integration_cross-call-memory-handoff-contract_run_1.output.txt"
+      },
+      {
+        "name": "pytest-hardening-cross-call-memory-handoff-contract-run-1",
+        "command": "python3 -m pytest tests/hardening/test_cross-call-memory-handoff-contract_hardening.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/hardening_cross-call-memory-handoff-contract_run_1.output.txt"
+      },
+      {
+        "name": "pytest-contract-cross-call-memory-handoff-contract-run-2",
+        "command": "python3 -m pytest tests/contracts/test_cross-call-memory-handoff-contract.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/contract_cross-call-memory-handoff-contract_run_2.output.txt"
+      },
+      {
+        "name": "pytest-integration-cross-call-memory-handoff-contract-run-2",
+        "command": "python3 -m pytest tests/integration/test_cross-call-memory-handoff-contract.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/integration_cross-call-memory-handoff-contract_run_2.output.txt"
+      },
+      {
+        "name": "pytest-hardening-cross-call-memory-handoff-contract-run-2",
+        "command": "python3 -m pytest tests/hardening/test_cross-call-memory-handoff-contract_hardening.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/hardening_cross-call-memory-handoff-contract_run_2.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "req034-cross-call-contradiction-analysis-vs-synthesis",
+        "status": "passed",
+        "details": "Hardening coverage blocks analysis-versus-synthesis contradiction drift with deterministic cross_call_contradiction reason codes and contract-linked evidence refs."
+      },
+      {
+        "name": "req034-uncited-strategic-claim-citation-discipline",
+        "status": "passed",
+        "details": "Uncited recommendation claims are rejected with uncited_strategic_claim and evidence refs that include the REQ-034 contract output plus the offending uncited reference."
+      },
+      {
+        "name": "req034-replay-stable-recommendation-order",
+        "status": "passed",
+        "details": "Replay over reordered call-chain inputs preserves canonical processing hashes plus stable recommendation ids and ordering."
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      {
+        "label": "strategy-llm-pipeline-source",
+        "path": "scripts/strategy_llm_pipeline.py",
+        "kind": "source"
+      },
+      {
+        "label": "req034-contract-test",
+        "path": "tests/contracts/test_cross-call-memory-handoff-contract.py",
+        "kind": "test"
+      },
+      {
+        "label": "req034-integration-test",
+        "path": "tests/integration/test_cross-call-memory-handoff-contract.py",
+        "kind": "test"
+      },
+      {
+        "label": "req034-hardening-test",
+        "path": "tests/hardening/test_cross-call-memory-handoff-contract_hardening.py",
+        "kind": "test"
+      },
+      {
+        "label": "dev-check-bundle-run-1",
+        "path": "reports/optimus-prime/planning/evidence/TASK-118/dev-check-bundle_run_1.json",
+        "kind": "json"
+      },
+      {
+        "label": "dev-check-bundle-run-2",
+        "path": "reports/optimus-prime/planning/evidence/TASK-118/dev-check-bundle_run_2.json",
+        "kind": "json"
+      }
+    ]
+  },
+  "test": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-contract-cross-call-memory-handoff-contract-run-1",
+        "command": "python3 -m pytest tests/contracts/test_cross-call-memory-handoff-contract.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/contract_cross-call-memory-handoff-contract_run_1.output.txt"
+      },
+      {
+        "name": "pytest-integration-cross-call-memory-handoff-contract-run-1",
+        "command": "python3 -m pytest tests/integration/test_cross-call-memory-handoff-contract.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/integration_cross-call-memory-handoff-contract_run_1.output.txt"
+      },
+      {
+        "name": "pytest-hardening-cross-call-memory-handoff-contract-run-1",
+        "command": "python3 -m pytest tests/hardening/test_cross-call-memory-handoff-contract_hardening.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/hardening_cross-call-memory-handoff-contract_run_1.output.txt"
+      },
+      {
+        "name": "pytest-contract-cross-call-memory-handoff-contract-run-2",
+        "command": "python3 -m pytest tests/contracts/test_cross-call-memory-handoff-contract.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/contract_cross-call-memory-handoff-contract_run_2.output.txt"
+      },
+      {
+        "name": "pytest-integration-cross-call-memory-handoff-contract-run-2",
+        "command": "python3 -m pytest tests/integration/test_cross-call-memory-handoff-contract.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/integration_cross-call-memory-handoff-contract_run_2.output.txt"
+      },
+      {
+        "name": "pytest-hardening-cross-call-memory-handoff-contract-run-2",
+        "command": "python3 -m pytest tests/hardening/test_cross-call-memory-handoff-contract_hardening.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-118/hardening_cross-call-memory-handoff-contract_run_2.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "req034-stable-reason-code-behavior",
+        "status": "passed",
+        "details": "Both consecutive runs exited 0 and preserved the same REQ-034 contradiction, citation-discipline, and replay-stability reason-code paths."
+      }
+    ],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": [
+      {
+        "label": "contract-run-1-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-118/contract_cross-call-memory-handoff-contract_run_1.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "integration-run-1-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-118/integration_cross-call-memory-handoff-contract_run_1.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "hardening-run-1-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-118/hardening_cross-call-memory-handoff-contract_run_1.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "contract-run-2-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-118/contract_cross-call-memory-handoff-contract_run_2.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "integration-run-2-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-118/integration_cross-call-memory-handoff-contract_run_2.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "hardening-run-2-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-118/hardening_cross-call-memory-handoff-contract_run_2.output.txt",
+        "kind": "text"
+      }
+    ]
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "passed",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "acceptance_checks_passed",
+      "deterministic_replay_verified"
+    ]
+  }
+}
