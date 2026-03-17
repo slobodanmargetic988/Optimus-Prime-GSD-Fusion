@@ -1,0 +1,82 @@
+{
+  "schema_version": "strategy-packet.v1",
+  "identity": {
+    "project_id": "prj.myownmint",
+    "run_id": "run.20260312t201000z-s001",
+    "event_id": "event.20260312t201400z-strategy-packet"
+  },
+  "strategy": {
+    "revision_id": "strat.20260312-r1",
+    "summary": "Fail the REQ-059 consumability gate on deterministic diagnostics."
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.dispatch-quality-first",
+      "priority": "high",
+      "summary": "Hold build until quality gates are truthful.",
+      "rationale": "Automation needs accurate diagnostics.",
+      "expected_impact": "Prevent invalid strategy packets from reaching runtime.",
+      "risk_level": "medium"
+    }
+  ],
+  "recommendation_mapping": [
+    {
+      "recommendation_id": "rec.dispatch-quality-first",
+      "op_plan_ref": "op-plan.input.recommendations[rec.dispatch-quality-first]",
+      "op_initialize_ref": "op-initialize.input.recommendations[rec.dispatch-quality-first]"
+    }
+  ],
+  "constraints": {
+    "hard": [
+      "Do not auto-heal malformed gate fields."
+    ],
+    "soft": []
+  },
+  "kpi_targets": [
+    {
+      "metric": "invalid_packet_acceptance_ratio",
+      "direction": "decrease",
+      "target": "0"
+    }
+  ],
+  "source": {
+    "repo": "Optimus-Prime-GSD-Fusion",
+    "tool": "op-tools/strategy"
+  },
+  "gate_policy": {
+    "min_citation_coverage_ratio": 0.85,
+    "max_unresolved_contradictions": 0,
+    "min_high_confidence_ratio": 0.5
+  },
+  "strategy_quality_report": {
+    "citation_coverage": {
+      "cited_claims": 1,
+      "uncited_claims": 2,
+      "total_claims": 3,
+      "coverage_ratio": 0.5
+    },
+    "contradiction_status": {
+      "has_unresolved_contradictions": false,
+      "unresolved_contradiction_count": 1,
+      "unresolved_contradiction_ids": [
+        "contradiction.scope-vs-dependency"
+      ]
+    },
+    "confidence_distribution": {
+      "high": 1,
+      "medium": 1,
+      "low": 1,
+      "total": 3,
+      "high_ratio": 0.3333,
+      "medium_ratio": 0.3333,
+      "low_ratio": 0.3333
+    },
+    "gate_verdicts": {
+      "citation_coverage_pass": true,
+      "contradiction_pass": true,
+      "confidence_distribution_pass": true,
+      "overall_pass": true,
+      "failed_gate_ids": []
+    }
+  }
+}

@@ -1,0 +1,151 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-129",
+  "requirement_ids": [
+    "REQ-037"
+  ],
+  "updated_at": "2026-03-16T02:44:23Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_037_contract_suite",
+        "command": "python3 -m pytest tests/contracts/test_recommendation-deduplication-and-merge.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-129/contract_recommendation-deduplication-and-merge.output.txt"
+      },
+      {
+        "name": "req_037_integration_suite",
+        "command": "python3 -m pytest tests/integration/test_recommendation-deduplication-and-merge.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-129/integration_recommendation-deduplication-and-merge.output.txt"
+      },
+      {
+        "name": "e2e_strategy_llm_pipeline_smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.11s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-129/e2e_strategy_llm_pipeline_smoke.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-037",
+        "status": "pass",
+        "details": "REQ-037 now emits replay-stable llm_call_trace_rows for each deterministic recommendation merge call, preserves objective/input/output/handoff metadata in call_metadata, and keeps the trace artifact linked from committed evidence.",
+        "evidence_refs": [
+          "scripts/strategy_llm_pipeline.py",
+          "strategy/current/llm_call_trace.jsonl",
+          "strategy/current/samples/REQ-037_recommendation-deduplication-and-merge.sample.json",
+          "tests/contracts/test_recommendation-deduplication-and-merge.py",
+          "tests/integration/test_recommendation-deduplication-and-merge.py",
+          "reports/optimus-prime/planning/evidence/TASK-129/contract_recommendation-deduplication-and-merge.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-129/integration_recommendation-deduplication-and-merge.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-129/e2e_strategy_llm_pipeline_smoke.output.txt"
+        ]
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "req_037_trace_rows_must_not_collapse_multiple_calls",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "req_037_trace_rows_must_be_replay_stable",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "contracts/req/REQ-037_recommendation-deduplication-and-merge.md",
+      "examples/fixtures/recommendation-deduplication-and-merge.json",
+      "strategy/current/samples/REQ-037_recommendation-deduplication-and-merge.sample.json",
+      "strategy/current/llm_call_trace.jsonl",
+      "tests/contracts/test_recommendation-deduplication-and-merge.py",
+      "tests/integration/test_recommendation-deduplication-and-merge.py",
+      "tests/e2e/test_strategy_llm_pipeline_smoke.py",
+      "reports/optimus-prime/planning/evidence/TASK-129/contract_recommendation-deduplication-and-merge.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-129/integration_recommendation-deduplication-and-merge.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-129/e2e_strategy_llm_pipeline_smoke.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-129/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_037_acceptance_integration",
+        "command": "python3 -m pytest tests/integration/test_recommendation-deduplication-and-merge.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-129/integration_recommendation-deduplication-and-merge.output.txt"
+      },
+      {
+        "name": "e2e_strategy_llm_pipeline_smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.11s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-129/e2e_strategy_llm_pipeline_smoke.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-037",
+        "status": "pass",
+        "details": "The targeted integration suite validates deterministic per-call REQ-037 trace rows, and the smoke suite keeps the shared jsonl trace path materialized with replay-stable serialization.",
+        "evidence_refs": [
+          "strategy/current/llm_call_trace.jsonl",
+          "reports/optimus-prime/planning/evidence/TASK-129/integration_recommendation-deduplication-and-merge.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-129/e2e_strategy_llm_pipeline_smoke.output.txt"
+        ]
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-037",
+        "passed": true,
+        "notes": "REQ-037 emits one trace row per deterministic merge call with committed evidence links, and the acceptance-targeted smoke/integration commands both exit 0."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "strategy/current/llm_call_trace.jsonl",
+      "reports/optimus-prime/planning/evidence/TASK-129/integration_recommendation-deduplication-and-merge.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-129/e2e_strategy_llm_pipeline_smoke.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-129/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/integration/test_recommendation-deduplication-and-merge.py",
+      "reports/optimus-prime/planning/evidence/TASK-129/TASK_EVIDENCE.json"
+    ]
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_review",
+    "reason_codes": [
+      "req_037_llm_call_trace_rows_added",
+      "req_037_replay_stable_trace_metadata_verified",
+      "req_037_targeted_acceptance_green",
+      "task_129_evidence_links_trace_artifacts"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

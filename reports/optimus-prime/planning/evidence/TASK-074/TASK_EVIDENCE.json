@@ -1,0 +1,100 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-1",
+  "task_id": "TASK-074",
+  "requirement_ids": [
+    "REQ-023"
+  ],
+  "updated_at": "2026-03-15T21:09:04Z",
+  "dev": {
+    "status": "pass",
+    "checks": [
+      "python3 -m pytest tests/contracts/test_context-compaction-for-llm-call-budget.py -q",
+      "python3 -m pytest tests/integration/test_context-compaction-for-llm-call-budget.py -q",
+      "python3 -m pytest tests/hardening/test_context-compaction-for-llm-call-budget_hardening.py -q"
+    ],
+    "verify_results": [
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/contracts/test_context-compaction-for-llm-call-budget.py -q",
+        "passed": true
+      },
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/integration/test_context-compaction-for-llm-call-budget.py -q",
+        "passed": true
+      },
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/hardening/test_context-compaction-for-llm-call-budget_hardening.py -q",
+        "passed": true
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/contracts/test_context-compaction-for-llm-call-budget.py -q",
+        "passed": true
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/integration/test_context-compaction-for-llm-call-budget.py -q",
+        "passed": true
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/hardening/test_context-compaction-for-llm-call-budget_hardening.py -q",
+        "passed": true
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "stale_source_artifact_detected_during_earth_sweep",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "missing_mission_scope_or_peer_project_doc_reason_codes",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "replay_stable_context_bundle_serialization",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "tests/hardening/test_context-compaction-for-llm-call-budget_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-074/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "pending",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_023_stale_earth_artifact_reason_code_verified",
+      "req_023_missing_required_doc_reason_codes_verified",
+      "req_023_replay_bundle_serialization_verified"
+    ]
+  }
+}

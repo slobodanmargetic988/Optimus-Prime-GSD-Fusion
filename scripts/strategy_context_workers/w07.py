@@ -14,6 +14,9 @@ REQ_007_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-007.ground-graph-context-bundle.v1"
 REQ_015_SCHEMA_VERSION = "req-015.integration-opportunity-detection.v1"
 REQ_015_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-015.integration-opportunity-context-bundle.v1"
 REQ_016_SCHEMA_VERSION = "req-016.reuse-opportunity-detection.v1"
+REQ_017_SCHEMA_VERSION = "req-017.overlap-and-conflict-detection.v1"
+REQ_017_CONTEXT_BUNDLE_SCHEMA_VERSION = "req-017.overlap-and-conflict-context-bundle.v1"
+REQ_017_ALLOWED_DIRECTION_SIGNALS = {"advance", "hold", "sunset"}
 
 
 def _utc_now_iso() -> str:
@@ -893,6 +896,750 @@ def detect_reuse_opportunities(
     }
 
 
+def _normalize_req_017_direction_signal(value: Any, *, label: str) -> str:
+    signal = _require_nonempty_str(value if value is not None else "advance", label=label).lower()
+    if signal not in REQ_017_ALLOWED_DIRECTION_SIGNALS:
+        raise ValueError(
+            f"{label} must be one of {sorted(REQ_017_ALLOWED_DIRECTION_SIGNALS)}"
+        )
+    return signal
+
+
+def _normalize_req_017_timeline(value: Any, *, label: str) -> dict[str, int]:
+    timeline = _require_mapping(value, label=label)
+    start_week = _require_nonnegative_int(timeline.get("start_week"), label=f"{label}.start_week")
+    end_week = _require_nonnegative_int(timeline.get("end_week"), label=f"{label}.end_week")
+    if end_week < start_week:
+        raise ValueError(f"{label}.end_week must be >= {label}.start_week")
+    return {
+        "start_week": start_week,
+        "end_week": end_week,
+    }
+
+
+def _req_017_conflict_risk_level(left_signal: str, right_signal: str) -> str | None:
+    if left_signal == right_signal:
+        return None
+    pair = frozenset({left_signal, right_signal})
+    if pair == {"advance", "sunset"}:
+        return "high"
+    if pair == {"advance", "hold"}:
+        return "medium"
+    if pair == {"hold", "sunset"}:
+        return "medium"
+    return "medium"
+
+
+def _req_017_resolution_options(*, risk_level: str) -> list[dict[str, str]]:
+    return [
+        {
+            "option_id": "align_direction_before_commit",
+            "summary": "Align roadmap direction signals across both projects before roadmap lock.",
+            "risk_tradeoff": (
+                "Lowers cross-project churn risk but may delay one initiative during direction convergence."
+                if risk_level == "high"
+                else "Reduces integration ambiguity but can defer near-term throughput while teams realign."
+            ),
+        },
+        {
+            "option_id": "timebox_dual_track_validation",
+            "summary": "Run a short dual-track validation window before final direction selection.",
+            "risk_tradeoff": "Preserves optionality but increases near-term coordination and validation cost.",
+        },
+        {
+            "option_id": "split_interface_boundaries",
+            "summary": "Split capability ownership boundaries and enforce explicit interface contracts.",
+            "risk_tradeoff": "Allows independent progress but increases long-term maintenance and integration overhead.",
+        },
+    ]
+
+
+def _normalize_req_017_project_context(
+    value: Any,
+    *,
+    related_project_ids: set[str],
+    label: str,
+) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+
+    rows: list[dict[str, Any]] = []
+    seen_project_ids: set[str] = set()
+    for idx, row in enumerate(value):
+        item = _require_mapping(row, label=f"{label}[{idx}]")
+        project_id = _require_nonempty_str(item.get("project_id"), label=f"{label}[{idx}].project_id")
+        if project_id not in related_project_ids:
+            raise ValueError(f"{label}[{idx}].project_id must reference related_project_ids")
+        if project_id in seen_project_ids:
+            raise ValueError(f"{label}[{idx}].project_id must be unique")
+        seen_project_ids.add(project_id)
+
+        context_note_raw = item.get("context_note")
+        if context_note_raw is None:
+            context_note = ""
+        elif isinstance(context_note_raw, str):
+            context_note = context_note_raw.strip()
+        else:
+            raise ValueError(f"{label}[{idx}].context_note must be a string when provided")
+
+        rows.append(
+            {
+                "project_id": project_id,
+                "context_note": context_note,
+                "evidence_refs": _normalize_string_list(
+                    item.get("evidence_refs"),
+                    label=f"{label}[{idx}].evidence_refs",
+                ),
+            }
+        )
+
+    rows.sort(key=lambda row: row["project_id"])
+    return rows
+
+
+def _normalize_req_017_unresolved_direction_ideas(
+    value: Any,
+    *,
+    related_project_ids: set[str],
+    label: str,
+) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+
+    rows: list[dict[str, Any]] = []
+    seen_idea_ids: set[str] = set()
+    for idx, row in enumerate(value):
+        item = _require_mapping(row, label=f"{label}[{idx}]")
+        project_id = _require_nonempty_str(item.get("project_id"), label=f"{label}[{idx}].project_id")
+        if project_id not in related_project_ids:
+            raise ValueError(f"{label}[{idx}].project_id must reference related_project_ids")
+
+        summary = _require_nonempty_str(item.get("summary"), label=f"{label}[{idx}].summary")
+        raw_idea_id = item.get("idea_id")
+        if raw_idea_id is None:
+            digest = hashlib.sha256(f"{project_id}|{summary}".encode("utf-8")).hexdigest()[:10]
+            idea_id = f"idea-{digest}"
+        else:
+            idea_id = _require_nonempty_str(raw_idea_id, label=f"{label}[{idx}].idea_id")
+        if idea_id in seen_idea_ids:
+            raise ValueError(f"{label}[{idx}].idea_id must be unique")
+        seen_idea_ids.add(idea_id)
+
+        rows.append(
+            {
+                "idea_id": idea_id,
+                "project_id": project_id,
+                "summary": summary,
+                "related_conflict_ids": _normalize_string_list(
+                    item.get("related_conflict_ids"),
+                    label=f"{label}[{idx}].related_conflict_ids",
+                ),
+                "evidence_refs": _normalize_string_list(
+                    item.get("evidence_refs"),
+                    label=f"{label}[{idx}].evidence_refs",
+                ),
+            }
+        )
+
+    rows.sort(key=lambda row: (row["project_id"], row["idea_id"], row["summary"]))
+    return rows
+
+
+def _req_017_conflict_summary(
+    *,
+    conflict_id: str,
+    project_ids: list[str],
+    shared_capability_tags: list[str],
+    overlap_window: Mapping[str, Any],
+) -> str:
+    capability_text = ", ".join(shared_capability_tags)
+    project_text = ", ".join(project_ids)
+    return (
+        f"Resolve {conflict_id} across {project_text} for shared capabilities "
+        f"{capability_text} before weeks {overlap_window['start_week']}-{overlap_window['end_week']} commit."
+    )
+
+
+def _normalize_req_017_source_artifact_status(value: Any, *, label: str) -> str:
+    status = _require_nonempty_str(value if value is not None else "fresh", label=label).lower()
+    if status not in {"fresh", "stale"}:
+        raise ValueError(f"{label} must be either 'fresh' or 'stale'")
+    return status
+
+
+def _normalize_req_017_earth_sweep_source_artifacts(value: Any, *, label: str) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+
+    rows: list[dict[str, Any]] = []
+    seen_artifact_refs: set[str] = set()
+    for idx, row in enumerate(value):
+        item = _require_mapping(row, label=f"{label}[{idx}]")
+        artifact_ref = _require_nonempty_str(item.get("artifact_ref"), label=f"{label}[{idx}].artifact_ref")
+        if artifact_ref in seen_artifact_refs:
+            continue
+        seen_artifact_refs.add(artifact_ref)
+        rows.append(
+            {
+                "artifact_ref": artifact_ref,
+                "status": _normalize_req_017_source_artifact_status(
+                    item.get("status"),
+                    label=f"{label}[{idx}].status",
+                ),
+                "evidence_refs": _normalize_string_list(
+                    item.get("evidence_refs"),
+                    label=f"{label}[{idx}].evidence_refs",
+                ),
+            }
+        )
+
+    rows.sort(key=lambda row: (row["artifact_ref"], row["status"]))
+    return rows
+
+
+def _normalize_req_017_required_doc_kind(value: Any, *, label: str) -> str:
+    doc_kind = _require_nonempty_str(value, label=label).lower()
+    if doc_kind not in {"mission", "scope", "peer-project"}:
+        raise ValueError(f"{label} must be one of: mission, scope, peer-project")
+    return doc_kind
+
+
+def _normalize_req_017_required_doc_status(value: Any, *, label: str) -> str:
+    status = _require_nonempty_str(value if value is not None else "present", label=label).lower()
+    if status not in {"present", "missing"}:
+        raise ValueError(f"{label} must be either 'present' or 'missing'")
+    return status
+
+
+def _normalize_req_017_required_context_documents(
+    value: Any,
+    *,
+    related_project_ids: set[str],
+    label: str,
+) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+
+    rows: list[dict[str, Any]] = []
+    for idx, row in enumerate(value):
+        item = _require_mapping(row, label=f"{label}[{idx}]")
+        doc_kind = _normalize_req_017_required_doc_kind(
+            item.get("doc_kind"),
+            label=f"{label}[{idx}].doc_kind",
+        )
+        project_id = ""
+        if doc_kind == "peer-project":
+            project_id = _require_nonempty_str(item.get("project_id"), label=f"{label}[{idx}].project_id")
+            if project_id not in related_project_ids:
+                raise ValueError(f"{label}[{idx}].project_id must reference related_project_ids")
+
+        rows.append(
+            {
+                "doc_kind": doc_kind,
+                "doc_ref": _require_nonempty_str(item.get("doc_ref"), label=f"{label}[{idx}].doc_ref"),
+                "status": _normalize_req_017_required_doc_status(
+                    item.get("status"),
+                    label=f"{label}[{idx}].status",
+                ),
+                "project_id": project_id,
+                "evidence_refs": _normalize_string_list(
+                    item.get("evidence_refs"),
+                    label=f"{label}[{idx}].evidence_refs",
+                ),
+            }
+        )
+
+    rows.sort(key=lambda row: (row["doc_kind"], row["project_id"], row["doc_ref"], row["status"]))
+    return rows
+
+
+def _req_017_hardening_open_risks(
+    *,
+    earth_sweep_source_artifacts: list[dict[str, Any]],
+    required_context_documents: list[dict[str, Any]],
+    earth_ref_set: set[str],
+) -> list[dict[str, Any]]:
+    risks: list[dict[str, Any]] = []
+
+    for source_artifact in earth_sweep_source_artifacts:
+        if source_artifact["status"] != "stale":
+            continue
+        all_evidence_refs = sorted(
+            {
+                source_artifact["artifact_ref"],
+                *source_artifact["evidence_refs"],
+            }
+        )
+        out_of_scope_evidence_refs = sorted(ref for ref in all_evidence_refs if ref not in earth_ref_set)
+        risks.append(
+            {
+                "risk_id": (
+                    "risk-earth-source-"
+                    + hashlib.sha256(source_artifact["artifact_ref"].encode("utf-8")).hexdigest()[:12]
+                ),
+                "reason": "stale_earth_sweep_source_artifact",
+                "reason_code": "stale_earth_sweep_source_artifact",
+                "artifact_ref": source_artifact["artifact_ref"],
+                "evidence_refs": all_evidence_refs,
+                "out_of_scope_evidence_refs": out_of_scope_evidence_refs,
+            }
+        )
+
+    for document in required_context_documents:
+        if document["status"] != "missing":
+            continue
+        reason_code = {
+            "mission": "missing_mission_doc",
+            "scope": "missing_scope_doc",
+            "peer-project": "missing_peer_project_doc",
+        }[document["doc_kind"]]
+        all_evidence_refs = sorted({document["doc_ref"], *document["evidence_refs"]})
+        out_of_scope_evidence_refs = sorted(ref for ref in all_evidence_refs if ref not in earth_ref_set)
+        risk_row = {
+            "risk_id": (
+                f"risk-{document['doc_kind']}-"
+                + hashlib.sha256(
+                    f"{document['project_id']}|{document['doc_ref']}".encode("utf-8")
+                ).hexdigest()[:12]
+            ),
+            "reason": reason_code,
+            "reason_code": reason_code,
+            "doc_kind": document["doc_kind"],
+            "doc_ref": document["doc_ref"],
+            "evidence_refs": all_evidence_refs,
+            "out_of_scope_evidence_refs": out_of_scope_evidence_refs,
+        }
+        if document["project_id"]:
+            risk_row["project_id"] = document["project_id"]
+        risks.append(risk_row)
+
+    risks.sort(key=lambda row: row["risk_id"])
+    return risks
+
+
+def detect_overlap_and_conflicts(
+    payload: Mapping[str, Any],
+    *,
+    evaluated_at: str | None = None,
+) -> dict[str, Any]:
+    context = _require_mapping(payload, label="overlap_and_conflict_detection")
+    active_project_id = _require_nonempty_str(
+        context.get("active_project_id"),
+        label="overlap_and_conflict_detection.active_project_id",
+    )
+    related_project_ids_raw = context.get("related_project_ids")
+    if not isinstance(related_project_ids_raw, list) or not related_project_ids_raw:
+        raise ValueError("overlap_and_conflict_detection.related_project_ids must be a non-empty list")
+    related_project_ids = _normalize_string_list(
+        related_project_ids_raw,
+        label="overlap_and_conflict_detection.related_project_ids",
+    )
+    if active_project_id in related_project_ids:
+        raise ValueError("overlap_and_conflict_detection.related_project_ids must not include active_project_id")
+    allowed_project_ids = {active_project_id, *related_project_ids}
+    broad_sweep_context = payload.get("broad_sweep_context")
+    if broad_sweep_context is None:
+        normalized_broad_sweep_context: Mapping[str, Any] = {}
+    else:
+        normalized_broad_sweep_context = _require_mapping(
+            broad_sweep_context,
+            label="overlap_and_conflict_detection.broad_sweep_context",
+        )
+    earth_sweep_evidence_refs = _normalize_string_list(
+        normalized_broad_sweep_context.get("earth_sweep_evidence_refs"),
+        label="overlap_and_conflict_detection.broad_sweep_context.earth_sweep_evidence_refs",
+    )
+    earth_ref_set = set(earth_sweep_evidence_refs)
+    project_context_rows = _normalize_req_017_project_context(
+        normalized_broad_sweep_context.get("project_context"),
+        related_project_ids=set(related_project_ids),
+        label="overlap_and_conflict_detection.broad_sweep_context.project_context",
+    )
+    unresolved_direction_ideas = _normalize_req_017_unresolved_direction_ideas(
+        normalized_broad_sweep_context.get("unresolved_direction_ideas"),
+        related_project_ids=set(related_project_ids),
+        label="overlap_and_conflict_detection.broad_sweep_context.unresolved_direction_ideas",
+    )
+    earth_sweep_source_artifacts = _normalize_req_017_earth_sweep_source_artifacts(
+        normalized_broad_sweep_context.get("earth_sweep_source_artifacts"),
+        label="overlap_and_conflict_detection.broad_sweep_context.earth_sweep_source_artifacts",
+    )
+    required_context_documents = _normalize_req_017_required_context_documents(
+        normalized_broad_sweep_context.get("required_context_documents"),
+        related_project_ids=set(related_project_ids),
+        label="overlap_and_conflict_detection.broad_sweep_context.required_context_documents",
+    )
+
+    initiatives_raw = context.get("initiatives")
+    if not isinstance(initiatives_raw, list) or not initiatives_raw:
+        raise ValueError("overlap_and_conflict_detection.initiatives must be a non-empty list")
+
+    initiatives: list[dict[str, Any]] = []
+    seen_initiative_keys: set[tuple[str, str]] = set()
+    for idx, row in enumerate(initiatives_raw):
+        item = _require_mapping(row, label=f"overlap_and_conflict_detection.initiatives[{idx}]")
+        project_id = _require_nonempty_str(
+            item.get("project_id"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].project_id",
+        )
+        if project_id not in allowed_project_ids:
+            raise ValueError(
+                f"overlap_and_conflict_detection.initiatives[{idx}].project_id must reference active_project_id or related_project_ids"
+            )
+        initiative_id = _require_nonempty_str(
+            item.get("initiative_id"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].initiative_id",
+        )
+        initiative_key = (project_id, initiative_id)
+        if initiative_key in seen_initiative_keys:
+            continue
+        seen_initiative_keys.add(initiative_key)
+
+        roadmap_direction = _require_nonempty_str(
+            item.get("roadmap_direction"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].roadmap_direction",
+        )
+        direction_signal = _normalize_req_017_direction_signal(
+            item.get("direction_signal"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].direction_signal",
+        )
+        capability_tags = _normalize_string_list_in_order(
+            item.get("capability_tags"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].capability_tags",
+            allow_empty=False,
+        )
+        timeline = _normalize_req_017_timeline(
+            item.get("timeline"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].timeline",
+        )
+        evidence_refs = _normalize_string_list(
+            item.get("evidence_refs"),
+            label=f"overlap_and_conflict_detection.initiatives[{idx}].evidence_refs",
+        )
+        initiatives.append(
+            {
+                "initiative_id": initiative_id,
+                "project_id": project_id,
+                "roadmap_direction": roadmap_direction,
+                "direction_signal": direction_signal,
+                "capability_tags": capability_tags,
+                "timeline": timeline,
+                "evidence_refs": evidence_refs,
+            }
+        )
+
+    initiatives.sort(key=lambda row: (row["project_id"], row["initiative_id"]))
+
+    overlapping_initiatives: list[dict[str, Any]] = []
+    conflicting_directions: list[dict[str, Any]] = []
+    overlap_detection_refs: set[str] = set()
+    out_of_scope_refs: set[str] = set()
+
+    for left_idx, left in enumerate(initiatives):
+        for right in initiatives[left_idx + 1 :]:
+            if left["project_id"] == right["project_id"]:
+                continue
+            shared_capability_tags = sorted(set(left["capability_tags"]).intersection(right["capability_tags"]))
+            if not shared_capability_tags:
+                continue
+
+            overlap_start_week = max(left["timeline"]["start_week"], right["timeline"]["start_week"])
+            overlap_end_week = min(left["timeline"]["end_week"], right["timeline"]["end_week"])
+            if overlap_start_week > overlap_end_week:
+                continue
+
+            pair = sorted([left, right], key=lambda row: (row["project_id"], row["initiative_id"]))
+            overlap_evidence_refs = sorted({*left["evidence_refs"], *right["evidence_refs"]})
+            overlap_earth_refs = sorted(ref for ref in overlap_evidence_refs if ref in earth_ref_set)
+            overlap_out_of_scope_refs = sorted(ref for ref in overlap_evidence_refs if ref not in earth_ref_set)
+            overlap_id = f"overlap-{len(overlapping_initiatives) + 1:03d}"
+            overlapping_initiatives.append(
+                {
+                    "overlap_id": overlap_id,
+                    "initiatives": [
+                        {
+                            "initiative_id": row["initiative_id"],
+                            "project_id": row["project_id"],
+                            "roadmap_direction": row["roadmap_direction"],
+                            "direction_signal": row["direction_signal"],
+                        }
+                        for row in pair
+                    ],
+                    "shared_capability_tags": shared_capability_tags,
+                    "overlap_window": {
+                        "start_week": overlap_start_week,
+                        "end_week": overlap_end_week,
+                    },
+                    "evidence_refs": overlap_evidence_refs,
+                    "earth_sweep_evidence_refs": overlap_earth_refs,
+                    "out_of_scope_evidence_refs": overlap_out_of_scope_refs,
+                }
+            )
+            overlap_detection_refs.update(overlap_evidence_refs)
+            out_of_scope_refs.update(overlap_out_of_scope_refs)
+
+            risk_level = _req_017_conflict_risk_level(left["direction_signal"], right["direction_signal"])
+            if risk_level is None:
+                continue
+            conflicting_directions.append(
+                {
+                    "conflict_id": f"conflict-{len(conflicting_directions) + 1:03d}",
+                    "overlap_id": overlap_id,
+                    "initiatives": [
+                        {
+                            "initiative_id": row["initiative_id"],
+                            "project_id": row["project_id"],
+                            "roadmap_direction": row["roadmap_direction"],
+                            "direction_signal": row["direction_signal"],
+                        }
+                        for row in pair
+                    ],
+                    "shared_capability_tags": shared_capability_tags,
+                    "conflict_reason": "direction_signals_conflict_on_overlapping_capability_window",
+                    "risk_level": risk_level,
+                    "resolution_options": _req_017_resolution_options(risk_level=risk_level),
+                    "evidence_refs": overlap_evidence_refs,
+                    "earth_sweep_evidence_refs": overlap_earth_refs,
+                    "out_of_scope_evidence_refs": overlap_out_of_scope_refs,
+                }
+            )
+
+    overlap_evidence_refs = sorted(overlap_detection_refs)
+    overlap_by_id = {row["overlap_id"]: row for row in overlapping_initiatives}
+    recommendation_rows: list[dict[str, Any]] = []
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risks: list[dict[str, Any]] = []
+    recommendation_evidence_refs: set[str] = set()
+
+    for conflict in conflicting_directions:
+        overlap = overlap_by_id[conflict["overlap_id"]]
+        project_ids = sorted({row["project_id"] for row in conflict["initiatives"]})
+        summary = _req_017_conflict_summary(
+            conflict_id=conflict["conflict_id"],
+            project_ids=project_ids,
+            shared_capability_tags=list(conflict["shared_capability_tags"]),
+            overlap_window=overlap["overlap_window"],
+        )
+        supported_evidence_refs = list(conflict["earth_sweep_evidence_refs"])
+        missing_evidence_refs = list(conflict["out_of_scope_evidence_refs"])
+        recommendation_row = {
+            "recommendation_id": f"resolution-{conflict['conflict_id']}",
+            "conflict_id": conflict["conflict_id"],
+            "summary": summary,
+            "project_ids": project_ids,
+            "shared_capability_tags": list(conflict["shared_capability_tags"]),
+            "overlap_window": dict(overlap["overlap_window"]),
+            "risk_level": conflict["risk_level"],
+            "resolution_options": list(conflict["resolution_options"]),
+            "evidence_refs": supported_evidence_refs,
+        }
+        if missing_evidence_refs:
+            recommendation_row["out_of_scope_evidence_refs"] = missing_evidence_refs
+            out_of_scope_refs.update(missing_evidence_refs)
+
+        if supported_evidence_refs:
+            recommendation_rows.append(recommendation_row)
+            recommendation_evidence_refs.update(supported_evidence_refs)
+            cross_project_obligations.append(
+                {
+                    "obligation_id": f"obligation-{conflict['conflict_id']}",
+                    "conflict_id": conflict["conflict_id"],
+                    "project_ids": project_ids,
+                    "summary": summary,
+                    "risk_level": conflict["risk_level"],
+                    "resolution_option_ids": [
+                        option["option_id"] for option in conflict["resolution_options"]
+                    ],
+                    "evidence_refs": supported_evidence_refs,
+                }
+            )
+        else:
+            open_risks.append(
+                {
+                    "risk_id": f"risk-{conflict['conflict_id']}",
+                    "reason": "conflict_missing_earth_sweep_evidence_refs",
+                    "reason_code": "conflict_missing_earth_sweep_evidence_refs",
+                    "conflict_id": conflict["conflict_id"],
+                    "project_ids": project_ids,
+                    "summary": summary,
+                    "evidence_refs": [],
+                    "out_of_scope_evidence_refs": missing_evidence_refs,
+                }
+            )
+
+    conflict_ids = {row["conflict_id"] for row in conflicting_directions}
+    for idea in unresolved_direction_ideas:
+        supported_evidence_refs = sorted(ref for ref in idea["evidence_refs"] if ref in earth_ref_set)
+        missing_evidence_refs = sorted(ref for ref in idea["evidence_refs"] if ref not in earth_ref_set)
+        recommendation_evidence_refs.update(supported_evidence_refs)
+        out_of_scope_refs.update(missing_evidence_refs)
+        open_risks.append(
+            {
+                "risk_id": f"risk-{idea['idea_id']}",
+                "reason": "unresolved_direction_idea_open_risk",
+                "reason_code": "unresolved_direction_idea_open_risk",
+                "project_id": idea["project_id"],
+                "summary": idea["summary"],
+                "related_conflict_ids": sorted(
+                    conflict_id for conflict_id in idea["related_conflict_ids"] if conflict_id in conflict_ids
+                ),
+                "evidence_refs": supported_evidence_refs,
+                "out_of_scope_evidence_refs": missing_evidence_refs,
+            }
+        )
+
+    hardening_open_risks = _req_017_hardening_open_risks(
+        earth_sweep_source_artifacts=earth_sweep_source_artifacts,
+        required_context_documents=required_context_documents,
+        earth_ref_set=earth_ref_set,
+    )
+    for risk in hardening_open_risks:
+        recommendation_evidence_refs.update(ref for ref in risk["evidence_refs"] if ref in earth_ref_set)
+        out_of_scope_refs.update(risk.get("out_of_scope_evidence_refs", []))
+    open_risks.extend(hardening_open_risks)
+
+    overlap_ids_by_project: dict[str, list[str]] = {project_id: [] for project_id in related_project_ids}
+    conflict_ids_by_project: dict[str, list[str]] = {project_id: [] for project_id in related_project_ids}
+    for overlap in overlapping_initiatives:
+        for initiative in overlap["initiatives"]:
+            project_id = initiative["project_id"]
+            if project_id in overlap_ids_by_project:
+                overlap_ids_by_project[project_id].append(overlap["overlap_id"])
+    for conflict in conflicting_directions:
+        for initiative in conflict["initiatives"]:
+            project_id = initiative["project_id"]
+            if project_id in conflict_ids_by_project:
+                conflict_ids_by_project[project_id].append(conflict["conflict_id"])
+
+    project_context_by_project = {row["project_id"]: row for row in project_context_rows}
+    related_project_context: list[dict[str, Any]] = []
+    for project_id in related_project_ids:
+        project_context = project_context_by_project.get(
+            project_id,
+            {
+                "project_id": project_id,
+                "context_note": "",
+                "evidence_refs": [],
+            },
+        )
+        project_earth_refs = sorted(ref for ref in project_context["evidence_refs"] if ref in earth_ref_set)
+        project_out_of_scope_refs = sorted(ref for ref in project_context["evidence_refs"] if ref not in earth_ref_set)
+        out_of_scope_refs.update(project_out_of_scope_refs)
+        related_project_context.append(
+            {
+                "project_id": project_id,
+                "context_note": project_context["context_note"],
+                "evidence_refs": list(project_context["evidence_refs"]),
+                "earth_sweep_evidence_refs": project_earth_refs,
+                "out_of_scope_evidence_refs": project_out_of_scope_refs,
+                "overlap_ids": sorted(overlap_ids_by_project[project_id]),
+                "conflict_ids": sorted(conflict_ids_by_project[project_id]),
+            }
+        )
+
+    normalized_unresolved_ideas: list[dict[str, Any]] = []
+    for idea in unresolved_direction_ideas:
+        idea_earth_refs = sorted(ref for ref in idea["evidence_refs"] if ref in earth_ref_set)
+        idea_out_of_scope_refs = sorted(ref for ref in idea["evidence_refs"] if ref not in earth_ref_set)
+        normalized_unresolved_ideas.append(
+            {
+                "idea_id": idea["idea_id"],
+                "project_id": idea["project_id"],
+                "summary": idea["summary"],
+                "related_conflict_ids": sorted(
+                    conflict_id for conflict_id in idea["related_conflict_ids"] if conflict_id in conflict_ids
+                ),
+                "evidence_refs": list(idea["evidence_refs"]),
+                "earth_sweep_evidence_refs": idea_earth_refs,
+                "out_of_scope_evidence_refs": idea_out_of_scope_refs,
+            }
+        )
+
+    recommendation_rows.sort(key=lambda row: row["recommendation_id"])
+    cross_project_obligations.sort(key=lambda row: row["obligation_id"])
+    open_risks.sort(key=lambda row: row["risk_id"])
+    recommendation_evidence_ref_list = sorted(recommendation_evidence_refs)
+
+    if recommendation_rows:
+        recommendation_decision = "planning_with_open_risks" if open_risks else "ready_for_conflict_resolution"
+    elif conflicting_directions:
+        recommendation_decision = "blocked_missing_earth_evidence"
+    elif overlapping_initiatives:
+        recommendation_decision = "monitor_overlaps"
+    else:
+        recommendation_decision = "no_action_required"
+
+    if conflicting_directions:
+        decision = "conflicts_detected"
+    elif overlapping_initiatives:
+        decision = "overlap_detected_no_direction_conflict"
+    else:
+        decision = "no_overlap_or_conflict_detected"
+
+    return {
+        "requirement_id": "REQ-017",
+        "surface": "overlap_and_conflict_detection",
+        "schema_version": REQ_017_SCHEMA_VERSION,
+        "evaluated_at": _require_nonempty_str(evaluated_at or _utc_now_iso(), label="evaluated_at"),
+        "active_project_id": active_project_id,
+        "related_project_ids": related_project_ids,
+        "overlap_index": {
+            "initiative_ids": [f"{row['project_id']}::{row['initiative_id']}" for row in initiatives],
+            "capability_tags_considered": sorted(
+                {
+                    capability_tag
+                    for row in initiatives
+                    for capability_tag in row["capability_tags"]
+                }
+            ),
+        },
+        "overlapping_initiatives": overlapping_initiatives,
+        "conflicting_directions": conflicting_directions,
+        "cross_project_context": {
+            "cross_project_context_used": bool(
+                earth_sweep_evidence_refs or project_context_rows or unresolved_direction_ideas
+            ),
+            "earth_sweep_context_used": bool(earth_sweep_evidence_refs),
+            "projects_considered": related_project_ids,
+            "earth_sweep_evidence_refs": earth_sweep_evidence_refs,
+            "related_project_context": related_project_context,
+            "unresolved_direction_ideas": normalized_unresolved_ideas,
+        },
+        "evidence_refs": {
+            "overlap_detection": overlap_evidence_refs,
+            "earth_sweep": earth_sweep_evidence_refs,
+            "recommendation": recommendation_evidence_ref_list,
+            "out_of_scope": sorted(out_of_scope_refs),
+        },
+        "recommendation": {
+            "decision": recommendation_decision,
+            "summary": (
+                f"{len(recommendation_rows)} evidence-backed conflict resolution recommendation(s); "
+                f"{len(cross_project_obligations)} cross-project obligation(s); "
+                f"{len(open_risks)} open risk(s)."
+            ),
+            "conflict_resolution_recommendations": recommendation_rows,
+            "cross_project_obligations": cross_project_obligations,
+            "open_risks": open_risks,
+            "evidence_refs": recommendation_evidence_ref_list,
+        },
+        "decision": decision,
+        "summary": (
+            f"{len(overlapping_initiatives)} overlap(s) detected; "
+            f"{len(conflicting_directions)} conflict(s); "
+            f"{len(open_risks)} open risk(s)."
+        ),
+    }
+
+
 def serialize_ground_graph_context_bundle(payload: Mapping[str, Any]) -> dict[str, str]:
     context_bundle = _require_mapping(payload, label="ground_graph_context_bundle")
     serialized_payload = json.dumps(
@@ -905,6 +1652,24 @@ def serialize_ground_graph_context_bundle(payload: Mapping[str, Any]) -> dict[st
         "requirement_id": "REQ-007",
         "surface": "ground_graph_context_bundle",
         "schema_version": REQ_007_CONTEXT_BUNDLE_SCHEMA_VERSION,
+        "serialization_format": "json-canonical-v1",
+        "checksum_sha256": hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest(),
+        "serialized_payload": serialized_payload,
+    }
+
+
+def serialize_overlap_and_conflict_context_bundle(payload: Mapping[str, Any]) -> dict[str, str]:
+    context_bundle = _require_mapping(payload, label="overlap_and_conflict_context_bundle")
+    serialized_payload = json.dumps(
+        context_bundle,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        "requirement_id": "REQ-017",
+        "surface": "overlap_and_conflict_context_bundle",
+        "schema_version": REQ_017_CONTEXT_BUNDLE_SCHEMA_VERSION,
         "serialization_format": "json-canonical-v1",
         "checksum_sha256": hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest(),
         "serialized_payload": serialized_payload,

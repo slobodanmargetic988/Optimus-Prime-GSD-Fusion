@@ -1,0 +1,144 @@
+{
+  "schema_version": "1.0",
+  "task_id": "TASK-086",
+  "requirement_ids": [
+    "REQ-026"
+  ],
+  "updated_at": "2026-03-16T00:47:42Z",
+  "dev": {
+    "status": "pass",
+    "checks": [
+      {
+        "run_id": "run-1",
+        "tool": "dev-check-bundle",
+        "overall": "pass",
+        "checks": [
+          {
+            "name": "contracts",
+            "result": "pass",
+            "exit_code": 0,
+            "duration_ms": 222,
+            "snippet": "...                                                                      [100%]\n3 passed in 0.06s"
+          },
+          {
+            "name": "integration",
+            "result": "pass",
+            "exit_code": 0,
+            "duration_ms": 168,
+            "snippet": "..                                                                       [100%]\n2 passed in 0.01s"
+          },
+          {
+            "name": "hardening",
+            "result": "pass",
+            "exit_code": 0,
+            "duration_ms": 165,
+            "snippet": "...                                                                      [100%]\n3 passed in 0.01s"
+          }
+        ]
+      },
+      {
+        "run_id": "run-2",
+        "tool": "dev-check-bundle",
+        "overall": "pass",
+        "checks": [
+          {
+            "name": "contracts",
+            "result": "pass",
+            "exit_code": 0,
+            "duration_ms": 211,
+            "snippet": "...                                                                      [100%]\n3 passed in 0.05s"
+          },
+          {
+            "name": "integration",
+            "result": "pass",
+            "exit_code": 0,
+            "duration_ms": 168,
+            "snippet": "..                                                                       [100%]\n2 passed in 0.01s"
+          },
+          {
+            "name": "hardening",
+            "result": "pass",
+            "exit_code": 0,
+            "duration_ms": 165,
+            "snippet": "...                                                                      [100%]\n3 passed in 0.01s"
+          }
+        ]
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "deterministic-reason-code-behavior",
+        "result": "pass",
+        "details": "Both acceptance runs exited 0 with matching check order and no blocker entries."
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/hardening/test_call-1-situational-analysis-reasoning_hardening.py",
+      "strategy/current/samples/REQ-026_call-1-situational-analysis-reasoning.sample.json"
+    ]
+  },
+  "test": {
+    "status": "pass",
+    "checks": [
+      "python3 -m pytest tests/contracts/test_call-1-situational-analysis-reasoning.py -q",
+      "python3 -m pytest tests/integration/test_call-1-situational-analysis-reasoning.py -q",
+      "python3 -m pytest tests/hardening/test_call-1-situational-analysis-reasoning_hardening.py -q"
+    ],
+    "verify_results": [
+      {
+        "name": "cross-call contradiction between analysis and synthesis outputs",
+        "result": "pass",
+        "reason_codes": [
+          "cross_call_contradiction"
+        ],
+        "unresolved_blockers": []
+      },
+      {
+        "name": "uncited strategic claim blocked by citation discipline",
+        "result": "pass",
+        "reason_codes": [
+          "uncited_strategic_claim"
+        ],
+        "unresolved_blockers": []
+      },
+      {
+        "name": "call-chain replay producing stable recommendation IDs and ordering",
+        "result": "pass",
+        "reason_codes": [
+          "deterministic_replay_stable"
+        ],
+        "unresolved_blockers": []
+      }
+    ],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-086/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "acceptance_checks_passed_twice",
+      "deterministic_replay_verified",
+      "no_unresolved_edge_case_blockers"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

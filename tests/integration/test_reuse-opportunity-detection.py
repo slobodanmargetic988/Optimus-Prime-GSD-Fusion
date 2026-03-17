@@ -25,6 +25,7 @@ def test_req_016_integration_reuse_detection_emits_evidence_and_complete_recomme
         "reuse_index",
         "reuse_recommendations",
         "no_reuse_detected",
+        "open_risks",
         "evidence_refs",
         "decision",
         "summary",
@@ -42,6 +43,7 @@ def test_req_016_integration_reuse_detection_emits_evidence_and_complete_recomme
         "contracts/req/REQ-007_ground-graph-snapshot-ingestion.md",
         "strategy/current/samples/REQ-007_ground-graph-snapshot-ingestion.sample.json",
     ]
+    assert output["open_risks"] == []
 
     recommendations = output["reuse_recommendations"]
     assert len(recommendations) == 1
@@ -55,4 +57,4 @@ def test_req_016_integration_reuse_detection_emits_evidence_and_complete_recomme
     assert candidate["source_project_id"] != output["active_project_id"]
     assert candidate["adoption_path"]
     assert candidate["compatibility_constraints"]
-
+    assert output["summary"] == "1 capability reuse recommendation(s); 1 capability gap(s); 0 open risk(s)."

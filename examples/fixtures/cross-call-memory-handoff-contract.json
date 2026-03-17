@@ -1,0 +1,179 @@
+{
+  "input": {
+    "analysis_type": "cross_call_memory_handoff_contract",
+    "call_id": "call-4",
+    "checked_at_utc": "2026-03-16T16:00:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion"
+    },
+    "current_call": {
+      "call_id": "call-4",
+      "objective": "Carry bounded cited memory from earlier calls into the current reasoning pass without contradiction drift or context leakage."
+    },
+    "call_chain": [
+      {
+        "sequence": 1,
+        "call_id": "call-1",
+        "phase": "analysis",
+        "output_ref": "REQ-026::call::call-1::output::situational_analysis"
+      },
+      {
+        "sequence": 2,
+        "call_id": "call-2",
+        "phase": "planning",
+        "output_ref": "REQ-027::call::call-2::output::constraint_refinement"
+      },
+      {
+        "sequence": 3,
+        "call_id": "call-3",
+        "phase": "alignment",
+        "output_ref": "REQ-028::call::call-3::output::execution_alignment"
+      },
+      {
+        "sequence": 4,
+        "call_id": "call-4",
+        "phase": "handoff",
+        "output_ref": "REQ-034::call::call-4::output::cross_call_memory_handoff"
+      }
+    ],
+    "allowed_context_refs": [
+      "reports/optimus-prime/planning/VERIFICATION.md",
+      "reports/optimus-prime/planning/STATE.json",
+      "scope.md",
+      "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+    ],
+    "memory_budget": {
+      "max_entries": 3,
+      "max_citation_refs_per_entry": 2
+    },
+    "prior_call_memory": [
+      {
+        "call_id": "call-1",
+        "output_ref": "REQ-026::call::call-1::output::situational_analysis",
+        "summary": "Call-1 surfaced the main verification and runtime coordination facts that later calls must preserve.",
+        "handoff_items": [
+          {
+            "memory_id": "mem.runtime-dependency.v1",
+            "memory_key": "runtime-dependency",
+            "kind": "risk",
+            "summary": "Shared runtime interpretation still depends on runtime-orchestrator.",
+            "position": "route-through-runtime-orchestrator",
+            "carry_forward": true,
+            "supersedes_memory_ids": [],
+            "citation_refs": [
+              "REQ-026::call::call-1::output::situational_analysis",
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+            ]
+          },
+          {
+            "memory_id": "mem.verification-freshness.v1",
+            "memory_key": "verification-freshness",
+            "kind": "constraint",
+            "summary": "Refresh verification evidence before widening execution scope.",
+            "position": "refresh-before-widening",
+            "carry_forward": true,
+            "supersedes_memory_ids": [],
+            "citation_refs": [
+              "REQ-026::call::call-1::output::situational_analysis",
+              "reports/optimus-prime/planning/VERIFICATION.md"
+            ]
+          }
+        ]
+      },
+      {
+        "call_id": "call-2",
+        "output_ref": "REQ-027::call::call-2::output::constraint_refinement",
+        "summary": "Call-2 narrowed what must be preserved into strict scope and verification handoff items.",
+        "handoff_items": [
+          {
+            "memory_id": "mem.scope-lock.v1",
+            "memory_key": "scope-lock",
+            "kind": "decision",
+            "summary": "Keep implementation limited to the REQ-034 contract and data-model surface.",
+            "position": "req-034-only",
+            "carry_forward": true,
+            "supersedes_memory_ids": [],
+            "citation_refs": [
+              "REQ-027::call::call-2::output::constraint_refinement",
+              "scope.md"
+            ]
+          },
+          {
+            "memory_id": "mem.verification-freshness.v2",
+            "memory_key": "verification-freshness",
+            "kind": "constraint",
+            "summary": "Carry the verification-refresh guard into later calls until branch-head evidence is refreshed.",
+            "position": "refresh-before-widening",
+            "carry_forward": true,
+            "supersedes_memory_ids": [
+              "mem.verification-freshness.v1"
+            ],
+            "citation_refs": [
+              "REQ-027::call::call-2::output::constraint_refinement",
+              "reports/optimus-prime/planning/STATE.json"
+            ]
+          }
+        ]
+      },
+      {
+        "call_id": "call-3",
+        "output_ref": "REQ-028::call::call-3::output::execution_alignment",
+        "summary": "Call-3 refreshed the runtime dependency with cited alignment output and earth evidence.",
+        "handoff_items": [
+          {
+            "memory_id": "mem.runtime-dependency.v2",
+            "memory_key": "runtime-dependency",
+            "kind": "risk",
+            "summary": "Route shared runtime follow-up through runtime-orchestrator with cited earth evidence.",
+            "position": "route-through-runtime-orchestrator",
+            "carry_forward": true,
+            "supersedes_memory_ids": [
+              "mem.runtime-dependency.v1"
+            ],
+            "citation_refs": [
+              "REQ-028::call::call-3::output::execution_alignment",
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+              "reports/optimus-prime/planning/STATE.json"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expected_contract_anchors": {
+    "schema_version": "req-034.cross-call-memory-handoff-contract.v1",
+    "requirement_id": "REQ-034",
+    "checked_at_utc": "2026-03-16T16:00:00Z",
+    "project_id": "optimus-prime-gsd-fusion",
+    "call_id": "call-4",
+    "source_calls": [
+      "call-1",
+      "call-2",
+      "call-3"
+    ],
+    "retained_memory_ids": [
+      "mem.scope-lock.v1",
+      "mem.verification-freshness.v2",
+      "mem.runtime-dependency.v2"
+    ],
+    "superseded_memory_ids": [
+      "mem.runtime-dependency.v1",
+      "mem.verification-freshness.v1"
+    ],
+    "processing_strategy": "cross-call-memory-handoff",
+    "reasoning_mode": "deterministic-bounded-memory-handoff",
+    "allowed_context_refs_used": [
+      "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+      "reports/optimus-prime/planning/STATE.json",
+      "scope.md"
+    ],
+    "citation_ref_count": 6,
+    "summary": {
+      "source_call_count": 3,
+      "input_item_count": 5,
+      "retained_item_count": 3,
+      "superseded_item_count": 2,
+      "open_risk_count": 0
+    }
+  }
+}

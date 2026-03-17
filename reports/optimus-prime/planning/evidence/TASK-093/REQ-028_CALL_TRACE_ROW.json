@@ -1,0 +1,20 @@
+{
+  "schema_version": "req-025.llm-call-trace-row.v1",
+  "requirement_id": "REQ-028",
+  "plan_id": "req028-plan-17f2dedef6f1ea77",
+  "processing_call_id": "req028-processing-17f2dedef6f1ea77",
+  "call_id": "req028-call-03-22fc87512d",
+  "sequence": 3,
+  "call_objective": "Reason about strategic gaps and opportunities not visible from the local mission alone.",
+  "depends_on": [],
+  "expected_output": "call_3_gap_and_opportunity_reasoning",
+  "input_refs": [
+    "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+    "reports/earth/sweeps/2026-03-16/shared-observability.json",
+    "reports/optimus-prime/planning/evidence/TASK-091/TASK_EVIDENCE.json"
+  ],
+  "output_refs": [
+    "req028-plan-17f2dedef6f1ea77::call::req028-call-03-22fc87512d::output::call_3_gap_and_opportunity_reasoning"
+  ],
+  "handoff_summary": "Call 3 hands off call_3_gap_and_opportunity_reasoning via req028-plan-17f2dedef6f1ea77::call::req028-call-03-22fc87512d::output::call_3_gap_and_opportunity_reasoning after reasoning over 2 ecosystem-visible gaps and 3 linked opportunities beyond the local mission."
+}

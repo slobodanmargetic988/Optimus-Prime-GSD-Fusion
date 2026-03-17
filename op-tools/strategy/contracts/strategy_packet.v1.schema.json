@@ -9,9 +9,12 @@
     "identity",
     "strategy",
     "recommendations",
+    "recommendation_mapping",
     "constraints",
     "kpi_targets",
-    "source"
+    "source",
+    "gate_policy",
+    "strategy_quality_report"
   ],
   "properties": {
     "schema_version": {
@@ -87,6 +90,29 @@
         }
       }
     },
+    "recommendation_mapping": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["recommendation_id", "op_plan_ref", "op_initialize_ref"],
+        "properties": {
+          "recommendation_id": {
+            "type": "string",
+            "pattern": "^rec\\.[a-z0-9][a-z0-9-]{1,95}$"
+          },
+          "op_plan_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "op_initialize_ref": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
     "constraints": {
       "type": "object",
       "additionalProperties": false,
@@ -125,6 +151,179 @@
       "properties": {
         "repo": {"type": "string", "minLength": 1},
         "tool": {"type": "string", "minLength": 1}
+      }
+    },
+    "gate_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_citation_coverage_ratio",
+        "max_unresolved_contradictions",
+        "min_high_confidence_ratio"
+      ],
+      "properties": {
+        "min_citation_coverage_ratio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "max_unresolved_contradictions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "min_high_confidence_ratio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "strategy_quality_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "citation_coverage",
+        "contradiction_status",
+        "confidence_distribution",
+        "gate_verdicts"
+      ],
+      "properties": {
+        "citation_coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cited_claims",
+            "uncited_claims",
+            "total_claims",
+            "coverage_ratio"
+          ],
+          "properties": {
+            "cited_claims": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "uncited_claims": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total_claims": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "coverage_ratio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "contradiction_status": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "has_unresolved_contradictions",
+            "unresolved_contradiction_count",
+            "unresolved_contradiction_ids"
+          ],
+          "properties": {
+            "has_unresolved_contradictions": {
+              "type": "boolean"
+            },
+            "unresolved_contradiction_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unresolved_contradiction_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "confidence_distribution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "high",
+            "medium",
+            "low",
+            "total",
+            "high_ratio",
+            "medium_ratio",
+            "low_ratio"
+          ],
+          "properties": {
+            "high": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "medium": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "low": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "high_ratio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "medium_ratio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "low_ratio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "gate_verdicts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "citation_coverage_pass",
+            "contradiction_pass",
+            "confidence_distribution_pass",
+            "overall_pass",
+            "failed_gate_ids"
+          ],
+          "properties": {
+            "citation_coverage_pass": {
+              "type": "boolean"
+            },
+            "contradiction_pass": {
+              "type": "boolean"
+            },
+            "confidence_distribution_pass": {
+              "type": "boolean"
+            },
+            "overall_pass": {
+              "type": "boolean"
+            },
+            "failed_gate_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "citation_coverage",
+                  "contradiction_status",
+                  "confidence_distribution"
+                ]
+              }
+            }
+          }
+        }
       }
     }
   }

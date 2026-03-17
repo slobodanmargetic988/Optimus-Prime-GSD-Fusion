@@ -1,0 +1,122 @@
+{
+  "input": {
+    "analysis_type": "call_4_recommendation_synthesis",
+    "call_id": "call-4",
+    "checked_at_utc": "2026-03-16T10:45:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion"
+    },
+    "earlier_call_outputs": [
+      {
+        "call_id": "call-1",
+        "output_ref": "REQ-026::call::call-1::output::situational_analysis",
+        "summary": "Call-1 established the bounded assessment and surfaced unknown-resolution work.",
+        "candidate_recommendations": [
+          {
+            "candidate_id": "unknown-resolution",
+            "summary": "Carry explicit unknown resolution into the next planning pass before execution scope widens.",
+            "rationale": "Call-1 marked unresolved planning and runtime unknowns that later calls depend on.",
+            "impact": "Keeps downstream execution choices grounded in refreshed planning and verification evidence.",
+            "risk": "Skipping the unknown handoff can freeze later calls around stale branch-head assumptions.",
+            "evidence_refs": [
+              "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json",
+              "reports/optimus-prime/planning/VERIFICATION.md"
+            ]
+          }
+        ]
+      },
+      {
+        "call_id": "call-2",
+        "output_ref": "REQ-027::call::call-2::output::constraint_refinement",
+        "summary": "Call-2 converted situational unknowns into bounded implementation follow-ups.",
+        "candidate_recommendations": [
+          {
+            "candidate_id": "verification-refresh",
+            "summary": "Refresh verification evidence on the working branch before promoting any follow-up packet.",
+            "rationale": "Call-2 narrowed the main branch-head question to current verification freshness.",
+            "impact": "Prevents recommendation drafts from citing stale runtime outcomes.",
+            "risk": "Recommendation promotion may drift from the actual branch state if verification is not rerun.",
+            "evidence_refs": [
+              "reports/optimus-prime/planning/STATE.json",
+              "reports/optimus-prime/planning/VERIFICATION.md"
+            ]
+          },
+          {
+            "candidate_id": "contract-surface-lock",
+            "summary": "Keep implementation limited to the contract and data-model surface defined for this wave.",
+            "rationale": "Call-2 confirmed this task is scoped to REQ-029 contract artifacts only.",
+            "impact": "Protects delivery velocity by preventing unrelated managers or packet sections from entering the work.",
+            "risk": "Scope creep would weaken deterministic validation and make branch-head evidence ambiguous.",
+            "evidence_refs": [
+              "scope.md",
+              "reports/optimus-prime/planning/TASK_EXECUTION_STATE.json"
+            ]
+          }
+        ]
+      },
+      {
+        "call_id": "call-3",
+        "output_ref": "REQ-028::call::call-3::output::execution_alignment",
+        "summary": "Call-3 aligned synthesis inputs with evidence-backed cross-project coordination needs.",
+        "candidate_recommendations": [
+          {
+            "candidate_id": "runtime-coordination",
+            "recommendation_scope": "cross-project",
+            "project_id": "runtime-orchestrator",
+            "requires_earth_evidence": true,
+            "summary": "Route shared runtime follow-up through the existing runtime-orchestrator coordination path.",
+            "rationale": "Call-3 preserved the earlier cross-project runtime dependency while keeping the task implementation local to REQ-029 artifacts.",
+            "impact": "Lets the final draft note a concrete coordination dependency without inventing a new manager or gate.",
+            "risk": "Shared runtime assumptions can drift if the coordination dependency is omitted from the draft set.",
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+              "reports/optimus-prime/planning/VERIFICATION.md"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expected_contract_anchors": {
+    "schema_version": "req-029.call-4-recommendation-synthesis.v1",
+    "requirement_id": "REQ-029",
+    "checked_at_utc": "2026-03-16T10:45:00Z",
+    "project_id": "optimus-prime-gsd-fusion",
+    "source_calls": [
+      "call-1",
+      "call-2",
+      "call-3"
+    ],
+    "recommendation_ids": [
+      "rec-call-4-call-1-unknown-resolution",
+      "rec-call-4-call-2-contract-surface-lock",
+      "rec-call-4-call-2-verification-refresh",
+      "rec-call-4-call-3-runtime-coordination"
+    ],
+    "candidate_recommendation_count": 4,
+    "source_call_count": 3,
+    "open_risk_count": 0,
+    "processing_strategy": "call-4-recommendation-synthesis",
+    "reasoning_mode": "deterministic-recommendation-synthesis",
+    "recommendation_id_schema": "rec-call-4-{source_call_id}-{candidate_id}",
+    "cross_project_context_used": true,
+    "cross_project_project_ids_used": [
+      "runtime-orchestrator"
+    ],
+    "earth_sweep_evidence_refs_used": [
+      "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+    ],
+    "required_draft_fields": [
+      "recommendation_id",
+      "source_call_id",
+      "source_output_ref",
+      "source_candidate_id",
+      "summary",
+      "rationale",
+      "impact",
+      "risk",
+      "evidence_refs"
+    ],
+    "evidence_ref_count": 5
+  }
+}

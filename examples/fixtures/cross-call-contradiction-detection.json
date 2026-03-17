@@ -1,0 +1,103 @@
+{
+  "input": {
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req036-fixture-r1",
+    "call_outputs": [
+      {
+        "call_id": "call-1",
+        "call_requirement_id": "REQ-026",
+        "emitted_claims": [
+          {
+            "claim_id": "claim-lane-parallelism",
+            "claim_text": "Execution can safely run five lanes in parallel under current runtime constraints.",
+            "stance": "support",
+            "evidence_refs": [
+              "reports/strategy/call-1/runtime-budget.json"
+            ]
+          },
+          {
+            "claim_id": "claim-token-headroom",
+            "claim_text": "Token budget headroom is sufficient for deep recommendation synthesis.",
+            "stance": "support",
+            "evidence_refs": [
+              "reports/strategy/call-1/token-budget.json"
+            ]
+          }
+        ]
+      },
+      {
+        "call_id": "call-2",
+        "call_requirement_id": "REQ-030",
+        "emitted_claims": [
+          {
+            "claim_id": "claim-lane-parallelism",
+            "claim_text": "Execution should serialize lane operations due to runtime saturation risk.",
+            "stance": "contradict",
+            "evidence_refs": [
+              "reports/strategy/call-2/runtime-saturation.json"
+            ]
+          },
+          {
+            "claim_id": "claim-token-headroom",
+            "claim_text": "Token budget headroom is insufficient for deep recommendation synthesis.",
+            "stance": "contradict",
+            "evidence_refs": [
+              "reports/strategy/call-2/token-budget-alert.json"
+            ]
+          }
+        ]
+      },
+      {
+        "call_id": "call-3",
+        "call_requirement_id": "REQ-031",
+        "emitted_claims": [
+          {
+            "claim_id": "claim-kpi-projection",
+            "claim_text": "KPI projection confidence remains medium until contradiction handling completes.",
+            "stance": "support",
+            "evidence_refs": [
+              "reports/strategy/call-3/kpi-projection.json"
+            ]
+          }
+        ]
+      }
+    ],
+    "contradiction_resolutions": [
+      {
+        "claim_id": "claim-lane-parallelism",
+        "resolution_status": "resolved",
+        "resolution_summary": "Adopt two-lane phased parallelism to satisfy both throughput and saturation constraints.",
+        "resolved_by_call_id": "call-3",
+        "evidence_refs": [
+          "reports/strategy/call-3/lane-phasing-decision.json"
+        ]
+      }
+    ]
+  },
+  "expected_contract_anchors": {
+    "schema_version": "req-036.cross-call-contradiction-detection.v1",
+    "requirement_id": "REQ-036",
+    "strategy": "cross-call-contradiction-detection",
+    "handling_policy": "explicit-resolution-or-unresolved-risk",
+    "decision": "requires-resolution-before-final-synthesis",
+    "contradiction_count": 2,
+    "resolved_contradictions": 1,
+    "unresolved_contradictions": 1,
+    "unresolved_claim_ids": [
+      "claim-token-headroom"
+    ]
+  },
+  "determinism_probe": {
+    "append_resolution": {
+      "claim_id": "claim-token-headroom",
+      "resolution_status": "unresolved",
+      "resolution_summary": "Runtime owner accepted unresolved contradiction pending next-cycle telemetry sweep.",
+      "resolved_by_call_id": "",
+      "evidence_refs": [
+        "reports/strategy/call-4/unresolved-risk-acknowledgement.json"
+      ]
+    }
+  }
+}

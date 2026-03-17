@@ -1,0 +1,134 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-1",
+  "task_id": "TASK-081",
+  "requirement_ids": [
+    "REQ-025"
+  ],
+  "updated_at": "2026-03-15T23:50:54Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contract_multi_call_strategy_pipeline_planner",
+        "command": "python3 -m pytest tests/contracts/test_multi-call-strategy-pipeline-planner.py -q",
+        "exit_code": 0,
+        "summary": "5 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-081/contract_multi-call-strategy-pipeline-planner.output.txt"
+      },
+      {
+        "name": "integration_multi_call_strategy_pipeline_planner",
+        "command": "python3 -m pytest tests/integration/test_multi-call-strategy-pipeline-planner.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-081/integration_multi-call-strategy-pipeline-planner.output.txt"
+      },
+      {
+        "name": "e2e_strategy_llm_pipeline_smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.08s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-081/e2e_strategy_llm_pipeline_smoke.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-025",
+        "status": "pass",
+        "details": "The planner payload now carries replay-stable llm_call_trace_rows that mirror every planned LLM call, and the CLI emits the same rows to strategy/current/llm_call_trace.jsonl without collapsing the chain into a single summary record.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-081/ACCEPTANCE_REQ-025.json",
+          "strategy/current/llm_call_trace.jsonl",
+          "reports/optimus-prime/planning/evidence/TASK-081/integration_multi-call-strategy-pipeline-planner.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-081/e2e_strategy_llm_pipeline_smoke.output.txt"
+        ]
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "contracts/req/REQ-025_multi-call-strategy-pipeline-planner.md",
+      "examples/fixtures/multi-call-strategy-pipeline-planner.json",
+      "strategy/current/samples/REQ-025_multi-call-strategy-pipeline-planner.sample.json",
+      "strategy/current/llm_call_trace.jsonl",
+      "tests/contracts/test_multi-call-strategy-pipeline-planner.py",
+      "tests/integration/test_multi-call-strategy-pipeline-planner.py",
+      "tests/e2e/test_strategy_llm_pipeline_smoke.py",
+      "reports/optimus-prime/planning/evidence/TASK-081/ACCEPTANCE_REQ-025.json",
+      "reports/optimus-prime/planning/evidence/TASK-081/contract_multi-call-strategy-pipeline-planner.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-081/integration_multi-call-strategy-pipeline-planner.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-081/e2e_strategy_llm_pipeline_smoke.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-081/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "integration_multi_call_strategy_pipeline_planner",
+        "command": "python3 -m pytest tests/integration/test_multi-call-strategy-pipeline-planner.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-081/integration_multi-call-strategy-pipeline-planner.output.txt"
+      },
+      {
+        "name": "e2e_strategy_llm_pipeline_smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.08s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-081/e2e_strategy_llm_pipeline_smoke.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-025",
+        "status": "pass",
+        "details": "Integration coverage validates the deterministic trace schema and dependency-linked input/output refs, while the smoke test confirms repeated CLI reruns rewrite the same strategy/current/llm_call_trace.jsonl payload.",
+        "evidence_refs": [
+          "strategy/current/llm_call_trace.jsonl",
+          "reports/optimus-prime/planning/evidence/TASK-081/integration_multi-call-strategy-pipeline-planner.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-081/e2e_strategy_llm_pipeline_smoke.output.txt"
+        ]
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-025",
+        "passed": true,
+        "notes": "Every planned LLM call produces one trace row containing call objective, input refs, output refs, and handoff summary, and the serialized jsonl trace is replay-stable across repeated runs."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "strategy/current/llm_call_trace.jsonl",
+      "reports/optimus-prime/planning/evidence/TASK-081/ACCEPTANCE_REQ-025.json",
+      "reports/optimus-prime/planning/evidence/TASK-081/integration_multi-call-strategy-pipeline-planner.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-081/e2e_strategy_llm_pipeline_smoke.output.txt"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_review",
+    "reason_codes": [
+      "req_025_llm_call_trace_rows_added",
+      "req_025_trace_jsonl_materialized",
+      "req_025_replay_stable_cli_smoke_passed",
+      "task_081_evidence_links_trace_artifact"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

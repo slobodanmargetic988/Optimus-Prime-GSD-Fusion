@@ -1,0 +1,169 @@
+{
+  "input": {
+    "target_project_id": "prj.optimus-prime-gsd-fusion",
+    "contract_signals": [
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-core",
+        "dependency_ref": "contracts/runtime-heartbeat.v1",
+        "summary": "Runtime lease heartbeat contract binds dispatch cadence.",
+        "signal_strength": "strong",
+        "evidence_refs": [
+          "contracts/runtime-heartbeat.md#L10",
+          "reports/earth/contracts-index.json#runtime-heartbeat-v1"
+        ]
+      },
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.analytics-hub",
+        "dependency_ref": "contracts/analytics-ingest.v2",
+        "summary": "Analytics ingestion contract defines cycle export payload.",
+        "signal_strength": "moderate",
+        "evidence_refs": [
+          "contracts/analytics-ingest-v2.md#L22"
+        ]
+      }
+    ],
+    "trace_signals": [
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-core",
+        "dependency_ref": "traces/dispatch-cycle-2026-03-15.jsonl#evt-404",
+        "summary": "Dispatch trace shows heartbeat lookups before queue rebalance.",
+        "signal_strength": "moderate",
+        "evidence_refs": [
+          "reports/runtime/dispatch-cycle-2026-03-15.jsonl#L404"
+        ]
+      },
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.analytics-hub",
+        "dependency_ref": "traces/export-cycle-2026-03-15.jsonl#evt-122",
+        "summary": "Trace confirms export submission attempts to analytics endpoint.",
+        "signal_strength": "weak",
+        "evidence_refs": [
+          "reports/runtime/export-cycle-2026-03-15.jsonl#L122"
+        ]
+      },
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-observability",
+        "dependency_ref": "traces/rate-snapshot-bridge-2026-03-15.jsonl#evt-78",
+        "summary": "Single weak trace mentions optional observability bridge handoff.",
+        "signal_strength": "weak",
+        "evidence_refs": [
+          "reports/runtime/rate-snapshot-bridge-2026-03-15.jsonl#L78"
+        ]
+      },
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.optimus-prime-gsd-fusion",
+        "dependency_ref": "traces/local-controller-loop-2026-03-15.jsonl#evt-9",
+        "summary": "Local-only loopback trace should not produce cross-project edges.",
+        "signal_strength": "moderate",
+        "evidence_refs": [
+          "reports/runtime/local-controller-loop-2026-03-15.jsonl#L9"
+        ]
+      }
+    ],
+    "integration_point_signals": [
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-core",
+        "dependency_ref": "integration/runtime-core-lease-heartbeat",
+        "summary": "Declared integration point consumes runtime-core lease heartbeat feed.",
+        "signal_strength": "strong",
+        "evidence_refs": [
+          "strategy/current/integration/runtime-core-lease-heartbeat.md#L4"
+        ]
+      },
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.analytics-hub",
+        "dependency_ref": "integration/analytics-export-v2",
+        "summary": "Declared integration point exports per-cycle diagnostics to analytics-hub.",
+        "signal_strength": "weak",
+        "evidence_refs": [
+          "strategy/current/integration/analytics-export-v2.md#L6"
+        ]
+      }
+    ]
+  },
+  "expected_contract_anchors": {
+    "schema_version": "req-011.cross-project-dependency-extraction.v1",
+    "requirement_id": "REQ-011",
+    "target_project_id": "prj.optimus-prime-gsd-fusion",
+    "provider_project_ids": [
+      "prj.analytics-hub",
+      "prj.runtime-core",
+      "prj.runtime-observability"
+    ],
+    "required_edge_fields": [
+      "dependency_edge_id",
+      "consumer_project_id",
+      "provider_project_id",
+      "relationship",
+      "summary",
+      "source_kinds",
+      "supporting_signal_count",
+      "dependency_refs",
+      "confidence",
+      "hard_dependency",
+      "evidence_refs"
+    ],
+    "open_risk_reason_codes": [
+      "low_confidence_dependency_edge",
+      "medium_confidence_dependency_edge"
+    ],
+    "summary": {
+      "source_signal_count": 8,
+      "filtered_local_signal_count": 1,
+      "dependency_edge_count": 3,
+      "hard_dependency_count": 1,
+      "soft_dependency_count": 2,
+      "weak_dependency_count": 1,
+      "open_risk_count": 2
+    }
+  },
+  "determinism_probe": {
+    "append_integration_point_signals": [
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-observability",
+        "dependency_ref": "integration/runtime-observability-snapshot-feed",
+        "summary": "Declared integration point routes runtime snapshot metrics into observability feeds.",
+        "signal_strength": "moderate",
+        "evidence_refs": [
+          "strategy/current/integration/runtime-observability-snapshot-feed.md#L3"
+        ]
+      }
+    ],
+    "expected_changed_provider_project_id": "prj.runtime-observability",
+    "baseline_confidence": "low",
+    "changed_confidence": "medium",
+    "reversed_equal_key_contract_signals": [
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-core",
+        "dependency_ref": "contracts/runtime-heartbeat.v1",
+        "summary": "Runtime lease heartbeat contract binds dispatch cadence.",
+        "signal_strength": "strong",
+        "evidence_refs": [
+          "contracts/runtime-heartbeat.md#L11",
+          "reports/earth/contracts-index.json#runtime-heartbeat-v1-secondary"
+        ]
+      },
+      {
+        "consumer_project_id": "prj.optimus-prime-gsd-fusion",
+        "provider_project_id": "prj.runtime-core",
+        "dependency_ref": "contracts/runtime-heartbeat.v1",
+        "summary": "Runtime lease heartbeat contract binds dispatch cadence.",
+        "signal_strength": "strong",
+        "evidence_refs": [
+          "contracts/runtime-heartbeat.md#L12",
+          "reports/earth/contracts-index.json#runtime-heartbeat-v1-tertiary"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "task_identifier": "TASK-124",
+  "requirement_id": "REQ-036",
+  "summary": {
+    "result": "pass",
+    "reason_codes": [],
+    "checked_at": "2026-03-16T08:15:22Z",
+    "notes": "Cross-call contradiction detection now carries explicit broad-sweep context inputs/usages, deterministic processing fields, and unresolved-risk handling evidence for REQ-036."
+  },
+  "verification_runs": [
+    {
+      "run_id": "run-1-targeted-integration-pytest",
+      "checks": [
+        {
+          "command": "python3 -m pytest tests/integration/test_cross-call-contradiction-detection.py -q",
+          "exit_code": 0,
+          "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-124/integration_cross-call-contradiction-detection.output.txt"
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "integration_cross_call_contradiction_detection",
+      "command": "python3 -m pytest tests/integration/test_cross-call-contradiction-detection.py -q",
+      "exit_code": 0,
+      "summary": "2 passed in 0.01s",
+      "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-124/integration_cross-call-contradiction-detection.output.txt"
+    }
+  ],
+  "blockers": [],
+  "edge_case_rows": [
+    {
+      "edge_case": "contradiction_without_resolution_requires_unresolved_risk",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "cross_call_contradiction"
+      ],
+      "evidence_refs": [
+        "tests/integration/test_cross-call-contradiction-detection.py::test_req_036_integration_emits_evidence_refs_and_complete_recommendation"
+      ]
+    },
+    {
+      "edge_case": "cross_project_context_usage_requires_broad_sweep_context_inputs",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "broad_sweep_context_used"
+      ],
+      "evidence_refs": [
+        "tests/integration/test_cross-call-contradiction-detection.py::test_req_036_integration_uses_broad_sweep_context_deterministically"
+      ]
+    }
+  ],
+  "unresolved_blocker_rows": []
+}

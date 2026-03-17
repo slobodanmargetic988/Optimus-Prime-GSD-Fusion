@@ -1,0 +1,94 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-2",
+  "task_id": "TASK-032",
+  "requirement_ids": [
+    "REQ-010"
+  ],
+  "updated_at": "2026-03-15T20:53:12Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contract_change_detection_since_previous_strategy_revision",
+        "command": "python3 -m pytest tests/contracts/test_change-detection-since-previous-strategy-revision.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.02s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-032/contract_change-detection-since-previous-strategy-revision.output.txt"
+      },
+      {
+        "name": "integration_change_detection_since_previous_strategy_revision",
+        "command": "python3 -m pytest tests/integration/test_change-detection-since-previous-strategy-revision.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-032/integration_change-detection-since-previous-strategy-revision.output.txt"
+      },
+      {
+        "name": "hardening_change_detection_since_previous_strategy_revision",
+        "command": "python3 -m pytest tests/hardening/test_change-detection-since-previous-strategy-revision_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.02s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-032/hardening_change-detection-since-previous-strategy-revision.output.txt"
+      },
+      {
+        "name": "acceptance_req_010_schema_check",
+        "command": "python3 -c \"import json; p='reports/optimus-prime/planning/evidence/TASK-032/ACCEPTANCE_REQ-010.json'; d=json.load(open(p,'r',encoding='utf-8')); req=['req_id','summary','evidence_refs','consumability_verdict','open_risks']; assert d.get('req_id')=='REQ-010'; assert all((k in d) and (d[k] not in ('', None, [])) for k in req)\"",
+        "exit_code": 0,
+        "summary": "acceptance artifact required keys populated and non-empty",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-032/ACCEPTANCE_REQ-010.json"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-010",
+        "status": "pass",
+        "details": "Change detection output remains machine-readable across mission scope, runtime data, and ecosystem signals, and recommendation deltas are directly evidence-linked to detected changes.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-032/ACCEPTANCE_REQ-010.json",
+          "reports/optimus-prime/planning/evidence/TASK-032/contract_change-detection-since-previous-strategy-revision.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-032/integration_change-detection-since-previous-strategy-revision.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-032/hardening_change-detection-since-previous-strategy-revision.output.txt"
+        ]
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-032/ACCEPTANCE_REQ-010.json",
+      "reports/optimus-prime/planning/evidence/TASK-032/contract_change-detection-since-previous-strategy-revision.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-032/integration_change-detection-since-previous-strategy-revision.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-032/hardening_change-detection-since-previous-strategy-revision.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-032/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_010_acceptance_artifact_created",
+      "req_010_contract_integration_hardening_outputs_recorded"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

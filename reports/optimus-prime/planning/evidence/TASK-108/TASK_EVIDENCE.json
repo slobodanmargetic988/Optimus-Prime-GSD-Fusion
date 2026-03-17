@@ -1,0 +1,109 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-108",
+  "requirement_ids": [
+    "REQ-032"
+  ],
+  "updated_at": "2026-03-16T04:53:56Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_032_contract_call_7_blocker_and_risk_policy_reasoning",
+        "command": "python3 -m pytest tests/contracts/test_call-7-blocker-and-risk-policy-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-108/TASK_EVIDENCE.json"
+      },
+      {
+        "name": "req_032_integration_call_7_blocker_and_risk_policy_reasoning",
+        "command": "python3 -m pytest tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.04s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-108/TASK_EVIDENCE.json"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-032",
+        "status": "pass",
+        "details": "Call-7 now keeps unresolved cross-project escalation ideas in recommendation.open_risks and blocks promotion of the invented trigger while preserving deterministic fallback and evidence-backed escalation output for the valid TASK-107-derived path.",
+        "evidence_refs": [
+          "scripts/strategy_llm_pipeline.py",
+          "tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py",
+          "reports/optimus-prime/planning/evidence/TASK-108/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py",
+      "reports/optimus-prime/planning/evidence/TASK-108/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_032_acceptance_targeted_pytest",
+        "command": "python3 -m pytest tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "Acceptance command exited 0 with 2 passing integration checks.",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-108/TASK_EVIDENCE.json"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-032",
+        "status": "pass",
+        "details": "Integration coverage verifies cross-project context usage, recommendation field completeness, evidence refs, and the unresolved-trigger open-risk path for Call-7 policy reasoning.",
+        "evidence_refs": [
+          "tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py",
+          "reports/optimus-prime/planning/evidence/TASK-108/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-032",
+        "passed": true,
+        "notes": "The acceptance command exited 0 and TASK-108 evidence retains empty dev/test/review blockers arrays."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py",
+      "reports/optimus-prime/planning/evidence/TASK-108/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py",
+      "reports/optimus-prime/planning/evidence/TASK-108/TASK_EVIDENCE.json"
+    ]
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_review",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_032_call_7_policy_reasoning_green",
+      "req_032_missing_trigger_context_open_risk_green",
+      "task_108_no_unresolved_blockers"
+    ]
+  }
+}

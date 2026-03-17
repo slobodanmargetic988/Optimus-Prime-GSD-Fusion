@@ -1,0 +1,53 @@
+{
+  "required_files": [
+    "strategy/current/strategy_packet.v1.json",
+    "strategy/current/samples/REQ-065_planner-consumability-validator.sample.json"
+  ],
+  "available_files": [
+    "contracts/req/REQ-065_planner-consumability-validator.md",
+    "strategy/current/samples/REQ-065_planner-consumability-validator.sample.json",
+    "strategy/current/strategy_packet.v1.json"
+  ],
+  "required_keys": [
+    "identity.project_id",
+    "strategy.summary",
+    "recommendations[0].recommendation_id",
+    "recommendation_mapping[0].op_plan_ref",
+    "recommendation_mapping[0].op_initialize_ref"
+  ],
+  "strategy_output": {
+    "identity": {
+      "project_id": "prj.optimus-prime"
+    },
+    "strategy": {
+      "summary": "Route recommendations directly into op-plan and op-initialize inputs."
+    },
+    "recommendations": [
+      {
+        "recommendation_id": "rec.dispatch-quality-first",
+        "priority": "high",
+        "summary": "Protect planner throughput with deterministic handoff mapping.",
+        "rationale": "op-plan and op-initialize need stable recommendation ids and references.",
+        "expected_impact": "Removes manual transforms between strategy output and planner intake.",
+        "risk_level": "low"
+      }
+    ],
+    "recommendation_mapping": [
+      {
+        "recommendation_id": "rec.dispatch-quality-first",
+        "op_plan_ref": "op-plan.input.recommendations[rec.dispatch-quality-first]",
+        "op_initialize_ref": "op-initialize.input.recommendations[rec.dispatch-quality-first]"
+      }
+    ]
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.dispatch-quality-first",
+      "priority": "high",
+      "summary": "Protect planner throughput with deterministic handoff mapping.",
+      "rationale": "op-plan and op-initialize need stable recommendation ids and references.",
+      "expected_impact": "Removes manual transforms between strategy output and planner intake.",
+      "risk_level": "low"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""REQ-008 and REQ-015 contract/data-model surfaces for strategy context sweep."""
+"""REQ-008, REQ-015, and REQ-017 contract/data-model surfaces for strategy context sweep."""
 
 from __future__ import annotations
 
@@ -19,6 +19,8 @@ REQUIREMENT_ID = "REQ-008"
 SCHEMA_VERSION = "req-008.research-packet-ingestion-and-normalization.v1"
 REQ_015_REQUIREMENT_ID = "REQ-015"
 REQ_015_SCHEMA_VERSION = "req-015.integration-opportunity-detection.v1"
+REQ_017_REQUIREMENT_ID = "REQ-017"
+REQ_017_SCHEMA_VERSION = "req-017.overlap-and-conflict-detection.v1"
 ALLOWED_RISK_LEVELS = {"low", "medium", "high", "critical"}
 REASON_CODE_EARTH_SWEEP_EVIDENCE_MISSING = "earth_sweep_evidence_missing"
 REASON_CODE_EARTH_SWEEP_STALE_SOURCE_ARTIFACT = "earth_sweep_stale_source_artifact"
@@ -41,6 +43,10 @@ class Req008Error(ValueError):
 
 class Req015Error(ValueError):
     """Raised when REQ-015 integration opportunity input is malformed."""
+
+
+class Req017Error(ValueError):
+    """Raised when REQ-017 overlap/conflict detection input is malformed."""
 
 
 def utc_now_iso() -> str:
@@ -2657,6 +2663,655 @@ def validate_req_015_integration_opportunity_detection(payload: Mapping[str, Any
             errors.append(f"source.tool must be {TOOL}")
         if source.get("tool_version") != TOOL_VERSION:
             errors.append(f"source.tool_version must be {TOOL_VERSION}")
+        context_bundle_sha256 = _as_text(source.get("context_bundle_sha256"))
+        if not context_bundle_sha256:
+            errors.append("source.context_bundle_sha256 must be a non-empty string")
+        elif not re.fullmatch(r"[0-9a-f]{64}", context_bundle_sha256):
+            errors.append("source.context_bundle_sha256 must be a lowercase hex sha256 digest")
+
+    return errors
+
+
+def _require_text_req_017(value: Any, *, field_name: str) -> str:
+    text = _as_text(value)
+    if not text:
+        raise Req017Error(f"{field_name} must be a non-empty string")
+    return text
+
+
+def _require_mapping_req_017(value: Any, *, field_name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise Req017Error(f"{field_name} must be an object")
+    return value
+
+
+def _require_sequence_req_017(value: Any, *, field_name: str) -> Sequence[Any]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req017Error(f"{field_name} must be an array")
+    return value
+
+
+def _normalize_req_017_string_list(value: Any, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise Req017Error(f"{field_name} must be an array of strings")
+    out: set[str] = set()
+    for idx, raw in enumerate(value):
+        item = _require_text_req_017(raw, field_name=f"{field_name}[{idx}]")
+        out.add(item)
+    return sorted(out)
+
+
+def _normalize_req_017_date(value: Any, *, field_name: str) -> str:
+    if value is None:
+        return ""
+    raw = _as_text(value)
+    if not raw:
+        return ""
+    try:
+        datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError as exc:
+        raise Req017Error(f"{field_name} must be YYYY-MM-DD") from exc
+    return raw
+
+
+def _req_017_digest_fragment(payload: Mapping[str, Any]) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def _normalize_req_017_initiatives(initiatives: Sequence[Any] | None) -> list[dict[str, Any]]:
+    if initiatives is None:
+        return []
+    rows = _require_sequence_req_017(initiatives, field_name="initiatives")
+    normalized: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for idx, raw in enumerate(rows):
+        row = _require_mapping_req_017(raw, field_name=f"initiatives[{idx}]")
+        project_id = _require_text_req_017(row.get("project_id"), field_name=f"initiatives[{idx}].project_id")
+        initiative_id = _require_text_req_017(row.get("initiative_id"), field_name=f"initiatives[{idx}].initiative_id")
+        key = (project_id, initiative_id)
+        if key in seen:
+            raise Req017Error(f"initiatives[{idx}] duplicates ({project_id}, {initiative_id})")
+        seen.add(key)
+        title = _require_text_req_017(row.get("title"), field_name=f"initiatives[{idx}].title")
+        summary = _as_text(row.get("summary"))
+        start_date = _normalize_req_017_date(row.get("start_date"), field_name=f"initiatives[{idx}].start_date")
+        end_date = _normalize_req_017_date(row.get("end_date"), field_name=f"initiatives[{idx}].end_date")
+        if start_date and end_date and start_date > end_date:
+            raise Req017Error(f"initiatives[{idx}] start_date must be <= end_date")
+        domains = _normalize_req_017_string_list(row.get("domains"), field_name=f"initiatives[{idx}].domains")
+        evidence_refs = _normalize_req_017_string_list(
+            row.get("evidence_refs"),
+            field_name=f"initiatives[{idx}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "project_id": project_id,
+                "initiative_id": initiative_id,
+                "title": title,
+                "summary": summary,
+                "start_date": start_date,
+                "end_date": end_date,
+                "domains": domains,
+                "evidence_refs": evidence_refs,
+            }
+        )
+    normalized.sort(key=lambda row: (row["project_id"], row["initiative_id"]))
+    return normalized
+
+
+def _normalize_req_017_direction_signals(direction_signals: Sequence[Any] | None) -> list[dict[str, Any]]:
+    if direction_signals is None:
+        return []
+    rows = _require_sequence_req_017(direction_signals, field_name="direction_signals")
+    normalized: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for idx, raw in enumerate(rows):
+        row = _require_mapping_req_017(raw, field_name=f"direction_signals[{idx}]")
+        project_id = _require_text_req_017(row.get("project_id"), field_name=f"direction_signals[{idx}].project_id")
+        topic = _require_text_req_017(row.get("topic"), field_name=f"direction_signals[{idx}].topic")
+        stance = _require_text_req_017(row.get("stance"), field_name=f"direction_signals[{idx}].stance")
+        statement = _require_text_req_017(row.get("statement"), field_name=f"direction_signals[{idx}].statement")
+        raw_signal_id = _as_text(row.get("signal_id"))
+        signal_id = raw_signal_id or f"signal-{idx + 1:02d}"
+        key = (project_id, signal_id)
+        if key in seen:
+            raise Req017Error(f"direction_signals[{idx}] duplicates ({project_id}, {signal_id})")
+        seen.add(key)
+        confidence_raw = row.get("confidence")
+        confidence: float = 0.5
+        if confidence_raw is not None and confidence_raw != "":
+            try:
+                confidence = float(confidence_raw)
+            except (TypeError, ValueError) as exc:
+                raise Req017Error(f"direction_signals[{idx}].confidence must be a number") from exc
+            if confidence < 0 or confidence > 1:
+                raise Req017Error(f"direction_signals[{idx}].confidence must be between 0 and 1")
+        evidence_refs = _normalize_req_017_string_list(
+            row.get("evidence_refs"),
+            field_name=f"direction_signals[{idx}].evidence_refs",
+        )
+        normalized.append(
+            {
+                "project_id": project_id,
+                "signal_id": signal_id,
+                "topic": topic,
+                "stance": stance,
+                "statement": statement,
+                "confidence": round(confidence, 3),
+                "evidence_refs": evidence_refs,
+            }
+        )
+    normalized.sort(key=lambda row: (row["topic"], row["project_id"], row["signal_id"]))
+    return normalized
+
+
+def _date_overlap_window(
+    *,
+    start_a: str,
+    end_a: str,
+    start_b: str,
+    end_b: str,
+) -> tuple[str, str] | None:
+    if not (start_a and end_a and start_b and end_b):
+        return None
+    start = max(start_a, start_b)
+    end = min(end_a, end_b)
+    if start <= end:
+        return (start, end)
+    return None
+
+
+def _build_req_017_overlaps(
+    *,
+    initiatives: list[dict[str, Any]],
+    research_event_id: str,
+) -> list[dict[str, Any]]:
+    overlaps: list[dict[str, Any]] = []
+    for idx, left in enumerate(initiatives):
+        for right in initiatives[idx + 1 :]:
+            if left["project_id"] == right["project_id"]:
+                continue
+            shared_domains = sorted(set(left["domains"]).intersection(right["domains"]))
+            if not shared_domains:
+                continue
+            window = _date_overlap_window(
+                start_a=left["start_date"],
+                end_a=left["end_date"],
+                start_b=right["start_date"],
+                end_b=right["end_date"],
+            )
+            if window is None:
+                continue
+            start_date, end_date = window
+            evidence_refs = sorted(set(left["evidence_refs"]).union(right["evidence_refs"]))
+            overlap_id = f"overlap-{_req_017_digest_fragment({'a': (left['project_id'], left['initiative_id']), 'b': (right['project_id'], right['initiative_id']), 'domains': shared_domains, 'start': start_date, 'end': end_date})}"
+            overlaps.append(
+                {
+                    "overlap_id": overlap_id,
+                    "shared_domains": shared_domains,
+                    "overlap_window": {"start_date": start_date, "end_date": end_date},
+                    "initiatives": {
+                        "left": {
+                            "project_id": left["project_id"],
+                            "initiative_id": left["initiative_id"],
+                            "title": left["title"],
+                            "start_date": left["start_date"],
+                            "end_date": left["end_date"],
+                        },
+                        "right": {
+                            "project_id": right["project_id"],
+                            "initiative_id": right["initiative_id"],
+                            "title": right["title"],
+                            "start_date": right["start_date"],
+                            "end_date": right["end_date"],
+                        },
+                    },
+                    "overlap_summary": (
+                        f"Initiatives overlap on {', '.join(shared_domains)} between {start_date} and {end_date}."
+                    ),
+                    "evidence_refs": evidence_refs,
+                    "provenance": {
+                        "source_fields": [
+                            "initiatives[].project_id",
+                            "initiatives[].initiative_id",
+                            "initiatives[].title",
+                            "initiatives[].domains[]",
+                            "initiatives[].start_date",
+                            "initiatives[].end_date",
+                            "initiatives[].evidence_refs[]",
+                        ],
+                        "research_event_id": research_event_id,
+                    },
+                }
+            )
+    overlaps.sort(key=lambda row: row["overlap_id"])
+    return overlaps
+
+
+def _build_req_017_resolution_options(
+    *,
+    topic: str,
+    active_project_stance: str,
+    alternative_stance: str,
+) -> list[dict[str, Any]]:
+    options: list[dict[str, Any]] = []
+    option_index = 0
+
+    def add_option(
+        *,
+        title: str,
+        description: str,
+        risk_level: str,
+        tradeoffs: list[str],
+        recommended: bool,
+    ) -> None:
+        nonlocal option_index
+        option_index += 1
+        options.append(
+            {
+                "option_id": f"option-{option_index:02d}",
+                "title": title,
+                "description": description,
+                "risk_level": risk_level,
+                "tradeoffs": tradeoffs,
+                "recommended": recommended,
+            }
+        )
+
+    if active_project_stance:
+        add_option(
+            title=f"Align on '{active_project_stance}' for {topic}",
+            description=(
+                "Choose a single direction and align related initiatives to reduce duplicated effort and conflicting interfaces."
+            ),
+            risk_level="medium",
+            tradeoffs=[
+                "Requires rework in projects currently pursuing other stances.",
+                "May reduce local autonomy for affected peer projects.",
+                "Improves interface compatibility and integration predictability.",
+            ],
+            recommended=True,
+        )
+        if alternative_stance:
+            add_option(
+                title=f"Align on '{alternative_stance}' for {topic}",
+                description="Adopt the alternative stance across projects and retire competing direction signals.",
+                risk_level="high",
+                tradeoffs=[
+                    "Active project may incur redesign or delayed delivery.",
+                    "Reduces short-term coordination risk if the alternative stance is already advanced.",
+                    "Can increase migration cost if the active project already shipped assumptions.",
+                ],
+                recommended=False,
+            )
+    add_option(
+        title=f"Define a boundary and allow divergence on {topic}",
+        description="Allow projects to keep different stances, but define explicit interface boundaries and integration adapters.",
+        risk_level="medium",
+        tradeoffs=[
+            "Higher ongoing integration complexity.",
+            "Risk of fragmented user experience across projects.",
+            "Can unblock delivery without forcing immediate alignment.",
+        ],
+        recommended=not bool(active_project_stance),
+    )
+    add_option(
+        title=f"Run a timeboxed experiment to choose stance for {topic}",
+        description="Design a small proof and measure impact before committing to a single direction across projects.",
+        risk_level="low",
+        tradeoffs=[
+            "Adds schedule delay and coordination overhead.",
+            "Reduces risk of choosing the wrong long-term direction.",
+            "May require temporary duplication during evaluation.",
+        ],
+        recommended=not bool(active_project_stance),
+    )
+    return options
+
+
+def _build_req_017_conflicts(
+    *,
+    active_project_id: str,
+    direction_signals: list[dict[str, Any]],
+    research_event_id: str,
+) -> list[dict[str, Any]]:
+    by_topic: dict[str, list[dict[str, Any]]] = {}
+    for signal in direction_signals:
+        by_topic.setdefault(signal["topic"], []).append(signal)
+
+    conflicts: list[dict[str, Any]] = []
+    for topic, signals in sorted(by_topic.items()):
+        stances = sorted({row["stance"] for row in signals})
+        if len(stances) <= 1:
+            continue
+        by_stance: dict[str, list[dict[str, Any]]] = {stance: [] for stance in stances}
+        for row in signals:
+            by_stance[row["stance"]].append(row)
+        for stance_rows in by_stance.values():
+            stance_rows.sort(key=lambda row: (row["project_id"], row["signal_id"]))
+
+        active_project_stance = ""
+        for row in signals:
+            if row["project_id"] == active_project_id:
+                active_project_stance = row["stance"]
+                break
+        alternative_stance = ""
+        for stance in stances:
+            if stance != active_project_stance:
+                alternative_stance = stance
+                break
+
+        stance_variants: list[dict[str, Any]] = []
+        evidence_refs: set[str] = set()
+        project_ids: set[str] = set()
+        for stance in stances:
+            stance_signals = by_stance[stance]
+            project_id_list = sorted({row["project_id"] for row in stance_signals})
+            project_ids.update(project_id_list)
+            for row in stance_signals:
+                evidence_refs.update(row["evidence_refs"])
+            stance_variants.append(
+                {
+                    "stance": stance,
+                    "project_ids": project_id_list,
+                    "signals": [
+                        {
+                            "project_id": row["project_id"],
+                            "signal_id": row["signal_id"],
+                            "statement": row["statement"],
+                            "confidence": row["confidence"],
+                            "evidence_refs": row["evidence_refs"],
+                        }
+                        for row in stance_signals
+                    ],
+                }
+            )
+
+        conflict_id = f"conflict-{_req_017_digest_fragment({'topic': topic, 'stances': stances, 'projects': sorted(project_ids)})}"
+        conflicts.append(
+            {
+                "conflict_id": conflict_id,
+                "topic": topic,
+                "stance_variants": stance_variants,
+                "conflict_summary": (
+                    f"Conflicting roadmap direction detected for topic '{topic}': " + " vs ".join(stances) + "."
+                ),
+                "resolution_options": _build_req_017_resolution_options(
+                    topic=topic,
+                    active_project_stance=active_project_stance,
+                    alternative_stance=alternative_stance,
+                ),
+                "evidence_refs": sorted(evidence_refs),
+                "provenance": {
+                    "source_fields": [
+                        "direction_signals[].project_id",
+                        "direction_signals[].signal_id",
+                        "direction_signals[].topic",
+                        "direction_signals[].stance",
+                        "direction_signals[].statement",
+                        "direction_signals[].confidence",
+                        "direction_signals[].evidence_refs[]",
+                    ],
+                    "research_event_id": research_event_id,
+                },
+            }
+        )
+
+    conflicts.sort(key=lambda row: row["conflict_id"])
+    return conflicts
+
+
+def serialize_req_017_overlap_and_conflict_bundle(payload: Mapping[str, Any]) -> str:
+    bundle = {
+        "target_project": payload.get("target_project", {}),
+        "projects_considered": payload.get("projects_considered", []),
+        "overlaps": payload.get("overlaps", []),
+        "conflicts": payload.get("conflicts", []),
+        "summary": payload.get("summary", {}),
+    }
+    return json.dumps(bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _req_017_bundle_sha256(payload: Mapping[str, Any]) -> str:
+    return hashlib.sha256(serialize_req_017_overlap_and_conflict_bundle(payload).encode("utf-8")).hexdigest()
+
+
+def build_req_017_overlap_and_conflict_detection(
+    *,
+    target_project: Mapping[str, Any],
+    initiatives: Sequence[Any] | None = None,
+    direction_signals: Sequence[Any] | None = None,
+    research_event_id: str = "",
+    normalized_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """Build REQ-017 overlap/conflict detection payload."""
+    normalized_target_project = {
+        "project_id": _require_text_req_017(target_project.get("project_id"), field_name="target_project.project_id"),
+    }
+    target_project_name = _as_text(target_project.get("project_name"))
+    if target_project_name:
+        normalized_target_project["project_name"] = target_project_name
+
+    normalized_initiatives = _normalize_req_017_initiatives(initiatives)
+    normalized_signals = _normalize_req_017_direction_signals(direction_signals)
+
+    active_project_id = normalized_target_project["project_id"]
+    projects_considered = sorted(
+        {active_project_id}
+        | {row["project_id"] for row in normalized_initiatives}
+        | {row["project_id"] for row in normalized_signals}
+    )
+
+    research_event_id_text = _as_text(research_event_id)
+    overlaps = _build_req_017_overlaps(
+        initiatives=normalized_initiatives,
+        research_event_id=research_event_id_text,
+    )
+    conflicts = _build_req_017_conflicts(
+        active_project_id=active_project_id,
+        direction_signals=normalized_signals,
+        research_event_id=research_event_id_text,
+    )
+    evidence_refs = sorted(
+        set(ref for row in overlaps for ref in row["evidence_refs"]).union(
+            ref for row in conflicts for ref in row["evidence_refs"]
+        )
+    )
+
+    if conflicts:
+        decision = "conflicts_detected"
+    elif overlaps:
+        decision = "overlaps_detected"
+    else:
+        decision = "no_overlaps_or_conflicts_detected"
+
+    output_payload: dict[str, Any] = {
+        "schema_version": REQ_017_SCHEMA_VERSION,
+        "requirement_id": REQ_017_REQUIREMENT_ID,
+        "target_project": normalized_target_project,
+        "projects_considered": projects_considered,
+        "overlaps": overlaps,
+        "conflicts": conflicts,
+        "evidence_refs": evidence_refs,
+        "decision": decision,
+        "summary": {
+            "projects_considered": len(projects_considered),
+            "initiative_rows": len(normalized_initiatives),
+            "direction_signal_rows": len(normalized_signals),
+            "overlap_count": len(overlaps),
+            "conflict_count": len(conflicts),
+        },
+        "source": {
+            "normalized_at_utc": _normalize_timestamp(normalized_at_utc),
+            "tool": TOOL,
+            "tool_version": TOOL_VERSION,
+        },
+    }
+    output_payload["source"]["context_bundle_sha256"] = _req_017_bundle_sha256(output_payload)
+    return output_payload
+
+
+def validate_req_017_overlap_and_conflict_detection(payload: Mapping[str, Any]) -> list[str]:
+    """Validate REQ-017 overlap/conflict contract shape."""
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["payload must be an object"]
+
+    required_top_level = {
+        "schema_version",
+        "requirement_id",
+        "target_project",
+        "projects_considered",
+        "overlaps",
+        "conflicts",
+        "evidence_refs",
+        "decision",
+        "summary",
+        "source",
+    }
+    top_keys = set(payload.keys())
+    missing_top = sorted(required_top_level - top_keys)
+    unexpected_top = sorted(top_keys - required_top_level)
+    if missing_top:
+        errors.append(f"missing top-level keys: {missing_top}")
+    if unexpected_top:
+        errors.append(f"unexpected top-level keys: {unexpected_top}")
+
+    if payload.get("schema_version") != REQ_017_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {REQ_017_SCHEMA_VERSION}")
+    if payload.get("requirement_id") != REQ_017_REQUIREMENT_ID:
+        errors.append(f"requirement_id must be {REQ_017_REQUIREMENT_ID}")
+
+    target_project = payload.get("target_project")
+    if not isinstance(target_project, Mapping):
+        errors.append("target_project must be an object")
+        target_project = {}
+    else:
+        project_id = _as_text(target_project.get("project_id"))
+        if not project_id:
+            errors.append("target_project.project_id must be a non-empty string")
+
+    projects_considered = payload.get("projects_considered")
+    if not isinstance(projects_considered, list) or any(
+        not isinstance(item, str) or not item.strip() for item in projects_considered
+    ):
+        errors.append("projects_considered must be an array of strings")
+        projects_considered = []
+    else:
+        normalized = sorted({item.strip() for item in projects_considered})
+        if projects_considered != normalized:
+            errors.append("projects_considered must be sorted unique")
+
+    overlaps = payload.get("overlaps")
+    if not isinstance(overlaps, list):
+        errors.append("overlaps must be an array")
+        overlaps = []
+    else:
+        seen_ids: set[str] = set()
+        for idx, row in enumerate(overlaps):
+            if not isinstance(row, Mapping):
+                errors.append(f"overlaps[{idx}] must be an object")
+                continue
+            overlap_id = _as_text(row.get("overlap_id"))
+            if not overlap_id:
+                errors.append(f"overlaps[{idx}].overlap_id is required")
+            elif overlap_id in seen_ids:
+                errors.append(f"overlaps[{idx}].overlap_id duplicates {overlap_id}")
+            seen_ids.add(overlap_id)
+            shared_domains = row.get("shared_domains")
+            if not isinstance(shared_domains, list) or any(
+                not isinstance(item, str) or not item.strip() for item in shared_domains
+            ):
+                errors.append(f"overlaps[{idx}].shared_domains must be an array of strings")
+            overlap_window = row.get("overlap_window")
+            if not isinstance(overlap_window, Mapping):
+                errors.append(f"overlaps[{idx}].overlap_window must be an object")
+            initiatives = row.get("initiatives")
+            if not isinstance(initiatives, Mapping):
+                errors.append(f"overlaps[{idx}].initiatives must be an object")
+            evidence_refs = row.get("evidence_refs")
+            if not isinstance(evidence_refs, list) or any(
+                not isinstance(item, str) or not item.strip() for item in evidence_refs
+            ):
+                errors.append(f"overlaps[{idx}].evidence_refs must be an array of strings")
+
+    conflicts = payload.get("conflicts")
+    if not isinstance(conflicts, list):
+        errors.append("conflicts must be an array")
+        conflicts = []
+    else:
+        seen_ids: set[str] = set()
+        for idx, row in enumerate(conflicts):
+            if not isinstance(row, Mapping):
+                errors.append(f"conflicts[{idx}] must be an object")
+                continue
+            conflict_id = _as_text(row.get("conflict_id"))
+            if not conflict_id:
+                errors.append(f"conflicts[{idx}].conflict_id is required")
+            elif conflict_id in seen_ids:
+                errors.append(f"conflicts[{idx}].conflict_id duplicates {conflict_id}")
+            seen_ids.add(conflict_id)
+            topic = _as_text(row.get("topic"))
+            if not topic:
+                errors.append(f"conflicts[{idx}].topic is required")
+            stance_variants = row.get("stance_variants")
+            if not isinstance(stance_variants, list) or not stance_variants:
+                errors.append(f"conflicts[{idx}].stance_variants must be a non-empty array")
+            resolution_options = row.get("resolution_options")
+            if not isinstance(resolution_options, list) or not resolution_options:
+                errors.append(f"conflicts[{idx}].resolution_options must be a non-empty array")
+            else:
+                for opt_idx, opt in enumerate(resolution_options):
+                    if not isinstance(opt, Mapping):
+                        errors.append(f"conflicts[{idx}].resolution_options[{opt_idx}] must be an object")
+                        continue
+                    for key in ("option_id", "title", "description", "risk_level", "tradeoffs", "recommended"):
+                        if key not in opt:
+                            errors.append(f"conflicts[{idx}].resolution_options[{opt_idx}].{key} is required")
+                    risk_level = _as_text(opt.get("risk_level"))
+                    if risk_level and risk_level not in {"low", "medium", "high"}:
+                        errors.append(
+                            f"conflicts[{idx}].resolution_options[{opt_idx}].risk_level must be low, medium, or high"
+                        )
+
+            evidence_refs = row.get("evidence_refs")
+            if not isinstance(evidence_refs, list) or any(
+                not isinstance(item, str) or not item.strip() for item in evidence_refs
+            ):
+                errors.append(f"conflicts[{idx}].evidence_refs must be an array of strings")
+
+    evidence_refs = payload.get("evidence_refs")
+    if not isinstance(evidence_refs, list) or any(not isinstance(item, str) or not item.strip() for item in evidence_refs):
+        errors.append("evidence_refs must be an array of strings")
+    else:
+        normalized = sorted({item.strip() for item in evidence_refs})
+        if evidence_refs != normalized:
+            errors.append("evidence_refs must be sorted unique")
+
+    decision = _as_text(payload.get("decision"))
+    if decision not in {"conflicts_detected", "overlaps_detected", "no_overlaps_or_conflicts_detected"}:
+        errors.append("decision must be one of conflicts_detected, overlaps_detected, no_overlaps_or_conflicts_detected")
+
+    summary = payload.get("summary")
+    if not isinstance(summary, Mapping):
+        errors.append("summary must be an object")
+
+    source = payload.get("source")
+    if not isinstance(source, Mapping):
+        errors.append("source must be an object")
+    else:
+        normalized_at_utc = _as_text(source.get("normalized_at_utc"))
+        if not normalized_at_utc:
+            errors.append("source.normalized_at_utc must be a non-empty string")
+        tool = _as_text(source.get("tool"))
+        if not tool:
+            errors.append("source.tool must be a non-empty string")
+        tool_version = _as_text(source.get("tool_version"))
+        if not tool_version:
+            errors.append("source.tool_version must be a non-empty string")
         context_bundle_sha256 = _as_text(source.get("context_bundle_sha256"))
         if not context_bundle_sha256:
             errors.append("source.context_bundle_sha256 must be a non-empty string")

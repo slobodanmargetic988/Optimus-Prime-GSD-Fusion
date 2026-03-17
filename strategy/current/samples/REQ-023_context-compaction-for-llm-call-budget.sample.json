@@ -1,0 +1,591 @@
+{
+  "schema_version": "req-023.context-compaction-for-llm-call-budget.v1",
+  "requirement_id": "REQ-023",
+  "context_compaction_for_llm_call_budget": {
+    "runtime_mode": "llm-first",
+    "execution_mode": "long-thinking",
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/current/out",
+    "revision_identity": "rev-req023-sample-r1"
+  },
+  "processing_behavior": {
+    "strategy": "context-compaction-broad-sweep",
+    "reasoning_mode": "long-thinking",
+    "heuristic_summarization_only": false,
+    "context_inputs": {
+      "target_project": {
+        "project_root": "/workspace/projects/optimus-prime",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+        ]
+      },
+      "earth_sweep": {
+        "earth_root": "/workspace/projects/Earth",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/portfolio.json"
+        ]
+      },
+      "cross_project_context": [
+        {
+          "project_id": "ground-control-hub",
+          "project_root": "/workspace/projects/Earth/ground-control-hub",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+          ],
+          "context_note": "Shared packet dependency from Earth sweep."
+        },
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime budgeting signals from Earth sweep."
+        }
+      ],
+      "candidate_recommendations": [
+        {
+          "action_id": "compact-constraint-preservation",
+          "summary": "Retain hard constraints when context is compacted for multiple LLM calls.",
+          "rationale": "Compaction cannot drop non-negotiable planning constraints.",
+          "action_scope": "cross-project",
+          "requires_earth_evidence": true,
+          "project_id": "runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "next_step": "Attach hard-constraint ids to every compacted packet."
+        },
+        {
+          "action_id": "compact-context-traceability",
+          "summary": "Preserve traceability refs inside compacted context packets.",
+          "rationale": "Every compacted packet still needs source evidence anchors.",
+          "action_scope": "cross-project",
+          "requires_earth_evidence": true,
+          "project_id": "ground-control-hub",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+          ],
+          "next_step": "Carry evidence refs into the compacted packet envelope."
+        },
+        {
+          "action_id": "compact-req-023-contract",
+          "summary": "Implement the REQ-023 contract and sample packet surface.",
+          "rationale": "Local contract coverage must match the compacted packet output.",
+          "action_scope": "local",
+          "requires_earth_evidence": false,
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ],
+          "next_step": "Ship builder, validator, fixture, and sample updates together."
+        }
+      ],
+      "earth_sweep_source_artifacts": [
+        {
+          "artifact_ref": "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "status": "stale",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json"
+          ]
+        }
+      ],
+      "required_context_documents": [
+        {
+          "doc_kind": "mission",
+          "doc_ref": "mission.md",
+          "status": "missing",
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "hard_constraints": [
+        {
+          "constraint_id": "keep-hard-constraints-visible",
+          "statement": "Do not remove hard constraints when compressing context for multi-call reasoning.",
+          "evidence_refs": [
+            "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md"
+          ]
+        },
+        {
+          "constraint_id": "preserve-traceability-pointers",
+          "statement": "Preserve evidence refs needed to trace each compacted packet back to the original sweep.",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "llm_call_budget": {
+        "max_context_packets": 3,
+        "max_focus_points_per_packet": 2,
+        "max_evidence_refs_per_packet": 3
+      }
+    },
+    "context_usage": {
+      "target_project_context_used": true,
+      "earth_sweep_context_used": true,
+      "cross_project_context_used": true,
+      "target_project_refs_used": [
+        "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_refs_used": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json"
+      ],
+      "cross_project_refs_used": [
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+      ],
+      "cross_project_projects_considered": [
+        "ground-control-hub",
+        "runtime-orchestrator"
+      ],
+      "evidence_refs_used": [
+        "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md",
+        "mission.md",
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_source_artifacts_used": true,
+      "earth_sweep_source_artifact_refs_used": [
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+      ],
+      "required_context_documents_used": true,
+      "required_context_document_refs_used": [
+        "mission.md",
+        "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+      ],
+      "context_compaction_used": true,
+      "context_compaction_packet_ids": [
+        "packet-01",
+        "packet-02",
+        "packet-03"
+      ],
+      "context_compaction_traceability_refs_used": [
+        "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md",
+        "mission.md",
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+      ],
+      "context_compaction_hard_constraint_ids": [
+        "keep-hard-constraints-visible",
+        "preserve-traceability-pointers"
+      ],
+      "context_compaction_covered_action_ids": [
+        "compact-constraint-preservation",
+        "compact-context-traceability",
+        "compact-req-023-contract"
+      ],
+      "context_compaction_covered_obligation_ids": [
+        "obligation-compact-constraint-preservation",
+        "obligation-compact-context-traceability"
+      ],
+      "context_compaction_covered_risk_ids": [
+        "risk-context-doc-c764f8c07198",
+        "risk-earth-source-7fdf112ec591"
+      ]
+    },
+    "context_compaction": {
+      "compaction_strategy": "high-signal-packets-for-multi-call-reasoning",
+      "llm_call_budget": {
+        "max_context_packets": 3,
+        "max_focus_points_per_packet": 2,
+        "max_evidence_refs_per_packet": 3
+      },
+      "mandatory_traceability_refs": [
+        "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md",
+        "mission.md",
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+      ],
+      "hard_constraints": [
+        {
+          "constraint_id": "keep-hard-constraints-visible",
+          "statement": "Do not remove hard constraints when compressing context for multi-call reasoning.",
+          "evidence_refs": [
+            "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md"
+          ]
+        },
+        {
+          "constraint_id": "preserve-traceability-pointers",
+          "statement": "Preserve evidence refs needed to trace each compacted packet back to the original sweep.",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "compacted_packets": [
+        {
+          "packet_id": "packet-01",
+          "packet_kind": "risk",
+          "summary": "Resolve 2 open risk(s) before broad replay expansion.",
+          "focus_points": [
+            "Earth sweep source artifact is stale: reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+            "Required mission document is missing: mission.md"
+          ],
+          "project_ids": [],
+          "source_action_ids": [],
+          "source_obligation_ids": [],
+          "source_risk_ids": [
+            "risk-context-doc-c764f8c07198",
+            "risk-earth-source-7fdf112ec591"
+          ],
+          "hard_constraint_ids": [
+            "keep-hard-constraints-visible",
+            "preserve-traceability-pointers"
+          ],
+          "traceability_refs": [
+            "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md",
+            "mission.md",
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ],
+          "evidence_focus_refs": [
+            "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md",
+            "mission.md",
+            "reports/earth/sweeps/2026-03-15/portfolio.json"
+          ],
+          "next_steps": [
+            "Resolve risk-earth-source-7fdf112ec591 and refresh required evidence refs.",
+            "Resolve risk-context-doc-c764f8c07198 and refresh required evidence refs."
+          ]
+        },
+        {
+          "packet_id": "packet-02",
+          "packet_kind": "cross-project",
+          "summary": "Cross-project packet for 'ground-control-hub' covering 1 action(s).",
+          "focus_points": [
+            "Preserve traceability refs inside compacted context packets."
+          ],
+          "project_ids": [
+            "ground-control-hub"
+          ],
+          "source_action_ids": [
+            "compact-context-traceability"
+          ],
+          "source_obligation_ids": [
+            "obligation-compact-context-traceability"
+          ],
+          "source_risk_ids": [],
+          "hard_constraint_ids": [
+            "keep-hard-constraints-visible",
+            "preserve-traceability-pointers"
+          ],
+          "traceability_refs": [
+            "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md",
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ],
+          "evidence_focus_refs": [
+            "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md",
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-15/portfolio.json"
+          ],
+          "next_steps": [
+            "Carry evidence refs into the compacted packet envelope."
+          ]
+        },
+        {
+          "packet_id": "packet-03",
+          "packet_kind": "mixed",
+          "summary": "Merged 2 high-signal groups for LLM call budget fit.",
+          "focus_points": [
+            "Retain hard constraints when context is compacted for multiple LLM calls.",
+            "Implement the REQ-023 contract and sample packet surface."
+          ],
+          "project_ids": [
+            "runtime-orchestrator"
+          ],
+          "source_action_ids": [
+            "compact-constraint-preservation",
+            "compact-req-023-contract"
+          ],
+          "source_obligation_ids": [
+            "obligation-compact-constraint-preservation"
+          ],
+          "source_risk_ids": [],
+          "hard_constraint_ids": [
+            "keep-hard-constraints-visible",
+            "preserve-traceability-pointers"
+          ],
+          "traceability_refs": [
+            "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md",
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ],
+          "evidence_focus_refs": [
+            "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md",
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "next_steps": [
+            "Attach hard-constraint ids to every compacted packet.",
+            "Ship builder, validator, fixture, and sample updates together."
+          ]
+        }
+      ],
+      "coverage": {
+        "recommended_action_ids": [
+          "compact-constraint-preservation",
+          "compact-context-traceability",
+          "compact-req-023-contract"
+        ],
+        "covered_action_ids": [
+          "compact-constraint-preservation",
+          "compact-context-traceability",
+          "compact-req-023-contract"
+        ],
+        "uncovered_action_ids": [],
+        "cross_project_obligation_ids": [
+          "obligation-compact-constraint-preservation",
+          "obligation-compact-context-traceability"
+        ],
+        "covered_obligation_ids": [
+          "obligation-compact-constraint-preservation",
+          "obligation-compact-context-traceability"
+        ],
+        "uncovered_obligation_ids": [],
+        "open_risk_ids": [
+          "risk-context-doc-c764f8c07198",
+          "risk-earth-source-7fdf112ec591"
+        ],
+        "covered_risk_ids": [
+          "risk-context-doc-c764f8c07198",
+          "risk-earth-source-7fdf112ec591"
+        ],
+        "uncovered_risk_ids": [],
+        "hard_constraint_ids": [
+          "keep-hard-constraints-visible",
+          "preserve-traceability-pointers"
+        ],
+        "covered_hard_constraint_ids": [
+          "keep-hard-constraints-visible",
+          "preserve-traceability-pointers"
+        ],
+        "uncovered_hard_constraint_ids": []
+      }
+    },
+    "recommendation": {
+      "decision": "proceed-with-open-risks",
+      "rationale": "Compacted 3 packet(s) covering 3 action(s), 2 obligation(s), 2 risk(s), and 2 hard constraint(s). Some actions are evidence-backed, while unresolved cross-project ideas remain open risks.",
+      "confidence": "medium",
+      "evidence_refs": [
+        "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md",
+        "mission.md",
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-15/portfolio.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+      ],
+      "recommended_actions": [
+        {
+          "action_id": "compact-constraint-preservation",
+          "summary": "Retain hard constraints when context is compacted for multiple LLM calls.",
+          "rationale": "Compaction cannot drop non-negotiable planning constraints.",
+          "action_scope": "cross-project",
+          "next_step": "Attach hard-constraint ids to every compacted packet.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "action_id": "compact-context-traceability",
+          "summary": "Preserve traceability refs inside compacted context packets.",
+          "rationale": "Every compacted packet still needs source evidence anchors.",
+          "action_scope": "cross-project",
+          "next_step": "Carry evidence refs into the compacted packet envelope.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+          ]
+        },
+        {
+          "action_id": "compact-req-023-contract",
+          "summary": "Implement the REQ-023 contract and sample packet surface.",
+          "rationale": "Local contract coverage must match the compacted packet output.",
+          "action_scope": "local",
+          "next_step": "Ship builder, validator, fixture, and sample updates together.",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "cross_project_obligations": [
+        {
+          "obligation_id": "obligation-compact-constraint-preservation",
+          "project_id": "runtime-orchestrator",
+          "summary": "Retain hard constraints when context is compacted for multiple LLM calls.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/portfolio.json",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "obligation_id": "obligation-compact-context-traceability",
+          "project_id": "ground-control-hub",
+          "summary": "Preserve traceability refs inside compacted context packets.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+            "reports/earth/sweeps/2026-03-15/portfolio.json"
+          ]
+        }
+      ],
+      "open_risks": [
+        {
+          "risk_id": "risk-earth-source-7fdf112ec591",
+          "summary": "Earth sweep source artifact is stale: reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "reason_code": "stale_earth_sweep_source_artifact",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json",
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "risk_id": "risk-context-doc-c764f8c07198",
+          "summary": "Required mission document is missing: mission.md",
+          "reason_code": "missing_mission_doc",
+          "required_evidence_refs": [
+            "mission.md",
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ]
+        }
+      ]
+    }
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input_sha256": "79ac1af47a1912efd0b3e9ac6ecc9a4b15d0ff1907adabe22b6165121f2111e3",
+    "reproducible_call_id": "req023-79ac1af47a1912ef",
+    "canonical_input": {
+      "earth_root": "/workspace/projects/Earth",
+      "execution_mode": "long-thinking",
+      "output_root": "/workspace/projects/optimus-prime/strategy/current/out",
+      "revision_identity": "rev-req023-sample-r1",
+      "runtime_mode": "llm-first",
+      "target_project_root": "/workspace/projects/optimus-prime"
+    },
+    "processing_input_sha256": "77175b288a953ae8c5cae30c5de0f423959e2ff132cb8fdc05f880c5ee4f6f95",
+    "processing_call_id": "req023-processing-77175b288a953ae8",
+    "canonical_processing_input": {
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/portfolio.json"
+      ],
+      "cross_project_context": [
+        {
+          "project_id": "ground-control-hub",
+          "project_root": "/workspace/projects/Earth/ground-control-hub",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+          ],
+          "context_note": "Shared packet dependency from Earth sweep."
+        },
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime budgeting signals from Earth sweep."
+        }
+      ],
+      "candidate_recommendations": [
+        {
+          "action_id": "compact-constraint-preservation",
+          "summary": "Retain hard constraints when context is compacted for multiple LLM calls.",
+          "rationale": "Compaction cannot drop non-negotiable planning constraints.",
+          "action_scope": "cross-project",
+          "requires_earth_evidence": true,
+          "project_id": "runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "next_step": "Attach hard-constraint ids to every compacted packet."
+        },
+        {
+          "action_id": "compact-context-traceability",
+          "summary": "Preserve traceability refs inside compacted context packets.",
+          "rationale": "Every compacted packet still needs source evidence anchors.",
+          "action_scope": "cross-project",
+          "requires_earth_evidence": true,
+          "project_id": "ground-control-hub",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/ground-control-hub.json"
+          ],
+          "next_step": "Carry evidence refs into the compacted packet envelope."
+        },
+        {
+          "action_id": "compact-req-023-contract",
+          "summary": "Implement the REQ-023 contract and sample packet surface.",
+          "rationale": "Local contract coverage must match the compacted packet output.",
+          "action_scope": "local",
+          "requires_earth_evidence": false,
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ],
+          "next_step": "Ship builder, validator, fixture, and sample updates together."
+        }
+      ],
+      "earth_sweep_source_artifacts": [
+        {
+          "artifact_ref": "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "status": "stale",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.audit.json"
+          ]
+        }
+      ],
+      "required_context_documents": [
+        {
+          "doc_kind": "mission",
+          "doc_ref": "mission.md",
+          "status": "missing",
+          "project_id": "",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "hard_constraints": [
+        {
+          "constraint_id": "keep-hard-constraints-visible",
+          "statement": "Do not remove hard constraints when compressing context for multi-call reasoning.",
+          "evidence_refs": [
+            "contracts/req/REQ-023_context-compaction-for-llm-call-budget.md"
+          ]
+        },
+        {
+          "constraint_id": "preserve-traceability-pointers",
+          "statement": "Preserve evidence refs needed to trace each compacted packet back to the original sweep.",
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-072/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "llm_call_budget": {
+        "max_context_packets": 3,
+        "max_focus_points_per_packet": 2,
+        "max_evidence_refs_per_packet": 3
+      }
+    }
+  }
+}

@@ -130,6 +130,18 @@ Accepted builder input shape:
         ],
         "next_step": "Open a cross-project follow-up with Earth-sweep and runtime verification refs attached."
       }
+    ],
+    "strategic_claims": [
+      {
+        "claim_id": "claim-runtime-recovery",
+        "phase": "analysis",
+        "summary": "Analysis says degraded fallback behavior remains an active branch-head concern.",
+        "position": "active-risk",
+        "source_call_sequence": 1,
+        "evidence_refs": [
+          "reports/optimus-prime/planning/VERIFICATION.md"
+        ]
+      }
     ]
   }
 }
@@ -160,6 +172,7 @@ Rules:
 - `broad_sweep_context.earth_sweep_evidence_refs[]` may be empty, but cross-project recommendations that require Earth evidence cannot become obligations unless these refs are present.
 - `broad_sweep_context.cross_project_context[]` records Earth-sweep-backed project context with `project_id`, `project_root`, `evidence_refs[]`, and `context_note`.
 - `broad_sweep_context.candidate_recommendations[]` records deterministic local or cross-project next-step proposals for Call-1 recommendation shaping.
+- `broad_sweep_context.strategic_claims[]` may be supplied to capture replayed analysis/synthesis claim rows with `claim_id`, `phase`, `position`, `source_call_sequence`, and `evidence_refs[]`.
 - Call-1 output must include at least one explicit unknown for later calls.
 
 ## Output contract
@@ -209,6 +222,7 @@ Top-level required keys:
 - `processing_behavior`
   - `strategy`
   - `reasoning_mode`
+  - `strict_evidence_discipline`
   - `context_inputs.broad_sweep_context`
   - `context_usage`
   - `recommendation`
@@ -258,8 +272,11 @@ Normalization rules:
   - `planning_evidence`
   - `runtime_evidence`
 - `unknowns[].must_be_resolved_by` is fixed to `call-2`.
+- Candidate recommendations and cross-project context rows are normalized into deterministic identifier order before replay-sensitive metadata is computed.
 - Cross-project obligations may only be emitted when Earth-sweep evidence refs are present and matched to the referenced project context.
 - Unsupported cross-project ideas must be emitted as `processing_behavior.recommendation.open_risks[]`, never silently promoted to obligations.
+- Uncited or mismatched strategic claims must emit `reason_code = uncited_strategic_claim` with deterministic evidence refs.
+- Contradictory analysis vs synthesis claim rows for the same `claim_id` must emit `reason_code = cross_call_contradiction` with deterministic evidence refs.
 
 ## Sample structure
 

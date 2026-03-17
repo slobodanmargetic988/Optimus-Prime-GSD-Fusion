@@ -1,0 +1,90 @@
+{
+  "schema_version": "strategy-packet.v1",
+  "identity": {
+    "project_id": "prj.myownmint",
+    "run_id": "run.20260312t201000z-s001",
+    "event_id": "event.20260312t201400z-strategy-packet",
+    "era_id": "era.2026q1-execution",
+    "plan_id": "plan.myownmint-phase2"
+  },
+  "strategy": {
+    "revision_id": "strat.20260312-r1",
+    "summary": "Prioritize dispatch quality and deterministic continuation to unlock reliable autonomous throughput.",
+    "link_map_ref": "strategy/current/ECOSYSTEM_LINK_MAP.json"
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.dispatch-quality-first",
+      "priority": "high",
+      "summary": "Implement watcher-driven cycle release and redispatch-quality controls before broader runtime features.",
+      "rationale": "This directly reduces non-actionable cycles and improves output per token budget.",
+      "expected_impact": "Lower idle loops and better per-cycle productivity under constrained hardware and rate limits.",
+      "risk_level": "medium"
+    }
+  ],
+  "recommendation_mapping": [
+    {
+      "recommendation_id": "rec.dispatch-quality-first",
+      "op_plan_ref": "op-plan.input.recommendations[rec.dispatch-quality-first]",
+      "op_initialize_ref": "op-initialize.input.recommendations[rec.dispatch-quality-first]"
+    }
+  ],
+  "constraints": {
+    "hard": [
+      "Preserve existing OP behavior unless feature flags explicitly enable new cycle-release mode."
+    ],
+    "soft": [
+      "Default to token-conservative mode in low budget environments."
+    ]
+  },
+  "kpi_targets": [
+    {
+      "metric": "non_actionable_cycle_ratio",
+      "direction": "decrease",
+      "target": ">=20% reduction versus baseline"
+    },
+    {
+      "metric": "redispatch_loop_ratio",
+      "direction": "decrease",
+      "target": ">=15% reduction versus baseline"
+    }
+  ],
+  "source": {
+    "repo": "Optimus-Prime-GSD-Fusion",
+    "tool": "op-tools/strategy"
+  },
+  "gate_policy": {
+    "min_citation_coverage_ratio": 0.85,
+    "max_unresolved_contradictions": 0,
+    "min_high_confidence_ratio": 0.5
+  },
+  "strategy_quality_report": {
+    "citation_coverage": {
+      "cited_claims": 1,
+      "uncited_claims": 0,
+      "total_claims": 1,
+      "coverage_ratio": 1.0
+    },
+    "contradiction_status": {
+      "has_unresolved_contradictions": false,
+      "unresolved_contradiction_count": 0,
+      "unresolved_contradiction_ids": []
+    },
+    "confidence_distribution": {
+      "high": 1,
+      "medium": 0,
+      "low": 0,
+      "total": 1,
+      "high_ratio": 1.0,
+      "medium_ratio": 0.0,
+      "low_ratio": 0.0
+    },
+    "gate_verdicts": {
+      "citation_coverage_pass": true,
+      "contradiction_pass": true,
+      "confidence_distribution_pass": true,
+      "overall_pass": true,
+      "failed_gate_ids": []
+    }
+  }
+}

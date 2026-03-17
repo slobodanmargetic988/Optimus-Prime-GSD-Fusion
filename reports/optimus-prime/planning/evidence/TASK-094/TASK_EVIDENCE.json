@@ -1,0 +1,158 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-094",
+  "requirement_ids": [
+    "REQ-028"
+  ],
+  "updated_at": "2026-03-16T01:48:38Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_028_check_bundle_run_1",
+        "command": "python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-check-bundle/scripts/dev_check_bundle.py --input-json - --json-pretty",
+        "exit_code": 0,
+        "summary": "overall=pass; req_028_contract_suite=0; req_028_integration_suite=0; req_028_hardening_suite=0",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-1.json"
+      },
+      {
+        "name": "req_028_check_bundle_run_2",
+        "command": "python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-check-bundle/scripts/dev_check_bundle.py --input-json - --json-pretty",
+        "exit_code": 0,
+        "summary": "overall=pass; req_028_contract_suite=0; req_028_integration_suite=0; req_028_hardening_suite=0",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-2.json"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-028",
+        "status": "pass",
+        "details": "Call-3 now emits a deterministic `cross_call_contradiction` open risk when analysis and synthesis claims disagree, with source-output evidence refs preserved for replay diagnostics.",
+        "evidence_refs": [
+          "scripts/strategy_llm_pipeline.py",
+          "tests/hardening/test_call-3-gap-and-opportunity-reasoning_hardening.py",
+          "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-1.json",
+          "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-2.json"
+        ]
+      },
+      {
+        "requirement_id": "REQ-028",
+        "status": "pass",
+        "details": "Citation discipline now blocks uncited strategic claims with a deterministic `uncited_strategic_claim` reason code and actionable evidence refs.",
+        "evidence_refs": [
+          "scripts/strategy_llm_pipeline.py",
+          "tests/hardening/test_call-3-gap-and-opportunity-reasoning_hardening.py",
+          "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-1.json",
+          "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-2.json"
+        ]
+      },
+      {
+        "requirement_id": "REQ-028",
+        "status": "pass",
+        "details": "Call-chain replay keeps recommended opportunity IDs and ordering stable across reordered inputs and consecutive verification runs.",
+        "evidence_refs": [
+          "scripts/strategy_llm_pipeline.py",
+          "tests/hardening/test_call-3-gap-and-opportunity-reasoning_hardening.py",
+          "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-1.json",
+          "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-2.json"
+        ]
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "cross_call_contradiction_between_analysis_and_synthesis_outputs",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "uncited_strategic_claim_blocked_by_citation_discipline",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "call_chain_replay_stable_recommendation_ids_and_ordering",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/hardening/test_call-3-gap-and-opportunity-reasoning_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-1.json",
+      "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-2.json",
+      "reports/optimus-prime/planning/evidence/TASK-094/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_028_acceptance_bundle_run_1",
+        "command": "python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-check-bundle/scripts/dev_check_bundle.py --input-json - --json-pretty",
+        "exit_code": 0,
+        "summary": "consecutive acceptance run 1 passed for contract, integration, and hardening suites",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-1.json"
+      },
+      {
+        "name": "req_028_acceptance_bundle_run_2",
+        "command": "python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/dev-check-bundle/scripts/dev_check_bundle.py --input-json - --json-pretty",
+        "exit_code": 0,
+        "summary": "consecutive acceptance run 2 passed for contract, integration, and hardening suites",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-2.json"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-028",
+        "status": "pass",
+        "details": "Consecutive bundle runs kept `cross_call_contradiction` and `uncited_strategic_claim` behavior deterministic while preserving stable recommendation ordering.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-1.json",
+          "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-2.json"
+        ]
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-028",
+        "passed": true,
+        "notes": "TASK_EVIDENCE contains no unresolved blocker rows for the three TASK-094 hardening edge cases and both acceptance bundles exited 0."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-1.json",
+      "reports/optimus-prime/planning/evidence/TASK-094/check-bundle-run-2.json",
+      "reports/optimus-prime/planning/evidence/TASK-094/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/hardening/test_call-3-gap-and-opportunity-reasoning_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-094/TASK_EVIDENCE.json"
+    ]
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_review",
+    "reason_codes": [
+      "req_028_cross_call_contradiction_reason_code_green",
+      "req_028_uncited_claim_citation_gate_green",
+      "req_028_replay_ordering_stable",
+      "req_028_consecutive_check_bundle_green",
+      "task_094_no_unresolved_blockers"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

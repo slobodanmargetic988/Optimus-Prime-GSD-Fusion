@@ -1,0 +1,58 @@
+{
+  "artifact_type": "planner_consumability_validator",
+  "checks": {
+    "recommendation_mapping": {
+      "incomplete_mappings": [],
+      "mapped_recommendation_ids": [
+        "rec.dispatch-quality-first"
+      ],
+      "missing_mapping_ids": [],
+      "pass": true,
+      "recommendation_ids": [
+        "rec.dispatch-quality-first"
+      ],
+      "recommendations_missing_id": [],
+      "required_mapping_fields": [
+        "op_plan_ref",
+        "op_initialize_ref"
+      ]
+    },
+    "required_files": {
+      "available_files": [
+        "contracts/req/REQ-065_planner-consumability-validator.md",
+        "strategy/current/samples/REQ-065_planner-consumability-validator.sample.json",
+        "strategy/current/strategy_packet.v1.json"
+      ],
+      "missing_required_files": [],
+      "pass": true,
+      "required_files": [
+        "strategy/current/samples/REQ-065_planner-consumability-validator.sample.json",
+        "strategy/current/strategy_packet.v1.json"
+      ]
+    },
+    "required_keys": {
+      "empty_required_keys": [],
+      "missing_required_keys": [],
+      "pass": true,
+      "required_keys": [
+        "identity.project_id",
+        "recommendation_mapping[0].op_initialize_ref",
+        "recommendation_mapping[0].op_plan_ref",
+        "recommendations[0].recommendation_id",
+        "strategy.summary"
+      ]
+    }
+  },
+  "gate_verdict": {
+    "blocking_reasons": [],
+    "ready_for_planner_consumption": true,
+    "verdict": "pass",
+    "warning_reasons": []
+  },
+  "planner_targets": [
+    "op-plan",
+    "op-initialize"
+  ],
+  "requirement_id": "REQ-065",
+  "validator_version": "1.0"
+}

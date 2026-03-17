@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-canary-001",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-076",
+  "requirement_ids": [
+    "REQ-024"
+  ],
+  "updated_at": "2026-03-15T20:20:17Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "integration_strategy_context_bundle_serialization",
+        "command": "python3 -m pytest tests/integration/test_strategy-context-bundle-serialization.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-076/integration_strategy-context-bundle-serialization.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-024",
+        "status": "pass",
+        "details": "Strategy context bundle serialization now derives deterministic broad-sweep processing behavior from context inputs, preserves complete evidence refs and recommendation fields, and records cross-project actions as open risks when Earth-sweep evidence is unavailable.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-076/integration_strategy-context-bundle-serialization.output.txt"
+        ]
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "contracts/req/REQ-024_strategy-context-bundle-serialization.md",
+      "examples/fixtures/strategy-context-bundle-serialization.json",
+      "strategy/current/samples/REQ-024_strategy-context-bundle-serialization.sample.json",
+      "tests/contracts/test_strategy-context-bundle-serialization.py",
+      "tests/integration/test_strategy-context-bundle-serialization.py",
+      "reports/optimus-prime/planning/evidence/TASK-076/integration_strategy-context-bundle-serialization.output.txt"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_024_integration_green",
+      "processing_behavior_deterministic",
+      "recommendation_fields_complete",
+      "cross_project_context_usage_tracked",
+      "missing_earth_evidence_recorded_as_open_risk"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}
