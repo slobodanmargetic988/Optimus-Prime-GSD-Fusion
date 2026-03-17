@@ -92,6 +92,9 @@ def test_req_068_contract_doc_references_sample_structure() -> None:
         "op_plan_strategy_ingestion.planner_inputs.recommendation_traceability_index",
         "op_plan_strategy_ingestion.planning_alerts",
         "op_plan_strategy_ingestion.planning_alerts.validator_verdict",
+        "processing_behavior",
+        "processing_behavior.recommendation_generation",
+        "processing_behavior.context_usage",
         "totals",
     ):
         assert key in contract_text

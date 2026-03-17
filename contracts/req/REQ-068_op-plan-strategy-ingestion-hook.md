@@ -57,6 +57,7 @@ Rules:
 - `analysis_type` must be `op_plan_strategy_ingestion_hook` when provided.
 - `target_project.project_root` must normalize to an absolute path.
 - `final_strategy_artifact`, `kpi_target_artifact`, and `recommendation_id_validator` are required.
+- `broad_sweep_context` is optional input for processing behavior and must follow the canonical broad-sweep context shape when present.
 - Each artifact envelope is strict and limited to:
   - `artifact_ref`
   - `payload`
@@ -70,6 +71,7 @@ REQ-068 output payload contains:
 - metadata: `ok`, `schema_version`, `requirement_id`, `analysis_type`, `call_id`, `checked_at_utc`
 - ingestion target: `target_project`
 - planner ingestion surface: `op_plan_strategy_ingestion`
+- deterministic reasoning surface: `processing_behavior`
 - bounded counts: `totals`
 
 `op_plan_strategy_ingestion` contains:
@@ -118,6 +120,25 @@ Each `recommendation_traceability_index[]` row includes:
 - `id_drift[]`
 - `validator_verdict`
 
+`processing_behavior` contains:
+- `strategy`
+- `reasoning_mode`
+- `heuristic_summarization_only`
+- `context_inputs`
+- `context_usage`
+- `recommendation_generation`
+- `recommendation`
+
+`processing_behavior.recommendation` contains:
+- `decision`
+- `rationale`
+- `confidence`
+- `evidence_refs[]`
+- `strategy_packet_input_ids[]`
+- `planner_ready_recommendation_ids[]`
+- `cross_project_obligations[]`
+- `open_risks[]`
+
 `totals` contains:
 - `strategy_packet_inputs`
 - `planner_ready_recommendations`
@@ -132,6 +153,7 @@ Behavior anchors:
 - `recommendation_traceability_index[]` preserves recommendation lineage by combining final recommendation evidence, call-trace lineage, KPI target linkage, and REQ-062 diagnostic refs.
 - `id_validation_status` is `collision`, `drifted`, or `stable` based on the canonical REQ-062 diagnostics relevant to the recommendation.
 - `planning_alerts` carries deferred recommendations, open risks, and recommendation ID diagnostics forward without redefining planner packet semantics.
+- `processing_behavior` must remain deterministic, must surface broad-sweep context usage explicitly, and must not convert unsupported cross-project ideas into obligations without Earth-sweep evidence refs.
 
 ## Deterministic fixtures and samples
 - Input fixture: `examples/fixtures/op-plan-strategy-ingestion-hook.json`
@@ -147,4 +169,7 @@ is the canonical contract shape for REQ-068 and documents:
 - `op_plan_strategy_ingestion.planner_inputs.recommendation_traceability_index`
 - `op_plan_strategy_ingestion.planning_alerts`
 - `op_plan_strategy_ingestion.planning_alerts.validator_verdict`
+- `processing_behavior`
+- `processing_behavior.recommendation_generation`
+- `processing_behavior.context_usage`
 - `totals`

@@ -27,6 +27,8 @@ REQ_068_REQUIREMENT_ID = "REQ-068"
 REQ_068_SCHEMA_VERSION = "1.0"
 REQ_068_ANALYSIS_TYPE = "op_plan_strategy_ingestion_hook"
 REQ_068_CALL_ID = "op-plan-strategy-ingestion-hook"
+REQ_068_PROCESSING_STRATEGY = "op-plan-strategy-ingestion-broad-sweep"
+REQ_068_REASONING_MODE = "deterministic-broad-sweep"
 
 _EXPECTED_DIRECTIONS = {"increase", "decrease", "maintain"}
 _CONFIDENCE_LEVELS = {"high", "medium", "low"}
@@ -49,6 +51,16 @@ _REQ_062_RECOMMENDATION_FIELDS = [
     "rationale",
     "confidence",
     "evidence_refs",
+    "cross_project_obligations",
+    "open_risks",
+]
+_REQ_068_RECOMMENDATION_FIELDS = [
+    "decision",
+    "rationale",
+    "confidence",
+    "evidence_refs",
+    "strategy_packet_input_ids",
+    "planner_ready_recommendation_ids",
     "cross_project_obligations",
     "open_risks",
 ]
@@ -82,6 +94,10 @@ def _utc_timestamp() -> str:
 def _stable_id_fragment(*parts: Any) -> str:
     joined = "||".join(str(part).strip() for part in parts if str(part).strip())
     return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:12]
+
+
+def _json_copy(value: Any) -> Any:
+    return json.loads(json.dumps(value, sort_keys=True))
 
 
 def _require_mapping(value: Any, *, field_name: str) -> Mapping[str, Any]:
@@ -2391,6 +2407,567 @@ def _req_068_diagnostic_refs_for_recommendation(
     return status, sorted(set(diagnostic_refs))
 
 
+def _earth_sweep_refs(*groups: Any) -> list[str]:
+    return sorted(
+        {
+            ref
+            for ref in _collect_unique_refs(*groups)
+            if ref.startswith(_EARTH_SWEEP_PREFIX)
+        }
+    )
+
+
+def _req_068_merge_broad_sweep_context(*contexts: Any) -> dict[str, Any]:
+    merged = {
+        "earth_sweep_evidence_refs": [],
+        "projects_considered": [],
+        "cross_project_obligations": [],
+        "unresolved_ideas": [],
+    }
+    for context in contexts:
+        if not isinstance(context, Mapping):
+            continue
+        merged["earth_sweep_evidence_refs"].extend(context.get("earth_sweep_evidence_refs") or [])
+        merged["projects_considered"].extend(context.get("projects_considered") or [])
+        merged["cross_project_obligations"].extend(context.get("cross_project_obligations") or [])
+        merged["unresolved_ideas"].extend(context.get("unresolved_ideas") or [])
+    return _normalize_broad_sweep_context(merged)
+
+
+def _req_068_derived_broad_sweep_context(final_synthesis: Mapping[str, Any]) -> dict[str, Any]:
+    context_usage = (
+        final_synthesis.get("cross_project_context_usage")
+        if isinstance(final_synthesis.get("cross_project_context_usage"), Mapping)
+        else {}
+    )
+    derived = {
+        "earth_sweep_evidence_refs": list(context_usage.get("earth_sweep_evidence_refs_considered") or []),
+        "projects_considered": list(context_usage.get("projects_considered") or []),
+        "cross_project_obligations": [],
+        "unresolved_ideas": [],
+    }
+
+    for row in final_synthesis.get("strategy_packet_inputs") or []:
+        if not isinstance(row, Mapping) or row.get("packet_kind") != "cross-project":
+            continue
+        project_id = str(row.get("peer_project_id") or "").strip()
+        if project_id:
+            derived["projects_considered"].append(project_id)
+        evidence_refs = _earth_sweep_refs(row.get("evidence_refs") or [])
+        derived["earth_sweep_evidence_refs"].extend(evidence_refs)
+        derived["cross_project_obligations"].append(
+            {
+                "project_id": project_id,
+                "recommendation_ids": list(row.get("recommendation_ids") or []),
+                "earth_sweep_evidence_refs": evidence_refs,
+            }
+        )
+
+    for row in final_synthesis.get("open_risks") or []:
+        if not isinstance(row, Mapping):
+            continue
+        project_id = str(row.get("project_id") or "").strip()
+        if project_id:
+            derived["projects_considered"].append(project_id)
+        evidence_refs = _earth_sweep_refs(
+            row.get("evidence_refs") or [],
+            row.get("required_evidence_refs") or [],
+        )
+        derived["earth_sweep_evidence_refs"].extend(evidence_refs)
+        if project_id:
+            derived["unresolved_ideas"].append(
+                {
+                    "idea_id": row.get("recommendation_id") or row.get("open_risk_id") or row.get("summary"),
+                    "summary": row.get("summary") or project_id,
+                    "project_id": project_id,
+                    "recommendation_ids": list(row.get("linked_recommendation_ids") or []),
+                    "earth_sweep_evidence_refs": _earth_sweep_refs(row.get("evidence_refs") or []),
+                }
+            )
+
+    for row in final_synthesis.get("deferred_recommendations") or []:
+        if not isinstance(row, Mapping):
+            continue
+        peer_projects = sorted(
+            {
+                str(project_id).strip()
+                for project_id in (row.get("peer_project_candidates") or [])
+                if str(project_id).strip()
+            }
+        )
+        evidence_refs = _earth_sweep_refs(row.get("evidence_refs") or [])
+        derived["earth_sweep_evidence_refs"].extend(evidence_refs)
+        for project_id in peer_projects:
+            derived["projects_considered"].append(project_id)
+
+    return _normalize_broad_sweep_context(derived)
+
+
+def _req_068_recommendation_decision(
+    *,
+    open_risks: list[dict[str, Any]],
+    deferred_recommendations: list[dict[str, Any]],
+    validator_verdict: Mapping[str, Any],
+) -> str:
+    if any(row.get("reason_code") == _MISSING_EARTH_SWEEP_EVIDENCE for row in open_risks):
+        return "collect-earth-evidence"
+    if open_risks or deferred_recommendations or validator_verdict.get("passed") is False:
+        return "proceed-with-open-risks"
+    return "proceed"
+
+
+def _req_068_recommendation_confidence(
+    *,
+    decision: str,
+    open_risks: list[dict[str, Any]],
+    deferred_recommendations: list[dict[str, Any]],
+    validator_verdict: Mapping[str, Any],
+) -> str:
+    if decision == "collect-earth-evidence":
+        return "low"
+    if validator_verdict.get("passed") is False:
+        return "low"
+    if open_risks or deferred_recommendations:
+        return "medium"
+    return "high"
+
+
+def _build_req_068_processing_behavior(
+    *,
+    target_project: dict[str, str],
+    canonical_strategy_artifacts: dict[str, str],
+    strategy_packet_inputs: list[dict[str, Any]],
+    recommendation_traceability_index: list[dict[str, Any]],
+    planning_alerts: dict[str, Any],
+    broad_sweep_context: dict[str, Any],
+) -> dict[str, Any]:
+    cross_project_obligations: list[dict[str, Any]] = []
+    open_risk_rows: list[dict[str, Any]] = [_json_copy(row) for row in planning_alerts["open_risks"]]
+    open_risk_keys = {
+        (
+            str(row.get("reason_code") or ""),
+            str(row.get("project_id") or ""),
+            str(row.get("recommendation_id") or ""),
+            str(row.get("summary") or ""),
+        )
+        for row in open_risk_rows
+        if isinstance(row, Mapping)
+    }
+
+    for row in strategy_packet_inputs:
+        if row["packet_kind"] != "cross-project":
+            continue
+        earth_refs = _earth_sweep_refs(row["evidence_refs"])
+        if earth_refs:
+            cross_project_obligations.append(
+                {
+                    "obligation_id": f"obligation.{_stable_id_fragment(row['peer_project_id'], row['packet_input_id'])}",
+                    "project_id": row["peer_project_id"],
+                    "strategy_packet_input_ids": [row["packet_input_id"]],
+                    "recommendation_ids": list(row["recommendation_ids"]),
+                    "evidence_refs": earth_refs,
+                }
+            )
+            continue
+
+        missing_risk = {
+            "open_risk_id": f"open-risk.{_stable_id_fragment(row['peer_project_id'], row['packet_input_id'])}",
+            "recommendation_id": f"idea.{_stable_id_fragment(row['peer_project_id'], 'missing-earth-sweep')}",
+            "summary": f"Cross-project planner packet for {row['peer_project_id']} lacks Earth-sweep evidence refs.",
+            "reason_code": _MISSING_EARTH_SWEEP_EVIDENCE,
+            "project_id": row["peer_project_id"],
+            "required_evidence_refs": ["missing:earth-sweep-evidence-ref"],
+            "evidence_refs": [],
+            "linked_recommendation_ids": list(row["recommendation_ids"]),
+            "call_trace_lineage": [],
+            "contributing_call_ids": [],
+        }
+        missing_key = (
+            missing_risk["reason_code"],
+            missing_risk["project_id"],
+            missing_risk["recommendation_id"],
+            missing_risk["summary"],
+        )
+        if missing_key not in open_risk_keys:
+            open_risk_rows.append(missing_risk)
+            open_risk_keys.add(missing_key)
+
+    planner_ready_recommendation_ids = sorted(
+        {str(row["recommendation_id"]) for row in recommendation_traceability_index}
+    )
+    for row in broad_sweep_context["unresolved_ideas"]:
+        unresolved_risk = {
+            "open_risk_id": f"open-risk.{_stable_id_fragment(row['idea_id'], row['project_id'])}",
+            "recommendation_id": row["idea_id"],
+            "summary": row["summary"],
+            "reason_code": "unresolved_idea_open_risk",
+            "project_id": row["project_id"],
+            "required_evidence_refs": list(row["earth_sweep_evidence_refs"]) or ["missing:earth-sweep-evidence-ref"],
+            "evidence_refs": list(row["earth_sweep_evidence_refs"]),
+            "linked_recommendation_ids": list(row["recommendation_ids"]),
+            "call_trace_lineage": [],
+            "contributing_call_ids": [],
+        }
+        unresolved_key = (
+            unresolved_risk["reason_code"],
+            unresolved_risk["project_id"],
+            unresolved_risk["recommendation_id"],
+            unresolved_risk["summary"],
+        )
+        if unresolved_key not in open_risk_keys:
+            open_risk_rows.append(unresolved_risk)
+            open_risk_keys.add(unresolved_key)
+
+    for row in broad_sweep_context["cross_project_obligations"]:
+        if row["earth_sweep_evidence_refs"]:
+            continue
+        linked_ids = sorted(set(row["recommendation_ids"]).intersection(planner_ready_recommendation_ids))
+        if any(
+            isinstance(existing, Mapping)
+            and existing.get("reason_code") == _MISSING_EARTH_SWEEP_EVIDENCE
+            and str(existing.get("project_id") or "") == row["project_id"]
+            and sorted(existing.get("linked_recommendation_ids") or []) == linked_ids
+            for existing in open_risk_rows
+        ):
+            continue
+        missing_risk = {
+            "open_risk_id": f"open-risk.{_stable_id_fragment(row['project_id'], linked_ids, 'missing-earth-sweep')}",
+            "recommendation_id": f"idea.{_stable_id_fragment(row['project_id'], linked_ids, 'missing-earth-sweep')}",
+            "summary": f"Cross-project strategy ingestion dependency for {row['project_id']} lacks Earth-sweep evidence refs.",
+            "reason_code": _MISSING_EARTH_SWEEP_EVIDENCE,
+            "project_id": row["project_id"],
+            "required_evidence_refs": ["missing:earth-sweep-evidence-ref"],
+            "evidence_refs": [],
+            "linked_recommendation_ids": linked_ids,
+            "call_trace_lineage": [],
+            "contributing_call_ids": [],
+        }
+        missing_key = (
+            missing_risk["reason_code"],
+            missing_risk["project_id"],
+            missing_risk["recommendation_id"],
+            missing_risk["summary"],
+        )
+        if missing_key not in open_risk_keys:
+            open_risk_rows.append(missing_risk)
+            open_risk_keys.add(missing_key)
+
+    cross_project_obligations.sort(
+        key=lambda row: (
+            row["project_id"],
+            row["strategy_packet_input_ids"],
+            row["recommendation_ids"],
+        )
+    )
+    open_risk_rows.sort(
+        key=lambda row: (
+            str(row.get("project_id") or ""),
+            str(row.get("reason_code") or ""),
+            str(row.get("open_risk_id") or row.get("risk_id") or ""),
+            str(row.get("recommendation_id") or ""),
+        )
+    )
+
+    strategy_packet_input_ids = sorted({str(row["packet_input_id"]) for row in strategy_packet_inputs})
+    linked_kpi_target_ids_used = sorted(
+        {
+            str(target_id)
+            for row in recommendation_traceability_index
+            for target_id in row["linked_kpi_target_ids"]
+        }
+    )
+    validator_diagnostic_refs_used = sorted(
+        {
+            str(ref)
+            for row in recommendation_traceability_index
+            for ref in row["validator_diagnostic_refs"]
+        }
+    )
+    earth_sweep_evidence_refs_used = _earth_sweep_refs(
+        broad_sweep_context["earth_sweep_evidence_refs"],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row.get("evidence_refs", []) for row in open_risk_rows if isinstance(row, Mapping)],
+        *[row.get("required_evidence_refs", []) for row in open_risk_rows if isinstance(row, Mapping)],
+    )
+
+    evidence_refs = _collect_unique_refs(
+        list(canonical_strategy_artifacts.values()),
+        broad_sweep_context["earth_sweep_evidence_refs"],
+        *[row["traceability_refs"] for row in recommendation_traceability_index],
+        *[row["validator_diagnostic_refs"] for row in recommendation_traceability_index],
+        *[row["evidence_refs"] for row in cross_project_obligations],
+        *[row.get("evidence_refs", []) for row in open_risk_rows if isinstance(row, Mapping)],
+        *[row.get("required_evidence_refs", []) for row in open_risk_rows if isinstance(row, Mapping)],
+    )
+    decision = _req_068_recommendation_decision(
+        open_risks=open_risk_rows,
+        deferred_recommendations=planning_alerts["deferred_recommendations"],
+        validator_verdict=planning_alerts["validator_verdict"],
+    )
+    recommendation = {
+        "decision": decision,
+        "rationale": (
+            f"strategy_packet_inputs={len(strategy_packet_inputs)} "
+            f"planner_ready_recommendations={len(planner_ready_recommendation_ids)} "
+            f"cross_project_obligations={len(cross_project_obligations)} "
+            f"open_risks={len(open_risk_rows)} "
+            f"deferred_recommendations={len(planning_alerts['deferred_recommendations'])} "
+            f"validator_passed={planning_alerts['validator_verdict']['passed']}"
+        ),
+        "confidence": _req_068_recommendation_confidence(
+            decision=decision,
+            open_risks=open_risk_rows,
+            deferred_recommendations=planning_alerts["deferred_recommendations"],
+            validator_verdict=planning_alerts["validator_verdict"],
+        ),
+        "evidence_refs": evidence_refs,
+        "strategy_packet_input_ids": strategy_packet_input_ids,
+        "planner_ready_recommendation_ids": planner_ready_recommendation_ids,
+        "cross_project_obligations": cross_project_obligations,
+        "open_risks": open_risk_rows,
+    }
+    recommendation_generation = {
+        "recommendation_fields_complete": set(recommendation.keys()) == set(_REQ_068_RECOMMENDATION_FIELDS),
+        "required_recommendation_fields": list(_REQ_068_RECOMMENDATION_FIELDS),
+        "cross_project_context_used": bool(
+            broad_sweep_context["projects_considered"] or cross_project_obligations or open_risk_rows
+        ),
+        "evidence_refs_used": evidence_refs,
+    }
+
+    return {
+        "strategy": REQ_068_PROCESSING_STRATEGY,
+        "reasoning_mode": REQ_068_REASONING_MODE,
+        "heuristic_summarization_only": False,
+        "context_inputs": {
+            "target_project": target_project,
+            "canonical_strategy_artifacts": canonical_strategy_artifacts,
+            "planner_inputs": {
+                "strategy_packet_inputs": _json_copy(strategy_packet_inputs),
+                "recommendation_traceability_index": _json_copy(recommendation_traceability_index),
+            },
+            "planning_alerts": _json_copy(planning_alerts),
+            "broad_sweep_context": broad_sweep_context,
+        },
+        "context_usage": {
+            "target_project_context_used": True,
+            "canonical_strategy_artifacts_used": True,
+            "broad_sweep_context_used": bool(
+                broad_sweep_context["projects_considered"]
+                or broad_sweep_context["earth_sweep_evidence_refs"]
+                or broad_sweep_context["cross_project_obligations"]
+                or broad_sweep_context["unresolved_ideas"]
+            ),
+            "cross_project_context_used": recommendation_generation["cross_project_context_used"],
+            "earth_sweep_context_used": bool(earth_sweep_evidence_refs_used),
+            "projects_considered": list(broad_sweep_context["projects_considered"]),
+            "earth_sweep_evidence_refs_used": earth_sweep_evidence_refs_used,
+            "strategy_packet_input_ids_used": strategy_packet_input_ids,
+            "linked_recommendation_ids_used": planner_ready_recommendation_ids,
+            "linked_kpi_target_ids_used": linked_kpi_target_ids_used,
+            "validator_diagnostic_refs_used": validator_diagnostic_refs_used,
+            "evidence_refs_used": evidence_refs,
+        },
+        "recommendation_generation": recommendation_generation,
+        "recommendation": recommendation,
+    }
+
+
+def _validate_req_068_processing_behavior(payload: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, Mapping):
+        return ["processing_behavior must be an object"]
+
+    expected_keys = {
+        "strategy",
+        "reasoning_mode",
+        "heuristic_summarization_only",
+        "context_inputs",
+        "context_usage",
+        "recommendation_generation",
+        "recommendation",
+    }
+    payload_keys = set(payload.keys())
+    missing_keys = sorted(expected_keys - payload_keys)
+    if missing_keys:
+        errors.append(f"processing_behavior missing keys: {missing_keys}")
+    unexpected_keys = sorted(payload_keys - expected_keys)
+    if unexpected_keys:
+        errors.append(f"processing_behavior has unexpected keys: {unexpected_keys}")
+
+    if payload.get("strategy") != REQ_068_PROCESSING_STRATEGY:
+        errors.append(f"processing_behavior.strategy must be {REQ_068_PROCESSING_STRATEGY}")
+    if payload.get("reasoning_mode") != REQ_068_REASONING_MODE:
+        errors.append(f"processing_behavior.reasoning_mode must be {REQ_068_REASONING_MODE}")
+    if payload.get("heuristic_summarization_only") is not False:
+        errors.append("processing_behavior.heuristic_summarization_only must be false")
+
+    context_inputs = payload.get("context_inputs")
+    if not isinstance(context_inputs, Mapping):
+        errors.append("processing_behavior.context_inputs must be an object")
+    else:
+        for key in (
+            "target_project",
+            "canonical_strategy_artifacts",
+            "planner_inputs",
+            "planning_alerts",
+            "broad_sweep_context",
+        ):
+            if key not in context_inputs:
+                errors.append(f"processing_behavior.context_inputs missing {key}")
+
+    context_usage = payload.get("context_usage")
+    if not isinstance(context_usage, Mapping):
+        errors.append("processing_behavior.context_usage must be an object")
+    else:
+        expected_usage_fields = {
+            "target_project_context_used",
+            "canonical_strategy_artifacts_used",
+            "broad_sweep_context_used",
+            "cross_project_context_used",
+            "earth_sweep_context_used",
+            "projects_considered",
+            "earth_sweep_evidence_refs_used",
+            "strategy_packet_input_ids_used",
+            "linked_recommendation_ids_used",
+            "linked_kpi_target_ids_used",
+            "validator_diagnostic_refs_used",
+            "evidence_refs_used",
+        }
+        missing_usage = sorted(expected_usage_fields - set(context_usage.keys()))
+        if missing_usage:
+            errors.append(f"processing_behavior.context_usage missing keys: {missing_usage}")
+        for key in (
+            "target_project_context_used",
+            "canonical_strategy_artifacts_used",
+            "broad_sweep_context_used",
+            "cross_project_context_used",
+            "earth_sweep_context_used",
+        ):
+            if key in context_usage and not isinstance(context_usage.get(key), bool):
+                errors.append(f"processing_behavior.context_usage.{key} must be a boolean")
+        for key in (
+            "projects_considered",
+            "earth_sweep_evidence_refs_used",
+            "strategy_packet_input_ids_used",
+            "linked_recommendation_ids_used",
+            "linked_kpi_target_ids_used",
+            "validator_diagnostic_refs_used",
+            "evidence_refs_used",
+        ):
+            if key in context_usage and not isinstance(context_usage.get(key), list):
+                errors.append(f"processing_behavior.context_usage.{key} must be a list")
+
+    recommendation_generation = payload.get("recommendation_generation")
+    if not isinstance(recommendation_generation, Mapping):
+        errors.append("processing_behavior.recommendation_generation must be an object")
+    else:
+        expected_generation_fields = {
+            "recommendation_fields_complete",
+            "required_recommendation_fields",
+            "cross_project_context_used",
+            "evidence_refs_used",
+        }
+        missing_generation = sorted(expected_generation_fields - set(recommendation_generation.keys()))
+        if missing_generation:
+            errors.append(f"processing_behavior.recommendation_generation missing keys: {missing_generation}")
+        if (
+            "recommendation_fields_complete" in recommendation_generation
+            and not isinstance(recommendation_generation.get("recommendation_fields_complete"), bool)
+        ):
+            errors.append(
+                "processing_behavior.recommendation_generation.recommendation_fields_complete must be a boolean"
+            )
+        if (
+            "cross_project_context_used" in recommendation_generation
+            and not isinstance(recommendation_generation.get("cross_project_context_used"), bool)
+        ):
+            errors.append("processing_behavior.recommendation_generation.cross_project_context_used must be a boolean")
+        for key in ("required_recommendation_fields", "evidence_refs_used"):
+            if key in recommendation_generation and not isinstance(recommendation_generation.get(key), list):
+                errors.append(f"processing_behavior.recommendation_generation.{key} must be a list")
+
+    recommendation = payload.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        errors.append("processing_behavior.recommendation must be an object")
+    else:
+        recommendation_keys = set(recommendation.keys())
+        expected_recommendation_keys = set(_REQ_068_RECOMMENDATION_FIELDS)
+        missing_recommendation = sorted(expected_recommendation_keys - recommendation_keys)
+        if missing_recommendation:
+            errors.append(f"processing_behavior.recommendation missing keys: {missing_recommendation}")
+        unexpected_recommendation = sorted(recommendation_keys - expected_recommendation_keys)
+        if unexpected_recommendation:
+            errors.append(f"processing_behavior.recommendation has unexpected keys: {unexpected_recommendation}")
+        if recommendation.get("decision") not in {"proceed", "proceed-with-open-risks", "collect-earth-evidence"}:
+            errors.append(
+                "processing_behavior.recommendation.decision must be one of: "
+                "['collect-earth-evidence', 'proceed', 'proceed-with-open-risks']"
+            )
+        if recommendation.get("confidence") not in _CONFIDENCE_LEVELS:
+            errors.append(
+                f"processing_behavior.recommendation.confidence must be one of: {sorted(_CONFIDENCE_LEVELS)}"
+            )
+        if not isinstance(recommendation.get("rationale"), str) or not str(recommendation.get("rationale")).strip():
+            errors.append("processing_behavior.recommendation.rationale must be a non-empty string")
+        for key in (
+            "evidence_refs",
+            "strategy_packet_input_ids",
+            "planner_ready_recommendation_ids",
+            "cross_project_obligations",
+            "open_risks",
+        ):
+            if key in recommendation and not isinstance(recommendation.get(key), list):
+                errors.append(f"processing_behavior.recommendation.{key} must be a list")
+
+        if isinstance(recommendation_generation, Mapping):
+            expected_complete = recommendation_keys == expected_recommendation_keys
+            if recommendation_generation.get("recommendation_fields_complete") != expected_complete:
+                errors.append(
+                    "processing_behavior.recommendation_generation.recommendation_fields_complete "
+                    "must match recommendation field completeness"
+                )
+            if recommendation_generation.get("required_recommendation_fields") != _REQ_068_RECOMMENDATION_FIELDS:
+                errors.append(
+                    "processing_behavior.recommendation_generation.required_recommendation_fields "
+                    "must match REQ-068 recommendation fields"
+                )
+            if recommendation_generation.get("evidence_refs_used") != recommendation.get("evidence_refs"):
+                errors.append(
+                    "processing_behavior.recommendation_generation.evidence_refs_used must match "
+                    "processing_behavior.recommendation.evidence_refs"
+                )
+
+        if isinstance(context_usage, Mapping):
+            if context_usage.get("evidence_refs_used") != recommendation.get("evidence_refs"):
+                errors.append(
+                    "processing_behavior.context_usage.evidence_refs_used must match "
+                    "processing_behavior.recommendation.evidence_refs"
+                )
+            if context_usage.get("strategy_packet_input_ids_used") != recommendation.get("strategy_packet_input_ids"):
+                errors.append(
+                    "processing_behavior.context_usage.strategy_packet_input_ids_used must match "
+                    "processing_behavior.recommendation.strategy_packet_input_ids"
+                )
+            if context_usage.get("linked_recommendation_ids_used") != recommendation.get(
+                "planner_ready_recommendation_ids"
+            ):
+                errors.append(
+                    "processing_behavior.context_usage.linked_recommendation_ids_used must match "
+                    "processing_behavior.recommendation.planner_ready_recommendation_ids"
+                )
+        if isinstance(recommendation_generation, Mapping) and isinstance(context_usage, Mapping):
+            if recommendation_generation.get("cross_project_context_used") != context_usage.get(
+                "cross_project_context_used"
+            ):
+                errors.append(
+                    "processing_behavior.recommendation_generation.cross_project_context_used must match "
+                    "processing_behavior.context_usage.cross_project_context_used"
+                )
+
+    return errors
+
+
 def build_req_068_op_plan_strategy_ingestion_hook(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Build normalized REQ-068 payload for canonical strategy ingestion into op-plan."""
     raw = _require_mapping(payload, field_name="payload")
@@ -2433,6 +3010,16 @@ def build_req_068_op_plan_strategy_ingestion_hook(payload: Mapping[str, Any]) ->
     kpi_targets = kpi_target_payload["kpi_target_artifact"]["kpi_targets"]
     diagnostics = recommendation_id_validator["payload"]["diagnostics"]
     verdict = recommendation_id_validator["payload"]["verdict"]
+    derived_broad_sweep_context = _req_068_derived_broad_sweep_context(final_synthesis)
+    explicit_broad_sweep_context = (
+        _normalize_broad_sweep_context(raw.get("broad_sweep_context"))
+        if "broad_sweep_context" in raw
+        else _normalize_broad_sweep_context(None)
+    )
+    broad_sweep_context = _req_068_merge_broad_sweep_context(
+        derived_broad_sweep_context,
+        explicit_broad_sweep_context,
+    )
 
     canonical_strategy_artifacts = {
         "final_strategy_artifact_ref": _req_068_anchor(
@@ -2517,6 +3104,21 @@ def build_req_068_op_plan_strategy_ingestion_hook(payload: Mapping[str, Any]) ->
             }
         )
     recommendation_traceability_index.sort(key=lambda row: str(row["recommendation_id"]))
+    planning_alerts = {
+        "deferred_recommendations": list(final_synthesis["deferred_recommendations"]),
+        "open_risks": list(final_synthesis["open_risks"]),
+        "id_collisions": list(diagnostics["id_collisions"]),
+        "id_drift": list(diagnostics["id_drift"]),
+        "validator_verdict": dict(verdict),
+    }
+    processing_behavior = _build_req_068_processing_behavior(
+        target_project=target_project,
+        canonical_strategy_artifacts=canonical_strategy_artifacts,
+        strategy_packet_inputs=list(final_synthesis["strategy_packet_inputs"]),
+        recommendation_traceability_index=recommendation_traceability_index,
+        planning_alerts=planning_alerts,
+        broad_sweep_context=broad_sweep_context,
+    )
 
     built: dict[str, Any] = {
         "ok": True,
@@ -2532,14 +3134,9 @@ def build_req_068_op_plan_strategy_ingestion_hook(payload: Mapping[str, Any]) ->
                 "strategy_packet_inputs": list(final_synthesis["strategy_packet_inputs"]),
                 "recommendation_traceability_index": recommendation_traceability_index,
             },
-            "planning_alerts": {
-                "deferred_recommendations": list(final_synthesis["deferred_recommendations"]),
-                "open_risks": list(final_synthesis["open_risks"]),
-                "id_collisions": list(diagnostics["id_collisions"]),
-                "id_drift": list(diagnostics["id_drift"]),
-                "validator_verdict": dict(verdict),
-            },
+            "planning_alerts": planning_alerts,
         },
+        "processing_behavior": processing_behavior,
         "totals": {
             "strategy_packet_inputs": len(final_synthesis["strategy_packet_inputs"]),
             "planner_ready_recommendations": len(recommendation_traceability_index),
@@ -2574,6 +3171,7 @@ def validate_req_068_op_plan_strategy_ingestion_hook(payload: Mapping[str, Any])
         "checked_at_utc",
         "target_project",
         "op_plan_strategy_ingestion",
+        "processing_behavior",
         "totals",
     }
     payload_keys = set(payload.keys())
@@ -2927,6 +3525,8 @@ def validate_req_068_op_plan_strategy_ingestion_hook(payload: Mapping[str, Any])
                 errors.append("totals.id_collisions must equal planning_alerts.id_collisions count")
             if totals.get("id_drift") != len(planning_alerts.get("id_drift") or []):
                 errors.append("totals.id_drift must equal planning_alerts.id_drift count")
+
+    errors.extend(_validate_req_068_processing_behavior(payload.get("processing_behavior")))
 
     return errors
 
