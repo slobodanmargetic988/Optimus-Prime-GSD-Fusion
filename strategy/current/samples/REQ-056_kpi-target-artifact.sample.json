@@ -1,0 +1,59 @@
+{
+  "analysis_type": "kpi_target_artifact",
+  "call_id": "kpi-target-artifact",
+  "checked_at_utc": "2026-03-16T09:20:00Z",
+  "kpi_target_artifact": {
+    "kpi_targets": [
+      {
+        "assumption_ids": [
+          "assumption.integration-endpoint-stable",
+          "assumption.runtime-ownership-confirmed"
+        ],
+        "baseline_reference": "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json#integration-latency-ms",
+        "confidence_level": "medium",
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json#strategy_packet_inputs"
+        ],
+        "expected_direction": "decrease",
+        "metric_name": "cross_project_integration_latency_ms",
+        "originating_recommendation_ids": [
+          "rec.align-earth-runtime-canary",
+          "rec.harden-telemetry-freshness"
+        ],
+        "rationale": "Lower integration latency reflects successful alignment on cross-project runtime canary operations.",
+        "target_id": "kpi.cross-project-integration-latency"
+      },
+      {
+        "assumption_ids": [
+          "assumption.runtime-ownership-confirmed",
+          "assumption.telemetry-path-stable"
+        ],
+        "baseline_reference": "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json#open_risks",
+        "confidence_level": "high",
+        "evidence_refs": [
+          "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json#final_recommendations"
+        ],
+        "expected_direction": "decrease",
+        "metric_name": "telemetry_freshness_slo_breach_rate",
+        "originating_recommendation_ids": [
+          "rec.harden-telemetry-freshness"
+        ],
+        "rationale": "This KPI measures whether telemetry freshness risk exposure is trending down after remediation.",
+        "target_id": "kpi.telemetry-freshness-slo"
+      }
+    ]
+  },
+  "ok": true,
+  "requirement_id": "REQ-056",
+  "schema_version": "1.0",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "totals": {
+    "kpi_targets": 2,
+    "unique_assumptions_linked": 3,
+    "unique_recommendations_linked": 2
+  }
+}
