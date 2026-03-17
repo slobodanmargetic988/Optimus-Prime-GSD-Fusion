@@ -1,0 +1,18 @@
+{
+  "artifact_type": "strategy_packet_validation",
+  "requirement_ids": [
+    "REQ-070"
+  ],
+  "verdict": "pass",
+  "validated_artifact_ref": "strategy/current/strategy_packet.v1.json",
+  "checks": [
+    {
+      "check_id": "strategy-packet-schema",
+      "status": "pass"
+    },
+    {
+      "check_id": "acceptance-packet-consumability",
+      "status": "pass"
+    }
+  ]
+}

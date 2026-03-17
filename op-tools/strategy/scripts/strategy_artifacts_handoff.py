@@ -238,12 +238,42 @@ def _collect_projects(payload: dict[str, Any]) -> list[str]:
     return sorted(project_ids)
 
 
+def _project_evidence_index(payload: dict[str, Any]) -> dict[str, list[str]]:
+    index: dict[str, set[str]] = {}
+
+    project_sources = [
+        ("earth_sweep", _as_list(_as_dict(payload.get("earth_sweep")).get("projects"))),
+        ("broad_sweep", _as_list(_as_dict(payload.get("broad_sweep")).get("projects"))),
+        ("ecosystem_context", _as_list(_as_dict(payload.get("ecosystem_context")).get("projects"))),
+        (
+            "context_bundle.earth_sweep",
+            _as_list(_as_dict(_as_dict(payload.get("context_bundle")).get("earth_sweep")).get("projects")),
+        ),
+    ]
+    context_sources = [
+        ("cross_project_context", _as_list(payload.get("cross_project_context"))),
+        ("context_bundle.cross_project_context", _as_list(_as_dict(payload.get("context_bundle")).get("cross_project_context"))),
+    ]
+
+    for _source_name, candidates in project_sources + context_sources:
+        for item in candidates:
+            project_id = _project_id_from_item(item)
+            if not project_id:
+                continue
+            refs = _collect_nested_evidence_refs(item)
+            if refs:
+                index.setdefault(project_id, set()).update(refs)
+
+    return {key: sorted(values) for key, values in sorted(index.items())}
+
+
 def _collect_obligation_risks(payload: dict[str, Any]) -> list[dict[str, Any]]:
     open_risks = []
     obligations = []
     obligations.extend(_as_list(payload.get("ecosystem_obligations")))
     obligations.extend(_as_list(payload.get("obligations")))
     obligations.extend(_as_list(_as_dict(payload.get("context_bundle")).get("ecosystem_obligations")))
+    project_evidence_index = _project_evidence_index(payload)
 
     for index, item in enumerate(obligations, start=1):
         record = _as_dict(item)
@@ -255,13 +285,20 @@ def _collect_obligation_risks(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if evidence_refs:
             continue
         project_id = _project_id_from_item(record) or f"project-{index:03d}"
+        required_evidence_refs = project_evidence_index.get(project_id, [])
         open_risks.append(
             {
                 "risk_id": f"risk.unsupported-cross-project-obligation.{index:03d}",
                 "severity": "medium",
                 "category": "open_risk",
+                "reason_code": "missing_earth_sweep_evidence_refs",
                 "summary": f"Cross-project obligation for {project_id} has no Earth-sweep evidence refs.",
                 "project_id": project_id,
+                "linked_recommendation_ids": _unique_sorted_strings(
+                    _as_list(record.get("recommendation_ids")) + _as_list(record.get("linked_recommendation_ids"))
+                ),
+                "evidence_refs": required_evidence_refs,
+                "required_evidence_refs": required_evidence_refs,
                 "recommendation": "Keep this as an open risk until Earth-sweep evidence refs exist.",
             }
         )
@@ -400,6 +437,112 @@ def _collect_context_usage(payload: dict[str, Any]) -> dict[str, Any]:
         "sources_used": sources_used,
         "evidence_refs": _collect_nested_evidence_refs(
             [value for value in source_map.values() if value not in (None, "", [], {})]
+        ),
+    }
+
+
+def _build_planner_hook(
+    payload: dict[str, Any],
+    recommendations: list[dict[str, Any]],
+    evidence_index: dict[str, list[str]],
+    artifact_refs: list[str],
+) -> dict[str, Any]:
+    planner_hook_payload = _as_dict(payload.get("planner_hook"))
+    sources_used: set[str] = set()
+    rows_by_recommendation_id: dict[str, dict[str, Any]] = {}
+
+    explicit_rows = []
+    for field_name in ("recommendation_mapping", "recommendation_readiness"):
+        if field_name in planner_hook_payload:
+            sources_used.add(f"planner_hook.{field_name}")
+            value = planner_hook_payload.get(field_name)
+            if isinstance(value, dict):
+                explicit_rows.extend(value.values())
+            else:
+                explicit_rows.extend(_as_list(value))
+
+    for item in explicit_rows:
+        record = _as_dict(item)
+        recommendation_id = str(
+            _coalesce(record.get("recommendation_id"), record.get("id"), record.get("recommendation"))
+            or ""
+        ).strip()
+        if not recommendation_id:
+            continue
+        rows_by_recommendation_id[recommendation_id] = {
+            "recommendation_id": recommendation_id,
+            "recommendation_key": str(
+                _coalesce(record.get("recommendation_key"), record.get("key"), recommendation_id) or recommendation_id
+            ).strip(),
+            "status": str(_coalesce(record.get("status"), "ready")).strip().lower(),
+            "priority": str(_coalesce(record.get("priority"), "") or "").strip(),
+            "summary": str(_coalesce(record.get("summary"), "") or "").strip(),
+            "artifact_refs": _unique_sorted_strings(
+                _as_list(record.get("artifact_refs")) + _as_list(record.get("artifacts"))
+            ),
+            "evidence_refs": _collect_nested_evidence_refs(record),
+        }
+
+    for recommendation in recommendations:
+        recommendation_id = recommendation["recommendation_id"]
+        row = rows_by_recommendation_id.setdefault(
+            recommendation_id,
+            {
+                "recommendation_id": recommendation_id,
+                "recommendation_key": recommendation_id,
+                "status": "ready",
+                "priority": "",
+                "summary": "",
+                "artifact_refs": [],
+                "evidence_refs": [],
+            },
+        )
+        row["recommendation_key"] = str(
+            _coalesce(
+                row.get("recommendation_key"),
+                recommendation.get("recommendation_key"),
+                recommendation_id,
+            )
+        ).strip()
+        row["priority"] = str(_coalesce(row.get("priority"), recommendation.get("priority"), "")).strip()
+        row["summary"] = str(_coalesce(row.get("summary"), recommendation.get("summary"), recommendation_id)).strip()
+        row["artifact_refs"] = _unique_sorted_strings(row.get("artifact_refs", []) + artifact_refs)
+        row["evidence_refs"] = _unique_sorted_strings(
+            row.get("evidence_refs", []) + _recommendation_evidence_refs(recommendation, evidence_index)
+        )
+
+    recommendation_ids = sorted(
+        recommendation["recommendation_id"] for recommendation in recommendations
+    )
+    mapped_recommendation_ids = sorted(
+        recommendation_id
+        for recommendation_id in rows_by_recommendation_id
+        if recommendation_id in recommendation_ids
+    )
+    missing_recommendation_ids = sorted(
+        recommendation_id
+        for recommendation_id in recommendation_ids
+        if recommendation_id not in mapped_recommendation_ids
+    )
+    sources_used.add("generated_from_recommendations")
+
+    return {
+        "recommendation_ids": recommendation_ids,
+        "mapped_recommendation_ids": mapped_recommendation_ids,
+        "missing_recommendation_ids": missing_recommendation_ids,
+        "mapping_complete": bool(recommendation_ids) and not missing_recommendation_ids,
+        "sources_used": sorted(sources_used),
+        "recommendation_mapping": {
+            recommendation_id: rows_by_recommendation_id[recommendation_id]
+            for recommendation_id in mapped_recommendation_ids
+        },
+        "evidence_refs": _unique_sorted_strings(
+            _collect_nested_evidence_refs(planner_hook_payload)
+            + [
+                ref
+                for recommendation_id in mapped_recommendation_ids
+                for ref in rows_by_recommendation_id[recommendation_id]["evidence_refs"]
+            ]
         ),
     }
 
@@ -553,6 +696,8 @@ def build_end_to_end_autonomous_strategy_acceptance_packet(
 ) -> dict[str, Any]:
     quality_report = build_strategy_quality_report(payload)
     context_usage = _collect_context_usage(payload)
+    recommendations = _normalize_recommendations(payload)
+    evidence_index = _build_evidence_index(payload)
     target_project_id = quality_report["cross_project_context"]["target_project_id"]
 
     artifact_groups = {
@@ -593,6 +738,12 @@ def build_end_to_end_autonomous_strategy_acceptance_packet(
             for ref in artifact["evidence_refs"]
         }
     )
+    planner_hook = _build_planner_hook(
+        payload=payload,
+        recommendations=recommendations,
+        evidence_index=evidence_index,
+        artifact_refs=artifact_refs,
+    )
     open_risks = _collect_obligation_risks(payload)
 
     recommendation_fields_pass = quality_report["gate_verdict"]["recommendation_fields_pass"]
@@ -626,6 +777,7 @@ def build_end_to_end_autonomous_strategy_acceptance_packet(
             *quality_report["evidence_refs"],
             *context_usage["evidence_refs"],
             *artifact_evidence_refs,
+            *planner_hook["evidence_refs"],
         }
     )
 
@@ -662,6 +814,7 @@ def build_end_to_end_autonomous_strategy_acceptance_packet(
         "recommendation_field_completeness": _json_copy(
             quality_report["recommendation_field_completeness"]
         ),
+        "planner_hook": planner_hook,
         "cross_project_context": cross_project_context,
         "open_risks": open_risks,
         "consumability_verdict": {

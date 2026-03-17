@@ -1,0 +1,83 @@
+{
+  "task_identifier": "TASK-259",
+  "requirement_id": "REQ-070",
+  "summary": {
+    "result": "pass",
+    "reason_codes": [],
+    "checked_at": "2026-03-17T00:51:50Z",
+    "notes": "REQ-070 contract, integration, and hardening checks passed in two consecutive runs with deterministic replay and reason-code behavior."
+  },
+  "verification_runs": [
+    {
+      "run_id": "run-1-direct-pytest",
+      "checks": [
+        {
+          "command": "python3 -m pytest tests/contracts/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/integration/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py -q",
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "run_id": "run-2-direct-pytest",
+      "checks": [
+        {
+          "command": "python3 -m pytest tests/contracts/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/integration/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py -q",
+          "exit_code": 0
+        },
+        {
+          "command": "python3 -m pytest tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py -q",
+          "exit_code": 0
+        }
+      ]
+    }
+  ],
+  "edge_case_rows": [
+    {
+      "edge_case": "artifact_regeneration_with_no_semantic_drift_on_no_change_rerun",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "deterministic_acceptance_packet_regeneration"
+      ],
+      "evidence_refs": [
+        "tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py::test_req_070_hardening_artifact_regeneration_has_no_semantic_drift_on_no_change_rerun"
+      ]
+    },
+    {
+      "edge_case": "planner_hook_receives_complete_recommendation_mapping_set",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "planner_hook_recommendation_mapping_complete"
+      ],
+      "evidence_refs": [
+        "tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py::test_req_070_hardening_planner_hook_receives_complete_recommendation_mapping_set"
+      ]
+    },
+    {
+      "edge_case": "acceptance_packet_includes_required_evidence_refs_and_open_risk_handling",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "missing_earth_sweep_evidence_refs",
+        "open_risks_present"
+      ],
+      "evidence_refs": [
+        "tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py::test_req_070_hardening_acceptance_packet_includes_required_evidence_refs_and_open_risk_handling"
+      ]
+    }
+  ],
+  "unresolved_blocker_rows": []
+}
