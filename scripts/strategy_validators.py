@@ -18,19 +18,19 @@ for candidate in (SCRIPTS_ROOT,):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from scripts.strategy_artifacts_handoff import (
-    REQ_054_ANALYSIS_TYPE,
-    REQ_054_CALL_ID,
-    REQ_054_REQUIREMENT_ID,
-    REQ_054_SCHEMA_VERSION,
-    validate_req_054_recommendation_to_planner_mapping_artifact,
-)
+from scripts.strategy_artifacts_handoff import validate_req_068_op_plan_strategy_ingestion_hook
 
+REQ_054_REQUIREMENT_ID = "REQ-054"
+REQ_054_SCHEMA_VERSION = "1.0"
+REQ_054_ANALYSIS_TYPE = "recommendation_to_planner_mapping_artifact"
+REQ_054_CALL_ID = "recommendation-to-planner-mapping-artifact"
 REQ_060_REQUIREMENT_ID = "REQ-060"
 REQ_060_ANALYSIS_TYPE = "strategy_packet_v1_schema_validator"
 REQ_066_REQUIREMENT_ID = "REQ-066"
 REQ_066_ANALYSIS_TYPE = "validator_runner_and_aggregate_verdict"
 REQ_066_STRATEGY_PACKET_VALIDATOR_ID = "strategy_packet_v1_schema_validator"
+REQ_068_INGESTION_HOOK_FILE = "REQ-068_op-plan-strategy-ingestion-hook.sample.json"
+REQ_068_INGESTION_HOOK_RELATIVE_PATH = Path("strategy/current/samples") / REQ_068_INGESTION_HOOK_FILE
 
 SEVERITY_ERROR = "error"
 REASON_REQ_054_CONTRACT_VIOLATION = "req_054_contract_violation"
@@ -39,6 +39,10 @@ REASON_MAPPING_REFERENCES_UNKNOWN_PACKET_RECOMMENDATION = "mapping_references_un
 REASON_MAPPING_ARTIFACT_RECOMMENDATION_IDS_MISMATCH = "mapping_artifact_recommendation_ids_mismatch"
 REASON_DUPLICATE_RECOMMENDATION_ID_COLLISION = "duplicate_recommendation_id_collision"
 REASON_TRACEABILITY_GATE_FAILURE = "traceability_gate_failure"
+REASON_REQ_068_INGESTION_HOOK_MISSING = "req_068_ingestion_hook_missing"
+REASON_REQ_068_INGESTION_HOOK_PAYLOAD_NOT_OBJECT = "req_068_ingestion_hook_payload_not_object"
+REASON_REQ_068_CONTRACT_VIOLATION = "req_068_contract_violation"
+REASON_REQ_068_PACKET_RECOMMENDATION_IDS_MISMATCH = "req_068_packet_recommendation_ids_mismatch"
 
 _SCHEMA_REASON_CODE_BY_VALIDATOR = {
     "additionalProperties": "schema_additional_property",
@@ -52,6 +56,79 @@ _SCHEMA_REASON_CODE_BY_VALIDATOR = {
     "required": "schema_required_field_missing",
     "type": "schema_type_mismatch",
 }
+
+
+def validate_req_054_recommendation_to_planner_mapping_artifact(payload: Mapping[str, Any]) -> list[str]:
+    artifact = payload.get("recommendation_to_planner_mapping_artifact")
+    if not isinstance(artifact, Mapping):
+        return ["recommendation_to_planner_mapping_artifact must be an object"]
+
+    raw_mappings = artifact.get("recommendation_to_task_intent_mappings")
+    if not isinstance(raw_mappings, list) or not raw_mappings:
+        return ["recommendation_to_planner_mapping_artifact.recommendation_to_task_intent_mappings must be a non-empty list"]
+
+    errors: list[str] = []
+    observed_recommendation_ids: set[str] = set()
+    observed_planner_handles: set[str] = set()
+    observed_pairs: set[tuple[str, str]] = set()
+
+    for index, row in enumerate(raw_mappings):
+        row_path = f"recommendation_to_planner_mapping_artifact.recommendation_to_task_intent_mappings[{index}]"
+        if not isinstance(row, Mapping):
+            errors.append(f"{row_path} must be an object")
+            continue
+
+        recommendation_id = str(row.get("recommendation_id") or "").strip()
+        planner_task_intent_handle = str(row.get("planner_task_intent_handle") or "").strip()
+        if recommendation_id:
+            observed_recommendation_ids.add(recommendation_id)
+        if planner_task_intent_handle:
+            observed_planner_handles.add(planner_task_intent_handle)
+
+        if recommendation_id and planner_task_intent_handle:
+            pair = (recommendation_id, planner_task_intent_handle)
+            if pair in observed_pairs:
+                errors.append(
+                    f"{row_path} has duplicate recommendation_id + planner_task_intent_handle pair"
+                )
+            else:
+                observed_pairs.add(pair)
+
+        sequence_hint = row.get("sequence_hint")
+        if not isinstance(sequence_hint, int) or sequence_hint <= 0:
+            errors.append(f"{row_path}.sequence_hint must be a positive integer")
+
+    recommendation_ids = artifact.get("recommendation_ids")
+    if isinstance(recommendation_ids, list):
+        normalized_recommendation_ids = sorted(
+            {
+                row
+                for row in recommendation_ids
+                if isinstance(row, str) and row.strip()
+            }
+        )
+        if normalized_recommendation_ids != sorted(observed_recommendation_ids):
+            errors.append(
+                "recommendation_to_planner_mapping_artifact.recommendation_ids must exactly match "
+                "recommendation_to_task_intent_mappings recommendation_id set"
+            )
+
+    planner_task_intent_handles = artifact.get("planner_task_intent_handles")
+    if isinstance(planner_task_intent_handles, list):
+        normalized_planner_handles = sorted(
+            {
+                row
+                for row in planner_task_intent_handles
+                if isinstance(row, str) and row.strip()
+            }
+        )
+        if normalized_planner_handles != sorted(observed_planner_handles):
+            errors.append(
+                "recommendation_to_planner_mapping_artifact.planner_task_intent_handles must exactly match "
+                "recommendation_to_task_intent_mappings planner_task_intent_handle set"
+            )
+
+    return sorted(errors)
 
 
 def _utc_timestamp() -> str:
@@ -197,6 +274,148 @@ def _validate_req_054_mapping_artifact(artifact: Mapping[str, Any]) -> list[dict
             )
         )
     return diagnostics
+
+
+def _req_068_field_path(message: str) -> str:
+    for marker in (" must ", " has ", " missing ", " duplicate "):
+        marker_index = message.find(marker)
+        if marker_index > 0:
+            candidate = message[:marker_index].strip()
+            if candidate:
+                return candidate
+    return "op_plan_strategy_ingestion_hook"
+
+
+def _sorted_unique_strings(values: list[str]) -> list[str]:
+    return sorted({value for value in values if value.strip()})
+
+
+def _req_068_recommendation_ids(hook_payload: Mapping[str, Any]) -> list[str]:
+    ingestion = hook_payload.get("op_plan_strategy_ingestion")
+    if not isinstance(ingestion, Mapping):
+        return []
+    planner_inputs = ingestion.get("planner_inputs")
+    if not isinstance(planner_inputs, Mapping):
+        return []
+
+    recommendation_ids: list[str] = []
+
+    strategy_packet_inputs = planner_inputs.get("strategy_packet_inputs")
+    if isinstance(strategy_packet_inputs, list):
+        for row in strategy_packet_inputs:
+            if not isinstance(row, Mapping):
+                continue
+            row_ids = row.get("recommendation_ids")
+            if not isinstance(row_ids, list):
+                continue
+            for recommendation_id in row_ids:
+                if isinstance(recommendation_id, str) and recommendation_id.strip():
+                    recommendation_ids.append(recommendation_id)
+
+    recommendation_traceability_index = planner_inputs.get("recommendation_traceability_index")
+    if isinstance(recommendation_traceability_index, list):
+        for row in recommendation_traceability_index:
+            if not isinstance(row, Mapping):
+                continue
+            recommendation_id = row.get("recommendation_id")
+            if isinstance(recommendation_id, str) and recommendation_id.strip():
+                recommendation_ids.append(recommendation_id)
+
+    return _sorted_unique_strings(recommendation_ids)
+
+
+def _validate_req_068_consumability(
+    packet: Mapping[str, Any],
+    op_plan_ingestion_hook: Any,
+    *,
+    require_op_plan_ingestion_hook: bool,
+) -> list[dict[str, str]]:
+    if op_plan_ingestion_hook is None:
+        if not require_op_plan_ingestion_hook:
+            return []
+        return [
+            _diagnostic(
+                field_path="op_plan_strategy_ingestion_hook",
+                reason_code=REASON_REQ_068_INGESTION_HOOK_MISSING,
+                message=(
+                    "REQ-068 op-plan strategy ingestion hook payload is required for planner consumability gate "
+                    "(expected strategy/current/samples/REQ-068_op-plan-strategy-ingestion-hook.sample.json)"
+                ),
+            )
+        ]
+
+    if not isinstance(op_plan_ingestion_hook, Mapping):
+        return [
+            _diagnostic(
+                field_path="op_plan_strategy_ingestion_hook",
+                reason_code=REASON_REQ_068_INGESTION_HOOK_PAYLOAD_NOT_OBJECT,
+                message="REQ-068 op-plan strategy ingestion hook payload must be a JSON object",
+            )
+        ]
+
+    diagnostics: list[dict[str, str]] = []
+    contract_errors = validate_req_068_op_plan_strategy_ingestion_hook(op_plan_ingestion_hook)
+    for message in contract_errors:
+        diagnostics.append(
+            _diagnostic(
+                field_path=_req_068_field_path(message),
+                reason_code=REASON_REQ_068_CONTRACT_VIOLATION,
+                message=message,
+            )
+        )
+
+    if diagnostics:
+        return diagnostics
+
+    packet_recommendation_ids = _sorted_unique_strings(_packet_recommendation_ids(packet))
+    hook_recommendation_ids = _req_068_recommendation_ids(op_plan_ingestion_hook)
+    unexpected_in_hook = sorted(set(hook_recommendation_ids) - set(packet_recommendation_ids))
+    if unexpected_in_hook:
+        diagnostics.append(
+            _diagnostic(
+                field_path="op_plan_strategy_ingestion.planner_inputs.recommendation_traceability_index",
+                reason_code=REASON_REQ_068_PACKET_RECOMMENDATION_IDS_MISMATCH,
+                message=(
+                    "REQ-068 recommendation IDs must reference strategy packet recommendation_id values for "
+                    "planner consumability; "
+                    f"unexpected_in_hook={unexpected_in_hook} "
+                    f"packet_recommendation_ids={packet_recommendation_ids}"
+                ),
+            )
+        )
+
+    return diagnostics
+
+
+def _discover_req_068_ingestion_hook_path(input_path: Path) -> Path | None:
+    candidates: list[Path] = []
+    candidates.append(input_path.parent / "samples" / REQ_068_INGESTION_HOOK_FILE)
+    for parent in input_path.parents:
+        candidates.append(parent / REQ_068_INGESTION_HOOK_RELATIVE_PATH)
+    candidates.append(Path.cwd().resolve() / REQ_068_INGESTION_HOOK_RELATIVE_PATH)
+
+    visited: set[Path] = set()
+    for candidate in candidates:
+        resolved_candidate = candidate.expanduser().resolve()
+        if resolved_candidate in visited:
+            continue
+        visited.add(resolved_candidate)
+        if resolved_candidate.is_file():
+            return resolved_candidate
+    return None
+
+
+def _load_req_068_ingestion_hook_payload(
+    input_path: str | Path,
+    op_plan_ingestion_hook_path: str | Path | None,
+) -> Any | None:
+    if op_plan_ingestion_hook_path is not None:
+        return load_json_file(op_plan_ingestion_hook_path)
+
+    discovered_path = _discover_req_068_ingestion_hook_path(Path(input_path).expanduser().resolve())
+    if discovered_path is None:
+        return None
+    return load_json_file(discovered_path)
 
 
 def _packet_recommendation_index(packet: Mapping[str, Any]) -> dict[str, int]:
@@ -404,6 +623,9 @@ def _validate_req_054_consumability(packet: Mapping[str, Any]) -> list[dict[str,
 def validate_strategy_packet_payload(
     packet: Mapping[str, Any],
     schema: Mapping[str, Any],
+    *,
+    op_plan_ingestion_hook: Any | None = None,
+    require_op_plan_ingestion_hook: bool = False,
 ) -> dict[str, Any]:
     diagnostics: list[dict[str, str]] = []
     validator = Draft202012Validator(schema)
@@ -427,6 +649,13 @@ def validate_strategy_packet_payload(
     diagnostics.extend(_validate_duplicate_recommendation_ids(packet))
     diagnostics.extend(_validate_traceability_gate(packet))
     diagnostics.extend(_validate_req_054_consumability(packet))
+    diagnostics.extend(
+        _validate_req_068_consumability(
+            packet,
+            op_plan_ingestion_hook,
+            require_op_plan_ingestion_hook=require_op_plan_ingestion_hook,
+        )
+    )
     diagnostics = _sorted_diagnostics(diagnostics)
     reason_codes = sorted({row["reason_code"] for row in diagnostics})
     ok = not diagnostics
@@ -470,8 +699,16 @@ def _packet_payload_not_object_validation_result(*, checked_at_utc: str | None =
 def _run_req_060_strategy_packet_v1_schema_validator(
     packet: Mapping[str, Any],
     schema: Mapping[str, Any],
+    *,
+    op_plan_ingestion_hook: Any | None = None,
+    require_op_plan_ingestion_hook: bool = False,
 ) -> dict[str, Any]:
-    return validate_strategy_packet_payload(packet, schema)
+    return validate_strategy_packet_payload(
+        packet,
+        schema,
+        op_plan_ingestion_hook=op_plan_ingestion_hook,
+        require_op_plan_ingestion_hook=require_op_plan_ingestion_hook,
+    )
 
 
 def _req_066_validator_registry() -> tuple[dict[str, Any], ...]:
@@ -583,17 +820,29 @@ def run_strategy_packet_validator_runner(
     schema: Mapping[str, Any],
     *,
     checked_at_utc: str | None = None,
+    op_plan_ingestion_hook: Any | None = None,
+    require_op_plan_ingestion_hook: bool = False,
 ) -> dict[str, Any]:
     normalized_checked_at = checked_at_utc or _utc_timestamp()
     validator_rows: list[dict[str, Any]] = []
     for definition in _req_066_validator_registry():
         runner = definition["runner"]
-        output = runner(packet, schema)
+        output = runner(
+            packet,
+            schema,
+            op_plan_ingestion_hook=op_plan_ingestion_hook,
+            require_op_plan_ingestion_hook=require_op_plan_ingestion_hook,
+        )
         validator_rows.append(_req_066_validator_row(definition, output))
     return _build_req_066_aggregate_verdict(validator_rows, checked_at_utc=normalized_checked_at)
 
 
-def run_strategy_packet_validator_runner_files(input_path: str | Path, schema_path: str | Path) -> dict[str, Any]:
+def run_strategy_packet_validator_runner_files(
+    input_path: str | Path,
+    schema_path: str | Path,
+    *,
+    op_plan_ingestion_hook_path: str | Path | None = None,
+) -> dict[str, Any]:
     packet = load_json_file(input_path)
     schema = load_json_schema(schema_path)
     checked_at_utc = _utc_timestamp()
@@ -602,12 +851,30 @@ def run_strategy_packet_validator_runner_files(input_path: str | Path, schema_pa
         definition = _req_066_validator_registry()[0]
         row = _req_066_validator_row(definition, output)
         return _build_req_066_aggregate_verdict([row], checked_at_utc=checked_at_utc)
-    return run_strategy_packet_validator_runner(packet, schema, checked_at_utc=checked_at_utc)
+    op_plan_ingestion_hook = _load_req_068_ingestion_hook_payload(input_path, op_plan_ingestion_hook_path)
+    return run_strategy_packet_validator_runner(
+        packet,
+        schema,
+        checked_at_utc=checked_at_utc,
+        op_plan_ingestion_hook=op_plan_ingestion_hook,
+        require_op_plan_ingestion_hook=True,
+    )
 
 
-def validate_strategy_packet_files(input_path: str | Path, schema_path: str | Path) -> dict[str, Any]:
+def validate_strategy_packet_files(
+    input_path: str | Path,
+    schema_path: str | Path,
+    *,
+    op_plan_ingestion_hook_path: str | Path | None = None,
+) -> dict[str, Any]:
     packet = load_json_file(input_path)
     schema = load_json_schema(schema_path)
     if not isinstance(packet, Mapping):
         return _packet_payload_not_object_validation_result()
-    return validate_strategy_packet_payload(packet, schema)
+    op_plan_ingestion_hook = _load_req_068_ingestion_hook_payload(input_path, op_plan_ingestion_hook_path)
+    return validate_strategy_packet_payload(
+        packet,
+        schema,
+        op_plan_ingestion_hook=op_plan_ingestion_hook,
+        require_op_plan_ingestion_hook=True,
+    )

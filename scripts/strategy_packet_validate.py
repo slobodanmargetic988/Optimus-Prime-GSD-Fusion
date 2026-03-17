@@ -31,6 +31,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Emit REQ-066 aggregate validator runner output with per-validator verdicts and blocking reason codes."
         ),
     )
+    parser.add_argument(
+        "--op-plan-ingestion-hook",
+        help=(
+            "Optional path to REQ-068 op-plan strategy ingestion hook payload. "
+            "If omitted, validator auto-discovers strategy/current/samples/REQ-068_op-plan-strategy-ingestion-hook.sample.json."
+        ),
+    )
     parser.add_argument("--json-pretty", action="store_true", help="Pretty-print the validator output.")
     return parser.parse_args(argv)
 
@@ -47,11 +54,13 @@ def main(argv: list[str] | None = None) -> int:
         payload = run_strategy_packet_validator_runner_files(
             input_path=Path(args.input),
             schema_path=Path(args.schema),
+            op_plan_ingestion_hook_path=args.op_plan_ingestion_hook,
         )
     else:
         payload = validate_strategy_packet_files(
             input_path=Path(args.input),
             schema_path=Path(args.schema),
+            op_plan_ingestion_hook_path=args.op_plan_ingestion_hook,
         )
     print(_render(payload, pretty=args.json_pretty))
     return 0 if payload["ok"] else 1
