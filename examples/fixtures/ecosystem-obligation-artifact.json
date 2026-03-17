@@ -1,0 +1,87 @@
+{
+  "input": {
+    "analysis_type": "ecosystem_obligation_artifact",
+    "now_utc": "2026-03-16T11:30:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "ecosystem_obligations": [
+      {
+        "obligation_id": "obl.produce-strategy-health-summary",
+        "peer_project_id": "earth-analytics-hub",
+        "responsibility": "Produce",
+        "artifact": "strategy_health_summary_v1",
+        "obligation_summary": "Produce cycle health summary packets so analytics-hub can maintain cross-project trend baselines.",
+        "dependency_prerequisites": [
+          "dep.analytics-schema-v2",
+          "dep.runtime-heartbeat-contract",
+          "dep.analytics-schema-v2"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/analytics-hub/signals-2026-03-15.json",
+          "strategy/current/samples/REQ-046_final-strategy-synthesis-composer.sample.json#final_recommendations"
+        ]
+      },
+      {
+        "obligation_id": "obl.consume-runtime-heartbeats",
+        "peer_project_id": "earth-core-runtime",
+        "responsibility": "consume",
+        "artifact": "runtime_lease_heartbeat_events",
+        "obligation_summary": "Consume runtime lease heartbeat events to detect stale worker behavior in strategy decisions.",
+        "dependency_prerequisites": [
+          "dep.state-artifact-cadence",
+          "dep.runtime-heartbeat-contract"
+        ],
+        "evidence_refs": [
+          "strategy/current/samples/REQ-007_ground-graph-snapshot-ingestion.sample.json#lineage_index",
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+        ]
+      }
+    ]
+  },
+  "invalid_unknown_responsibility_input": {
+    "analysis_type": "ecosystem_obligation_artifact",
+    "now_utc": "2026-03-16T11:30:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "ecosystem_obligations": [
+      {
+        "obligation_id": "obl.consume-runtime-heartbeats",
+        "peer_project_id": "earth-core-runtime",
+        "responsibility": "broker",
+        "artifact": "runtime_lease_heartbeat_events",
+        "obligation_summary": "Invalid responsibility type for contract guardrail verification.",
+        "dependency_prerequisites": [
+          "dep.runtime-heartbeat-contract"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+        ]
+      }
+    ]
+  },
+  "invalid_missing_prerequisites_input": {
+    "analysis_type": "ecosystem_obligation_artifact",
+    "now_utc": "2026-03-16T11:30:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "ecosystem_obligations": [
+      {
+        "obligation_id": "obl.consume-runtime-heartbeats",
+        "peer_project_id": "earth-core-runtime",
+        "responsibility": "consume",
+        "artifact": "runtime_lease_heartbeat_events",
+        "obligation_summary": "Missing prerequisite linkage should fail REQ-058 contract validation.",
+        "dependency_prerequisites": [],
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+        ]
+      }
+    ]
+  }
+}

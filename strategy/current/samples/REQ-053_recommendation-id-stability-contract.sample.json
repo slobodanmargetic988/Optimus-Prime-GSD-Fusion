@@ -1,0 +1,378 @@
+{
+    "ok": true,
+    "schema_version": "req-053.recommendation-id-stability-contract.v1",
+    "requirement_id": "REQ-053",
+    "analysis_type": "recommendation_id_stability_contract",
+    "call_id": "recommendation-id-stability-contract",
+    "checked_at_utc": "2026-03-16T10:20:00Z",
+    "target_project": {
+        "project_id": "optimus-prime-gsd-fusion",
+        "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "recommendation_id_stability": {
+        "baseline_revision_id": "strategy-2026-03-15T08:00:00Z",
+        "stability_basis_fields": [
+            "summary",
+            "rationale",
+            "packet_kind",
+            "peer_project_id",
+            "lane",
+            "priority"
+        ],
+        "baseline_recommendations": [
+            {
+                "lineage_key": "lineage.runtime-canary-alignment",
+                "recommendation_id": "rec.align-earth-runtime-canary",
+                "stability_key": "ridkey.100a6499fb69",
+                "stability_basis": {
+                    "summary": "Align the Earth runtime canary stabilization window before widening rollout.",
+                    "rationale": "Call-2 linkage reasoning confirmed the rollout depends on shared runtime stabilization evidence.",
+                    "packet_kind": "cross-project",
+                    "peer_project_id": "earth-core-runtime",
+                    "lane": "coordination",
+                    "priority": "high"
+                },
+                "evidence_refs": [
+                    "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+                    "reports/quality/req-039-rationale-quality-score.json"
+                ],
+                "earth_sweep_evidence_refs": [
+                    "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+                ],
+                "recommendation_field_completeness": {
+                    "required_fields": [
+                        "lineage_key",
+                        "recommendation_id",
+                        "summary",
+                        "rationale",
+                        "packet_kind",
+                        "peer_project_id",
+                        "lane",
+                        "priority",
+                        "evidence_refs"
+                    ],
+                    "missing_fields": [],
+                    "all_fields_present": true
+                }
+            },
+            {
+                "lineage_key": "lineage.telemetry-freshness",
+                "recommendation_id": "rec.harden-telemetry-freshness",
+                "stability_key": "ridkey.bda9b3e99803",
+                "stability_basis": {
+                    "summary": "Harden telemetry freshness checks before the next autonomous canary pass.",
+                    "rationale": "Call-5 sequencing ranked telemetry freshness first because it unblocks downstream verification work.",
+                    "packet_kind": "target-project",
+                    "peer_project_id": "",
+                    "lane": "execution",
+                    "priority": "high"
+                },
+                "evidence_refs": [
+                    "reports/quality/req-039-rationale-quality-score.json",
+                    "reports/runtime/telemetry/freshness-gap-2026-03-15.json"
+                ],
+                "earth_sweep_evidence_refs": [],
+                "recommendation_field_completeness": {
+                    "required_fields": [
+                        "lineage_key",
+                        "recommendation_id",
+                        "summary",
+                        "rationale",
+                        "packet_kind",
+                        "peer_project_id",
+                        "lane",
+                        "priority",
+                        "evidence_refs"
+                    ],
+                    "missing_fields": [],
+                    "all_fields_present": true
+                }
+            }
+        ],
+        "scenario_results": [
+            {
+                "scenario_id": "scenario.no-change",
+                "scenario_kind": "no-change",
+                "description": "Replay the same recommendation set with only evidence-ref ordering noise.",
+                "recommendation_results": [
+                    {
+                        "lineage_key": "lineage.runtime-canary-alignment",
+                        "baseline_recommendation_id": "rec.align-earth-runtime-canary",
+                        "scenario_recommendation_id": "rec.align-earth-runtime-canary",
+                        "baseline_stability_key": "ridkey.100a6499fb69",
+                        "scenario_stability_key": "ridkey.100a6499fb69",
+                        "id_status": "stable",
+                        "changed_fields": [],
+                        "baseline_evidence_refs": [
+                            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+                            "reports/quality/req-039-rationale-quality-score.json"
+                        ],
+                        "scenario_evidence_refs": [
+                            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+                            "reports/quality/req-039-rationale-quality-score.json"
+                        ],
+                        "baseline_earth_sweep_evidence_refs": [
+                            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+                        ],
+                        "scenario_earth_sweep_evidence_refs": [
+                            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+                        ],
+                        "baseline_recommendation_field_completeness": {
+                            "required_fields": [
+                                "lineage_key",
+                                "recommendation_id",
+                                "summary",
+                                "rationale",
+                                "packet_kind",
+                                "peer_project_id",
+                                "lane",
+                                "priority",
+                                "evidence_refs"
+                            ],
+                            "missing_fields": [],
+                            "all_fields_present": true
+                        },
+                        "scenario_recommendation_field_completeness": {
+                            "required_fields": [
+                                "lineage_key",
+                                "recommendation_id",
+                                "summary",
+                                "rationale",
+                                "packet_kind",
+                                "peer_project_id",
+                                "lane",
+                                "priority",
+                                "evidence_refs"
+                            ],
+                            "missing_fields": [],
+                            "all_fields_present": true
+                        }
+                    },
+                    {
+                        "lineage_key": "lineage.telemetry-freshness",
+                        "baseline_recommendation_id": "rec.harden-telemetry-freshness",
+                        "scenario_recommendation_id": "rec.harden-telemetry-freshness",
+                        "baseline_stability_key": "ridkey.bda9b3e99803",
+                        "scenario_stability_key": "ridkey.bda9b3e99803",
+                        "id_status": "stable",
+                        "changed_fields": [],
+                        "baseline_evidence_refs": [
+                            "reports/quality/req-039-rationale-quality-score.json",
+                            "reports/runtime/telemetry/freshness-gap-2026-03-15.json"
+                        ],
+                        "scenario_evidence_refs": [
+                            "reports/quality/req-039-rationale-quality-score.json",
+                            "reports/runtime/telemetry/freshness-gap-2026-03-15.json"
+                        ],
+                        "baseline_earth_sweep_evidence_refs": [],
+                        "scenario_earth_sweep_evidence_refs": [],
+                        "baseline_recommendation_field_completeness": {
+                            "required_fields": [
+                                "lineage_key",
+                                "recommendation_id",
+                                "summary",
+                                "rationale",
+                                "packet_kind",
+                                "peer_project_id",
+                                "lane",
+                                "priority",
+                                "evidence_refs"
+                            ],
+                            "missing_fields": [],
+                            "all_fields_present": true
+                        },
+                        "scenario_recommendation_field_completeness": {
+                            "required_fields": [
+                                "lineage_key",
+                                "recommendation_id",
+                                "summary",
+                                "rationale",
+                                "packet_kind",
+                                "peer_project_id",
+                                "lane",
+                                "priority",
+                                "evidence_refs"
+                            ],
+                            "missing_fields": [],
+                            "all_fields_present": true
+                        }
+                    }
+                ],
+                "stable_recommendation_ids": [
+                    "rec.align-earth-runtime-canary",
+                    "rec.harden-telemetry-freshness"
+                ],
+                "evolved_recommendation_ids": [],
+                "added_recommendation_ids": [],
+                "removed_recommendation_ids": []
+            },
+            {
+                "scenario_id": "scenario.substantive-change",
+                "scenario_kind": "substantive-change",
+                "description": "Escalate the telemetry freshness recommendation while leaving runtime alignment unchanged.",
+                "recommendation_results": [
+                    {
+                        "lineage_key": "lineage.runtime-canary-alignment",
+                        "baseline_recommendation_id": "rec.align-earth-runtime-canary",
+                        "scenario_recommendation_id": "rec.align-earth-runtime-canary",
+                        "baseline_stability_key": "ridkey.100a6499fb69",
+                        "scenario_stability_key": "ridkey.100a6499fb69",
+                        "id_status": "stable",
+                        "changed_fields": [],
+                        "baseline_evidence_refs": [
+                            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+                            "reports/quality/req-039-rationale-quality-score.json"
+                        ],
+                        "scenario_evidence_refs": [
+                            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+                            "reports/quality/req-039-rationale-quality-score.json"
+                        ],
+                        "baseline_earth_sweep_evidence_refs": [
+                            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+                        ],
+                        "scenario_earth_sweep_evidence_refs": [
+                            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+                        ],
+                        "baseline_recommendation_field_completeness": {
+                            "required_fields": [
+                                "lineage_key",
+                                "recommendation_id",
+                                "summary",
+                                "rationale",
+                                "packet_kind",
+                                "peer_project_id",
+                                "lane",
+                                "priority",
+                                "evidence_refs"
+                            ],
+                            "missing_fields": [],
+                            "all_fields_present": true
+                        },
+                        "scenario_recommendation_field_completeness": {
+                            "required_fields": [
+                                "lineage_key",
+                                "recommendation_id",
+                                "summary",
+                                "rationale",
+                                "packet_kind",
+                                "peer_project_id",
+                                "lane",
+                                "priority",
+                                "evidence_refs"
+                            ],
+                            "missing_fields": [],
+                            "all_fields_present": true
+                        }
+                    },
+                    {
+                        "lineage_key": "lineage.telemetry-freshness",
+                        "baseline_recommendation_id": "rec.harden-telemetry-freshness",
+                        "scenario_recommendation_id": "rec.escalate-telemetry-freshness-guardrail",
+                        "baseline_stability_key": "ridkey.bda9b3e99803",
+                        "scenario_stability_key": "ridkey.127a032ade59",
+                        "id_status": "evolved",
+                        "changed_fields": [
+                            "summary",
+                            "rationale"
+                        ],
+                        "baseline_evidence_refs": [
+                            "reports/quality/req-039-rationale-quality-score.json",
+                            "reports/runtime/telemetry/freshness-gap-2026-03-15.json"
+                        ],
+                        "scenario_evidence_refs": [
+                            "reports/quality/req-039-rationale-quality-score.json",
+                            "reports/runtime/telemetry/freshness-gap-2026-03-16.json"
+                        ],
+                        "baseline_earth_sweep_evidence_refs": [],
+                        "scenario_earth_sweep_evidence_refs": [],
+                        "baseline_recommendation_field_completeness": {
+                            "required_fields": [
+                                "lineage_key",
+                                "recommendation_id",
+                                "summary",
+                                "rationale",
+                                "packet_kind",
+                                "peer_project_id",
+                                "lane",
+                                "priority",
+                                "evidence_refs"
+                            ],
+                            "missing_fields": [],
+                            "all_fields_present": true
+                        },
+                        "scenario_recommendation_field_completeness": {
+                            "required_fields": [
+                                "lineage_key",
+                                "recommendation_id",
+                                "summary",
+                                "rationale",
+                                "packet_kind",
+                                "peer_project_id",
+                                "lane",
+                                "priority",
+                                "evidence_refs"
+                            ],
+                            "missing_fields": [],
+                            "all_fields_present": true
+                        }
+                    }
+                ],
+                "stable_recommendation_ids": [
+                    "rec.align-earth-runtime-canary"
+                ],
+                "evolved_recommendation_ids": [
+                    "rec.escalate-telemetry-freshness-guardrail"
+                ],
+                "added_recommendation_ids": [],
+                "removed_recommendation_ids": []
+            }
+        ],
+        "cross_project_context_usage": {
+            "cross_project_context_provided": true,
+            "cross_project_context_used": true,
+            "projects_considered": [
+                "earth-core-runtime",
+                "earth-shared-observability"
+            ],
+            "earth_sweep_evidence_refs_considered": [
+                "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+                "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+            ],
+            "cross_project_obligation_count": 1,
+            "unresolved_idea_count": 1,
+            "recommendation_ids_with_context": [
+                "rec.align-earth-runtime-canary",
+                "rec.harden-telemetry-freshness"
+            ]
+        },
+        "open_risks": [
+            {
+                "open_risk_id": "open-risk.5054fc9d54b5",
+                "recommendation_id": "idea.telemetry-shared-observability-follow-up",
+                "summary": "Validate earth-shared-observability ownership before coupling freshness guardrails to shared dashboards.",
+                "reason_code": "unresolved_idea_open_risk",
+                "project_id": "earth-shared-observability",
+                "required_evidence_refs": [
+                    "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+                ],
+                "evidence_refs": [
+                    "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+                ],
+                "linked_recommendation_ids": [
+                    "rec.harden-telemetry-freshness"
+                ],
+                "call_trace_lineage": [],
+                "contributing_call_ids": []
+            }
+        ]
+    },
+    "totals": {
+        "baseline_recommendations": 2,
+        "scenario_count": 2,
+        "stable_results": 3,
+        "evolved_results": 1,
+        "added_results": 0,
+        "removed_results": 0,
+        "open_risk_count": 1
+    }
+}

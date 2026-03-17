@@ -9,7 +9,7 @@
   },
   "strategy": {
     "revision_id": "strat.20260316-r054",
-    "summary": "Package recommendation-to-planner traceability into the canonical strategy packet so planner gating remains deterministic.",
+    "summary": "Package recommendation-to-planner traceability and blocker routing policy into the canonical strategy packet so planner and runtime gating remain deterministic.",
     "link_map_ref": "strategy/current/ECOSYSTEM_LINK_MAP.json"
   },
   "recommendations": [
@@ -173,10 +173,12 @@
   },
   "constraints": {
     "hard": [
-      "Do not allow planner intake when a strategy recommendation lacks at least one intent mapping."
+      "Do not allow planner intake when a strategy recommendation lacks at least one intent mapping.",
+      "Never bypass validation failure gates when blocker policy artifact is malformed."
     ],
     "soft": [
-      "Preserve deterministic recommendation-to-intent traceability for downstream audit trails."
+      "Preserve deterministic recommendation-to-intent traceability for downstream audit trails.",
+      "Prefer cross-project evidence-backed escalation for non-local blockers."
     ]
   },
   "kpi_targets": [
@@ -189,8 +191,61 @@
       "metric": "traceability_coverage",
       "direction": "maintain",
       "target": "100% of recommendations mapped to at least one planner task intent"
+    },
+    {
+      "metric": "blocker_triage_cycle_count",
+      "direction": "decrease",
+      "target": ">=20% reduction in retry-only cycles"
     }
   ],
+  "blocker_handling_policy_artifact": {
+    "policies": [
+      {
+        "policy_id": "policy.cross-project-rate-limit",
+        "blocker_code": "all_rate_gates_blocking",
+        "escalation_trigger": {
+          "trigger_type": "attempts_exhausted",
+          "threshold": 3,
+          "window": "cycles"
+        },
+        "owner_hints": [
+          "boss-manager",
+          "runtime-coordinator"
+        ],
+        "fallback_paths": [
+          "pause-and-retry-window",
+          "reroute-to-lower-rate-profile"
+        ],
+        "project_id": "runtime-orchestrator",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "policy_id": "policy.validation-contract-mismatch",
+        "blocker_code": "verification_contract_missing",
+        "escalation_trigger": {
+          "trigger_type": "guardrail_violation",
+          "threshold": 1,
+          "window": "attempts"
+        },
+        "owner_hints": [
+          "developer-worker",
+          "planner-worker"
+        ],
+        "fallback_paths": [
+          "open-blocker-ticket",
+          "request-contract-refresh"
+        ],
+        "project_id": "",
+        "evidence_refs": [
+          "contracts/req/REQ-057_blocker-handling-policy-artifact.md",
+          "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
+        ]
+      }
+    ]
+  },
   "source": {
     "repo": "Optimus-Prime-GSD-Fusion",
     "tool": "op-tools/strategy"

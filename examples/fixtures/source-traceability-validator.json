@@ -1,0 +1,133 @@
+{
+  "input": {
+    "analysis_type": "source_traceability_validator",
+    "now_utc": "2026-03-16T12:45:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "source_references": [
+      {
+        "evidence_ref": "src.mission-001",
+        "source_path": "mission.md#L1",
+        "source_excerpt": "Keep strategy outputs grounded in verifiable evidence from runtime and planning artifacts."
+      },
+      {
+        "evidence_ref": "src.runtime-003",
+        "source_path": "strategy/current/samples/REQ-058_ecosystem-obligation-artifact.sample.json#ecosystem_obligation_artifact",
+        "source_excerpt": "Obligations must stay evidence-backed across Earth-sweep context."
+      },
+      {
+        "evidence_ref": "src.sweep-002",
+        "source_path": "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+        "source_excerpt": "Runtime heartbeat trends show stale-worker risk when citation trails are incomplete."
+      }
+    ],
+    "recommendations": [
+      {
+        "recommendation_id": "rec.harden-source-citations",
+        "summary": "Require every recommendation and claim to keep explicit source evidence links before emission.",
+        "evidence_refs": [
+          "src.mission-001",
+          "src.runtime-003"
+        ],
+        "claims": [
+          {
+            "claim_id": "claim.citations-required",
+            "statement": "Recommendation packets without citations cannot pass source traceability checks.",
+            "evidence_refs": [
+              "src.mission-001"
+            ]
+          },
+          {
+            "claim_id": "claim.runtime-context-link",
+            "statement": "Cross-project obligation guidance remains valid only when tied to known source refs.",
+            "evidence_refs": [
+              "src.runtime-003"
+            ]
+          }
+        ]
+      },
+      {
+        "recommendation_id": "rec.verify-cross-project-evidence",
+        "summary": "Block promotion when recommendation claims cite refs missing from the source reference set.",
+        "evidence_refs": [
+          "src.sweep-002"
+        ],
+        "claims": [
+          {
+            "claim_id": "claim.broken-ref-blocker",
+            "statement": "Broken evidence references must fail validation immediately to prevent uncited downstream actions.",
+            "evidence_refs": [
+              "src.sweep-002"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "invalid_uncited_claim_input": {
+    "analysis_type": "source_traceability_validator",
+    "now_utc": "2026-03-16T12:45:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "source_references": [
+      {
+        "evidence_ref": "src.mission-001",
+        "source_path": "mission.md#L1",
+        "source_excerpt": "Keep strategy outputs grounded in verifiable evidence from runtime and planning artifacts."
+      }
+    ],
+    "recommendations": [
+      {
+        "recommendation_id": "rec.harden-source-citations",
+        "summary": "Uncited claims must be rejected by validator guardrails.",
+        "evidence_refs": [
+          "src.mission-001"
+        ],
+        "claims": [
+          {
+            "claim_id": "claim.uncited",
+            "statement": "This claim intentionally omits citation refs.",
+            "evidence_refs": []
+          }
+        ]
+      }
+    ]
+  },
+  "invalid_broken_reference_input": {
+    "analysis_type": "source_traceability_validator",
+    "now_utc": "2026-03-16T12:45:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion",
+      "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+    },
+    "source_references": [
+      {
+        "evidence_ref": "src.mission-001",
+        "source_path": "mission.md#L1",
+        "source_excerpt": "Keep strategy outputs grounded in verifiable evidence from runtime and planning artifacts."
+      }
+    ],
+    "recommendations": [
+      {
+        "recommendation_id": "rec.verify-cross-project-evidence",
+        "summary": "Broken references must fail validation.",
+        "evidence_refs": [
+          "src.unknown-999"
+        ],
+        "claims": [
+          {
+            "claim_id": "claim.broken-ref",
+            "statement": "This claim references an unknown source id.",
+            "evidence_refs": [
+              "src.unknown-999"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

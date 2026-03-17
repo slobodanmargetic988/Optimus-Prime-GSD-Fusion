@@ -1,0 +1,46 @@
+{
+  "schema_version": "strategy-packet.v1",
+  "identity": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "run_id": "run.20260316t100500z-task185",
+    "event_id": "event.20260316t100500z-strategy-packet"
+  },
+  "strategy": {
+    "revision_id": "strategy-2026-03-15T08:00:00Z",
+    "summary": "   "
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.harden-telemetry-freshness",
+      "priority": "high",
+      "summary": "Harden telemetry freshness checks before the next autonomous canary pass.",
+      "rationale": "Telemetry freshness remains the first unblocker.",
+      "expected_impact": "Reduce stale telemetry windows.",
+      "risk_level": "medium"
+    },
+    {
+      "recommendation_id": "rec.harden-telemetry-freshness",
+      "priority": "high",
+      "summary": "Align the Earth runtime canary stabilization window before widening rollout.",
+      "rationale": "Shared runtime stabilization still affects rollout timing.",
+      "expected_impact": "Prevent rollout drift.",
+      "risk_level": "high"
+    }
+  ],
+  "constraints": {
+    "hard": [
+      "Keep the packet surface minimal."
+    ],
+    "soft": []
+  },
+  "kpi_targets": [
+    {
+      "metric": "telemetry_freshness_lag_minutes",
+      "direction": "decrease"
+    }
+  ],
+  "source": {
+    "repo": "Optimus-Prime-GSD-Fusion",
+    "tool": "scripts/strategy_artifacts_handoff.py"
+  }
+}

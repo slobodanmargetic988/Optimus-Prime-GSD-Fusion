@@ -1,0 +1,325 @@
+{
+  "calibrated_at": "2026-03-16T12:30:00Z",
+  "call_metadata": {
+    "canonical_input": {
+      "calibrated_at": "2026-03-16T12:30:00Z",
+      "earth_root": "/workspace/projects/Earth",
+      "execution_mode": "long-thinking",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req038-fixture-r1",
+      "runtime_mode": "llm-first",
+      "target_project_root": "/workspace/projects/optimus-prime"
+    },
+    "canonical_input_sha256": "24831199a469b46b81d3275b0ac2b3bd18fc54d292ae949941d5b253960a9c47",
+    "canonical_processing_input": {
+      "broad_sweep_context": {
+        "context_project_ids": [],
+        "cross_project_context_project_ids": [],
+        "earth_sweep_evidence_refs": [],
+        "projects_considered": [],
+        "proposed_cross_project_obligations": [],
+        "unresolved_ideas": []
+      },
+      "priority_weights": {
+        "ecosystem_impact": 0.5,
+        "feasibility": 0.3,
+        "urgency": 0.2
+      },
+      "recommendations": [
+        {
+          "ecosystem_impact_score": 8.0,
+          "evidence_refs": [
+            "contracts/req/REQ-024_strategy-context-bundle-serialization.md",
+            "reports/optimus-prime/planning/evidence/TASK-130/TASK_EVIDENCE.json"
+          ],
+          "feasibility_score": 8.0,
+          "rationale": "Contract drift causes avoidable regressions during recommendation packet replay.",
+          "recommendation_id": "rec.contract-drift-guardrails",
+          "summary": "Add contract drift guardrails for recommendation packets.",
+          "urgency_score": 7.0
+        },
+        {
+          "ecosystem_impact_score": 7.0,
+          "evidence_refs": [
+            "contracts/req/REQ-001_llm-first-strategy-runtime-entrypoint.md",
+            "strategy/current/llm_call_trace.jsonl"
+          ],
+          "feasibility_score": 9.0,
+          "rationale": "Trace retention improves post-incident debugging and replay confidence.",
+          "recommendation_id": "rec.llm-trace-retention",
+          "summary": "Retain LLM call traces for reproducible recommendation audits.",
+          "urgency_score": 5.0
+        },
+        {
+          "ecosystem_impact_score": 9.0,
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json"
+          ],
+          "feasibility_score": 6.0,
+          "rationale": "Shared runtime contracts currently diverge across planning packets and slow cross-project delivery.",
+          "recommendation_id": "rec.runtime-bridge-alignment",
+          "summary": "Align runtime bridge assumptions across ecosystem workers.",
+          "urgency_score": 8.0
+        }
+      ]
+    },
+    "llm_call_trace_jsonl_sha256": "ac8f02456b538783b0045e53d17a2fbd44d8d17ba1ef733e5b0fddadd55ffdf6",
+    "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
+    "llm_call_trace_row_count": 3,
+    "llm_call_trace_rows": [
+      {
+        "call_id": "req038-call-01-98bf0249fd",
+        "call_objective": "Calibrate recommendation priority score using ecosystem impact, feasibility, and urgency for rec.runtime-bridge-alignment.",
+        "depends_on": [],
+        "expected_output": "priority_calibration_01_rec-runtime-bridge-alignment",
+        "handoff_summary": "Call 1 calibrated recommendation rec.runtime-bridge-alignment to priority score 7.9.",
+        "input_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json"
+        ],
+        "output_refs": [
+          "req038-plan-6bebd8d3e7d60b97::call::req038-call-01-98bf0249fd::output::priority_calibration_01",
+          "strategy/current/llm_call_trace.jsonl#L1"
+        ],
+        "plan_id": "req038-plan-6bebd8d3e7d60b97",
+        "processing_call_id": "req038-processing-6bebd8d3e7d60b97",
+        "requirement_id": "REQ-038",
+        "schema_version": "req-038.recommendation-priority-calibration.trace-row.v1",
+        "sequence": 1
+      },
+      {
+        "call_id": "req038-call-02-13e4dba580",
+        "call_objective": "Calibrate recommendation priority score using ecosystem impact, feasibility, and urgency for rec.contract-drift-guardrails.",
+        "depends_on": [
+          "req038-call-01-98bf0249fd"
+        ],
+        "expected_output": "priority_calibration_02_rec-contract-drift-guardrails",
+        "handoff_summary": "Call 2 calibrated recommendation rec.contract-drift-guardrails to priority score 7.8.",
+        "input_refs": [
+          "contracts/req/REQ-024_strategy-context-bundle-serialization.md",
+          "reports/optimus-prime/planning/evidence/TASK-130/TASK_EVIDENCE.json"
+        ],
+        "output_refs": [
+          "req038-plan-6bebd8d3e7d60b97::call::req038-call-02-13e4dba580::output::priority_calibration_02",
+          "strategy/current/llm_call_trace.jsonl#L2"
+        ],
+        "plan_id": "req038-plan-6bebd8d3e7d60b97",
+        "processing_call_id": "req038-processing-6bebd8d3e7d60b97",
+        "requirement_id": "REQ-038",
+        "schema_version": "req-038.recommendation-priority-calibration.trace-row.v1",
+        "sequence": 2
+      },
+      {
+        "call_id": "req038-call-03-02ff6be358",
+        "call_objective": "Calibrate recommendation priority score using ecosystem impact, feasibility, and urgency for rec.llm-trace-retention.",
+        "depends_on": [
+          "req038-call-02-13e4dba580"
+        ],
+        "expected_output": "priority_calibration_03_rec-llm-trace-retention",
+        "handoff_summary": "Call 3 calibrated recommendation rec.llm-trace-retention to priority score 7.2.",
+        "input_refs": [
+          "contracts/req/REQ-001_llm-first-strategy-runtime-entrypoint.md",
+          "strategy/current/llm_call_trace.jsonl"
+        ],
+        "output_refs": [
+          "req038-plan-6bebd8d3e7d60b97::call::req038-call-03-02ff6be358::output::priority_calibration_03",
+          "strategy/current/llm_call_trace.jsonl#L3"
+        ],
+        "plan_id": "req038-plan-6bebd8d3e7d60b97",
+        "processing_call_id": "req038-processing-6bebd8d3e7d60b97",
+        "requirement_id": "REQ-038",
+        "schema_version": "req-038.recommendation-priority-calibration.trace-row.v1",
+        "sequence": 3
+      }
+    ],
+    "llm_call_trace_schema_version": "req-038.recommendation-priority-calibration.trace-row.v1",
+    "llm_call_trace_serialization": "jsonl-per-call-row.v1",
+    "llm_call_trace_sha256": "c72bcd785c2092d6760ff06622e48613ae3493a7725ae40db688e8498bf625ec",
+    "processing_call_id": "req038-processing-6bebd8d3e7d60b97",
+    "processing_input_sha256": "6bebd8d3e7d60b97aef0876643375a882c71f3cfef7d69188a6e493a3986abed",
+    "reproducibility": "deterministic-input-fingerprint",
+    "reproducible_call_id": "req038-24831199a469b46b"
+  },
+  "evidence_refs": [
+    "contracts/req/REQ-001_llm-first-strategy-runtime-entrypoint.md",
+    "contracts/req/REQ-024_strategy-context-bundle-serialization.md",
+    "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+    "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json",
+    "reports/optimus-prime/planning/evidence/TASK-130/TASK_EVIDENCE.json",
+    "strategy/current/llm_call_trace.jsonl"
+  ],
+  "priority_calibrations": [
+    {
+      "ecosystem_impact_score": 9.0,
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json"
+      ],
+      "feasibility_score": 6.0,
+      "priority_band": "medium",
+      "priority_score": 7.9,
+      "rank": 1,
+      "rationale": "Shared runtime contracts currently diverge across planning packets and slow cross-project delivery.",
+      "recommendation_id": "rec.runtime-bridge-alignment",
+      "scoring_contributors": {
+        "ecosystem_impact": {
+          "score": 9.0,
+          "weight": 0.5,
+          "weighted_contribution": 4.5
+        },
+        "feasibility": {
+          "score": 6.0,
+          "weight": 0.3,
+          "weighted_contribution": 1.8
+        },
+        "urgency": {
+          "score": 8.0,
+          "weight": 0.2,
+          "weighted_contribution": 1.6
+        }
+      },
+      "summary": "Align runtime bridge assumptions across ecosystem workers.",
+      "urgency_score": 8.0
+    },
+    {
+      "ecosystem_impact_score": 8.0,
+      "evidence_refs": [
+        "contracts/req/REQ-024_strategy-context-bundle-serialization.md",
+        "reports/optimus-prime/planning/evidence/TASK-130/TASK_EVIDENCE.json"
+      ],
+      "feasibility_score": 8.0,
+      "priority_band": "medium",
+      "priority_score": 7.8,
+      "rank": 2,
+      "rationale": "Contract drift causes avoidable regressions during recommendation packet replay.",
+      "recommendation_id": "rec.contract-drift-guardrails",
+      "scoring_contributors": {
+        "ecosystem_impact": {
+          "score": 8.0,
+          "weight": 0.5,
+          "weighted_contribution": 4.0
+        },
+        "feasibility": {
+          "score": 8.0,
+          "weight": 0.3,
+          "weighted_contribution": 2.4
+        },
+        "urgency": {
+          "score": 7.0,
+          "weight": 0.2,
+          "weighted_contribution": 1.4
+        }
+      },
+      "summary": "Add contract drift guardrails for recommendation packets.",
+      "urgency_score": 7.0
+    },
+    {
+      "ecosystem_impact_score": 7.0,
+      "evidence_refs": [
+        "contracts/req/REQ-001_llm-first-strategy-runtime-entrypoint.md",
+        "strategy/current/llm_call_trace.jsonl"
+      ],
+      "feasibility_score": 9.0,
+      "priority_band": "medium",
+      "priority_score": 7.2,
+      "rank": 3,
+      "rationale": "Trace retention improves post-incident debugging and replay confidence.",
+      "recommendation_id": "rec.llm-trace-retention",
+      "scoring_contributors": {
+        "ecosystem_impact": {
+          "score": 7.0,
+          "weight": 0.5,
+          "weighted_contribution": 3.5
+        },
+        "feasibility": {
+          "score": 9.0,
+          "weight": 0.3,
+          "weighted_contribution": 2.7
+        },
+        "urgency": {
+          "score": 5.0,
+          "weight": 0.2,
+          "weighted_contribution": 1.0
+        }
+      },
+      "summary": "Retain LLM call traces for reproducible recommendation audits.",
+      "urgency_score": 5.0
+    }
+  ],
+  "priority_weights": {
+    "ecosystem_impact": 0.5,
+    "feasibility": 0.3,
+    "urgency": 0.2
+  },
+  "processing_behavior": {
+    "auditability": "Each recommendation reports transparent per-signal scoring contributors.",
+    "calibration_method": "weighted-signal-linear-model",
+    "context_inputs": {
+      "broad_sweep_context": {
+        "context_project_ids": [],
+        "cross_project_context_project_ids": [],
+        "earth_sweep_evidence_refs": [],
+        "projects_considered": [],
+        "proposed_cross_project_obligations": [],
+        "unresolved_ideas": []
+      }
+    },
+    "context_usage": {
+      "approved_cross_project_obligation_ids": [],
+      "context_project_ids": [],
+      "cross_project_context_used": false,
+      "earth_sweep_evidence_refs_used": [],
+      "evidence_refs_used": [
+        "contracts/req/REQ-001_llm-first-strategy-runtime-entrypoint.md",
+        "contracts/req/REQ-024_strategy-context-bundle-serialization.md",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json",
+        "reports/optimus-prime/planning/evidence/TASK-130/TASK_EVIDENCE.json",
+        "strategy/current/llm_call_trace.jsonl"
+      ],
+      "open_risk_ids": []
+    },
+    "ranking_rule": "Sort by priority_score desc, ecosystem_impact_score desc, urgency_score desc, feasibility_score desc, recommendation_id asc.",
+    "recommendation": {
+      "approved_cross_project_obligations": [],
+      "context_project_ids": [],
+      "decision": "prioritize_local",
+      "evidence_refs": [
+        "contracts/req/REQ-001_llm-first-strategy-runtime-entrypoint.md",
+        "contracts/req/REQ-024_strategy-context-bundle-serialization.md",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json",
+        "reports/optimus-prime/planning/evidence/TASK-130/TASK_EVIDENCE.json",
+        "strategy/current/llm_call_trace.jsonl"
+      ],
+      "open_risks": [],
+      "rationale": "context_projects=0 approved_obligations=0 open_risks=0 earth_refs=0"
+    },
+    "signal_order": [
+      "ecosystem_impact",
+      "feasibility",
+      "urgency"
+    ]
+  },
+  "recommendation_priority_calibration_entrypoint": {
+    "calibrated_at": "2026-03-16T12:30:00Z",
+    "earth_root": "/workspace/projects/Earth",
+    "execution_mode": "long-thinking",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req038-fixture-r1",
+    "runtime_mode": "llm-first",
+    "target_project_root": "/workspace/projects/optimus-prime"
+  },
+  "requirement_id": "REQ-038",
+  "schema_version": "req-038.recommendation-priority-calibration.v1",
+  "summary": {
+    "bottom_priority_score": 7.2,
+    "bottom_recommendation_id": "rec.llm-trace-retention",
+    "recommendation_count": 3,
+    "score_spread": 0.7,
+    "top_priority_score": 7.9,
+    "top_recommendation_id": "rec.runtime-bridge-alignment"
+  },
+  "surface": "recommendation_priority_calibration"
+}

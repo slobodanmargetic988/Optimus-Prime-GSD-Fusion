@@ -18,12 +18,19 @@ for candidate in (SCRIPTS_ROOT,):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from scripts.strategy_artifacts_handoff import validate_req_068_op_plan_strategy_ingestion_hook
+from scripts.strategy_artifacts_handoff import (
+    validate_req_057_blocker_handling_policy_artifact,
+    validate_req_068_op_plan_strategy_ingestion_hook,
+)
 
 REQ_054_REQUIREMENT_ID = "REQ-054"
 REQ_054_SCHEMA_VERSION = "1.0"
 REQ_054_ANALYSIS_TYPE = "recommendation_to_planner_mapping_artifact"
 REQ_054_CALL_ID = "recommendation-to-planner-mapping-artifact"
+REQ_057_REQUIREMENT_ID = "REQ-057"
+REQ_057_SCHEMA_VERSION = "1.0"
+REQ_057_ANALYSIS_TYPE = "blocker_handling_policy_artifact"
+REQ_057_CALL_ID = "blocker-handling-policy-artifact"
 REQ_060_REQUIREMENT_ID = "REQ-060"
 REQ_060_ANALYSIS_TYPE = "strategy_packet_v1_schema_validator"
 REQ_066_REQUIREMENT_ID = "REQ-066"
@@ -34,6 +41,7 @@ REQ_068_INGESTION_HOOK_RELATIVE_PATH = Path("strategy/current/samples") / REQ_06
 
 SEVERITY_ERROR = "error"
 REASON_REQ_054_CONTRACT_VIOLATION = "req_054_contract_violation"
+REASON_REQ_057_CONTRACT_VIOLATION = "req_057_contract_violation"
 REASON_PACKET_RECOMMENDATION_MISSING_MAPPING = "packet_recommendation_missing_mapping"
 REASON_MAPPING_REFERENCES_UNKNOWN_PACKET_RECOMMENDATION = "mapping_references_unknown_packet_recommendation"
 REASON_MAPPING_ARTIFACT_RECOMMENDATION_IDS_MISMATCH = "mapping_artifact_recommendation_ids_mismatch"
@@ -270,6 +278,90 @@ def _validate_req_054_mapping_artifact(artifact: Mapping[str, Any]) -> list[dict
             _diagnostic(
                 field_path=_req_054_field_path(message),
                 reason_code=REASON_REQ_054_CONTRACT_VIOLATION,
+                message=message,
+            )
+        )
+    return diagnostics
+
+
+def _req_057_envelope_from_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    policies = artifact.get("policies")
+    policy_rows = policies if isinstance(policies, list) else []
+    unique_blocker_codes = {
+        str(row.get("blocker_code")).strip()
+        for row in policy_rows
+        if isinstance(row, Mapping) and isinstance(row.get("blocker_code"), str) and str(row.get("blocker_code")).strip()
+    }
+    unique_owner_hints = {
+        str(owner).strip()
+        for row in policy_rows
+        if isinstance(row, Mapping) and isinstance(row.get("owner_hints"), list)
+        for owner in row.get("owner_hints", [])
+        if isinstance(owner, str) and owner.strip()
+    }
+    unique_fallback_paths = {
+        str(path).strip()
+        for row in policy_rows
+        if isinstance(row, Mapping) and isinstance(row.get("fallback_paths"), list)
+        for path in row.get("fallback_paths", [])
+        if isinstance(path, str) and path.strip()
+    }
+    unique_evidence_refs = {
+        str(reference).strip()
+        for row in policy_rows
+        if isinstance(row, Mapping) and isinstance(row.get("evidence_refs"), list)
+        for reference in row.get("evidence_refs", [])
+        if isinstance(reference, str) and reference.strip()
+    }
+    return {
+        "ok": True,
+        "schema_version": REQ_057_SCHEMA_VERSION,
+        "requirement_id": REQ_057_REQUIREMENT_ID,
+        "analysis_type": REQ_057_ANALYSIS_TYPE,
+        "call_id": REQ_057_CALL_ID,
+        "checked_at_utc": "validator-probe",
+        "target_project": {
+            "project_id": "validator-probe",
+            "project_root": str(Path.cwd().resolve()),
+        },
+        "blocker_handling_policy_artifact": artifact,
+        "totals": {
+            "policies": len(policy_rows),
+            "unique_blocker_codes": len(unique_blocker_codes),
+            "unique_owner_hints": len(unique_owner_hints),
+            "unique_fallback_paths": len(unique_fallback_paths),
+            "unique_evidence_refs": len(unique_evidence_refs),
+        },
+    }
+
+
+def _req_057_field_path(message: str) -> str:
+    for marker in (" must ", " has ", " missing ", " duplicates "):
+        marker_index = message.find(marker)
+        if marker_index > 0:
+            candidate = message[:marker_index].strip()
+            if candidate:
+                return candidate
+    return "blocker_handling_policy_artifact"
+
+
+def _validate_req_057_consumability(packet: Mapping[str, Any]) -> list[dict[str, str]]:
+    artifact = packet.get("blocker_handling_policy_artifact")
+    if not isinstance(artifact, Mapping):
+        return [
+            _diagnostic(
+                field_path="blocker_handling_policy_artifact",
+                reason_code=REASON_REQ_057_CONTRACT_VIOLATION,
+                message="blocker_handling_policy_artifact must be present for planner/runtime consumability",
+            )
+        ]
+
+    diagnostics: list[dict[str, str]] = []
+    for message in validate_req_057_blocker_handling_policy_artifact(_req_057_envelope_from_artifact(artifact)):
+        diagnostics.append(
+            _diagnostic(
+                field_path=_req_057_field_path(message),
+                reason_code=REASON_REQ_057_CONTRACT_VIOLATION,
                 message=message,
             )
         )
@@ -649,6 +741,7 @@ def validate_strategy_packet_payload(
     diagnostics.extend(_validate_duplicate_recommendation_ids(packet))
     diagnostics.extend(_validate_traceability_gate(packet))
     diagnostics.extend(_validate_req_054_consumability(packet))
+    diagnostics.extend(_validate_req_057_consumability(packet))
     diagnostics.extend(
         _validate_req_068_consumability(
             packet,
@@ -877,4 +970,17 @@ def validate_strategy_packet_files(
         schema,
         op_plan_ingestion_hook=op_plan_ingestion_hook,
         require_op_plan_ingestion_hook=True,
+    )
+
+
+def validate_strategy_packet_paths(
+    input_path: str | Path,
+    schema_path: str | Path,
+    *,
+    op_plan_ingestion_hook_path: str | Path | None = None,
+) -> dict[str, Any]:
+    return validate_strategy_packet_files(
+        input_path=input_path,
+        schema_path=schema_path,
+        op_plan_ingestion_hook_path=op_plan_ingestion_hook_path,
     )

@@ -1,0 +1,80 @@
+{
+  "analysis_type": "source_traceability_validator",
+  "call_id": "source-traceability-validator",
+  "checked_at_utc": "2026-03-16T12:45:00Z",
+  "ok": true,
+  "requirement_id": "REQ-064",
+  "schema_version": "1.0",
+  "source_traceability_validator": {
+    "recommendations": [
+      {
+        "claims": [
+          {
+            "claim_id": "claim.citations-required",
+            "evidence_refs": [
+              "src.mission-001"
+            ],
+            "statement": "Recommendation packets without citations cannot pass source traceability checks."
+          },
+          {
+            "claim_id": "claim.runtime-context-link",
+            "evidence_refs": [
+              "src.runtime-003"
+            ],
+            "statement": "Cross-project obligation guidance remains valid only when tied to known source refs."
+          }
+        ],
+        "evidence_refs": [
+          "src.mission-001",
+          "src.runtime-003"
+        ],
+        "recommendation_id": "rec.harden-source-citations",
+        "summary": "Require every recommendation and claim to keep explicit source evidence links before emission."
+      },
+      {
+        "claims": [
+          {
+            "claim_id": "claim.broken-ref-blocker",
+            "evidence_refs": [
+              "src.sweep-002"
+            ],
+            "statement": "Broken evidence references must fail validation immediately to prevent uncited downstream actions."
+          }
+        ],
+        "evidence_refs": [
+          "src.sweep-002"
+        ],
+        "recommendation_id": "rec.verify-cross-project-evidence",
+        "summary": "Block promotion when recommendation claims cite refs missing from the source reference set."
+      }
+    ],
+    "source_references": [
+      {
+        "evidence_ref": "src.mission-001",
+        "source_excerpt": "Keep strategy outputs grounded in verifiable evidence from runtime and planning artifacts.",
+        "source_path": "mission.md#L1"
+      },
+      {
+        "evidence_ref": "src.runtime-003",
+        "source_excerpt": "Obligations must stay evidence-backed across Earth-sweep context.",
+        "source_path": "strategy/current/samples/REQ-058_ecosystem-obligation-artifact.sample.json#ecosystem_obligation_artifact"
+      },
+      {
+        "evidence_ref": "src.sweep-002",
+        "source_excerpt": "Runtime heartbeat trends show stale-worker risk when citation trails are incomplete.",
+        "source_path": "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+      }
+    ]
+  },
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "totals": {
+    "claim_evidence_links": 3,
+    "claims": 3,
+    "recommendation_evidence_links": 3,
+    "recommendations": 2,
+    "source_references": 3
+  }
+}

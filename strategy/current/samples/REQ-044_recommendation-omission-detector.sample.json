@@ -1,0 +1,357 @@
+{
+  "schema_version": "req-044.recommendation-omission-detector.v1",
+  "requirement_id": "REQ-044",
+  "analysis_type": "recommendation_omission_detector",
+  "call_id": "call-recommendation-omission-detector",
+  "checked_at_utc": "2026-03-16T15:05:00Z",
+  "processing_behavior": {
+    "strategy": "recommendation-omission-detector",
+    "reasoning_mode": "deterministic-coverage-guard",
+    "strict_evidence_discipline": true,
+    "context_inputs": {
+      "target_project": {
+        "project_root": "/workspace/projects/optimus-prime",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-155/TASK_EVIDENCE.json"
+        ]
+      },
+      "earth_sweep": {
+        "earth_root": "/workspace/projects/Earth",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+        ]
+      },
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime orchestrator owns the shared recovery envelope."
+        }
+      ],
+      "mission_required_recommendation_classes": [
+        {
+          "class_id": "class.local-determinism",
+          "summary": "Mission requires deterministic local diagnostics to stay replay-stable.",
+          "required_scope": "local",
+          "project_id": "",
+          "critical": true,
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-155/TASK_EVIDENCE.json"
+          ],
+          "anchor_sources": [
+            "mission"
+          ]
+        },
+        {
+          "class_id": "class.runtime-sync",
+          "summary": "Mission requires runtime-orchestrator synchronization for shared recovery behavior.",
+          "required_scope": "cross-project",
+          "project_id": "runtime-orchestrator",
+          "critical": true,
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "anchor_sources": [
+            "mission"
+          ]
+        }
+      ],
+      "ecosystem_required_recommendation_classes": [
+        {
+          "class_id": "class.analytics-routing",
+          "summary": "Ecosystem needs cross-project analytics routing coverage for omission telemetry.",
+          "required_scope": "cross-project",
+          "project_id": "analytics-hub",
+          "critical": false,
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+          ],
+          "anchor_sources": [
+            "ecosystem"
+          ]
+        }
+      ],
+      "candidate_recommendations": [
+        {
+          "recommendation_id": "rec.local-determinism",
+          "recommendation_class_id": "class.local-determinism",
+          "summary": "Keep local diagnostics deterministic across repeated runs.",
+          "rationale": "Mission evidence ties branch reliability to stable local diagnostics.",
+          "recommendation_scope": "local",
+          "project_id": "",
+          "requires_earth_evidence": false,
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-155/TASK_EVIDENCE.json"
+          ],
+          "next_step": "Run deterministic contract checks and attach evidence packets."
+        },
+        {
+          "recommendation_id": "rec.runtime-sync-local",
+          "recommendation_class_id": "class.runtime-sync",
+          "summary": "Attempt runtime sync actions without cross-project obligation framing.",
+          "rationale": "Local-only framing was attempted but misses the required shared obligation.",
+          "recommendation_scope": "local",
+          "project_id": "",
+          "requires_earth_evidence": false,
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "next_step": "Reframe this class as a cross-project obligation."
+        }
+      ]
+    },
+    "context_usage": {
+      "required_recommendation_class_ids_considered": [
+        "class.analytics-routing",
+        "class.local-determinism",
+        "class.runtime-sync"
+      ],
+      "required_cross_project_class_ids": [
+        "class.analytics-routing",
+        "class.runtime-sync"
+      ],
+      "candidate_recommendation_ids_considered": [
+        "rec.local-determinism",
+        "rec.runtime-sync-local"
+      ],
+      "emitted_recommendation_ids": [
+        "rec.local-determinism"
+      ],
+      "omitted_recommendation_class_ids": [
+        "class.analytics-routing",
+        "class.runtime-sync"
+      ],
+      "missing_critical_cross_project_class_ids": [
+        "class.runtime-sync"
+      ],
+      "local_only_plan_detected": true,
+      "cross_project_obligation_ids_emitted": [],
+      "open_risk_ids_emitted": [
+        "risk-class.analytics-routing-missing-recommendation-class",
+        "risk-class.runtime-sync-missing-required-scope",
+        "risk-local-only-plan"
+      ],
+      "evidence_refs_used": [
+        "reports/earth/sweeps/2026-03-16/analytics-hub.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-155/TASK_EVIDENCE.json"
+      ]
+    },
+    "recommendation": {
+      "decision": "resolve-strategy-gaps",
+      "rationale": "required_classes=3 omissions=2 local_actions=1 obligations=0 open_risks=3",
+      "confidence": "medium",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/analytics-hub.json",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-155/TASK_EVIDENCE.json"
+      ],
+      "recommended_actions": [
+        {
+          "recommendation_id": "rec.local-determinism",
+          "class_id": "class.local-determinism",
+          "summary": "Keep local diagnostics deterministic across repeated runs.",
+          "rationale": "Mission evidence ties branch reliability to stable local diagnostics.",
+          "next_step": "Run deterministic contract checks and attach evidence packets.",
+          "anchor_sources": [
+            "mission"
+          ],
+          "critical": true,
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-155/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "cross_project_obligations": [],
+      "omitted_recommendation_classes": [
+        {
+          "class_id": "class.analytics-routing",
+          "anchor_sources": [
+            "ecosystem"
+          ],
+          "required_scope": "cross-project",
+          "project_id": "analytics-hub",
+          "critical": false,
+          "summary": "Ecosystem needs cross-project analytics routing coverage for omission telemetry.",
+          "reason_code": "missing_recommendation_class",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+          ]
+        },
+        {
+          "class_id": "class.runtime-sync",
+          "anchor_sources": [
+            "mission"
+          ],
+          "required_scope": "cross-project",
+          "project_id": "runtime-orchestrator",
+          "critical": true,
+          "summary": "Mission requires runtime-orchestrator synchronization for shared recovery behavior.",
+          "reason_code": "missing_required_scope",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ],
+      "open_risks": [
+        {
+          "risk_id": "risk-class.analytics-routing-missing-recommendation-class",
+          "reason_code": "missing_recommendation_class",
+          "summary": "Ecosystem needs cross-project analytics routing coverage for omission telemetry.",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+          ]
+        },
+        {
+          "risk_id": "risk-class.runtime-sync-missing-required-scope",
+          "reason_code": "missing_required_scope",
+          "summary": "Mission requires runtime-orchestrator synchronization for shared recovery behavior.",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        },
+        {
+          "risk_id": "risk-local-only-plan",
+          "reason_code": "local_only_plan_ignores_critical_cross_project_obligations",
+          "summary": "Local-only recommendation plans cannot satisfy critical cross-project obligations.",
+          "required_evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ]
+        }
+      ]
+    }
+  },
+  "call_metadata": {
+    "reproducibility": "deterministic-input-fingerprint",
+    "canonical_input": {
+      "runtime_mode": "llm-first",
+      "execution_mode": "long-thinking",
+      "target_project_root": "/workspace/projects/optimus-prime",
+      "earth_root": "/workspace/projects/Earth",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req044-contract-r1",
+      "strategy_goal": "Detect missing recommendation classes required by mission and ecosystem anchors before strategy promotion.",
+      "analysis_type": "recommendation_omission_detector",
+      "call_id": "call-recommendation-omission-detector",
+      "checked_at_utc": "2026-03-16T15:05:00Z"
+    },
+    "canonical_input_sha256": "ca2f349c2e5f8bb0435858fc9fe4f6e5bce28c2990868a41756f67d270bf2ba0",
+    "reproducible_call_id": "req044-ca2f349c2e5f8bb0",
+    "canonical_processing_input": {
+      "mission_required_recommendation_classes": [
+        {
+          "class_id": "class.local-determinism",
+          "summary": "Mission requires deterministic local diagnostics to stay replay-stable.",
+          "required_scope": "local",
+          "project_id": "",
+          "critical": true,
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-155/TASK_EVIDENCE.json"
+          ],
+          "anchor_sources": [
+            "mission"
+          ]
+        },
+        {
+          "class_id": "class.runtime-sync",
+          "summary": "Mission requires runtime-orchestrator synchronization for shared recovery behavior.",
+          "required_scope": "cross-project",
+          "project_id": "runtime-orchestrator",
+          "critical": true,
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "anchor_sources": [
+            "mission"
+          ]
+        }
+      ],
+      "ecosystem_required_recommendation_classes": [
+        {
+          "class_id": "class.analytics-routing",
+          "summary": "Ecosystem needs cross-project analytics routing coverage for omission telemetry.",
+          "required_scope": "cross-project",
+          "project_id": "analytics-hub",
+          "critical": false,
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+          ],
+          "anchor_sources": [
+            "ecosystem"
+          ]
+        }
+      ],
+      "candidate_recommendations": [
+        {
+          "recommendation_id": "rec.local-determinism",
+          "recommendation_class_id": "class.local-determinism",
+          "summary": "Keep local diagnostics deterministic across repeated runs.",
+          "rationale": "Mission evidence ties branch reliability to stable local diagnostics.",
+          "recommendation_scope": "local",
+          "project_id": "",
+          "requires_earth_evidence": false,
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-155/TASK_EVIDENCE.json"
+          ],
+          "next_step": "Run deterministic contract checks and attach evidence packets."
+        },
+        {
+          "recommendation_id": "rec.runtime-sync-local",
+          "recommendation_class_id": "class.runtime-sync",
+          "summary": "Attempt runtime sync actions without cross-project obligation framing.",
+          "rationale": "Local-only framing was attempted but misses the required shared obligation.",
+          "recommendation_scope": "local",
+          "project_id": "",
+          "requires_earth_evidence": false,
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "next_step": "Reframe this class as a cross-project obligation."
+        }
+      ],
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime orchestrator owns the shared recovery envelope."
+        }
+      ],
+      "target_project_evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-155/TASK_EVIDENCE.json"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+      ]
+    },
+    "processing_input_sha256": "b3e4f6ff93844eed25a1627f5de9bf42c78e58fc6ac9eb9318397e4cd4dddf7d",
+    "processing_call_id": "req044-processing-b3e4f6ff93844eed",
+    "llm_call_trace_schema_version": "req-044.llm-call-trace-row.v1",
+    "llm_call_trace_path": "strategy/current/llm_call_trace.jsonl",
+    "llm_call_trace_sha256": "38b5fea7f395bbe8ff734492163a32ff9af87f6b262d1853c87785d422b5bdaf",
+    "llm_call_trace_rows": [
+      {
+        "schema_version": "req-044.llm-call-trace-row.v1",
+        "requirement_id": "REQ-044",
+        "processing_call_id": "req044-processing-b3e4f6ff93844eed",
+        "call_id": "call-recommendation-omission-detector",
+        "sequence": 1,
+        "call_objective": "recommendation_omission_detector",
+        "input_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-155/TASK_EVIDENCE.json",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+        ],
+        "output_refs": [
+          "REQ-044::call::call-recommendation-omission-detector::output::recommendation_omission_detector"
+        ],
+        "handoff_summary": "Omission detector emitted 2 omitted class(es); local_only_plan_detected=true."
+      }
+    ]
+  }
+}

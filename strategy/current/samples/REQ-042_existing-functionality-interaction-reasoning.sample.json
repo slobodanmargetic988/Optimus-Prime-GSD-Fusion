@@ -1,0 +1,593 @@
+{
+  "requirement_id": "REQ-042",
+  "surface": "existing_functionality_interaction_reasoning",
+  "schema_version": "req-042.existing-functionality-interaction-reasoning.v1",
+  "evaluated_at": "2026-03-16T12:00:00Z",
+  "active_project_id": "optimus-prime-gsd-fusion",
+  "capability_need": {
+    "capability_id": "existing-functionality-interaction-reasoning",
+    "intent": "Reason about when the strategy pipeline should consume already-built functionality versus build new capability.",
+    "required_interfaces": [
+      "compatibility-check-matrix-v1",
+      "integration-burden-estimate-v1"
+    ]
+  },
+  "build_new_assessment": {
+    "summary": "Implement a greenfield interaction-reasoning surface in the strategy pipeline.",
+    "estimated_burden": "high",
+    "rationale": "A new implementation would need normalization, deterministic decision logic, docs, fixture coverage, and a bounded contract test.",
+    "evidence_refs": [
+      "reports/strategy/task-148/build-new-estimate.md"
+    ]
+  },
+  "interaction_reasoning": [
+    {
+      "candidate_id": "call-3-gap-reasoner",
+      "source_project_id": "optimus-prime-gsd-fusion",
+      "capability_id": "existing-functionality-interaction-reasoning",
+      "functionality_summary": "Reuse Call-3 gap reasoning as the interaction decision surface.",
+      "required_interfaces": [
+        "compatibility-check-matrix-v1",
+        "integration-burden-estimate-v1"
+      ],
+      "provided_interfaces": [
+        "integration-burden-estimate-v1"
+      ],
+      "missing_interfaces": [
+        "compatibility-check-matrix-v1"
+      ],
+      "compatibility_state": "incompatible",
+      "compatibility_checks": [
+        {
+          "check_id": "check-interface-fit",
+          "requirement": "Candidate exposes the compatibility check matrix interface expected by REQ-042.",
+          "status": "fail",
+          "detail": "Call-3 focuses on strategic gaps and opportunities rather than compatibility matrix outputs."
+        }
+      ],
+      "integration_burden": {
+        "estimate_level": "high",
+        "drivers": [
+          "Large semantic mismatch between gap reasoning and interaction reasoning.",
+          "Substantial reshaping would be required before the output is contract-safe."
+        ],
+        "rationale": "The candidate would need extensive adaptation before it could support consume-vs-build decisions."
+      },
+      "candidate_decision": "reject_existing_functionality",
+      "decision_rationale": "Reject this existing functionality because it misses required interfaces for the requested capability.",
+      "evidence_refs": [
+        "contracts/req/REQ-028_call-3-gap-and-opportunity-reasoning.md",
+        "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json"
+      ]
+    },
+    {
+      "candidate_id": "integration-opportunity-bridge",
+      "source_project_id": "shared-observability",
+      "capability_id": "existing-functionality-interaction-reasoning",
+      "functionality_summary": "Bridge REQ-015 integration opportunity signals into the interaction decision surface.",
+      "required_interfaces": [
+        "compatibility-check-matrix-v1",
+        "integration-burden-estimate-v1"
+      ],
+      "provided_interfaces": [
+        "compatibility-check-matrix-v1",
+        "integration-burden-estimate-v1"
+      ],
+      "missing_interfaces": [],
+      "compatibility_state": "needs_followup",
+      "compatibility_checks": [
+        {
+          "check_id": "check-decision-closure",
+          "requirement": "Candidate can close the loop with a final consume-vs-build decision.",
+          "status": "unknown",
+          "detail": "The current surface still stops at opportunity detection and does not yet emit the final decision rule."
+        },
+        {
+          "check_id": "check-opportunity-shape",
+          "requirement": "Candidate can list integration opportunities relevant to existing functionality.",
+          "status": "pass",
+          "detail": "The integration opportunity surface already identifies candidate interaction points for existing functionality."
+        }
+      ],
+      "integration_burden": {
+        "estimate_level": "medium",
+        "drivers": [
+          "Extra compatibility-to-burden mapping would need to be added.",
+          "Opportunity signals exist but decision closure is still missing."
+        ],
+        "rationale": "This option is promising but still has unresolved compatibility closure work."
+      },
+      "candidate_decision": "investigate_existing_functionality",
+      "decision_rationale": "Investigate this existing functionality further because compatibility checks remain unresolved.",
+      "evidence_refs": [
+        "contracts/req/REQ-015_integration-opportunity-detection.md",
+        "strategy/current/samples/REQ-015_integration-opportunity-detection.sample.json"
+      ]
+    },
+    {
+      "candidate_id": "reuse-detector-adapter",
+      "source_project_id": "runtime-orchestrator",
+      "capability_id": "existing-functionality-interaction-reasoning",
+      "functionality_summary": "Adapt the runtime detector adapter and add explicit consume-vs-build reasoning for REQ-042.",
+      "required_interfaces": [
+        "compatibility-check-matrix-v1",
+        "integration-burden-estimate-v1"
+      ],
+      "provided_interfaces": [
+        "compatibility-check-matrix-v1",
+        "integration-burden-estimate-v1"
+      ],
+      "missing_interfaces": [],
+      "compatibility_state": "compatible",
+      "compatibility_checks": [
+        {
+          "check_id": "check-burden-signal",
+          "requirement": "Candidate can surface a direct integration burden estimate for reuse decisions.",
+          "status": "pass",
+          "detail": "The adapter already tracks the integration steps required to consume the detector output without new managers."
+        },
+        {
+          "check_id": "check-contract-surface",
+          "requirement": "Candidate can emit compatibility check results in a deterministic packet.",
+          "status": "pass",
+          "detail": "The runtime detector adapter already emits replay-stable compatibility facts that can be lifted into REQ-042."
+        }
+      ],
+      "integration_burden": {
+        "estimate_level": "medium",
+        "drivers": [
+          "Most compatibility data is already emitted by the runtime detector adapter.",
+          "Only a dedicated consume-vs-build decision layer must be added on top of the existing packet."
+        ],
+        "rationale": "This path reuses an existing runtime artifact and only needs bounded REQ-042-specific shaping."
+      },
+      "candidate_decision": "consume_existing_functionality",
+      "decision_rationale": "Consume this existing functionality because compatibility checks passed and integration burden is not higher than building new capability.",
+      "evidence_refs": [
+        "contracts/req/REQ-016_reuse-opportunity-detection.md",
+        "strategy/current/samples/REQ-016_reuse-opportunity-detection.sample.json"
+      ]
+    }
+  ],
+  "selected_path": {
+    "decision": "consume_existing_functionality",
+    "selected_candidate_id": "reuse-detector-adapter",
+    "rationale": "Use reuse-detector-adapter because it is compatible and its medium integration burden is not higher than the high new-build estimate."
+  },
+  "processing_behavior": {
+    "strategy": "existing-functionality-interaction-reasoning",
+    "reasoning_mode": "long-thinking",
+    "strict_evidence_discipline": true,
+    "heuristic_summarization_only": false,
+    "context_inputs": {
+      "target_project": {
+        "project_root": "/workspace/projects/optimus-prime",
+        "active_project_id": "optimus-prime-gsd-fusion",
+        "capability_id": "existing-functionality-interaction-reasoning",
+        "intent": "Reason about when the strategy pipeline should consume already-built functionality versus build new capability.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-148/TASK_EVIDENCE.json"
+        ]
+      },
+      "build_new_assessment": {
+        "summary": "Implement a greenfield interaction-reasoning surface in the strategy pipeline.",
+        "estimated_burden": "high",
+        "rationale": "A new implementation would need normalization, deterministic decision logic, docs, fixture coverage, and a bounded contract test.",
+        "evidence_refs": [
+          "reports/strategy/task-148/build-new-estimate.md"
+        ]
+      },
+      "earth_sweep": {
+        "earth_root": "/workspace/projects/Earth",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/earth/sweeps/2026-03-16/shared-observability.json"
+        ]
+      },
+      "cross_project_context": [
+        {
+          "project_id": "runtime-orchestrator",
+          "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+          ],
+          "context_note": "Runtime orchestrator already exposes a detector adapter with bounded integration work for REQ-042."
+        },
+        {
+          "project_id": "shared-observability",
+          "project_root": "/workspace/projects/Earth/shared-observability",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/shared-observability.json"
+          ],
+          "context_note": "Shared observability context shows where opportunity signals can support the interaction-reasoning packet but still lacks decision closure."
+        }
+      ],
+      "existing_functionality_candidates": [
+        {
+          "candidate_id": "call-3-gap-reasoner",
+          "source_project_id": "optimus-prime-gsd-fusion",
+          "capability_id": "existing-functionality-interaction-reasoning",
+          "functionality_summary": "Reuse Call-3 gap reasoning as the interaction decision surface.",
+          "provided_interfaces": [
+            "integration-burden-estimate-v1"
+          ],
+          "compatibility_checks": [
+            {
+              "check_id": "check-interface-fit",
+              "requirement": "Candidate exposes the compatibility check matrix interface expected by REQ-042.",
+              "status": "fail",
+              "detail": "Call-3 focuses on strategic gaps and opportunities rather than compatibility matrix outputs."
+            }
+          ],
+          "integration_burden": {
+            "estimate_level": "high",
+            "drivers": [
+              "Large semantic mismatch between gap reasoning and interaction reasoning.",
+              "Substantial reshaping would be required before the output is contract-safe."
+            ],
+            "rationale": "The candidate would need extensive adaptation before it could support consume-vs-build decisions."
+          },
+          "evidence_refs": [
+            "contracts/req/REQ-028_call-3-gap-and-opportunity-reasoning.md",
+            "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json"
+          ]
+        },
+        {
+          "candidate_id": "integration-opportunity-bridge",
+          "source_project_id": "shared-observability",
+          "capability_id": "existing-functionality-interaction-reasoning",
+          "functionality_summary": "Bridge REQ-015 integration opportunity signals into the interaction decision surface.",
+          "provided_interfaces": [
+            "compatibility-check-matrix-v1",
+            "integration-burden-estimate-v1"
+          ],
+          "compatibility_checks": [
+            {
+              "check_id": "check-decision-closure",
+              "requirement": "Candidate can close the loop with a final consume-vs-build decision.",
+              "status": "unknown",
+              "detail": "The current surface still stops at opportunity detection and does not yet emit the final decision rule."
+            },
+            {
+              "check_id": "check-opportunity-shape",
+              "requirement": "Candidate can list integration opportunities relevant to existing functionality.",
+              "status": "pass",
+              "detail": "The integration opportunity surface already identifies candidate interaction points for existing functionality."
+            }
+          ],
+          "integration_burden": {
+            "estimate_level": "medium",
+            "drivers": [
+              "Extra compatibility-to-burden mapping would need to be added.",
+              "Opportunity signals exist but decision closure is still missing."
+            ],
+            "rationale": "This option is promising but still has unresolved compatibility closure work."
+          },
+          "evidence_refs": [
+            "contracts/req/REQ-015_integration-opportunity-detection.md",
+            "strategy/current/samples/REQ-015_integration-opportunity-detection.sample.json"
+          ]
+        },
+        {
+          "candidate_id": "reuse-detector-adapter",
+          "source_project_id": "runtime-orchestrator",
+          "capability_id": "existing-functionality-interaction-reasoning",
+          "functionality_summary": "Adapt the runtime detector adapter and add explicit consume-vs-build reasoning for REQ-042.",
+          "provided_interfaces": [
+            "compatibility-check-matrix-v1",
+            "integration-burden-estimate-v1"
+          ],
+          "compatibility_checks": [
+            {
+              "check_id": "check-burden-signal",
+              "requirement": "Candidate can surface a direct integration burden estimate for reuse decisions.",
+              "status": "pass",
+              "detail": "The adapter already tracks the integration steps required to consume the detector output without new managers."
+            },
+            {
+              "check_id": "check-contract-surface",
+              "requirement": "Candidate can emit compatibility check results in a deterministic packet.",
+              "status": "pass",
+              "detail": "The runtime detector adapter already emits replay-stable compatibility facts that can be lifted into REQ-042."
+            }
+          ],
+          "integration_burden": {
+            "estimate_level": "medium",
+            "drivers": [
+              "Most compatibility data is already emitted by the runtime detector adapter.",
+              "Only a dedicated consume-vs-build decision layer must be added on top of the existing packet."
+            ],
+            "rationale": "This path reuses an existing runtime artifact and only needs bounded REQ-042-specific shaping."
+          },
+          "evidence_refs": [
+            "contracts/req/REQ-016_reuse-opportunity-detection.md",
+            "strategy/current/samples/REQ-016_reuse-opportunity-detection.sample.json"
+          ]
+        }
+      ]
+    },
+    "context_usage": {
+      "target_project_context_used": true,
+      "earth_sweep_context_used": true,
+      "cross_project_context_used": true,
+      "candidate_ids_considered": [
+        "call-3-gap-reasoner",
+        "integration-opportunity-bridge",
+        "reuse-detector-adapter"
+      ],
+      "compatible_candidate_ids": [
+        "reuse-detector-adapter"
+      ],
+      "needs_followup_candidate_ids": [
+        "integration-opportunity-bridge"
+      ],
+      "incompatible_candidate_ids": [
+        "call-3-gap-reasoner"
+      ],
+      "cross_project_projects_considered": [
+        "runtime-orchestrator",
+        "shared-observability"
+      ],
+      "cross_project_refs_used": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json"
+      ],
+      "evidence_refs_used": [
+        "contracts/req/REQ-015_integration-opportunity-detection.md",
+        "contracts/req/REQ-016_reuse-opportunity-detection.md",
+        "contracts/req/REQ-028_call-3-gap-and-opportunity-reasoning.md",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json",
+        "reports/optimus-prime/planning/evidence/TASK-148/TASK_EVIDENCE.json",
+        "reports/strategy/task-148/build-new-estimate.md",
+        "strategy/current/samples/REQ-015_integration-opportunity-detection.sample.json",
+        "strategy/current/samples/REQ-016_reuse-opportunity-detection.sample.json",
+        "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json"
+      ]
+    },
+    "existing_functionality_reasoning": {
+      "reasoning_focus": "existing-functionality consume-vs-build with compatibility and integration burden",
+      "candidate_assessments": [
+        {
+          "candidate_id": "call-3-gap-reasoner",
+          "source_project_id": "optimus-prime-gsd-fusion",
+          "capability_id": "existing-functionality-interaction-reasoning",
+          "functionality_summary": "Reuse Call-3 gap reasoning as the interaction decision surface.",
+          "required_interfaces": [
+            "compatibility-check-matrix-v1",
+            "integration-burden-estimate-v1"
+          ],
+          "provided_interfaces": [
+            "integration-burden-estimate-v1"
+          ],
+          "missing_interfaces": [
+            "compatibility-check-matrix-v1"
+          ],
+          "compatibility_state": "incompatible",
+          "compatibility_checks": [
+            {
+              "check_id": "check-interface-fit",
+              "requirement": "Candidate exposes the compatibility check matrix interface expected by REQ-042.",
+              "status": "fail",
+              "detail": "Call-3 focuses on strategic gaps and opportunities rather than compatibility matrix outputs."
+            }
+          ],
+          "integration_burden": {
+            "estimate_level": "high",
+            "drivers": [
+              "Large semantic mismatch between gap reasoning and interaction reasoning.",
+              "Substantial reshaping would be required before the output is contract-safe."
+            ],
+            "rationale": "The candidate would need extensive adaptation before it could support consume-vs-build decisions."
+          },
+          "candidate_decision": "reject_existing_functionality",
+          "decision_rationale": "Reject this existing functionality because it misses required interfaces for the requested capability.",
+          "evidence_refs": [
+            "contracts/req/REQ-028_call-3-gap-and-opportunity-reasoning.md",
+            "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json"
+          ]
+        },
+        {
+          "candidate_id": "integration-opportunity-bridge",
+          "source_project_id": "shared-observability",
+          "capability_id": "existing-functionality-interaction-reasoning",
+          "functionality_summary": "Bridge REQ-015 integration opportunity signals into the interaction decision surface.",
+          "required_interfaces": [
+            "compatibility-check-matrix-v1",
+            "integration-burden-estimate-v1"
+          ],
+          "provided_interfaces": [
+            "compatibility-check-matrix-v1",
+            "integration-burden-estimate-v1"
+          ],
+          "missing_interfaces": [],
+          "compatibility_state": "needs_followup",
+          "compatibility_checks": [
+            {
+              "check_id": "check-decision-closure",
+              "requirement": "Candidate can close the loop with a final consume-vs-build decision.",
+              "status": "unknown",
+              "detail": "The current surface still stops at opportunity detection and does not yet emit the final decision rule."
+            },
+            {
+              "check_id": "check-opportunity-shape",
+              "requirement": "Candidate can list integration opportunities relevant to existing functionality.",
+              "status": "pass",
+              "detail": "The integration opportunity surface already identifies candidate interaction points for existing functionality."
+            }
+          ],
+          "integration_burden": {
+            "estimate_level": "medium",
+            "drivers": [
+              "Extra compatibility-to-burden mapping would need to be added.",
+              "Opportunity signals exist but decision closure is still missing."
+            ],
+            "rationale": "This option is promising but still has unresolved compatibility closure work."
+          },
+          "candidate_decision": "investigate_existing_functionality",
+          "decision_rationale": "Investigate this existing functionality further because compatibility checks remain unresolved.",
+          "evidence_refs": [
+            "contracts/req/REQ-015_integration-opportunity-detection.md",
+            "strategy/current/samples/REQ-015_integration-opportunity-detection.sample.json"
+          ]
+        },
+        {
+          "candidate_id": "reuse-detector-adapter",
+          "source_project_id": "runtime-orchestrator",
+          "capability_id": "existing-functionality-interaction-reasoning",
+          "functionality_summary": "Adapt the runtime detector adapter and add explicit consume-vs-build reasoning for REQ-042.",
+          "required_interfaces": [
+            "compatibility-check-matrix-v1",
+            "integration-burden-estimate-v1"
+          ],
+          "provided_interfaces": [
+            "compatibility-check-matrix-v1",
+            "integration-burden-estimate-v1"
+          ],
+          "missing_interfaces": [],
+          "compatibility_state": "compatible",
+          "compatibility_checks": [
+            {
+              "check_id": "check-burden-signal",
+              "requirement": "Candidate can surface a direct integration burden estimate for reuse decisions.",
+              "status": "pass",
+              "detail": "The adapter already tracks the integration steps required to consume the detector output without new managers."
+            },
+            {
+              "check_id": "check-contract-surface",
+              "requirement": "Candidate can emit compatibility check results in a deterministic packet.",
+              "status": "pass",
+              "detail": "The runtime detector adapter already emits replay-stable compatibility facts that can be lifted into REQ-042."
+            }
+          ],
+          "integration_burden": {
+            "estimate_level": "medium",
+            "drivers": [
+              "Most compatibility data is already emitted by the runtime detector adapter.",
+              "Only a dedicated consume-vs-build decision layer must be added on top of the existing packet."
+            ],
+            "rationale": "This path reuses an existing runtime artifact and only needs bounded REQ-042-specific shaping."
+          },
+          "candidate_decision": "consume_existing_functionality",
+          "decision_rationale": "Consume this existing functionality because compatibility checks passed and integration burden is not higher than building new capability.",
+          "evidence_refs": [
+            "contracts/req/REQ-016_reuse-opportunity-detection.md",
+            "strategy/current/samples/REQ-016_reuse-opportunity-detection.sample.json"
+          ]
+        }
+      ],
+      "reviewed_candidate_count": 3,
+      "compatible_count": 1,
+      "needs_followup_count": 1,
+      "incompatible_count": 1,
+      "selected_candidate_id": "reuse-detector-adapter"
+    },
+    "recommendation": {
+      "decision": "consume_existing_functionality",
+      "rationale": "Evidence-backed compatibility and integration burden reasoning support consuming existing functionality.",
+      "confidence": "high",
+      "evidence_refs": [
+        "contracts/req/REQ-015_integration-opportunity-detection.md",
+        "contracts/req/REQ-016_reuse-opportunity-detection.md",
+        "contracts/req/REQ-028_call-3-gap-and-opportunity-reasoning.md",
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-16/shared-observability.json",
+        "reports/optimus-prime/planning/evidence/TASK-148/TASK_EVIDENCE.json",
+        "reports/strategy/task-148/build-new-estimate.md",
+        "strategy/current/samples/REQ-015_integration-opportunity-detection.sample.json",
+        "strategy/current/samples/REQ-016_reuse-opportunity-detection.sample.json",
+        "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json"
+      ],
+      "selected_path": {
+        "decision": "consume_existing_functionality",
+        "selected_candidate_id": "reuse-detector-adapter",
+        "rationale": "Use reuse-detector-adapter because it is compatible and its medium integration burden is not higher than the high new-build estimate."
+      },
+      "reuse_candidates": [
+        {
+          "candidate_id": "call-3-gap-reasoner",
+          "source_project_id": "optimus-prime-gsd-fusion",
+          "compatibility_state": "incompatible",
+          "candidate_decision": "reject_existing_functionality",
+          "integration_burden": {
+            "estimate_level": "high",
+            "drivers": [
+              "Large semantic mismatch between gap reasoning and interaction reasoning.",
+              "Substantial reshaping would be required before the output is contract-safe."
+            ],
+            "rationale": "The candidate would need extensive adaptation before it could support consume-vs-build decisions."
+          },
+          "evidence_refs": [
+            "contracts/req/REQ-028_call-3-gap-and-opportunity-reasoning.md",
+            "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json"
+          ]
+        },
+        {
+          "candidate_id": "integration-opportunity-bridge",
+          "source_project_id": "shared-observability",
+          "compatibility_state": "needs_followup",
+          "candidate_decision": "investigate_existing_functionality",
+          "integration_burden": {
+            "estimate_level": "medium",
+            "drivers": [
+              "Extra compatibility-to-burden mapping would need to be added.",
+              "Opportunity signals exist but decision closure is still missing."
+            ],
+            "rationale": "This option is promising but still has unresolved compatibility closure work."
+          },
+          "evidence_refs": [
+            "contracts/req/REQ-015_integration-opportunity-detection.md",
+            "strategy/current/samples/REQ-015_integration-opportunity-detection.sample.json"
+          ]
+        },
+        {
+          "candidate_id": "reuse-detector-adapter",
+          "source_project_id": "runtime-orchestrator",
+          "compatibility_state": "compatible",
+          "candidate_decision": "consume_existing_functionality",
+          "integration_burden": {
+            "estimate_level": "medium",
+            "drivers": [
+              "Most compatibility data is already emitted by the runtime detector adapter.",
+              "Only a dedicated consume-vs-build decision layer must be added on top of the existing packet."
+            ],
+            "rationale": "This path reuses an existing runtime artifact and only needs bounded REQ-042-specific shaping."
+          },
+          "evidence_refs": [
+            "contracts/req/REQ-016_reuse-opportunity-detection.md",
+            "strategy/current/samples/REQ-016_reuse-opportunity-detection.sample.json"
+          ]
+        }
+      ],
+      "cross_project_obligations": [
+        {
+          "obligation_id": "obligation-reuse-detector-adapter",
+          "project_id": "runtime-orchestrator",
+          "candidate_id": "reuse-detector-adapter",
+          "summary": "Coordinate reuse of reuse-detector-adapter before promoting existing-functionality-interaction-reasoning into execution.",
+          "evidence_refs": [
+            "contracts/req/REQ-016_reuse-opportunity-detection.md",
+            "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/evidence/TASK-148/TASK_EVIDENCE.json",
+            "strategy/current/samples/REQ-016_reuse-opportunity-detection.sample.json"
+          ]
+        }
+      ],
+      "open_risks": []
+    },
+    "summary": "REQ-042 reviewed 3 candidate(s) and selected consume_existing_functionality with 1 cross-project obligation(s) and 0 open risk(s)."
+  },
+  "evidence_refs": [
+    "contracts/req/REQ-015_integration-opportunity-detection.md",
+    "contracts/req/REQ-016_reuse-opportunity-detection.md",
+    "contracts/req/REQ-028_call-3-gap-and-opportunity-reasoning.md",
+    "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+    "reports/earth/sweeps/2026-03-16/shared-observability.json",
+    "reports/optimus-prime/planning/evidence/TASK-148/TASK_EVIDENCE.json",
+    "reports/strategy/task-148/build-new-estimate.md",
+    "strategy/current/samples/REQ-015_integration-opportunity-detection.sample.json",
+    "strategy/current/samples/REQ-016_reuse-opportunity-detection.sample.json",
+    "strategy/current/samples/REQ-028_call-3-gap-and-opportunity-reasoning.sample.json"
+  ],
+  "summary": "Reviewed 3 existing-functionality candidate(s) for existing-functionality-interaction-reasoning: 1 compatible, 1 needing follow-up, 1 incompatible. Recommended path: consume_existing_functionality."
+}

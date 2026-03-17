@@ -1,0 +1,136 @@
+{
+  "analysis_type": "llm_call_trace_and_decision_ledger",
+  "now_utc": "2026-03-16T12:00:00Z",
+  "llm_call_trace_rows": [
+    {
+      "checked_at_utc": "2026-03-16T12:00:00Z",
+      "requirement_id": "REQ-039",
+      "analysis_type": "recommendation_rationale_quality_scoring",
+      "call_id": "score-req-039-contract-surface-evidence-a1b2c3d4e5f6",
+      "call_objective": "Score recommendation rationale quality before packet emission so only evidence-backed actions survive to the final packet.",
+      "target_project_id": "optimus-prime",
+      "peer_project_ids": [
+        "apollo"
+      ],
+      "input_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-168/TASK_EVIDENCE.json",
+        "strategy/current/samples/REQ-035_evidence-citation-discipline-in-reasoning-calls.sample.json"
+      ],
+      "output_refs": [
+        "REQ-039::call::score-req-039-contract-surface-evidence-a1b2c3d4e5f6::output::scored_recommendation",
+        "reports/optimus-prime/final/strategy-packet.json",
+        "strategy/current/llm_call_trace_artifacts/req-039/score-req-039-contract-surface-evidence-a1b2c3d4e5f6/5555666677778888/output.normalized.json"
+      ],
+      "artifacts": [
+        {
+          "kind": "output_snapshot",
+          "path": "strategy/current/llm_call_trace_artifacts/req-039/score-req-039-contract-surface-evidence-a1b2c3d4e5f6/5555666677778888/output.normalized.json",
+          "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        {
+          "kind": "input_snapshot",
+          "path": "strategy/current/llm_call_trace_artifacts/req-039/score-req-039-contract-surface-evidence-a1b2c3d4e5f6/5555666677778888/input.normalized.json",
+          "sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+        }
+      ],
+      "handoff_summary": "REQ-039 score-req-039-contract-surface-evidence-a1b2c3d4e5f6 handoff: quality_status=accepted recommended_actions=1 cross_project_obligations=0 open_risks=0",
+      "totals": {
+        "accepted_recommendations": 1,
+        "cross_project_obligations": 0,
+        "open_risks": 0,
+        "recommended_actions": 1,
+        "rejected_recommendations": 0,
+        "scored_recommendations": 1
+      }
+    },
+    {
+      "checked_at_utc": "2026-03-16T12:00:00Z",
+      "requirement_id": "REQ-035",
+      "analysis_type": "evidence_citation_discipline_in_reasoning_calls",
+      "call_id": "call-2",
+      "call_objective": "Enforce evidence citation discipline before promoting ecosystem-linkage actions into the operator-facing output set.",
+      "target_project_id": "optimus-prime",
+      "peer_project_ids": [
+        "earth-index",
+        "apollo"
+      ],
+      "input_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-168/TASK_EVIDENCE.json",
+        "strategy/current/samples/REQ-021_evidence-provenance-ledger-for-context.sample.json"
+      ],
+      "output_refs": [
+        "REQ-035::call::call-2::output::final_recommendations",
+        "reports/optimus-prime/final/replay-analysis.json",
+        "strategy/current/llm_call_trace_artifacts/req-035/call-2/1111222233334444/output.normalized.json"
+      ],
+      "artifacts": [
+        {
+          "kind": "output_snapshot",
+          "path": "strategy/current/llm_call_trace_artifacts/req-035/call-2/1111222233334444/output.normalized.json",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        {
+          "kind": "input_snapshot",
+          "path": "strategy/current/llm_call_trace_artifacts/req-035/call-2/1111222233334444/input.normalized.json",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ],
+      "handoff_summary": "REQ-035 call-2 handoff: decision=proceed confidence=high strategic_claims=3 cited_claims=2 flagged_claims=1 final_recommendations=1 promoted_actions=1",
+      "totals": {
+        "cited_claims": 2,
+        "final_recommendations": 1,
+        "flagged_claims": 1,
+        "reasoning_calls": 1,
+        "strategic_claims": 3
+      }
+    }
+  ],
+  "final_output_artifacts": [
+    {
+      "artifact_ref": "reports/optimus-prime/final/replay-analysis.json",
+      "artifact_role": "replay_analysis",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    {
+      "artifact_ref": "reports/optimus-prime/final/strategy-packet.json",
+      "artifact_role": "final_strategy_packet",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  ],
+  "decision_ledger": [
+    {
+      "decision_id": "dec.hold-replay-analysis",
+      "decision_type": "hold",
+      "summary": "Hold the replay artifact so deferred claims stay auditable before broader rollout.",
+      "rationale": "REQ-035 flagged one claim, so the replay analysis must preserve the hold decision and its evidence trail.",
+      "source_call_refs": [
+        "REQ-035::call::call-2"
+      ],
+      "final_output_artifact_refs": [
+        "reports/optimus-prime/final/replay-analysis.json"
+      ],
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-168/TASK_EVIDENCE.json",
+        "strategy/current/samples/REQ-035_evidence-citation-discipline-in-reasoning-calls.sample.json"
+      ]
+    },
+    {
+      "decision_id": "dec.emit-final-strategy-packet",
+      "decision_type": "emit",
+      "summary": "Emit the final strategy packet with the surviving evidence-backed action set.",
+      "rationale": "REQ-035 and REQ-039 agree the promoted recommendation remains cited, scored, and ready for packet emission.",
+      "source_call_refs": [
+        "REQ-039::call::score-req-039-contract-surface-evidence-a1b2c3d4e5f6",
+        "REQ-035::call::call-2"
+      ],
+      "final_output_artifact_refs": [
+        "reports/optimus-prime/final/strategy-packet.json"
+      ],
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-168/TASK_EVIDENCE.json",
+        "strategy/current/samples/REQ-035_evidence-citation-discipline-in-reasoning-calls.sample.json",
+        "strategy/current/samples/REQ-039_recommendation-rationale-quality-scoring.sample.json"
+      ]
+    }
+  ]
+}

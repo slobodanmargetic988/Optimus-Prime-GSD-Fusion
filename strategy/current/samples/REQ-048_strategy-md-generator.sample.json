@@ -1,0 +1,99 @@
+{
+  "ok": true,
+  "schema_version": "req-048.strategy-md-generator.v1",
+  "requirement_id": "REQ-048",
+  "analysis_type": "strategy_md_generator",
+  "call_id": "strategy-md-generator",
+  "checked_at_utc": "2026-03-16T09:15:00Z",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "strategy_md": {
+    "artifact_path": "STRATEGY.md",
+    "markdown": "# STRATEGY\n\nGenerated at `2026-03-16T09:15:00Z` for project `optimus-prime-gsd-fusion`.\nThis narrative is generated from validated recommendation outputs and formatted for clean diffs.\n\n## Final Recommendations (`final_strategy_synthesis.final_recommendations`)\n\n### rec.harden-telemetry-freshness\n- Summary: Harden telemetry freshness checks before the next autonomous canary pass.\n- Rationale: Call-5 sequencing ranked telemetry freshness first because it unblocks downstream verification work.\n- Packet kind: `target-project`\n- Peer project: `none`\n- Lane: `execution`\n- Priority: `high`\n- Sequence hint: `1`\n- Strategy packet input: `pkt.9e0c566d663e`\n- Supporting call count: `2`\n- Contributing calls: `call-5`, `rationale-quality-scoring`\n- Contributing requirements: `REQ-030`, `REQ-039`\n- Evidence refs:\n  - `reports/quality/req-039-rationale-quality-score.json`\n  - `reports/runtime/telemetry/freshness-gap-2026-03-15.json`\n- Call trace lineage:\n  - `trace-call-5-001` (call-5 / REQ-030) at `strategy/current/llm_call_trace.jsonl#call-5-001`\n  - `trace-rationale-quality-001` (rationale-quality-scoring / REQ-039) at `strategy/current/llm_call_trace.jsonl#rationale-quality-001`\n\n### rec.align-earth-runtime-canary\n- Summary: Align the Earth runtime canary stabilization window before widening rollout.\n- Rationale: Call-2 linkage reasoning confirmed the rollout depends on shared runtime stabilization evidence.\n- Packet kind: `cross-project`\n- Peer project: `earth-core-runtime`\n- Lane: `coordination`\n- Priority: `high`\n- Sequence hint: `2`\n- Strategy packet input: `pkt.c3c7c38214ae`\n- Supporting call count: `2`\n- Contributing calls: `call-2`, `rationale-quality-scoring`\n- Contributing requirements: `REQ-027`, `REQ-039`\n- Evidence refs:\n  - `reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json`\n  - `reports/quality/req-039-rationale-quality-score.json`\n  - `strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json`\n- Call trace lineage:\n  - `trace-call-2-001` (call-2 / REQ-027) at `strategy/current/llm_call_trace.jsonl#call-2-001`\n  - `trace-rationale-quality-001` (rationale-quality-scoring / REQ-039) at `strategy/current/llm_call_trace.jsonl#rationale-quality-001`\n\n## Deferred Recommendations (`final_strategy_synthesis.deferred_recommendations`)\n\n### rec.review-reuse-contracts\n- Summary: Review reuse-contract drift before promoting more shared interfaces.\n- Deferred reason code: `conflicting_packet_routing`\n- Packet kind candidates: `cross-project`, `target-project`\n- Peer project candidates: `earth-shared-observability`\n- Contributing calls: `call-2`, `call-5`\n- Evidence refs:\n  - `contracts/req/REQ-016_reuse-opportunity-detection.md`\n  - `reports/earth/sweeps/shared-observability/signals-2026-03-14.json`\n- Call trace lineage:\n  - `trace-call-2-001` (call-2 / REQ-027) at `strategy/current/llm_call_trace.jsonl#call-2-001`\n  - `trace-call-5-001` (call-5 / REQ-030) at `strategy/current/llm_call_trace.jsonl#call-5-001`\n\n## Open Risks (`final_strategy_synthesis.open_risks`)\n\n### open-risk.c6d73dbb8f81\n- Recommendation id: `idea.review-reuse-contracts-follow-up`\n- Summary: Validate earth-shared-observability ownership handoff before scheduling additional integration obligations.\n- Reason code: `unresolved_idea_open_risk`\n- Project id: `earth-shared-observability`\n- Linked recommendation ids: `rec.review-reuse-contracts`\n- Contributing calls: (none)\n- Required evidence refs:\n  - `reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json`\n  - `reports/earth/sweeps/shared-observability/signals-2026-03-14.json`\n- Evidence refs:\n  - `reports/earth/sweeps/shared-observability/signals-2026-03-14.json`\n- Call trace lineage:\n  - `(none)`\n\n## Strategy Packet Inputs (`final_strategy_synthesis.strategy_packet_inputs`)\n\n### pkt.c3c7c38214ae\n- Packet kind: `cross-project`\n- Target project id: `optimus-prime-gsd-fusion`\n- Peer project id: `earth-core-runtime`\n- Lane: `coordination`\n- Recommendation ids: `rec.align-earth-runtime-canary`\n- Recommendation count: `1`\n- Earliest sequence hint: `2`\n- Evidence refs:\n  - `reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json`\n  - `reports/quality/req-039-rationale-quality-score.json`\n  - `strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json`\n\n### pkt.9e0c566d663e\n- Packet kind: `target-project`\n- Target project id: `optimus-prime-gsd-fusion`\n- Peer project id: `none`\n- Lane: `execution`\n- Recommendation ids: `rec.harden-telemetry-freshness`\n- Recommendation count: `1`\n- Earliest sequence hint: `1`\n- Evidence refs:\n  - `reports/quality/req-039-rationale-quality-score.json`\n  - `reports/runtime/telemetry/freshness-gap-2026-03-15.json`\n\n## Multi-Call Trace (`multi_call_orchestration_trace`)\n\n### trace-call-2-001\n- Call id: `call-2`\n- Requirement id: `REQ-027`\n- Trace ref: `strategy/current/llm_call_trace.jsonl#call-2-001`\n- Artifact ref: `strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json`\n- Checked at UTC: `2026-03-16T08:10:00Z`\n- Call objective: Synthesize validated REQ-027 output from call-2 into replay-stable final strategy recommendations.\n- Input refs:\n  - `contracts/req/REQ-016_reuse-opportunity-detection.md`\n  - `reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json`\n  - `strategy/current/llm_call_trace.jsonl#call-2-001`\n  - `strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json`\n- Output refs:\n  - `final_strategy_synthesis.deferred_recommendations#rec.review-reuse-contracts`\n  - `final_strategy_synthesis.final_recommendations#rec.align-earth-runtime-canary`\n  - `final_strategy_synthesis.strategy_packet_inputs#pkt.c3c7c38214ae`\n- Handoff summary: From 2 candidate recommendations, emitted 1 final recommendations, 1 deferred recommendations, and 0 open risks.\n\n### trace-call-5-001\n- Call id: `call-5`\n- Requirement id: `REQ-030`\n- Trace ref: `strategy/current/llm_call_trace.jsonl#call-5-001`\n- Artifact ref: `strategy/current/llm_call_trace_artifacts/req-030/call-5/trace-call-5-001.json`\n- Checked at UTC: `2026-03-16T08:20:00Z`\n- Call objective: Synthesize validated REQ-030 output from call-5 into replay-stable final strategy recommendations.\n- Input refs:\n  - `reports/earth/sweeps/shared-observability/signals-2026-03-14.json`\n  - `reports/runtime/telemetry/freshness-gap-2026-03-15.json`\n  - `strategy/current/llm_call_trace.jsonl#call-5-001`\n  - `strategy/current/llm_call_trace_artifacts/req-030/call-5/trace-call-5-001.json`\n- Output refs:\n  - `final_strategy_synthesis.deferred_recommendations#rec.review-reuse-contracts`\n  - `final_strategy_synthesis.final_recommendations#rec.harden-telemetry-freshness`\n  - `final_strategy_synthesis.strategy_packet_inputs#pkt.9e0c566d663e`\n- Handoff summary: From 2 candidate recommendations, emitted 1 final recommendations, 1 deferred recommendations, and 0 open risks.\n\n### trace-rationale-quality-001\n- Call id: `rationale-quality-scoring`\n- Requirement id: `REQ-039`\n- Trace ref: `strategy/current/llm_call_trace.jsonl#rationale-quality-001`\n- Artifact ref: `strategy/current/llm_call_trace_artifacts/req-039/rationale-quality-001.json`\n- Checked at UTC: `2026-03-16T08:30:00Z`\n- Call objective: Synthesize validated REQ-039 output from rationale-quality-scoring into replay-stable final strategy recommendations.\n- Input refs:\n  - `reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json`\n  - `reports/quality/req-039-rationale-quality-score.json`\n  - `reports/runtime/telemetry/freshness-gap-2026-03-15.json`\n  - `strategy/current/llm_call_trace.jsonl#rationale-quality-001`\n  - `strategy/current/llm_call_trace_artifacts/req-039/rationale-quality-001.json`\n- Output refs:\n  - `final_strategy_synthesis.final_recommendations#rec.align-earth-runtime-canary`\n  - `final_strategy_synthesis.final_recommendations#rec.harden-telemetry-freshness`\n  - `final_strategy_synthesis.strategy_packet_inputs#pkt.9e0c566d663e`\n  - `final_strategy_synthesis.strategy_packet_inputs#pkt.c3c7c38214ae`\n- Handoff summary: From 2 candidate recommendations, emitted 2 final recommendations, 0 deferred recommendations, and 0 open risks.\n\n## Machine Alignment\n- `final_strategy_synthesis.final_recommendations`: `rec.align-earth-runtime-canary`, `rec.harden-telemetry-freshness`\n- `final_strategy_synthesis.deferred_recommendations`: `rec.review-reuse-contracts`\n- `final_strategy_synthesis.open_risks`: `open-risk.c6d73dbb8f81`\n- `final_strategy_synthesis.strategy_packet_inputs`: `pkt.9e0c566d663e`, `pkt.c3c7c38214ae`\n- `multi_call_orchestration_trace`: `trace-call-2-001`, `trace-call-5-001`, `trace-rationale-quality-001`\n\n## Totals\n- Final recommendations: `2`\n- Deferred recommendations: `1`\n- Open risks: `1`\n- Strategy packet inputs: `2`\n- Multi-call trace rows: `3`\n",
+    "content_sha256": "4ea8d34013ab4964f81e885f212ce1de87b4e2c8815ad3f7e8ab25ae2ae3fa8e",
+    "line_count": 176,
+    "sections": [
+      {
+        "section_id": "final-recommendations",
+        "title": "Final Recommendations",
+        "machine_field": "final_strategy_synthesis.final_recommendations",
+        "entry_count": 2,
+        "anchor_ids": [
+          "rec.align-earth-runtime-canary",
+          "rec.harden-telemetry-freshness"
+        ]
+      },
+      {
+        "section_id": "deferred-recommendations",
+        "title": "Deferred Recommendations",
+        "machine_field": "final_strategy_synthesis.deferred_recommendations",
+        "entry_count": 1,
+        "anchor_ids": [
+          "rec.review-reuse-contracts"
+        ]
+      },
+      {
+        "section_id": "open-risks",
+        "title": "Open Risks",
+        "machine_field": "final_strategy_synthesis.open_risks",
+        "entry_count": 1,
+        "anchor_ids": [
+          "open-risk.c6d73dbb8f81"
+        ]
+      },
+      {
+        "section_id": "strategy-packet-inputs",
+        "title": "Strategy Packet Inputs",
+        "machine_field": "final_strategy_synthesis.strategy_packet_inputs",
+        "entry_count": 2,
+        "anchor_ids": [
+          "pkt.9e0c566d663e",
+          "pkt.c3c7c38214ae"
+        ]
+      },
+      {
+        "section_id": "multi-call-trace",
+        "title": "Multi-Call Trace",
+        "machine_field": "multi_call_orchestration_trace",
+        "entry_count": 3,
+        "anchor_ids": [
+          "trace-call-2-001",
+          "trace-call-5-001",
+          "trace-rationale-quality-001"
+        ]
+      }
+    ],
+    "alignment": {
+      "final_recommendation_ids": [
+        "rec.align-earth-runtime-canary",
+        "rec.harden-telemetry-freshness"
+      ],
+      "deferred_recommendation_ids": [
+        "rec.review-reuse-contracts"
+      ],
+      "open_risk_ids": [
+        "open-risk.c6d73dbb8f81"
+      ],
+      "strategy_packet_input_ids": [
+        "pkt.9e0c566d663e",
+        "pkt.c3c7c38214ae"
+      ],
+      "trace_ids": [
+        "trace-call-2-001",
+        "trace-call-5-001",
+        "trace-rationale-quality-001"
+      ]
+    }
+  },
+  "totals": {
+    "final_recommendations": 2,
+    "deferred_recommendations": 1,
+    "open_risks": 1,
+    "strategy_packet_inputs": 2,
+    "multi_call_trace_rows": 3,
+    "markdown_sections": 5,
+    "markdown_lines": 176
+  }
+}

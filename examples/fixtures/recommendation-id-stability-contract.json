@@ -1,0 +1,148 @@
+{
+  "analysis_type": "recommendation_id_stability_contract",
+  "now_utc": "2026-03-16T10:20:00Z",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "broad_sweep_context": {
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+    ],
+    "projects_considered": [
+      "earth-core-runtime",
+      "earth-shared-observability"
+    ],
+    "cross_project_obligations": [
+      {
+        "target_project_id": "earth-core-runtime",
+        "recommendation_ids": [
+          "rec.align-earth-runtime-canary"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+        ]
+      }
+    ],
+    "unresolved_ideas": [
+      {
+        "idea_id": "idea.telemetry-shared-observability-follow-up",
+        "summary": "Validate earth-shared-observability ownership before coupling freshness guardrails to shared dashboards.",
+        "target_project_id": "earth-shared-observability",
+        "recommendation_ids": [
+          "rec.harden-telemetry-freshness"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ]
+      }
+    ]
+  },
+  "baseline_revision": {
+    "revision_id": "strategy-2026-03-15T08:00:00Z",
+    "recommendations": [
+      {
+        "lineage_key": "lineage.runtime-canary-alignment",
+        "recommendation_id": "rec.align-earth-runtime-canary",
+        "summary": "Align the Earth runtime canary stabilization window before widening rollout.",
+        "rationale": "Call-2 linkage reasoning confirmed the rollout depends on shared runtime stabilization evidence.",
+        "packet_kind": "cross-project",
+        "peer_project_id": "earth-core-runtime",
+        "lane": "coordination",
+        "priority": "high",
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/quality/req-039-rationale-quality-score.json"
+        ]
+      },
+      {
+        "lineage_key": "lineage.telemetry-freshness",
+        "recommendation_id": "rec.harden-telemetry-freshness",
+        "summary": "Harden telemetry freshness checks before the next autonomous canary pass.",
+        "rationale": "Call-5 sequencing ranked telemetry freshness first because it unblocks downstream verification work.",
+        "packet_kind": "target-project",
+        "peer_project_id": "",
+        "lane": "execution",
+        "priority": "high",
+        "evidence_refs": [
+          "reports/quality/req-039-rationale-quality-score.json",
+          "reports/runtime/telemetry/freshness-gap-2026-03-15.json"
+        ]
+      }
+    ]
+  },
+  "rerun_scenarios": [
+    {
+      "scenario_id": "scenario.no-change",
+      "scenario_kind": "no-change",
+      "description": "Replay the same recommendation set with only evidence-ref ordering noise.",
+      "recommendations": [
+        {
+          "lineage_key": "lineage.runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary",
+          "summary": "Align the Earth runtime canary stabilization window before widening rollout.",
+          "rationale": "Call-2 linkage reasoning confirmed the rollout depends on shared runtime stabilization evidence.",
+          "packet_kind": "cross-project",
+          "peer_project_id": "earth-core-runtime",
+          "lane": "coordination",
+          "priority": "high",
+          "evidence_refs": [
+            "reports/quality/req-039-rationale-quality-score.json",
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+            "reports/quality/req-039-rationale-quality-score.json"
+          ]
+        },
+        {
+          "lineage_key": "lineage.telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness",
+          "summary": "Harden telemetry freshness checks before the next autonomous canary pass.",
+          "rationale": "Call-5 sequencing ranked telemetry freshness first because it unblocks downstream verification work.",
+          "packet_kind": "target-project",
+          "peer_project_id": "",
+          "lane": "execution",
+          "priority": "high",
+          "evidence_refs": [
+            "reports/runtime/telemetry/freshness-gap-2026-03-15.json",
+            "reports/quality/req-039-rationale-quality-score.json"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario_id": "scenario.substantive-change",
+      "scenario_kind": "substantive-change",
+      "description": "Escalate the telemetry freshness recommendation while leaving runtime alignment unchanged.",
+      "recommendations": [
+        {
+          "lineage_key": "lineage.runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary",
+          "summary": "Align the Earth runtime canary stabilization window before widening rollout.",
+          "rationale": "Call-2 linkage reasoning confirmed the rollout depends on shared runtime stabilization evidence.",
+          "packet_kind": "cross-project",
+          "peer_project_id": "earth-core-runtime",
+          "lane": "coordination",
+          "priority": "high",
+          "evidence_refs": [
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+            "reports/quality/req-039-rationale-quality-score.json"
+          ]
+        },
+        {
+          "lineage_key": "lineage.telemetry-freshness",
+          "recommendation_id": "rec.escalate-telemetry-freshness-guardrail",
+          "summary": "Escalate telemetry freshness guardrails before the next autonomous canary pass.",
+          "rationale": "Freshness lag crossed the canary guardrail, so the recommendation escalates from hardening checks to guardrail enforcement.",
+          "packet_kind": "target-project",
+          "peer_project_id": "",
+          "lane": "execution",
+          "priority": "high",
+          "evidence_refs": [
+            "reports/quality/req-039-rationale-quality-score.json",
+            "reports/runtime/telemetry/freshness-gap-2026-03-16.json"
+          ]
+        }
+      ]
+    }
+  ]
+}

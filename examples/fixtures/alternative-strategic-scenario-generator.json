@@ -1,0 +1,680 @@
+{
+  "input": {
+    "generated_at_utc": "2026-03-16T11:30:00Z",
+    "target_project_root": "/workspace/projects/optimus-prime",
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "revision_identity": "rev-req045-contract-r1",
+    "strategy_goal": "Generate bounded alternative branches when evidence conflict or uncertainty makes a single strategy path unsafe.",
+    "uncertainty_score": 0.81,
+    "conflict_score": 0.74,
+    "uncertainty_signals": [
+      "Target-project evidence is incomplete for downstream execution ordering.",
+      "Comparable prior revisions point to different winning adoption paths."
+    ],
+    "conflict_signals": [
+      "Local delivery pressure conflicts with cross-project sequencing needs.",
+      "Existing recommendations disagree on whether to stabilize or expand first."
+    ],
+    "target_project_evidence_refs": [
+      "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-16/portfolio.json"
+    ],
+    "scenario_candidates": [
+      {
+        "branch_key": "stabilize-core-delivery",
+        "label": "Stabilize core delivery first",
+        "summary": "Prioritize local delivery hardening before expanding the strategic change surface.",
+        "comparative_tradeoffs": [
+          {
+            "dimension": "delivery_speed",
+            "position": "advantaged",
+            "summary": "Fastest path to restore deterministic local execution."
+          },
+          {
+            "dimension": "coordination_load",
+            "position": "advantaged",
+            "summary": "Needs the least cross-project coordination to begin."
+          },
+          {
+            "dimension": "future-option-value",
+            "position": "constrained",
+            "summary": "Defers broader leverage until uncertainty drops."
+          }
+        ],
+        "trigger_conditions": [
+          {
+            "condition_id": "cond.conflict-local-ownership",
+            "signal": "conflict_score",
+            "operator": "gte",
+            "value": 0.7,
+            "summary": "Choose this branch when ownership conflict is blocking execution."
+          },
+          {
+            "condition_id": "cond.local-proof-gap",
+            "signal": "local_evidence_gap",
+            "operator": "present",
+            "value": null,
+            "summary": "Choose this branch when local proof is missing for the main delivery path."
+          }
+        ],
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "branch_key": "parallel-discovery-track",
+        "label": "Run a parallel discovery track",
+        "summary": "Keep local delivery moving while a bounded discovery lane resolves the highest uncertainty.",
+        "comparative_tradeoffs": [
+          {
+            "dimension": "delivery_speed",
+            "position": "balanced",
+            "summary": "Preserves some near-term delivery while testing strategic options."
+          },
+          {
+            "dimension": "coordination_load",
+            "position": "balanced",
+            "summary": "Adds moderate coordination overhead but keeps decisions reversible."
+          },
+          {
+            "dimension": "future-option-value",
+            "position": "advantaged",
+            "summary": "Retains the most optionality while uncertainty remains high."
+          }
+        ],
+        "trigger_conditions": [
+          {
+            "condition_id": "cond.uncertainty-high",
+            "signal": "uncertainty_score",
+            "operator": "gte",
+            "value": 0.75,
+            "summary": "Choose this branch when the evidence picture is still materially incomplete."
+          },
+          {
+            "condition_id": "cond.reversible-experiment-window",
+            "signal": "experiment_window",
+            "operator": "present",
+            "value": null,
+            "summary": "Choose this branch when the team can afford a bounded experiment loop."
+          }
+        ],
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json",
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ]
+      },
+      {
+        "branch_key": "cross-project-alignment-first",
+        "label": "Resolve cross-project alignment first",
+        "summary": "Pause local acceleration until the cross-project decision envelope is aligned and cited.",
+        "comparative_tradeoffs": [
+          {
+            "dimension": "delivery_speed",
+            "position": "constrained",
+            "summary": "Slows immediate delivery while alignment work is completed."
+          },
+          {
+            "dimension": "coordination_load",
+            "position": "constrained",
+            "summary": "Requires the most up-front coordination across project boundaries."
+          },
+          {
+            "dimension": "evidence_strength",
+            "position": "advantaged",
+            "summary": "Produces the cleanest cited basis for later irreversible choices."
+          }
+        ],
+        "trigger_conditions": [
+          {
+            "condition_id": "cond.cross-project-dependency-block",
+            "signal": "shared_dependency_conflict",
+            "operator": "present",
+            "value": null,
+            "summary": "Choose this branch when shared dependency ownership remains unresolved."
+          },
+          {
+            "condition_id": "cond.earth-evidence-required",
+            "signal": "earth_sweep_required",
+            "operator": "eq",
+            "value": true,
+            "summary": "Choose this branch when Earth-sweep evidence is mandatory before commitment."
+          }
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ]
+      }
+    ]
+  },
+  "expected_payload": {
+    "schema_version": "req-045.alternative-strategic-scenario-generator.v1",
+    "requirement_id": "REQ-045",
+    "analysis_type": "alternative_strategic_scenario_generator",
+    "alternative_strategic_scenario_generator": {
+      "runtime_mode": "llm-first",
+      "execution_mode": "long-thinking",
+      "generated_at_utc": "2026-03-16T11:30:00Z",
+      "target_project_root": "/workspace/projects/optimus-prime",
+      "earth_root": "/workspace/projects/Earth",
+      "output_root": "/workspace/projects/optimus-prime/strategy/out",
+      "revision_identity": "rev-req045-contract-r1",
+      "strategy_goal": "Generate bounded alternative branches when evidence conflict or uncertainty makes a single strategy path unsafe.",
+      "scenario_trigger": {
+        "uncertainty_score": 0.81,
+        "conflict_score": 0.74,
+        "triggered": true,
+        "trigger_threshold": 0.7,
+        "reasons": [
+          "uncertainty_score=0.810 meets or exceeds 0.7",
+          "conflict_score=0.740 meets or exceeds 0.7",
+          "uncertainty_signals=2 captured for branch comparison",
+          "conflict_signals=2 captured for branch comparison"
+        ]
+      },
+      "evidence_refs": {
+        "target_project": [
+          "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+        ],
+        "earth_sweep": [
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ]
+      },
+      "scenarios": [
+        {
+          "scenario_id": "scenario.cross-project-alignment-first",
+          "branch_key": "cross-project-alignment-first",
+          "label": "Resolve cross-project alignment first",
+          "summary": "Pause local acceleration until the cross-project decision envelope is aligned and cited.",
+          "comparative_tradeoffs": [
+            {
+              "dimension": "coordination_load",
+              "position": "constrained",
+              "summary": "Requires the most up-front coordination across project boundaries."
+            },
+            {
+              "dimension": "delivery_speed",
+              "position": "constrained",
+              "summary": "Slows immediate delivery while alignment work is completed."
+            },
+            {
+              "dimension": "evidence_strength",
+              "position": "advantaged",
+              "summary": "Produces the cleanest cited basis for later irreversible choices."
+            }
+          ],
+          "trigger_conditions": [
+            {
+              "condition_id": "cond.cross-project-dependency-block",
+              "signal": "shared_dependency_conflict",
+              "operator": "present",
+              "value": null,
+              "summary": "Choose this branch when shared dependency ownership remains unresolved."
+            },
+            {
+              "condition_id": "cond.earth-evidence-required",
+              "signal": "earth_sweep_required",
+              "operator": "eq",
+              "value": true,
+              "summary": "Choose this branch when Earth-sweep evidence is mandatory before commitment."
+            }
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/portfolio.json"
+          ]
+        },
+        {
+          "scenario_id": "scenario.parallel-discovery-track",
+          "branch_key": "parallel-discovery-track",
+          "label": "Run a parallel discovery track",
+          "summary": "Keep local delivery moving while a bounded discovery lane resolves the highest uncertainty.",
+          "comparative_tradeoffs": [
+            {
+              "dimension": "coordination_load",
+              "position": "balanced",
+              "summary": "Adds moderate coordination overhead but keeps decisions reversible."
+            },
+            {
+              "dimension": "delivery_speed",
+              "position": "balanced",
+              "summary": "Preserves some near-term delivery while testing strategic options."
+            },
+            {
+              "dimension": "future-option-value",
+              "position": "advantaged",
+              "summary": "Retains the most optionality while uncertainty remains high."
+            }
+          ],
+          "trigger_conditions": [
+            {
+              "condition_id": "cond.reversible-experiment-window",
+              "signal": "experiment_window",
+              "operator": "present",
+              "value": null,
+              "summary": "Choose this branch when the team can afford a bounded experiment loop."
+            },
+            {
+              "condition_id": "cond.uncertainty-high",
+              "signal": "uncertainty_score",
+              "operator": "gte",
+              "value": 0.75,
+              "summary": "Choose this branch when the evidence picture is still materially incomplete."
+            }
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-16/portfolio.json",
+            "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+          ]
+        },
+        {
+          "scenario_id": "scenario.stabilize-core-delivery",
+          "branch_key": "stabilize-core-delivery",
+          "label": "Stabilize core delivery first",
+          "summary": "Prioritize local delivery hardening before expanding the strategic change surface.",
+          "comparative_tradeoffs": [
+            {
+              "dimension": "coordination_load",
+              "position": "advantaged",
+              "summary": "Needs the least cross-project coordination to begin."
+            },
+            {
+              "dimension": "delivery_speed",
+              "position": "advantaged",
+              "summary": "Fastest path to restore deterministic local execution."
+            },
+            {
+              "dimension": "future-option-value",
+              "position": "constrained",
+              "summary": "Defers broader leverage until uncertainty drops."
+            }
+          ],
+          "trigger_conditions": [
+            {
+              "condition_id": "cond.conflict-local-ownership",
+              "signal": "conflict_score",
+              "operator": "gte",
+              "value": 0.7,
+              "summary": "Choose this branch when ownership conflict is blocking execution."
+            },
+            {
+              "condition_id": "cond.local-proof-gap",
+              "signal": "local_evidence_gap",
+              "operator": "present",
+              "value": null,
+              "summary": "Choose this branch when local proof is missing for the main delivery path."
+            }
+          ],
+          "evidence_refs": [
+            "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+          ]
+        }
+      ],
+      "comparative_summary": {
+        "scenario_count": 3,
+        "branch_keys": [
+          "cross-project-alignment-first",
+          "parallel-discovery-track",
+          "stabilize-core-delivery"
+        ],
+        "dimensions_covered": [
+          "coordination_load",
+          "delivery_speed",
+          "evidence_strength",
+          "future-option-value"
+        ],
+        "trigger_condition_count": 6,
+        "requires_alternative_generation": true
+      }
+    },
+    "processing_behavior": {
+      "strategy": "alternative-strategic-scenario-generation",
+      "reasoning_mode": "deterministic-branch-comparison",
+      "heuristic_summarization_only": false,
+      "context_inputs": {
+        "generated_at_utc": "2026-03-16T11:30:00Z",
+        "uncertainty_score": 0.81,
+        "conflict_score": 0.74,
+        "uncertainty_signals": [
+          "Comparable prior revisions point to different winning adoption paths.",
+          "Target-project evidence is incomplete for downstream execution ordering."
+        ],
+        "conflict_signals": [
+          "Existing recommendations disagree on whether to stabilize or expand first.",
+          "Local delivery pressure conflicts with cross-project sequencing needs."
+        ],
+        "target_project_evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ],
+        "scenario_candidates": [
+          {
+            "branch_key": "cross-project-alignment-first",
+            "label": "Resolve cross-project alignment first",
+            "summary": "Pause local acceleration until the cross-project decision envelope is aligned and cited.",
+            "comparative_tradeoffs": [
+              {
+                "dimension": "coordination_load",
+                "position": "constrained",
+                "summary": "Requires the most up-front coordination across project boundaries."
+              },
+              {
+                "dimension": "delivery_speed",
+                "position": "constrained",
+                "summary": "Slows immediate delivery while alignment work is completed."
+              },
+              {
+                "dimension": "evidence_strength",
+                "position": "advantaged",
+                "summary": "Produces the cleanest cited basis for later irreversible choices."
+              }
+            ],
+            "trigger_conditions": [
+              {
+                "condition_id": "cond.cross-project-dependency-block",
+                "signal": "shared_dependency_conflict",
+                "operator": "present",
+                "value": null,
+                "summary": "Choose this branch when shared dependency ownership remains unresolved."
+              },
+              {
+                "condition_id": "cond.earth-evidence-required",
+                "signal": "earth_sweep_required",
+                "operator": "eq",
+                "value": true,
+                "summary": "Choose this branch when Earth-sweep evidence is mandatory before commitment."
+              }
+            ],
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/portfolio.json"
+            ]
+          },
+          {
+            "branch_key": "parallel-discovery-track",
+            "label": "Run a parallel discovery track",
+            "summary": "Keep local delivery moving while a bounded discovery lane resolves the highest uncertainty.",
+            "comparative_tradeoffs": [
+              {
+                "dimension": "coordination_load",
+                "position": "balanced",
+                "summary": "Adds moderate coordination overhead but keeps decisions reversible."
+              },
+              {
+                "dimension": "delivery_speed",
+                "position": "balanced",
+                "summary": "Preserves some near-term delivery while testing strategic options."
+              },
+              {
+                "dimension": "future-option-value",
+                "position": "advantaged",
+                "summary": "Retains the most optionality while uncertainty remains high."
+              }
+            ],
+            "trigger_conditions": [
+              {
+                "condition_id": "cond.reversible-experiment-window",
+                "signal": "experiment_window",
+                "operator": "present",
+                "value": null,
+                "summary": "Choose this branch when the team can afford a bounded experiment loop."
+              },
+              {
+                "condition_id": "cond.uncertainty-high",
+                "signal": "uncertainty_score",
+                "operator": "gte",
+                "value": 0.75,
+                "summary": "Choose this branch when the evidence picture is still materially incomplete."
+              }
+            ],
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/portfolio.json",
+              "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+            ]
+          },
+          {
+            "branch_key": "stabilize-core-delivery",
+            "label": "Stabilize core delivery first",
+            "summary": "Prioritize local delivery hardening before expanding the strategic change surface.",
+            "comparative_tradeoffs": [
+              {
+                "dimension": "coordination_load",
+                "position": "advantaged",
+                "summary": "Needs the least cross-project coordination to begin."
+              },
+              {
+                "dimension": "delivery_speed",
+                "position": "advantaged",
+                "summary": "Fastest path to restore deterministic local execution."
+              },
+              {
+                "dimension": "future-option-value",
+                "position": "constrained",
+                "summary": "Defers broader leverage until uncertainty drops."
+              }
+            ],
+            "trigger_conditions": [
+              {
+                "condition_id": "cond.conflict-local-ownership",
+                "signal": "conflict_score",
+                "operator": "gte",
+                "value": 0.7,
+                "summary": "Choose this branch when ownership conflict is blocking execution."
+              },
+              {
+                "condition_id": "cond.local-proof-gap",
+                "signal": "local_evidence_gap",
+                "operator": "present",
+                "value": null,
+                "summary": "Choose this branch when local proof is missing for the main delivery path."
+              }
+            ],
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+            ]
+          }
+        ]
+      },
+      "context_usage": {
+        "triggered": true,
+        "scenario_ids_considered": [
+          "scenario.cross-project-alignment-first",
+          "scenario.parallel-discovery-track",
+          "scenario.stabilize-core-delivery"
+        ],
+        "tradeoff_dimensions_used": [
+          "coordination_load",
+          "delivery_speed",
+          "evidence_strength",
+          "future-option-value"
+        ],
+        "trigger_condition_ids_used": [
+          "cond.conflict-local-ownership",
+          "cond.cross-project-dependency-block",
+          "cond.earth-evidence-required",
+          "cond.local-proof-gap",
+          "cond.reversible-experiment-window",
+          "cond.uncertainty-high"
+        ],
+        "evidence_refs_used": [
+          "reports/earth/sweeps/2026-03-16/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+        ]
+      },
+      "recommendation": {
+        "decision": "generate-alternatives",
+        "rationale": "High uncertainty or conflict requires multiple bounded strategic branches with explicit selection triggers.",
+        "confidence": "high",
+        "preferred_branch": "parallel-discovery-track",
+        "fallback_branch": "stabilize-core-delivery",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+        ]
+      }
+    },
+    "call_metadata": {
+      "reproducibility": "deterministic-input-fingerprint",
+      "canonical_input_sha256": "3df8184eea131c3325c3d21910a0423b246ec0184509485b076b84d2f3df26ce",
+      "reproducible_call_id": "req045-3df8184eea131c33",
+      "canonical_input": {
+        "runtime_mode": "llm-first",
+        "execution_mode": "long-thinking",
+        "target_project_root": "/workspace/projects/optimus-prime",
+        "earth_root": "/workspace/projects/Earth",
+        "output_root": "/workspace/projects/optimus-prime/strategy/out",
+        "revision_identity": "rev-req045-contract-r1",
+        "strategy_goal": "Generate bounded alternative branches when evidence conflict or uncertainty makes a single strategy path unsafe."
+      },
+      "processing_input_sha256": "a6a11929eef1a960169dfe07de2245493ef6d2a0c1c5ce83362fbbc31f19cbdb",
+      "processing_call_id": "req045-processing-a6a11929eef1a960",
+      "canonical_processing_input": {
+        "generated_at_utc": "2026-03-16T11:30:00Z",
+        "uncertainty_score": 0.81,
+        "conflict_score": 0.74,
+        "uncertainty_signals": [
+          "Comparable prior revisions point to different winning adoption paths.",
+          "Target-project evidence is incomplete for downstream execution ordering."
+        ],
+        "conflict_signals": [
+          "Existing recommendations disagree on whether to stabilize or expand first.",
+          "Local delivery pressure conflicts with cross-project sequencing needs."
+        ],
+        "target_project_evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+        ],
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ],
+        "scenario_candidates": [
+          {
+            "branch_key": "cross-project-alignment-first",
+            "label": "Resolve cross-project alignment first",
+            "summary": "Pause local acceleration until the cross-project decision envelope is aligned and cited.",
+            "comparative_tradeoffs": [
+              {
+                "dimension": "coordination_load",
+                "position": "constrained",
+                "summary": "Requires the most up-front coordination across project boundaries."
+              },
+              {
+                "dimension": "delivery_speed",
+                "position": "constrained",
+                "summary": "Slows immediate delivery while alignment work is completed."
+              },
+              {
+                "dimension": "evidence_strength",
+                "position": "advantaged",
+                "summary": "Produces the cleanest cited basis for later irreversible choices."
+              }
+            ],
+            "trigger_conditions": [
+              {
+                "condition_id": "cond.cross-project-dependency-block",
+                "signal": "shared_dependency_conflict",
+                "operator": "present",
+                "value": null,
+                "summary": "Choose this branch when shared dependency ownership remains unresolved."
+              },
+              {
+                "condition_id": "cond.earth-evidence-required",
+                "signal": "earth_sweep_required",
+                "operator": "eq",
+                "value": true,
+                "summary": "Choose this branch when Earth-sweep evidence is mandatory before commitment."
+              }
+            ],
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/portfolio.json"
+            ]
+          },
+          {
+            "branch_key": "parallel-discovery-track",
+            "label": "Run a parallel discovery track",
+            "summary": "Keep local delivery moving while a bounded discovery lane resolves the highest uncertainty.",
+            "comparative_tradeoffs": [
+              {
+                "dimension": "coordination_load",
+                "position": "balanced",
+                "summary": "Adds moderate coordination overhead but keeps decisions reversible."
+              },
+              {
+                "dimension": "delivery_speed",
+                "position": "balanced",
+                "summary": "Preserves some near-term delivery while testing strategic options."
+              },
+              {
+                "dimension": "future-option-value",
+                "position": "advantaged",
+                "summary": "Retains the most optionality while uncertainty remains high."
+              }
+            ],
+            "trigger_conditions": [
+              {
+                "condition_id": "cond.reversible-experiment-window",
+                "signal": "experiment_window",
+                "operator": "present",
+                "value": null,
+                "summary": "Choose this branch when the team can afford a bounded experiment loop."
+              },
+              {
+                "condition_id": "cond.uncertainty-high",
+                "signal": "uncertainty_score",
+                "operator": "gte",
+                "value": 0.75,
+                "summary": "Choose this branch when the evidence picture is still materially incomplete."
+              }
+            ],
+            "evidence_refs": [
+              "reports/earth/sweeps/2026-03-16/portfolio.json",
+              "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+            ]
+          },
+          {
+            "branch_key": "stabilize-core-delivery",
+            "label": "Stabilize core delivery first",
+            "summary": "Prioritize local delivery hardening before expanding the strategic change surface.",
+            "comparative_tradeoffs": [
+              {
+                "dimension": "coordination_load",
+                "position": "advantaged",
+                "summary": "Needs the least cross-project coordination to begin."
+              },
+              {
+                "dimension": "delivery_speed",
+                "position": "advantaged",
+                "summary": "Fastest path to restore deterministic local execution."
+              },
+              {
+                "dimension": "future-option-value",
+                "position": "constrained",
+                "summary": "Defers broader leverage until uncertainty drops."
+              }
+            ],
+            "trigger_conditions": [
+              {
+                "condition_id": "cond.conflict-local-ownership",
+                "signal": "conflict_score",
+                "operator": "gte",
+                "value": 0.7,
+                "summary": "Choose this branch when ownership conflict is blocking execution."
+              },
+              {
+                "condition_id": "cond.local-proof-gap",
+                "signal": "local_evidence_gap",
+                "operator": "present",
+                "value": null,
+                "summary": "Choose this branch when local proof is missing for the main delivery path."
+              }
+            ],
+            "evidence_refs": [
+              "reports/optimus-prime/planning/evidence/TASK-159/TASK_EVIDENCE.json"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
