@@ -1,0 +1,86 @@
+{
+  "analysis_type": "constraint_classification_artifact",
+  "call_id": "constraint-classification-artifact",
+  "checked_at_utc": "2026-03-16T09:05:00Z",
+  "constraint_classification": {
+    "hard_constraints": [
+      {
+        "classification": "hard",
+        "constraint_id": "guardrail-task-floor",
+        "evidence_refs": [
+          "AGENTS.md#scope-authoring-rule-high-priority",
+          "scope.md#mandatory-planning-gate"
+        ],
+        "policy_role": "mandatory_guardrail",
+        "rationale": "This is a mandatory planning gate and cannot be bypassed.",
+        "source_refs": [
+          "scope.md#mandatory-planning-gate"
+        ],
+        "statement": "Before build starts, planner must output at least 400 tasks."
+      }
+    ],
+    "planner_policy": {
+      "hard_constraint_ids": [
+        "guardrail-task-floor"
+      ],
+      "mandatory_guardrail_ids": [
+        "guardrail-task-floor"
+      ],
+      "optional_guidance_ids": [
+        "guidance-batch-size",
+        "speculative-cross-project-sync"
+      ],
+      "soft_constraint_ids": [
+        "guidance-batch-size"
+      ],
+      "speculative_constraint_ids": [
+        "speculative-cross-project-sync"
+      ]
+    },
+    "soft_constraints": [
+      {
+        "classification": "soft",
+        "constraint_id": "guidance-batch-size",
+        "evidence_refs": [
+          "reports/strategy/lane-throughput-2026-03-15.json"
+        ],
+        "policy_role": "optional_guidance",
+        "rationale": "Lane batching is guidance that improves throughput but can be adapted.",
+        "source_refs": [
+          "reports/strategy/lane-throughput-2026-03-15.json"
+        ],
+        "statement": "Prefer batching implementation packets by lane to reduce planner churn."
+      }
+    ],
+    "speculative_constraints": [
+      {
+        "classification": "speculative",
+        "constraint_id": "speculative-cross-project-sync",
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "policy_role": "optional_guidance",
+        "rationale": "The checkpoint is optional and should only be used when drift evidence appears.",
+        "source_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "statement": "Consider adding an Earth-wide sync checkpoint if parallel lane drift increases."
+      }
+    ]
+  },
+  "ok": true,
+  "requirement_id": "REQ-055",
+  "schema_version": "1.0",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "totals": {
+    "constraints": 3,
+    "hard_constraints": 1,
+    "mandatory_guardrails": 1,
+    "optional_guidance": 2,
+    "soft_constraints": 1,
+    "speculative_constraints": 1
+  }
+}

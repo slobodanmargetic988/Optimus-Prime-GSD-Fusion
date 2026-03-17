@@ -1,0 +1,113 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-198",
+  "requirement_ids": [
+    "REQ-055"
+  ],
+  "updated_at": "2026-03-16T22:34:00Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_055_integration_constraint_classification",
+        "command": "python3 -m pytest tests/integration/test_constraint-classification-artifact.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-055",
+        "status": "pass",
+        "details": "REQ-055 now emits deterministic hard/soft/speculative constraint artifacts and optional broad-sweep processing behavior with Earth-evidence-gated cross-project obligations.",
+        "evidence_refs": [
+          "scripts/strategy_artifacts_handoff.py",
+          "tests/integration/test_constraint-classification-artifact.py",
+          "reports/optimus-prime/planning/evidence/TASK-198/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "cross_project_obligation_without_earth_sweep_evidence",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "unresolved_idea_requires_open_risk_record",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_artifacts_handoff.py",
+      "tests/integration/test_constraint-classification-artifact.py",
+      "reports/optimus-prime/planning/evidence/TASK-198/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_055_acceptance_integration",
+        "command": "python3 -m pytest tests/integration/test_constraint-classification-artifact.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-055",
+        "status": "pass",
+        "details": "Integration checks verify evidence refs, recommendation field completeness, and cross-project context usage for REQ-055 constraint classification.",
+        "evidence_refs": [
+          "tests/integration/test_constraint-classification-artifact.py",
+          "reports/optimus-prime/planning/evidence/TASK-198/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-055",
+        "passed": true,
+        "notes": "Acceptance command exited 0 and no unresolved blocker entries remain in TASK_EVIDENCE."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "tests/integration/test_constraint-classification-artifact.py",
+      "reports/optimus-prime/planning/evidence/TASK-198/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_artifacts_handoff.py",
+      "tests/integration/test_constraint-classification-artifact.py",
+      "reports/optimus-prime/planning/evidence/TASK-198/TASK_EVIDENCE.json"
+    ]
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_review",
+    "reason_codes": [
+      "req_055_constraint_classification_deterministic",
+      "req_055_processing_behavior_with_broad_sweep_context",
+      "req_055_recommendation_fields_complete",
+      "req_055_cross_project_obligations_evidence_gated",
+      "req_055_targeted_integration_green",
+      "task_198_no_unresolved_blockers"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

@@ -53,8 +53,39 @@ Each mapping entry must include:
 - `op_plan_ref`
 - `op_initialize_ref`
 
+## Constraint Classification Artifact
+
+`constraints` is the REQ-055 consumability surface for planner/runtime policy logic.
+
+Required sections:
+
+- `constraints.hard_constraints[]`
+- `constraints.soft_constraints[]`
+- `constraints.speculative_constraints[]`
+- `constraints.planner_policy`
+
+Each constraint row must include:
+
+- `constraint_id`
+- `statement`
+- `classification`
+- `rationale`
+- `evidence_refs[]`
+- `source_refs[]`
+- `policy_role`
+
+Planner policy arrays must exactly align with the classified rows:
+
+- `mandatory_guardrail_ids[]` must equal the hard constraint IDs.
+- `optional_guidance_ids[]` must equal the soft plus speculative constraint IDs.
+- No duplicate constraint IDs are allowed across buckets or policy arrays.
+
 ## Validation
 
 - Machine schema: `contracts/strategy_packet.v1.schema.json`
 - Deterministic sample: `examples/strategy_packet.sample.v1.json`
 - Consumability validator: `python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json`
+- Gate surfaces:
+  - `constraint_classification_consumable` (REQ-055)
+  - `planner_policy_consumable` (REQ-061 policy quality and recommendation quality)
+  - `op_initialize_pre_plan_strategy_hook_consumable` (REQ-067 pre-plan hook context readiness)

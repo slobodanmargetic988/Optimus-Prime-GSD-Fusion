@@ -1,0 +1,32 @@
+{
+  "req_id": "REQ-069",
+  "summary": "Strategy revision history snapshots and deterministic diff workflow evidence are accepted for governance review based on passing contract, integration, and hardening checks with traceable artifact refs.",
+  "evidence_refs": [
+    {
+      "type": "test_output",
+      "test_path": "tests/contracts/test_strategy-revision-history-and-diff-workflow.py",
+      "command": "python3 -m pytest tests/contracts/test_strategy-revision-history-and-diff-workflow.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-256/contracts_strategy-revision-history-and-diff-workflow.output.txt",
+      "observed_output": "7 passed in 0.05s"
+    },
+    {
+      "type": "test_output",
+      "test_path": "tests/integration/test_strategy-revision-history-and-diff-workflow.py",
+      "command": "python3 -m pytest tests/integration/test_strategy-revision-history-and-diff-workflow.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-256/integration_strategy-revision-history-and-diff-workflow.output.txt",
+      "observed_output": "2 passed in 0.01s"
+    },
+    {
+      "type": "test_output",
+      "test_path": "tests/hardening/test_strategy-revision-history-and-diff-workflow_hardening.py",
+      "command": "python3 -m pytest tests/hardening/test_strategy-revision-history-and-diff-workflow_hardening.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-256/hardening_strategy-revision-history-and-diff-workflow.output.txt",
+      "observed_output": "3 passed in 0.01s"
+    }
+  ],
+  "consumability_verdict": "accepted_with_open_risks",
+  "open_risks": [
+    "Evidence is fixture-scoped and does not include live production strategy repositories or large longitudinal revision chains.",
+    "Governance remains dependent on maintaining current revision snapshot and diff artifact references; missing future refs must continue to block or warn deterministically per configured failure mode."
+  ]
+}

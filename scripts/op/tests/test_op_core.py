@@ -496,6 +496,60 @@ def test_initialize_chains_map_new_plan():
         assert (planning / "PLAN_CHECK.json").exists()
 
 
+def test_initialize_blocks_on_pre_plan_strategy_gate_in_strict_fail_closed_mode(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        monkeypatch.setenv("OP_INITIALIZE_PRE_PLAN_STRATEGY_STRICTNESS", "strict")
+        monkeypatch.setenv("OP_INITIALIZE_PRE_PLAN_STRATEGY_FAILURE_MODE", "fail_closed")
+
+        out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is False
+        assert out["status"] == "blocked_pre_plan_strategy_hook"
+        assert any(item.get("code") == "pre_plan_strategy_hook_blocked" for item in out.get("errors", []))
+        gate_path = root / "reports" / "optimus-prime" / "planning" / "STRATEGY_PRE_PLAN_GATE.json"
+        gate = json.loads(gate_path.read_text(encoding="utf-8"))
+        assert gate["blocked"] is True
+        assert gate["planner_decision"] == "block_planning"
+
+
+def test_initialize_continues_on_pre_plan_strategy_gate_in_advisory_fail_open_mode(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        monkeypatch.setenv("OP_INITIALIZE_PRE_PLAN_STRATEGY_STRICTNESS", "advisory")
+        monkeypatch.setenv("OP_INITIALIZE_PRE_PLAN_STRATEGY_FAILURE_MODE", "fail_open")
+
+        out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is True
+        assert out["data"]["pre_plan_strategy_hook"]["decision"] == "allow_planning_with_warning"
+        gate_path = root / "reports" / "optimus-prime" / "planning" / "STRATEGY_PRE_PLAN_GATE.json"
+        assert gate_path.exists()
+        gate = json.loads(gate_path.read_text(encoding="utf-8"))
+        assert gate["blocked"] is False
+        assert gate["planner_decision"] == "allow_planning_with_warning"
+
+
 def test_profile_detection_accepts_valid_codex_dirs_only():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

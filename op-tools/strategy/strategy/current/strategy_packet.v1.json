@@ -17,8 +17,8 @@
       "recommendation_id": "rec.dispatch-quality-first",
       "priority": "high",
       "summary": "Implement watcher-driven cycle release and redispatch-quality controls before broader runtime features.",
-      "rationale": "This directly reduces non-actionable cycles and improves output per token budget.",
-      "expected_impact": "Lower idle loops and better per-cycle productivity under constrained hardware and rate limits.",
+      "rationale": "This directly reduces non-actionable cycles and improves output per token budget using evidence from reports/strategy/lane-throughput-2026-03-15.json and strategy/current/ECOSYSTEM_LINK_MAP.json.",
+      "expected_impact": "Lower idle loops and better per-cycle productivity under constrained hardware and rate limits, aligned with reports/strategy/lane-throughput-2026-03-15.json and strategy/current/ECOSYSTEM_LINK_MAP.json.",
       "risk_level": "medium"
     }
   ],
@@ -30,12 +30,70 @@
     }
   ],
   "constraints": {
-    "hard": [
-      "Preserve existing OP behavior unless feature flags explicitly enable new cycle-release mode."
+    "hard_constraints": [
+      {
+        "constraint_id": "guardrail-task-floor",
+        "statement": "Before build starts, planner must output at least 400 tasks.",
+        "classification": "hard",
+        "rationale": "This is a mandatory planning gate and cannot be bypassed.",
+        "evidence_refs": [
+          "scope.md#mandatory-planning-gate",
+          "AGENTS.md#scope-authoring-rule-high-priority"
+        ],
+        "source_refs": [
+          "scope.md#mandatory-planning-gate"
+        ],
+        "policy_role": "mandatory_guardrail"
+      }
     ],
-    "soft": [
-      "Default to token-conservative mode in low budget environments."
-    ]
+    "soft_constraints": [
+      {
+        "constraint_id": "guidance-batch-size",
+        "statement": "Prefer batching implementation packets by lane to reduce planner churn.",
+        "classification": "soft",
+        "rationale": "Lane batching is guidance that improves throughput but can be adapted.",
+        "evidence_refs": [
+          "reports/strategy/lane-throughput-2026-03-15.json"
+        ],
+        "source_refs": [
+          "reports/strategy/lane-throughput-2026-03-15.json"
+        ],
+        "policy_role": "optional_guidance"
+      }
+    ],
+    "speculative_constraints": [
+      {
+        "constraint_id": "speculative-cross-project-sync",
+        "statement": "Consider adding an Earth-wide sync checkpoint if parallel lane drift increases.",
+        "classification": "speculative",
+        "rationale": "The checkpoint is optional and should only be used when drift evidence appears.",
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "source_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "policy_role": "optional_guidance"
+      }
+    ],
+    "planner_policy": {
+      "hard_constraint_ids": [
+        "guardrail-task-floor"
+      ],
+      "soft_constraint_ids": [
+        "guidance-batch-size"
+      ],
+      "speculative_constraint_ids": [
+        "speculative-cross-project-sync"
+      ],
+      "mandatory_guardrail_ids": [
+        "guardrail-task-floor"
+      ],
+      "optional_guidance_ids": [
+        "guidance-batch-size",
+        "speculative-cross-project-sync"
+      ]
+    }
   },
   "kpi_targets": [
     {

@@ -1,0 +1,59 @@
+{
+  "analysis_type": "strategy_revision_history_and_diff_workflow",
+  "call_id": "strategy-revision-history-and-diff-workflow",
+  "checked_at_utc": "2026-03-17T08:15:00Z",
+  "ok": true,
+  "requirement_id": "REQ-069",
+  "schema_version": "1.0",
+  "strategy_revision_history_and_diff_workflow": {
+    "deterministic_failure": {
+      "mode": "fail_closed",
+      "planner_action": "proceed_to_op_plan",
+      "reason_code": "none",
+      "status": "not_triggered"
+    },
+    "hook_stage": "strategy-revision-history:diff-workflow",
+    "planner_readiness": {
+      "context_ready": true,
+      "decision": "allow_diff_review",
+      "gating_reason_codes": [],
+      "hook_applied": true,
+      "missing_context_fields": [],
+      "next_command": "/op-plan"
+    },
+    "revision_history": {
+      "constraint_ids": [
+        "guardrail-deterministic-diff-order",
+        "guidance-cross-project-governance"
+      ],
+      "current_revision_id": "strategy-rev-20260317-081500",
+      "diff_artifact_refs": [
+        "strategy/current/DIFF_SUMMARY.json",
+        "strategy/current/STRATEGY_DIFF.md"
+      ],
+      "previous_revision_id": "strategy-rev-20260316-190000",
+      "recommendation_ids": [
+        "rec.harden-diff-governance",
+        "rec.preserve-revision-history"
+      ],
+      "revision_snapshot_refs": [
+        "strategy/current/STRATEGY.json",
+        "strategy/history/strategy-rev-20260316-190000/STRATEGY.json"
+      ],
+      "semantic_drift_detected": false,
+      "strategy_is_current": true
+    },
+    "strictness": "strict"
+  },
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "totals": {
+    "constraint_ids": 2,
+    "diff_artifact_refs": 2,
+    "missing_context_fields": 0,
+    "recommendation_ids": 2,
+    "revision_snapshot_refs": 2
+  }
+}
