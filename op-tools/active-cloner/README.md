@@ -5,3 +5,4 @@ Standalone active-thread service that mines reusable code tiles from prior plans
 - Mission file: `mission.md`
 - Scope file: `scope.md`
 - Architecture note: `notes/active-cloner-architecture-v1.md`
+- Exploration addendum: `notes/active-cloner-task-to-code-adaptation-addendum-2026-03-17.md`
