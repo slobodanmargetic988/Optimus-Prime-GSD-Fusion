@@ -61,3 +61,4 @@ dist/optimus-prime-*.gz
 /reports/optimus-prime/TEST_TASK_ATTEMPTS.json
 /reports/optimus-prime/TEST_WAVE_LOG.jsonl
 # END OPTIMUS-PRIME MANAGED REPORT IGNORES
+.gitnexus

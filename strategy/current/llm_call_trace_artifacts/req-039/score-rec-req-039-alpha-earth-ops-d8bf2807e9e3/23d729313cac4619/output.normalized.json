@@ -1,0 +1,74 @@
+{
+  "analysis_type": "recommendation_rationale_quality_scoring",
+  "call_id": "score-rec-req-039-alpha-earth-ops-d8bf2807e9e3",
+  "checked_at_utc": "2026-03-16T15:20:00Z",
+  "requirement_id": "REQ-039",
+  "result": {
+    "cross_project_obligations": [
+      {
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/earth-ops.json",
+          "reports/earth/sweeps/2026-03-16/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-138/TASK_EVIDENCE.json",
+          "strategy/current/samples/REQ-035_evidence-citation-discipline-in-reasoning-calls.sample.json"
+        ],
+        "obligation_id": "obl.4f8f1dbc9af4",
+        "project_id": "earth-ops",
+        "recommendation_id": "rec.req-039.alpha-earth-ops",
+        "summary": "Coordinate recommendation scoring expectations with earth-ops."
+      }
+    ],
+    "open_risks": [],
+    "recommended_actions": [
+      {
+        "action_id": "action.4f8f1dbc9af4",
+        "coordination_projects": [
+          "earth-ops"
+        ],
+        "coordination_required": true,
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/earth-ops.json",
+          "reports/earth/sweeps/2026-03-16/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-138/TASK_EVIDENCE.json",
+          "strategy/current/samples/REQ-035_evidence-citation-discipline-in-reasoning-calls.sample.json"
+        ],
+        "quality_score": 4,
+        "rationale": "Cross-project scoring conventions should align before packet emission.",
+        "recommendation_id": "rec.req-039.alpha-earth-ops",
+        "summary": "Coordinate recommendation scoring expectations with earth-ops.",
+        "tradeoffs": [
+          "Alignment reduces drift but adds coordination overhead."
+        ]
+      }
+    ],
+    "scored_recommendation": {
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-138/TASK_EVIDENCE.json",
+        "strategy/current/samples/REQ-035_evidence-citation-discipline-in-reasoning-calls.sample.json"
+      ],
+      "quality_score": 4,
+      "quality_status": "accepted",
+      "rationale": "Cross-project scoring conventions should align before packet emission.",
+      "recommendation_id": "rec.req-039.alpha-earth-ops",
+      "rejection_reason_codes": [],
+      "score_breakdown": {
+        "evidence_ref_count": 2,
+        "evidence_requirement_met": true,
+        "tradeoff_count": 1,
+        "tradeoff_requirement_met": true
+      },
+      "summary": "Coordinate recommendation scoring expectations with earth-ops.",
+      "tradeoffs": [
+        "Alignment reduces drift but adds coordination overhead."
+      ]
+    },
+    "totals": {
+      "accepted_recommendations": 3,
+      "recommendations": 3,
+      "recommendations_meeting_evidence_minimum": 3,
+      "recommendations_meeting_tradeoff_minimum": 3,
+      "rejected_recommendations": 0
+    }
+  },
+  "schema_version": "optimus-prime.req-039.recommendation-call-output-snapshot.v1"
+}
