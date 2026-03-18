@@ -9,6 +9,7 @@ from dataclasses import dataclass
 SUPPORTED_COMMANDS = {
     "op-map-codebase",
     "op-new-project",
+    "op-strategy",
     "op-plan",
     "op-initialize",
     "op-build",
@@ -24,6 +25,8 @@ ALIASES = {
     "map-codebase": "op-map-codebase",
     "op-new-project": "op-new-project",
     "new-project": "op-new-project",
+    "op-strategy": "op-strategy",
+    "strategy": "op-strategy",
     "op-plan": "op-plan",
     "plan": "op-plan",
     "op-initialize": "op-initialize",

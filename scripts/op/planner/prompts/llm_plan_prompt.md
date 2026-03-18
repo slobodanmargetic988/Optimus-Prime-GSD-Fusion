@@ -100,8 +100,8 @@ Planning requirements:
      - triggered_at (null)
 5. Phase graph must be acyclic and task phase_id must map to a valid phase.
 6. Per phase, use at most 3 distinct lanes.
-7. TDD-first: each requirement and task must include verification intent.
-   - phase-1 seed implementation tasks MUST use task_kind=implementation and verification_contract.mode=tdd_red.
+7. Verification-defined: each requirement and task must include concrete verification intent.
+   - phase-1 seed implementation tasks should use the allowed implementation verification mode that best fits the work; do not force tdd_red by default.
 8. Lane-level verification contract (hard):
    - Ordinary implementation tasks must end at developer completion and must not encode mandatory per-task tester/reviewer routing.
    - Each lane must include explicit dedicated verification tasks where needed:
@@ -142,8 +142,8 @@ Merge-to-run-base task verification contract (required):
 13. Minimum task volume and decomposition:
    - tasks_count MUST be >= max(20, requirements_count * 4).
    - For each requirement, produce at least:
-     - 1 phase-1 tdd_red task
-     - 2 phase-2 implementation_green tasks (split by concern, not bundled)
+     - 1 phase-1 implementation/bootstrap task
+     - 2 phase-2 implementation tasks (split by concern, not bundled)
      - 1 phase-3 hardening/review task
    - If a task would require >2 verify_commands or >2 must_haves, split it.
 
@@ -219,7 +219,7 @@ Strict output discipline:
 ## Constraints
 - Keep planning incremental in reasoning, but output one complete machine-valid bundle.
 - Prefer MVP-first feature ordering.
-- Every story must include acceptance criteria and test cases before implementation tasks.
+- Every story must include acceptance criteria and verification notes before or alongside implementation tasks.
 - Developer handoff is incomplete unless self-verification evidence exists.
 - Do not request user interaction, approvals, or clarifications during this run.
 - Keep all narrative deliverables inside required artifacts; do not create extra files outside the strict contract.

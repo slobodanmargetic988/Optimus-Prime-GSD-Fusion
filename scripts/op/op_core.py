@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import os
 import re
@@ -19,7 +18,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -36,6 +35,7 @@ from planner.llm_planner import (
 )
 from planner.validate_git_bootstrap import validate_git_bootstrap
 from planner.validate_plan_bundle import validate_bundle_contract
+import strategy_runner
 
 SCHEMA_VERSION = "1.0"
 TOOL = "opctl"
@@ -86,7 +86,6 @@ CONTROL_REL = Path("reports") / "optimus-prime" / "control"
 OPERATOR_STOP_JSON = CONTROL_REL / "OPERATOR_STOP.json"
 OPERATOR_STOP_STATE_JSON = CONTROL_REL / "OPERATOR_STOP_STATE.json"
 PROFILE_RATE_REGISTRY_JSON = Path("reports") / "optimus-prime" / "PROFILE_RATE_REGISTRY.json"
-STRATEGY_PRE_PLAN_GATE_JSON = PLANNING_REL / "STRATEGY_PRE_PLAN_GATE.json"
 APP_LIFECYCLE_JSON = Path("app_lifecycle.json")
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "minimal-rate-snapshot" / "scripts" / "minimal_rate_snapshot.py"
 PLANNER_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "llm_plan_prompt.md"
@@ -95,15 +94,9 @@ PLANNER_EXAMPLE_ROOT_PATH = SCRIPT_DIR / "llm" / "examples" / "op-plan" / "repor
 GIT_BOOTSTRAP_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "git_bootstrap_prompt.md"
 GIT_BOOTSTRAP_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_git_bootstrap.py"
 GIT_BOOTSTRAP_REQUIRED_BRANCH = "RAB-BASE"
-DEFAULT_STRATEGY_PACKET_REL = Path("op-tools") / "strategy" / "strategy" / "current" / "strategy_packet.v1.json"
-DEFAULT_STRATEGY_SCHEMA_REL = Path("op-tools") / "strategy" / "contracts" / "strategy_packet.v1.schema.json"
-DEFAULT_STRATEGY_VALIDATORS_REL = Path("op-tools") / "strategy" / "scripts" / "strategy_validators.py"
-PRE_PLAN_STRATEGY_STRICTNESS_ENV = "OP_INITIALIZE_PRE_PLAN_STRATEGY_STRICTNESS"
-PRE_PLAN_STRATEGY_FAILURE_MODE_ENV = "OP_INITIALIZE_PRE_PLAN_STRATEGY_FAILURE_MODE"
-PRE_PLAN_STRATEGY_PACKET_PATH_ENV = "OP_INITIALIZE_PRE_PLAN_STRATEGY_PACKET_PATH"
-PRE_PLAN_STRATEGY_SCHEMA_PATH_ENV = "OP_INITIALIZE_PRE_PLAN_STRATEGY_SCHEMA_PATH"
-PRE_PLAN_STRATEGY_ALLOWED_STRICTNESS = {"strict", "advisory"}
-PRE_PLAN_STRATEGY_ALLOWED_FAILURE_MODES = {"fail_closed", "fail_open"}
+DEFAULT_STRATEGY_MANIFEST_REL = strategy_runner.DEFAULT_STRATEGY_MANIFEST_REL
+DEFAULT_STRATEGY_PACKET_MD_REL = strategy_runner.DEFAULT_STRATEGY_PACKET_REL
+DEFAULT_STRATEGY_SUMMARY_MD_REL = strategy_runner.DEFAULT_STRATEGY_SUMMARY_REL
 
 MANDATORY_BUILD_BASELINE = [
     PROJECT_MD,
@@ -324,6 +317,9 @@ class OpRequest:
     selected_aliases: list[str] | None
     dry_run: bool
     reset_exhausted_retries: bool
+    strategy_manifest: str | None = None
+    strategy_manifest_file: str | None = None
+    skip_strategy: bool = False
     start_policy: str | None = None
     run_base_source_branch: str | None = None
     boss_model: str = "gpt-5.3-codex"
@@ -7040,6 +7036,190 @@ def _resolved_source_text(source: dict[str, Any]) -> str:
     return _as_str(source.get("display")) or ""
 
 
+def _resolve_strategy_manifest_path_for_request(req: OpRequest) -> Path:
+    return strategy_runner.resolve_strategy_manifest_path(req.repo_root, req.strategy_manifest_file)
+
+
+def _strategy_request_state(req: OpRequest, *, auto_optional: bool) -> dict[str, Any]:
+    inline_manifest = _as_str(req.strategy_manifest)
+    manifest_path = _resolve_strategy_manifest_path_for_request(req)
+    explicit = bool(_as_str(req.strategy_manifest_file) or inline_manifest)
+    exists = bool(inline_manifest) or manifest_path.exists()
+    manifest_ref = strategy_runner.INLINE_STRATEGY_MANIFEST_LABEL if inline_manifest else str(manifest_path)
+    manifest_mode = "inline" if inline_manifest else "file"
+    if req.skip_strategy:
+        return {
+            "mode": "skipped",
+            "reason": "skip_strategy_requested",
+            "manifest_path": manifest_path if not inline_manifest else None,
+            "manifest_ref": manifest_ref,
+            "manifest_mode": manifest_mode,
+            "explicit": explicit,
+            "exists": exists,
+            "should_run": False,
+        }
+    if inline_manifest:
+        return {
+            "mode": "ready",
+            "reason": "manifest_inline",
+            "manifest_path": None,
+            "manifest_ref": manifest_ref,
+            "manifest_mode": manifest_mode,
+            "explicit": True,
+            "exists": True,
+            "should_run": True,
+        }
+    if exists:
+        return {
+            "mode": "ready",
+            "reason": "manifest_present",
+            "manifest_path": manifest_path,
+            "manifest_ref": manifest_ref,
+            "manifest_mode": manifest_mode,
+            "explicit": explicit,
+            "exists": True,
+            "should_run": True,
+        }
+    if explicit or not auto_optional:
+        return {
+            "mode": "missing",
+            "reason": "manifest_missing",
+            "manifest_path": manifest_path,
+            "manifest_ref": manifest_ref,
+            "manifest_mode": manifest_mode,
+            "explicit": explicit,
+            "exists": False,
+            "should_run": False,
+        }
+    return {
+        "mode": "skipped",
+        "reason": "manifest_missing",
+        "manifest_path": manifest_path,
+        "manifest_ref": manifest_ref,
+        "manifest_mode": manifest_mode,
+        "explicit": explicit,
+        "exists": False,
+        "should_run": False,
+    }
+
+
+def _run_strategy_command(req: OpRequest, *, auto_optional: bool) -> dict[str, Any]:
+    strategy_state = _strategy_request_state(req, auto_optional=auto_optional)
+    manifest_path = strategy_state["manifest_path"]
+    manifest_ref = _as_str(strategy_state.get("manifest_ref")) or ""
+    packet_path = req.repo_root / DEFAULT_STRATEGY_PACKET_MD_REL
+    summary_path = req.repo_root / DEFAULT_STRATEGY_SUMMARY_MD_REL
+
+    if strategy_state["mode"] == "skipped":
+        reason = _as_str(strategy_state.get("reason")) or "skipped"
+        summary = (
+            "Strategy generation skipped because --skip-strategy was requested."
+            if reason == "skip_strategy_requested"
+            else "Strategy manifest not found; continuing without strategy."
+        )
+        return {
+            "ok": True,
+            "status": "skipped",
+            "summary": summary,
+            "warnings": [],
+            "errors": [],
+            "artifacts": [str(manifest_path)] if isinstance(manifest_path, Path) and manifest_path.exists() else [],
+            "data": {
+                "strategy": {
+                    "status": "skipped",
+                    "reason": reason,
+                    "manifest_path": manifest_ref,
+                    "packet_path": str(packet_path.resolve()),
+                    "summary_path": str(summary_path.resolve()),
+                }
+            },
+        }
+
+    if strategy_state["mode"] == "missing":
+        return {
+            "ok": False,
+            "status": "blocked_preflight",
+            "summary": "Strategy generation blocked: manifest file is missing.",
+            "warnings": [],
+            "errors": [
+                {
+                    "code": "strategy_manifest_missing",
+                    "message": f"strategy manifest does not exist: {manifest_ref}",
+                    "stage": "strategy",
+                }
+            ],
+            "artifacts": [],
+            "data": {
+                "strategy": {
+                    "status": "missing",
+                    "reason": "manifest_missing",
+                    "manifest_path": manifest_ref,
+                    "packet_path": str(packet_path.resolve()),
+                    "summary_path": str(summary_path.resolve()),
+                }
+            },
+        }
+
+    try:
+        result = strategy_runner.run_strategy(
+            repo_root=req.repo_root,
+            manifest=req.strategy_manifest,
+            manifest_file=req.strategy_manifest_file,
+            emit=lambda message: _emit_build_progress(replace(req, command="op-strategy"), message),
+        )
+    except strategy_runner.StrategyRunnerError as exc:
+        return {
+            "ok": False,
+            "status": "failed",
+            "summary": "Strategy generation failed.",
+            "warnings": [],
+            "errors": [
+                {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "stage": "strategy",
+                }
+            ],
+            "artifacts": [],
+            "data": {
+                "strategy": {
+                    "status": "failed",
+                    "reason": exc.code,
+                    "manifest_path": manifest_ref,
+                    "packet_path": str(packet_path.resolve()),
+                    "summary_path": str(summary_path.resolve()),
+                }
+            },
+        }
+
+    return {
+        "ok": True,
+        "status": "completed",
+        "summary": "Strategy artifacts generated.",
+        "warnings": [],
+        "errors": [],
+        "artifacts": result.artifacts,
+        "data": {
+            "strategy": {
+                "status": "completed",
+                "reason": "manifest_present",
+                "manifest_path": result.manifest_ref,
+                "packet_path": str(result.packet_path),
+                "summary_path": str(result.summary_path),
+            }
+        },
+    }
+
+
+def _existing_strategy_markdown_artifacts(repo_root: Path) -> list[str]:
+    found: list[str] = []
+    for rel in (DEFAULT_STRATEGY_PACKET_MD_REL, DEFAULT_STRATEGY_SUMMARY_MD_REL):
+        path = _repo_path(repo_root, rel)
+        if path.exists() and path.is_file():
+            found.append(str(rel))
+    return found
+
+
 def _load_app_lifecycle_payload(repo_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     path = _repo_path(repo_root, APP_LIFECYCLE_JSON)
     warnings: list[dict[str, Any]] = []
@@ -7892,6 +8072,9 @@ def _planner_prompt_text(
             code = _as_str(row.get("code")) or "unknown"
             message = _as_str(row.get("message")) or "validation failed"
             prompt += f"{idx}. [{code}] {message}\n"
+    strategy_note = strategy_runner.build_planner_strategy_note(skip_strategy=req.skip_strategy)
+    if strategy_note:
+        prompt += "\n\n" + strategy_note
     return prompt
 
 
@@ -8455,431 +8638,70 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
     )
 
 
-def _resolve_pre_plan_strategy_path(repo_root: Path, *, env_name: str, default_rel: Path) -> Path:
-    raw_value = _as_str(os.environ.get(env_name))
-    base = Path(raw_value).expanduser() if raw_value else _repo_path(repo_root, default_rel)
-    if not base.is_absolute():
-        base = repo_root / base
-    return base.resolve()
-
-
-def _resolve_pre_plan_strategy_gate_config() -> tuple[str, str]:
-    strictness = (_as_str(os.environ.get(PRE_PLAN_STRATEGY_STRICTNESS_ENV)) or "advisory").lower()
-    if strictness not in PRE_PLAN_STRATEGY_ALLOWED_STRICTNESS:
-        raise OpError(
-            "pre_plan_strategy_config_invalid",
-            (
-                f"{PRE_PLAN_STRATEGY_STRICTNESS_ENV} must be one of: "
-                f"{sorted(PRE_PLAN_STRATEGY_ALLOWED_STRICTNESS)}"
-            ),
-            stage="initialize",
-        )
-    mode_raw = _as_str(os.environ.get(PRE_PLAN_STRATEGY_FAILURE_MODE_ENV))
-    if mode_raw is None:
-        failure_mode = "fail_closed" if strictness == "strict" else "fail_open"
-    else:
-        failure_mode = mode_raw.lower()
-        if failure_mode not in PRE_PLAN_STRATEGY_ALLOWED_FAILURE_MODES:
-            raise OpError(
-                "pre_plan_strategy_config_invalid",
-                (
-                    f"{PRE_PLAN_STRATEGY_FAILURE_MODE_ENV} must be one of: "
-                    f"{sorted(PRE_PLAN_STRATEGY_ALLOWED_FAILURE_MODES)}"
-                ),
-                stage="initialize",
-            )
-    return strictness, failure_mode
-
-
-def _load_module_from_path(path: Path, module_name: str) -> Any | None:
-    if not path.exists():
-        return None
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        return None
-    return module
-
-
-def _load_pre_plan_strategy_validator_module(repo_root: Path) -> tuple[Any | None, str]:
-    local_path = _repo_path(repo_root, DEFAULT_STRATEGY_VALIDATORS_REL)
-    if local_path.exists():
-        return _load_module_from_path(local_path, "_op_pre_plan_strategy_validators_local"), str(local_path)
-    fallback_path = ENGINE_ROOT / DEFAULT_STRATEGY_VALIDATORS_REL
-    return _load_module_from_path(fallback_path, "_op_pre_plan_strategy_validators_engine"), str(fallback_path)
-
-
-def _collect_unique_nonempty_strings(values: Any) -> list[str]:
-    if not isinstance(values, list):
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in values:
-        text = _as_str(item)
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        out.append(text)
-    return out
-
-
-def _extract_pre_plan_context_from_strategy_packet(
-    *,
-    repo_root: Path,
-    packet_path: Path,
-    packet_payload: Mapping[str, Any],
-    strategy_is_current: bool,
-) -> dict[str, Any]:
-    strategy = packet_payload.get("strategy") if isinstance(packet_payload.get("strategy"), Mapping) else {}
-    strategy_revision_id = _as_str(strategy.get("revision_id")) or "strategy-revision-missing"
-
-    strategy_artifact_refs: list[str] = []
-    link_map_ref = _as_str(strategy.get("link_map_ref"))
-    if link_map_ref:
-        strategy_artifact_refs.append(link_map_ref)
-    try:
-        packet_ref = str(packet_path.resolve().relative_to(repo_root.resolve()))
-    except ValueError:
-        packet_ref = str(packet_path.resolve())
-    if packet_ref and packet_ref not in strategy_artifact_refs:
-        strategy_artifact_refs.append(packet_ref)
-
-    recommendations = packet_payload.get("recommendations")
-    recommendation_ids: list[str] = []
-    if isinstance(recommendations, list):
-        for row in recommendations:
-            if not isinstance(row, Mapping):
-                continue
-            recommendation_id = _as_str(row.get("recommendation_id"))
-            if recommendation_id:
-                recommendation_ids.append(recommendation_id)
-
-    constraint_ids: list[str] = []
-    constraints = packet_payload.get("constraints")
-    if isinstance(constraints, Mapping):
-        planner_policy = constraints.get("planner_policy")
-        if isinstance(planner_policy, Mapping):
-            for list_name in ("mandatory_guardrail_ids", "optional_guidance_ids"):
-                for item in _collect_unique_nonempty_strings(planner_policy.get(list_name)):
-                    if item not in constraint_ids:
-                        constraint_ids.append(item)
-
-        if not constraint_ids:
-            for bucket_name in ("hard_constraints", "soft_constraints", "speculative_constraints"):
-                bucket = constraints.get(bucket_name)
-                if not isinstance(bucket, list):
-                    continue
-                for row in bucket:
-                    if not isinstance(row, Mapping):
-                        continue
-                    constraint_id = _as_str(row.get("constraint_id"))
-                    if constraint_id and constraint_id not in constraint_ids:
-                        constraint_ids.append(constraint_id)
-
-    return {
-        "strategy_revision_id": strategy_revision_id,
-        "strategy_artifact_refs": strategy_artifact_refs,
-        "recommendation_ids": recommendation_ids,
-        "constraint_ids": constraint_ids,
-        "strategy_is_current": strategy_is_current,
-    }
-
-
-def _format_strategy_constraints_for_planner(
-    *,
-    strategy_context: Mapping[str, Any],
-    packet_payload: Mapping[str, Any],
-) -> list[str]:
-    lines: list[str] = []
-    revision_id = _as_str(strategy_context.get("strategy_revision_id"))
-    if revision_id:
-        lines.append(f"[strategy_revision] {revision_id}")
-    artifact_refs = _collect_unique_nonempty_strings(strategy_context.get("strategy_artifact_refs"))
-    if artifact_refs:
-        lines.append(f"[strategy_artifacts] {', '.join(artifact_refs)}")
-
-    statement_by_constraint_id: dict[str, str] = {}
-    constraints = packet_payload.get("constraints")
-    if isinstance(constraints, Mapping):
-        for bucket_name in ("hard_constraints", "soft_constraints", "speculative_constraints"):
-            bucket = constraints.get(bucket_name)
-            if not isinstance(bucket, list):
-                continue
-            for row in bucket:
-                if not isinstance(row, Mapping):
-                    continue
-                constraint_id = _as_str(row.get("constraint_id"))
-                statement = _as_str(row.get("statement"))
-                if constraint_id and statement and constraint_id not in statement_by_constraint_id:
-                    statement_by_constraint_id[constraint_id] = statement
-
-    for constraint_id in _collect_unique_nonempty_strings(strategy_context.get("constraint_ids")):
-        statement = statement_by_constraint_id.get(constraint_id)
-        if statement:
-            lines.append(f"[strategy_constraint:{constraint_id}] {statement}")
-        else:
-            lines.append(f"[strategy_constraint:{constraint_id}] enforce in planning flow")
-    return lines
-
-
-def _merge_constraints(base_constraints: list[str], strategy_constraints: list[str]) -> list[str]:
-    merged: list[str] = []
-    seen: set[str] = set()
-    for item in [*base_constraints, *strategy_constraints]:
-        text = _as_str(item)
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        merged.append(text)
-    return merged
-
-
-def _build_req_067_pre_plan_payload(payload: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    module = _load_module_from_path(
-        SCRIPT_DIR.parent / "strategy_artifacts_handoff.py",
-        "_op_pre_plan_strategy_handoff",
+def command_strategy(req: OpRequest) -> dict[str, Any]:
+    result = _run_strategy_command(req, auto_optional=False)
+    return _response(
+        req,
+        ok=bool(result.get("ok")),
+        status=_as_str(result.get("status")) or ("completed" if result.get("ok") else "failed"),
+        summary=_as_str(result.get("summary")) or "Strategy command finished.",
+        warnings=result.get("warnings") if isinstance(result.get("warnings"), list) else [],
+        errors=result.get("errors") if isinstance(result.get("errors"), list) else [],
+        artifacts=result.get("artifacts") if isinstance(result.get("artifacts"), list) else [],
+        next_action=_as_str(result.get("next_action")),
+        state_ref=_as_str(result.get("state_ref")),
+        data=result.get("data") if isinstance(result.get("data"), dict) else None,
     )
-    if module is None:
-        return None, "strategy_artifacts_handoff_unavailable"
-    build_fn = getattr(module, "build_req_067_op_initialize_pre_plan_strategy_hook", None)
-    if not callable(build_fn):
-        return None, "strategy_artifacts_handoff_builder_missing"
-    try:
-        built = build_fn(payload)
-    except Exception as exc:
-        return None, f"strategy_artifacts_handoff_builder_failed: {exc}"
-    if not isinstance(built, dict):
-        return None, "strategy_artifacts_handoff_builder_invalid_output"
-    return built, None
-
-
-def _run_op_initialize_pre_plan_strategy_gate(req: OpRequest) -> dict[str, Any]:
-    strictness, failure_mode = _resolve_pre_plan_strategy_gate_config()
-    packet_path = _resolve_pre_plan_strategy_path(
-        req.repo_root,
-        env_name=PRE_PLAN_STRATEGY_PACKET_PATH_ENV,
-        default_rel=DEFAULT_STRATEGY_PACKET_REL,
-    )
-    schema_path = _resolve_pre_plan_strategy_path(
-        req.repo_root,
-        env_name=PRE_PLAN_STRATEGY_SCHEMA_PATH_ENV,
-        default_rel=DEFAULT_STRATEGY_SCHEMA_REL,
-    )
-    validator_module, validator_module_path = _load_pre_plan_strategy_validator_module(req.repo_root)
-
-    validator_result: dict[str, Any]
-    if validator_module is None or not callable(getattr(validator_module, "validate_strategy_packet_files", None)):
-        validator_result = {
-            "ok": False,
-            "verdict": "fail",
-            "checked_at_utc": utc_now_iso(),
-            "summary": "Strategy packet validator module unavailable.",
-            "input_path": str(packet_path),
-            "schema_path": str(schema_path),
-            "reason_codes": ["strategy_validator_unavailable"],
-            "diagnostic_count": 1,
-            "gate": {
-                "schema_valid": False,
-                "constraint_classification_consumable": False,
-                "planner_policy_consumable": False,
-                "op_initialize_pre_plan_strategy_hook_consumable": False,
-            },
-            "diagnostics": [
-                {
-                    "path": "$",
-                    "severity": "error",
-                    "reason_code": "strategy_validator_unavailable",
-                    "message": f"Strategy validator module not available: {validator_module_path}",
-                }
-            ],
-        }
-    else:
-        try:
-            result = validator_module.validate_strategy_packet_files(str(packet_path), str(schema_path))
-        except Exception as exc:
-            result = {
-                "ok": False,
-                "verdict": "fail",
-                "checked_at_utc": utc_now_iso(),
-                "summary": f"Strategy packet validator execution failed: {exc}",
-                "input_path": str(packet_path),
-                "schema_path": str(schema_path),
-                "reason_codes": ["strategy_validator_runtime_error"],
-                "diagnostic_count": 1,
-                "gate": {
-                    "schema_valid": False,
-                    "constraint_classification_consumable": False,
-                    "planner_policy_consumable": False,
-                    "op_initialize_pre_plan_strategy_hook_consumable": False,
-                },
-                "diagnostics": [
-                    {
-                        "path": "$",
-                        "severity": "error",
-                        "reason_code": "strategy_validator_runtime_error",
-                        "message": f"Strategy validator execution failed: {exc}",
-                    }
-                ],
-            }
-        validator_result = result if isinstance(result, dict) else {}
-
-    gate_payload = validator_result.get("gate") if isinstance(validator_result.get("gate"), dict) else {}
-    op_initialize_consumable = _as_bool(
-        gate_payload.get("op_initialize_pre_plan_strategy_hook_consumable"),
-        default=_as_bool(gate_payload.get("planner_policy_consumable"), default=False),
-    )
-    reason_codes = _collect_unique_nonempty_strings(validator_result.get("reason_codes"))
-
-    packet_payload_raw: Any = {}
-    if packet_path.exists():
-        try:
-            packet_payload_raw = _read_json(packet_path)
-        except OpError:
-            packet_payload_raw = {}
-    packet_payload = packet_payload_raw if isinstance(packet_payload_raw, Mapping) else {}
-
-    strategy_context = _extract_pre_plan_context_from_strategy_packet(
-        repo_root=req.repo_root,
-        packet_path=packet_path,
-        packet_payload=packet_payload,
-        strategy_is_current=op_initialize_consumable,
-    )
-    project_id_seed = re.sub(r"[^a-z0-9-]+", "-", req.repo_root.name.lower()).strip("-") or "project"
-    hook_input = {
-        "analysis_type": "op_initialize_pre_plan_strategy_hook",
-        "now_utc": utc_now_iso(),
-        "target_project": {
-            "project_id": project_id_seed,
-            "project_root": str(req.repo_root.resolve()),
-        },
-        "hook_config": {
-            "strictness": strictness,
-            "deterministic_failure_mode": failure_mode,
-        },
-        "strategy_context": strategy_context,
-    }
-    pre_plan_hook_payload, hook_build_error = _build_req_067_pre_plan_payload(hook_input)
-
-    planner_decision = "allow_planning"
-    if isinstance(pre_plan_hook_payload, Mapping):
-        readiness = pre_plan_hook_payload.get("pre_plan_strategy_hook")
-        if isinstance(readiness, Mapping):
-            planner_readiness = readiness.get("planner_readiness")
-            if isinstance(planner_readiness, Mapping):
-                planner_decision = _as_str(planner_readiness.get("decision")) or planner_decision
-    elif not op_initialize_consumable:
-        planner_decision = "block_planning" if failure_mode == "fail_closed" else "allow_planning_with_warning"
-
-    blocked = planner_decision == "block_planning"
-    strategy_constraints = (
-        _format_strategy_constraints_for_planner(
-            strategy_context=strategy_context,
-            packet_payload=packet_payload,
-        )
-        if op_initialize_consumable
-        else []
-    )
-    merged_constraints = _merge_constraints(req.constraints, strategy_constraints)
-
-    warnings: list[dict[str, Any]] = []
-    if hook_build_error:
-        warnings.append(
-            {
-                "code": "pre_plan_strategy_hook_payload_unavailable",
-                "message": (
-                    "pre-plan strategy hook payload generation failed; "
-                    f"using validator-only gate decision ({hook_build_error})"
-                ),
-                "stage": "initialize",
-            }
-        )
-    if not op_initialize_consumable:
-        warnings.append(
-            {
-                "code": "pre_plan_strategy_hook_context_not_consumable",
-                "message": (
-                    "strategy packet is not consumable for pre-plan hook; "
-                    f"decision={planner_decision}, reason_codes={reason_codes}"
-                ),
-                "stage": "initialize",
-                "reason_codes": reason_codes,
-            }
-        )
-
-    gate_payload_out = {
-        "schema_version": SCHEMA_VERSION,
-        "checked_at_utc": utc_now_iso(),
-        "strictness": strictness,
-        "deterministic_failure_mode": failure_mode,
-        "planner_decision": planner_decision,
-        "blocked": blocked,
-        "strategy_packet": {
-            "input_path": str(packet_path),
-            "schema_path": str(schema_path),
-            "validator_module_path": validator_module_path,
-        },
-        "reason_codes": reason_codes,
-        "validator_result": validator_result,
-        "pre_plan_strategy_hook": pre_plan_hook_payload,
-        "applied_constraints": strategy_constraints,
-        "merged_constraints": merged_constraints,
-    }
-    gate_artifact_path = _repo_path(req.repo_root, STRATEGY_PRE_PLAN_GATE_JSON)
-    _atomic_write_json(gate_artifact_path, gate_payload_out)
-
-    return {
-        "blocked": blocked,
-        "planner_decision": planner_decision,
-        "reason_codes": reason_codes,
-        "warnings": warnings,
-        "artifacts": [str(gate_artifact_path)],
-        "constraints": merged_constraints,
-    }
-
 
 def command_initialize(req: OpRequest) -> dict[str, Any]:
     _require_override_if_existing_plan(req, stage="initialize")
     mission_source, scope_source = _resolve_mission_scope_sources(req, stage="initialize", required=True)
     git_bootstrap_warnings, git_bootstrap_artifacts = _ensure_git_initialized_for_initialize(req)
     _ensure_managed_gitignore_block(req.repo_root)
-    pre_plan_gate = _run_op_initialize_pre_plan_strategy_gate(req)
-    if pre_plan_gate["blocked"]:
+    strategy_result = _run_strategy_command(req, auto_optional=True)
+    strategy_warnings = strategy_result.get("warnings") if isinstance(strategy_result.get("warnings"), list) else []
+    strategy_errors = strategy_result.get("errors") if isinstance(strategy_result.get("errors"), list) else []
+    strategy_artifacts = strategy_result.get("artifacts") if isinstance(strategy_result.get("artifacts"), list) else []
+    strategy_data = strategy_result.get("data") if isinstance(strategy_result.get("data"), dict) else None
+    if not bool(strategy_result.get("ok")):
         return _response(
             req,
             ok=False,
-            status="blocked_pre_plan_strategy_hook",
-            summary="Initialization blocked by pre-plan strategy hook gate.",
-            warnings=pre_plan_gate["warnings"],
-            errors=[
-                {
-                    "code": "pre_plan_strategy_hook_blocked",
-                    "message": (
-                        "Pre-plan strategy hook blocked planning with fail_closed mode. "
-                        f"reason_codes={pre_plan_gate['reason_codes']}"
-                    ),
-                    "stage": "initialize",
-                }
-            ],
-            artifacts=pre_plan_gate["artifacts"],
-            next_action=(
-                "Fix strategy packet validator diagnostics or set "
-                f"{PRE_PLAN_STRATEGY_FAILURE_MODE_ENV}=fail_open for advisory continuation."
-            ),
-            data={
-                "pre_plan_strategy_hook": {
-                    "decision": pre_plan_gate["planner_decision"],
-                    "reason_codes": pre_plan_gate["reason_codes"],
-                }
-            },
+            status=_as_str(strategy_result.get("status")) or "failed",
+            summary=_as_str(strategy_result.get("summary")) or "Initialization blocked by strategy preflight.",
+            warnings=strategy_warnings,
+            errors=strategy_errors,
+            artifacts=strategy_artifacts,
+            next_action="Add the requested strategy manifest file or rerun with --skip-strategy.",
+            data=strategy_data,
         )
+    strategy_state = strategy_data.get("strategy") if isinstance(strategy_data, dict) else {}
+    if (
+        isinstance(strategy_state, dict)
+        and _as_str(strategy_state.get("status")) == "skipped"
+        and _as_str(strategy_state.get("reason")) == "manifest_missing"
+        and not req.skip_strategy
+    ):
+        existing_strategy_artifacts = _existing_strategy_markdown_artifacts(req.repo_root)
+        if existing_strategy_artifacts:
+            warning = {
+                "code": "strategy_artifacts_present_without_regeneration",
+                "message": (
+                    "Strategy manifest was not found, so strategy was not regenerated. "
+                    "Existing strategy artifacts are still present and will be available to planner."
+                ),
+                "stage": "initialize",
+                "artifacts": existing_strategy_artifacts,
+            }
+            strategy_warnings.append(warning)
+            _emit_build_progress(
+                replace(req, command="op-plan"),
+                "strategy manifest not found; existing strategy artifacts will still be considered by planner: "
+                + ", ".join(existing_strategy_artifacts),
+            )
 
-    effective_req = replace(req, constraints=list(pre_plan_gate["constraints"]))
-    map_result = command_map_codebase(effective_req)
-    new_result = command_new_project(effective_req)
+    map_result = command_map_codebase(req)
+    new_result = command_new_project(req)
     lifecycle_era_id, lifecycle_path, lifecycle_warnings = _append_app_lifecycle_era(
         req.repo_root,
         mission_source=mission_source,
@@ -8906,7 +8728,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
         profile_selection=profile_selection,
     )
 
-    plan_result = command_plan(effective_req)
+    plan_result = command_plan(req)
     _update_app_lifecycle_era_plan_id(
         req.repo_root,
         era_id=lifecycle_era_id,
@@ -8922,7 +8744,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
 
     artifacts = []
     artifacts.extend(git_bootstrap_artifacts)
-    artifacts.extend(pre_plan_gate["artifacts"])
+    artifacts.extend(strategy_artifacts)
     artifacts.extend(map_result.get("artifacts", []))
     artifacts.extend(new_result.get("artifacts", []))
     artifacts.extend(plan_result.get("artifacts", []))
@@ -8932,7 +8754,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
 
     warnings = []
     warnings.extend(git_bootstrap_warnings)
-    warnings.extend(pre_plan_gate["warnings"])
+    warnings.extend(strategy_warnings)
     warnings.extend(map_result.get("warnings", []))
     warnings.extend(rate_seed_warnings)
     warnings.extend(new_result.get("warnings", []))
@@ -8954,14 +8776,13 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
         artifacts=artifacts,
         next_action="Use /op-build when ready to execute autonomously.",
         state_ref=str(_repo_path(req.repo_root, STATE_JSON)),
-        data={
-            "plan_ready": plan_ready,
-            "profile_aliases": profile_selection.get("selected_aliases", []),
-            "pre_plan_strategy_hook": {
-                "decision": pre_plan_gate["planner_decision"],
-                "reason_codes": pre_plan_gate["reason_codes"],
+        data=_merge_response_data(
+            {
+                "plan_ready": plan_ready,
+                "profile_aliases": profile_selection.get("selected_aliases", []),
             },
-        },
+            strategy_data,
+        ),
     )
 
 
@@ -9743,8 +9564,8 @@ def _dispatch_task_packet(
         "executor_provider": executor_provider,
         "executor_model": executor_model,
         "blackbox_lane": blackbox_lane,
-        "mcp_mode": "disable-all",
-        "mcp_allowlist": [],
+        "mcp_mode": "enable-only",
+        "mcp_allowlist": ["figma"],
         "sandbox_mode": "danger-full-access",
         "sandbox_add_dirs": [],
         "test_train_mode": "off",
@@ -12301,6 +12122,14 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         raise OpError("input_error", "cycle_release_poll_seconds must be integer", stage="input") from exc
     if cycle_release_poll_seconds <= 0:
         cycle_release_poll_seconds = 5
+    strategy_manifest = _as_str(payload.get("strategy_manifest"))
+    strategy_manifest_file = _as_str(payload.get("strategy_manifest_file"))
+    if strategy_manifest and strategy_manifest_file:
+        raise OpError(
+            "input_error",
+            "provide strategy_manifest or strategy_manifest_file, not both",
+            stage="input",
+        )
 
     return OpRequest(
         command=command,
@@ -12321,6 +12150,9 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         selected_aliases=selected_aliases,
         dry_run=_as_bool(payload.get("dry_run"), default=False),
         reset_exhausted_retries=_as_bool(payload.get("reset_exhausted_retries"), default=False),
+        strategy_manifest=strategy_manifest,
+        strategy_manifest_file=strategy_manifest_file,
+        skip_strategy=_as_bool(payload.get("skip_strategy"), default=False),
         start_policy=start_policy if command == "op-build" else None,
         run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,
@@ -12342,6 +12174,8 @@ def execute_request(req: OpRequest) -> dict[str, Any]:
         return command_map_codebase(req)
     if req.command == "op-new-project":
         return command_new_project(req)
+    if req.command == "op-strategy":
+        return command_strategy(req)
     if req.command == "op-plan":
         return command_plan(req)
     if req.command == "op-initialize":

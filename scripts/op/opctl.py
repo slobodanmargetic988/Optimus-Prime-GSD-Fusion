@@ -94,6 +94,16 @@ def _emit_start_banner(payload: dict[str, Any]) -> None:
             flush=True,
         )
         return
+    if canonical == "op-strategy":
+        print(
+            f"[opctl] /op-strategy started for {repo_root}. Generating strategy packet and summary from the manifest.",
+            flush=True,
+        )
+        print(
+            f"[opctl] Expected outputs: {repo_root}/strategy/current/strategy_packet.md and {repo_root}/strategy/current/STRATEGY_SUMMARY.md",
+            flush=True,
+        )
+        return
 
 
 def _resolve_configured_workflow(repo_root: str) -> dict[str, Any]:
@@ -143,7 +153,7 @@ def _resolve_configured_workflow(repo_root: str) -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="OP command surface (map/new-project/plan/initialize/build/simple-build/health/status/report/resume)"
+        description="OP command surface (map/new-project/strategy/plan/initialize/build/simple-build/health/status/report/resume)"
     )
     parser.add_argument("--input-json", help="JSON payload path or '-' for stdin")
     parser.add_argument("--command")
@@ -152,6 +162,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mission-file")
     parser.add_argument("--scope")
     parser.add_argument("--scope-file")
+    parser.add_argument("--strategy-manifest")
+    parser.add_argument("--strategy-manifest-file")
+    parser.add_argument("--skip-strategy", action="store_true")
     parser.add_argument("--override-old-plan", action="store_true")
     parser.add_argument("--constraint", action="append")
     parser.add_argument("--non-interactive", action="store_true")
@@ -195,6 +208,12 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["scope"] = args.scope
     if args.scope_file is not None:
         payload["scope_file"] = args.scope_file
+    if args.strategy_manifest is not None:
+        payload["strategy_manifest"] = args.strategy_manifest
+    if args.strategy_manifest_file is not None:
+        payload["strategy_manifest_file"] = args.strategy_manifest_file
+    if args.skip_strategy:
+        payload["skip_strategy"] = True
     if args.override_old_plan:
         payload["override_old_plan"] = True
     if args.constraint is not None:

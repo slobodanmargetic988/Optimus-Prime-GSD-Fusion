@@ -450,13 +450,6 @@ def _validate_plan_packets(payload: dict[str, Any], errors: list[dict[str, objec
             contract = row.get("verification_contract") if isinstance(row.get("verification_contract"), dict) else {}
             mode = _as_str(contract.get("mode"))
             task_kind = _as_str(row.get("task_kind")) or "implementation"
-            if phase_id == "phase-1":
-                if task_kind == "implementation" and mode != "tdd_red":
-                    _err(
-                        errors,
-                        "planner_bundle_schema_error",
-                        f"PLAN_PACKETS.tasks[{idx}] in phase-1 must use verification_contract.mode=tdd_red",
-                    )
     else:
         _err(errors, "planner_bundle_schema_error", "PLAN_PACKETS.tasks must be non-empty list")
 
