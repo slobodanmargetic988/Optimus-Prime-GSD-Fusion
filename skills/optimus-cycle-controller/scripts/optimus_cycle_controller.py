@@ -65,6 +65,7 @@ STATUS_TO_PHASE_HINT = {
     "reviewing": "agent_review",
     "agent_review_done": "agent_review_done",
     "review_done": "agent_review_done",
+    "completed": "done",
     "done": "done",
     "blocked": "backlog",
     "failed": "backlog",
@@ -599,6 +600,15 @@ def _derive_handoff_linear_phase(latest_handoff: Dict[str, Any]) -> Optional[str
     )
     if status_hint:
         normalized = status_hint.strip().lower().replace("-", "_")
+        if normalized == "completed":
+            role_hint = (_first_non_empty(latest_handoff, ["role", "worker_role"]) or "").strip().lower()
+            slot_hint = (_first_non_empty(latest_handoff, ["slot", "worker_slot"]) or "").strip().lower()
+            if role_hint in {"reviewer"} or slot_hint.startswith("review-"):
+                return "agent_review_done"
+            if role_hint in {"tester", "flex-tester"} or slot_hint.startswith("test-"):
+                return "agent_test_done"
+            if role_hint in {"developer"} or slot_hint.startswith("dev-"):
+                return "agent_work_done"
         return STATUS_TO_PHASE_HINT.get(normalized)
 
     return None

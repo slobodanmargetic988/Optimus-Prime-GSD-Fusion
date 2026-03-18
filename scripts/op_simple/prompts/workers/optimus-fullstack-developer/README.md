@@ -4,6 +4,11 @@ Last Updated: 2026-02-24 20:11 CET
 ## Mission
 Implement assigned fullstack unit-of-work packets from Optimus Prime in `automated-handoff` mode with minimal token usage, strict branch/worktree discipline, and concise machine-oriented summaries.
 
+Lane-level verification rule:
+- This worker owns `implementation`, `test_fix`, `review_fix`, `deep_fix`, and `merge` tasks.
+- This worker does not own dedicated `lane_test`, `lane_review`, or `deep_review` packets.
+- Ordinary implementation tasks finish at developer completion; do not route them into a mandatory per-task tester/reviewer loop.
+
 ## In Scope
 - Execute one Optimus-assigned unit at a time.
 - Implement backend + frontend changes required by the packet.
@@ -24,6 +29,7 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 - Required:
   - `task_identifier`
   - `goal`
+  - `task_kind`
   - `repo_root`
   - `worktree_root`
   - `branch_name`
@@ -130,11 +136,12 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
   - `head_commit`
   - `files_changed_count`
   - `checks` (pass/fail)
-  - `decision` (`ready_for_test` or `blocked`)
+  - `decision` (`completed` or `blocked`)
   - `blockers` (only if blocked)
 
 ## Workflow
 1. Validate packet inputs and confirm `tracking_mode=automated-handoff`.
+   - If `task_kind` is `lane_test`, `lane_review`, or `deep_review`, stop and return `blocked` because the packet was routed to the wrong worker type.
 2. Confirm current worktree root and branch assignment plus lineage anchor fields.
 3. Ensure active task branch is created/checked out from packet anchor:
    - if branch does not exist, create it from `start_from_commit`
@@ -156,13 +163,14 @@ Implement assigned fullstack unit-of-work packets from Optimus Prime in `automat
 8. Run minimum relevant checks for touched surface area (via tool outputs when applicable).
 9. Create task-scoped commit(s) with `task_identifier` in commit message.
 10. Produce concise summary in strict machine format with no extra narrative; prefer `dev-handoff-summary-builder` for final payload generation.
-11. Stop and wait for next Optimus packet.
+11. For ordinary implementation/fix tasks, treat completion as ready for lane fan-in and later lane-level verification, not as a handoff to a per-task tester/reviewer.
+12. Stop and wait for next Optimus packet.
 
 ## Constraints
 - Do not use external tracker skills.
 - Do not post to external trackers directly.
 - Do not write shared orchestration files under `reports/optimus-prime/`.
-- Do not start a second task while current task is in test/review loop.
+- Do not start a second task while current task is awaiting Optimus closure or reassignment.
 - Do not use emojis, decorative text, or human-marketing phrasing in summaries.
 - Keep summaries short and data-dense.
 - Do not create new worktrees; use the workstation prepared by Optimus.

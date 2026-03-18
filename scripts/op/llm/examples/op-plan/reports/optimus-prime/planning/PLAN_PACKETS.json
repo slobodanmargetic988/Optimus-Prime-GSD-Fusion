@@ -118,9 +118,6 @@
       "gaps_that_need_patching": [],
       "verification_contract": {
         "mode": "tdd_red",
-        "dev_expectation": "expect_fail",
-        "test_expectation": "expect_fail",
-        "review_expectation": "expect_fail",
         "expected_failure_reason_codes": [
           "tdd_expected_failure_observed"
         ],
@@ -128,7 +125,8 @@
           "verification_environment_error",
           "verification_command_target_missing"
         ]
-      }
+      },
+      "task_kind": "implementation"
     },
     {
       "task_id": "TASK-002",
@@ -152,9 +150,6 @@
       "gaps_that_need_patching": [],
       "verification_contract": {
         "mode": "implementation_green",
-        "dev_expectation": "expect_pass",
-        "test_expectation": "expect_pass",
-        "review_expectation": "expect_pass",
         "expected_failure_reason_codes": [
           "tdd_expected_failure_observed"
         ],
@@ -162,7 +157,8 @@
           "verification_environment_error",
           "verification_command_target_missing"
         ]
-      }
+      },
+      "task_kind": "implementation"
     },
     {
       "task_id": "TASK-003",
@@ -186,9 +182,6 @@
       "gaps_that_need_patching": [],
       "verification_contract": {
         "mode": "hardening",
-        "dev_expectation": "expect_pass",
-        "test_expectation": "expect_pass",
-        "review_expectation": "expect_pass",
         "expected_failure_reason_codes": [
           "tdd_expected_failure_observed"
         ],
@@ -196,7 +189,8 @@
           "verification_environment_error",
           "verification_command_target_missing"
         ]
-      }
+      },
+      "task_kind": "implementation"
     }
   ],
   "depends_on": [],

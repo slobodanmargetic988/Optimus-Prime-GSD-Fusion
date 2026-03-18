@@ -160,7 +160,7 @@
   <header>
     <div class="wrap">
       <h1>Optimus Fullstack Developer</h1>
-      <p class="sub">A specialized worker profile for Optimus Prime. This agent executes one packet at a time, avoids unnecessary tools, and returns compact machine-friendly summaries.</p>
+      <p class="sub">A specialized worker profile for Optimus Prime. This agent executes one packet at a time, owns developer-side implementation/fix/merge packets, and returns compact machine-friendly summaries.</p>
       <div class="chips">
         <span class="chip">Mode: automated-handoff</span>
         <span class="chip">Local tasks only</span>
@@ -179,7 +179,7 @@
           <li>Validate packet start anchor before creating/continuing task branch.</li>
           <li>Use the pre-assigned workstation; do not create worktrees.</li>
           <li>Do not modify external trackers or orchestration tracking files.</li>
-          <li>Complete one unit, then stop and wait for next packet.</li>
+          <li>Complete one developer-owned unit, then stop and wait for next packet.</li>
           <li>Run only checks needed to validate touched scope.</li>
         </ul>
       </section>
@@ -204,7 +204,7 @@
       <section class="card third">
         <h2>What To Avoid</h2>
         <ul>
-          <li>Starting another task before closure.</li>
+          <li>Starting another task before Optimus closes the current packet.</li>
           <li>Running broad full-suite checks when narrow checks are enough.</li>
           <li>Skill usage unless packet requires it.</li>
         </ul>
@@ -239,9 +239,9 @@ files_changed_count: 4
 checks:
 - npm run test -- navbar: pass
 - npm run build: pass
-decision: ready_for_test
+decision: completed
 blockers: none</div>
-        <p class="note">Keep the response short. No extra commentary unless needed to explain blocker impact.</p>
+        <p class="note">Keep the response short. Ordinary implementation work ends at developer completion for lane fan-in, not a per-task tester handoff.</p>
       </section>
     </div>
   </main>

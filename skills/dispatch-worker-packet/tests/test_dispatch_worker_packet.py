@@ -154,7 +154,10 @@ class DispatchWorkerPacketTests(unittest.TestCase):
             self.assertIn("summary.expectation(expect_fail|expect_pass)", content)
             self.assertIn("summary.expectation_met(bool)", content)
             self.assertIn("summary.failure_class(expected_red|infra|unexpected|none)", content)
+            self.assertIn("gate (object) is optional phase-exit metadata only", content)
             self.assertIn("gate.ready_for_phase_exit(bool)", content)
+            self.assertNotIn("gate.ready_for_test(bool)", content)
+            self.assertNotIn("gate.ready_for_review(bool)", content)
             self.assertIn("schema validator reference", content)
             self.assertIn("schema regression test reference", content)
             self.assertIn("output must pass the canonical schema validator", content)
@@ -191,6 +194,7 @@ class DispatchWorkerPacketTests(unittest.TestCase):
                 self.assertIn("for every requirement_id in packet requirement_ids, write at least one test.uat_results row", content)
                 self.assertIn("summary.reason_codes[]", content)
                 self.assertIn(str(MODULE.TASK_EVIDENCE_SCHEMA_TEST_REF), content)
+                self.assertIn("do not invent legacy ready_for_test/ready_for_review booleans", content)
                 self.assertNotIn("  - verify_results: array", content)
 
     def test_packet_render_includes_test_source_sync_section_for_tester(self):

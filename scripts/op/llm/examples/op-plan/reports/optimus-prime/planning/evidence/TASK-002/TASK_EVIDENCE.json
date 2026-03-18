@@ -29,11 +29,6 @@
     "blockers": [],
     "artifacts": []
   },
-  "gate": {
-    "ready_for_test": false,
-    "ready_for_review": false,
-    "ready_for_phase_exit": false
-  },
   "summary": {
     "result": "blocked",
     "reason_codes": [
@@ -42,5 +37,6 @@
     "expectation": "expect_pass",
     "expectation_met": false,
     "failure_class": "none"
-  }
+  },
+  "task_kind": "implementation"
 }

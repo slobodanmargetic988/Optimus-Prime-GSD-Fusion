@@ -120,10 +120,23 @@ Planner behavior:
 opctl /op-build --json-pretty
 ```
 
-`/op-build` now runs `/op-simple-build` and will run `/op-initialize` first when:
+`/op-build` now has start-policy routing built in:
+- `--start-policy auto` (default): resumes when valid `.op-simple/current/initialize_state.json` + run-base branch state already exist, otherwise starts a fresh build.
+- `--start-policy new`: always starts a fresh OP Simple run-base.
+- `--start-policy resume`: requires valid OP Simple resume state and mirrors `/op-resume`.
+
+In fresh mode, `/op-build` will run `/op-initialize` first when:
 - mission/scope input is provided (`--mission`, `--scope`, `--mission-file`, `--scope-file`),
 - `--override-old-plan` is set, or
 - required planning baseline artifacts are missing.
+
+Auto mode still forces a fresh run when you explicitly supply fresh-run intent:
+- `--mission`
+- `--mission-file`
+- `--scope`
+- `--scope-file`
+- `--override-old-plan`
+- `--run-base-source-branch`
 
 Use file inputs directly on `/op-build`:
 
@@ -189,6 +202,10 @@ Related runtime state files:
 - `/op-simple-build`: `.op-simple/current/watchdog_exit_signal.json` (written when watchdog stop condition triggers).
 - `/op-simple-build`: `.op-simple/current/terminal_capsule.json` (terminal-stop forensic summary).
 - `/op-simple-build`: `.op-simple/current/mergeability_report.json` (lane/run mergeability state).
+- `/op-simple-build`: `.op-simple/current/merge_queue.json` (active deterministic merge failures waiting for cadence-based merge-manager handling).
+- `/op-simple-build`: `.op-simple/current/unmergable_merges.json` (merge-manager-consumed items that still could not be resolved).
+- `/op-simple-build`: `.op-simple/current/merge_manager_report.json` (runtime-normalized merge-manager outcome report).
+- `/op-simple-build`: `.op-simple/current/merge_journal.jsonl` (append-only merge attempt/disposition history).
 
 Resume after stop:
 
@@ -200,6 +217,7 @@ opctl /op-resume --repo-root /absolute/path/to/project --json-pretty
 - `.op-simple/current/initialize_state.json` must exist.
 - If missing, runtime returns `op_simple_resume_unavailable` and you must run `/op-build` first.
 - Legacy `/op-resume` fallback to old non-`.op-simple` state is removed.
+- `/op-build --start-policy resume` now uses the same OP Simple resume semantics.
 
 ### Multi-Profile Codex Setup
 
@@ -220,6 +238,7 @@ Behavior:
 
 Runtime reliability notes:
 - `/op-build` and `/op-resume` both execute the OP Simple runtime (`/op-simple-build`).
+- `/op-build` defaults to `--start-policy auto`, so it can resume existing valid OP Simple state instead of always starting over.
 - Legacy op-core autonomous build paths and legacy `/op-resume` fallback behavior are removed from active execution.
 - Watchdog runs pre-dispatch and sets `cycle_mode` as `normal`, `merge_recovery`, or `terminal_stale`.
 - In `merge_recovery`, dispatcher reserves exactly 2 worker slots for merge/fan-in work while allowing other active workers to continue.

@@ -336,6 +336,12 @@ def test_emits_test_train_wave_directives(controller_module, tmp_path):
     assert "start_new_test_wave" in action_codes
 
 
+def test_completed_handoff_maps_phase_from_role(controller_module):
+    assert controller_module._derive_handoff_linear_phase({"result": "completed", "role": "tester"}) == "agent_test_done"
+    assert controller_module._derive_handoff_linear_phase({"result": "completed", "role": "reviewer"}) == "agent_review_done"
+    assert controller_module._derive_handoff_linear_phase({"result": "completed", "role": "developer"}) == "agent_work_done"
+
+
 def test_test_train_unhealthy_runtime_emits_block_and_repair_directives(controller_module, tmp_path):
     write_json(
         tmp_path / "reports" / "optimus-prime" / "TEST_TRAIN_STATE.json",

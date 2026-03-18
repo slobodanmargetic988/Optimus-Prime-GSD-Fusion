@@ -237,10 +237,11 @@ Runtime propagation note:
 | tasks[].task_id | string | Task identity |
 | tasks[].phase_id | string | Phase membership |
 | tasks[].lane_id | string | Lane membership |
+| tasks[].task_kind | string | Canonical routing class: `implementation|lane_test|test_fix|lane_review|review_fix|deep_review|deep_fix|merge` |
 | tasks[].status | string | `pending|in_progress|done|blocked` |
 | tasks[].requirement_ids | array | Requirement links (may be empty) |
 | tasks[].depends_on | array | Dependency graph |
-| tasks[].verification_contract | object | Verification expectation contract |
+| tasks[].verification_contract | object | Task-kind-aware verification contract |
 
 ```json
 {
@@ -269,14 +270,12 @@ Runtime propagation note:
       "task_id": "TASK-123",
       "phase_id": "phase-1",
       "lane_id": "phase-1/lane-a",
+      "task_kind": "implementation",
       "status": "pending",
       "requirement_ids": ["REQ-1"],
       "depends_on": [],
       "verification_contract": {
         "mode": "implementation_green",
-        "dev_expectation": "expect_pass",
-        "test_expectation": "expect_pass",
-        "review_expectation": "expect_pass",
         "expected_failure_reason_codes": ["tdd_expected_failure_observed"],
         "infra_failure_reason_codes": ["verification_environment_error", "verification_command_target_missing"]
       }
@@ -300,6 +299,7 @@ Invariant:
 | attempts | object | Cycle-level stage counters |
 | last_handoff_outcome | object | Last cycle-level handoff outcome |
 | tasks[].task_id | string | Task identity |
+| tasks[].task_kind | string | Canonical routing class mirrored from `PLAN_PACKETS.tasks[]` |
 | tasks[].status | string | `pending|in_progress|done|blocked` |
 
 ```json
@@ -325,6 +325,7 @@ Invariant:
   "tasks": [
     {
       "task_id": "TASK-123",
+      "task_kind": "implementation",
       "status": "in_progress"
     }
   ]
@@ -628,20 +629,123 @@ Invariant:
 | cycle_mode | string | Runtime mode for this mergeability snapshot |
 | run_base_ref | string | Run-base branch/ref under evaluation |
 | run_base_sha | string | Run-base commit anchor |
-| lane_shas | object<string,array<string>> | Per-lane unmerged branch head SHAs |
-| unmerged_commit_count | integer | Aggregate unmerged commit signal |
-| merge_blockers | array | Explicit blockers preventing lane->run merge |
-| gate_owner | string | Current owner for merge-gate progression |
-| lane_status | object | Per-lane deterministic stage state |
-| lane_merge_gate_pending_cleared_count | integer | Auto-cleared pending merge-gate rows in this cycle |
-| progression | object | Stage counters (`done_worker_commits`, `lane_fan_in_ready`, `lane_tester_gate_passed`, `lane_to_run_merge_ready`) |
+| lane_shas | object<string,array<string>> | Per-lane queued source commits still waiting on deterministic merge success or merge-manager resolution |
+| unmerged_commit_count | integer | Aggregate queued merge-debt signal |
+| merge_blockers | array | Explicit runtime-known blockers preventing deterministic lane/run merge closure |
+| gate_owner | string | Current owner for merge truth (`runtime` when blockers exist, otherwise `none`) |
+| lane_status | object | Per-lane deterministic merge state (`fan_in_status`, tester gate, lane->run state, including blocked fan-in debt) |
+| lane_merge_gate_pending_cleared_count | integer | Compatibility field; always `0` in runtime-owned merge flow |
+| progression | object | Queue/progression counters (`task_to_lane_queue_items`, `lane_to_run_queue_items`, `lane_ready_for_run_merge`) |
 | progress_fingerprint | string | Deterministic mergeability digest |
 | mergeability_advanced | boolean | Whether mergeability fingerprint changed from previous cycle |
 
 Invariant:
 - Runtime writes `mergeability_report.json` every cycle, including timeout/unhappy-path cycles where feasible.
+- Runtime merge truth is git ancestry + active merge queue, not done worker branch names.
+- `lane_shas` must only include queue-backed unresolved source commits.
+- Lanes with active same-lane `task_to_lane` queue debt must not report `lane_to_run_merge_status=ready`.
 
-## 15) terminal_capsule.json
+## 15) merge_queue.json
+
+| Field | Type | Why it exists |
+|---|---|---|
+| schema_version | string | Contract version |
+| updated_at | string(UTC) | Recency |
+| cycle_number | integer | Last cycle that rewrote the queue |
+| items | array<object> | Active deterministic merge failures waiting for merge-manager cadence |
+
+Per-item fields:
+
+| Field | Type | Why it exists |
+|---|---|---|
+| queue_item_id | string | Stable identity derived from `kind + target_branch + source_commit` |
+| kind | string | `task_to_lane` or `lane_to_run` |
+| lane_id | string | Lane owning the merge opportunity |
+| task_id | string\|null | Task identity for `task_to_lane` items |
+| target_branch | string | Branch the runtime expected to merge into |
+| source_commit | string | Canonical source commit that must become ancestor of `target_branch` |
+| source_ref | string\|null | Optional human-facing source branch/ref |
+| first_failed_cycle | integer | First cycle this queue item was created |
+| last_failed_cycle | integer | Most recent cycle that retried and failed it |
+| attempt_count | integer | Deterministic retry counter |
+| failure_reason_code | string | Failure classification (`git_merge_conflict`, `source_commit_missing`, etc.) |
+| failure_message | string | Human-facing failure summary |
+| status | string | Active queue items remain `queued` |
+| updated_at | string(UTC) | Last queue mutation timestamp |
+
+Invariant:
+- Queue identity is source-commit scoped.
+- Runtime must deduplicate repeated failures for the same `kind + target_branch + source_commit`.
+
+## 16) unmergable_merges.json
+
+| Field | Type | Why it exists |
+|---|---|---|
+| schema_version | string | Contract version |
+| updated_at | string(UTC) | Recency |
+| cycle_number | integer | Last cycle that rewrote the file |
+| items | array<object> | Queue items consumed by merge-manager but not resolved |
+
+Additional per-item fields beyond `merge_queue.json`:
+
+| Field | Type | Why it exists |
+|---|---|---|
+| moved_at | string(UTC) | When merge-manager disposition moved the item out of active queue |
+| moved_cycle | integer | Cycle where the move occurred |
+| last_manager_reason | string | Why merge-manager left the item unresolved |
+| manager_report_ref | string | Absolute path to the merge-manager report used for disposition |
+
+Invariant:
+- Deterministic runtime never writes directly to `unmergable_merges.json`; only merge-manager consumption moves items there.
+
+## 17) merge_manager_report.json
+
+| Field | Type | Why it exists |
+|---|---|---|
+| schema_version | string | Contract version |
+| updated_at | string(UTC) | Recency |
+| cycle_number | integer | Merge-manager cycle identity |
+| status | string | Runtime-normalized disposition (`consumed`, `manager_failed`, `invalid_report`, etc.) |
+| summary | string | Human-facing outcome summary |
+| queue_count_before | integer | Active queue size before manager run |
+| queue_count_after | integer | Active queue size after runtime disposition |
+| resolved_items | array<object> | Queue items runtime accepted as resolved |
+| unresolved_items | array<object> | Queue items runtime moved to `unmergable_merges.json` |
+| manager_status | string | Raw manager execution status |
+| manager_timeout | boolean | Timeout signal for forensic handling |
+| manager_message | string | Raw manager message |
+| manager_reason_code | string | Raw manager reason code |
+
+Invariant:
+- A valid manager-produced consumption report must account for every active queue item exactly once across `resolved_items` and `unresolved_items`.
+- Runtime must independently verify git proof before accepting `resolved_items`.
+
+## 18) merge_journal.jsonl
+
+Append-only JSONL event stream. Each row includes:
+
+| Field | Type | Why it exists |
+|---|---|---|
+| schema_version | string | Contract version |
+| timestamp | string(UTC) | Event time |
+| cycle_number | integer | Cycle identity |
+| event | string | `merged`, `skip`, `queued`, `deferred`, `retired`, `manager_resolved`, or `manager_unresolved` |
+| kind | string | `task_to_lane` or `lane_to_run` |
+| lane_id | string | Lane owning the merge action |
+| task_id | string\|null | Task identity when relevant |
+| target_branch | string | Merge target branch |
+| source_commit | string | Source commit under evaluation |
+| source_ref | string\|null | Optional source branch/ref |
+| queue_item_id | string\|null | Queue linkage when relevant |
+| status | string | Human-facing state summary |
+| message | string | Human-facing event summary |
+| details | object | Supplemental fields (`merged_sha`, `failure_reason_code`, conflicted file list, etc.) |
+
+Invariant:
+- Runtime appends a journal row for every deterministic merge skip/success/queue action and every merge-manager disposition.
+- Runtime also appends journal rows when lane->run is deferred due to active task fan-in debt and when obsolete queue items are retired automatically.
+
+## 19) terminal_capsule.json
 
 | Field | Type | Why it exists |
 |---|---|---|
@@ -668,7 +772,7 @@ Invariant:
 - Timeout cycles must still emit `terminal_capsule.json`, `cycle_summary.json`, and `cycle_manager_decision.json`.
 - Non-timeout fail-closed BOSS cycles must also emit `terminal_capsule.json` with `stop_reason=""` and failure `reason_code`.
 
-## 16) timeout_adaptation_state.json
+## 20) timeout_adaptation_state.json
 
 | Field | Type | Why it exists |
 |---|---|---|
@@ -694,7 +798,7 @@ Invariant:
 - After two consecutive BOSS timeouts, adaptation must activate (`adaptation_active=true`).
 - If multiple eligible aliases exist, `rotation_required=true` and next BOSS selection must avoid `last_timeout_profile_alias`.
 
-## 17) restart_determinism_state.json (Packet 3 internals)
+## 21) restart_determinism_state.json (Packet 3 internals)
 
 | Field | Type | Why it exists |
 |---|---|---|
@@ -712,7 +816,7 @@ Invariant:
 - Repeated resume with identical checkpoint fingerprint and scenario should set `idempotent_continuation=true`.
 - `process_kill_resume` classification must use pre-lock run-lock evidence so stale PID context is not lost during lock acquisition.
 
-## 18) Packet 4 scaffold writers (runtime internals)
+## 22) Packet 4 scaffold writers (runtime internals)
 
 Runtime includes scaffold writers (not auto-executed in this implementation pass) for:
 

@@ -10,6 +10,7 @@ Agent: optimus-fullstack-developer
 Goal: Implement user-profile timezone preferences end-to-end.
 Inputs: task_identifier: MYO-81
 Inputs: goal: Add timezone selector in settings UI and persist timezone in backend profile service.
+Inputs: task_kind: implementation
 Inputs: repo_root: ../Ouroboros
 Inputs: worktree_root: ../workstation-1
 Inputs: branch_name: MYO-81-profile-timezone
@@ -29,6 +30,7 @@ Implements backend and frontend changes scoped to timezone preference feature.
 Runs only relevant checks for touched backend/frontend surfaces.
 Commits with task identifier.
 Returns short summary fields: task_identifier, branch, head_commit, files_changed_count, checks, decision.
+Decision should indicate developer completion for lane fan-in, not per-task tester routing.
 ```
 
 ## Example 2: Branch Active Elsewhere, Fallback Branch Used
@@ -39,6 +41,7 @@ Agent: optimus-fullstack-developer
 Goal: Continue assigned packet even when assigned branch is locked in another worktree.
 Inputs: task_identifier: MYO-23
 Inputs: goal: Fix navbar toggle race condition.
+Inputs: task_kind: implementation
 Inputs: repo_root: ../Ouroboros
 Inputs: worktree_root: ../workstation-3
 Inputs: branch_name: MYO-23-make-menu-navbar
@@ -56,7 +59,8 @@ Output: Continue work on fallback branch and report mapping in concise summary
 ```text
 Creates fallback branch MYO-23-make-menu-navbar-dev from same base.
 Completes fix and commits on fallback branch.
-Returns concise summary that includes fallback branch mapping and decision ready_for_test.
+Returns concise summary that includes fallback branch mapping and decision completed.
+Returns concise summary that includes fallback branch mapping and decision completed.
 ```
 
 ## Example 3: Blocked by Missing Secret
@@ -67,6 +71,7 @@ Agent: optimus-fullstack-developer
 Goal: Add signed upload endpoint and UI uploader wiring.
 Inputs: task_identifier: MYO-145
 Inputs: goal: Implement signed upload flow for profile avatars.
+Inputs: task_kind: implementation
 Inputs: repo_root: ../Ouroboros
 Inputs: worktree_root: ../workstation-2
 Inputs: branch_name: MYO-145-avatar-upload

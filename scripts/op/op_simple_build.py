@@ -49,6 +49,9 @@ ARTIFACT_FILES = {
     "dispatch_registry": CURRENT_DIR / "dispatch_registry.json",
     "cycle_summary": CURRENT_DIR / "cycle_summary.json",
     "mergeability_report": CURRENT_DIR / "mergeability_report.json",
+    "merge_queue": CURRENT_DIR / "merge_queue.json",
+    "unmergable_merges": CURRENT_DIR / "unmergable_merges.json",
+    "merge_manager_report": CURRENT_DIR / "merge_manager_report.json",
     "terminal_capsule": CURRENT_DIR / "terminal_capsule.json",
     "wrapup_manager_report": CURRENT_DIR / "wrapup_manager_report.json",
     "watchdog_state": CURRENT_DIR / "watchdog_state.json",
@@ -62,16 +65,17 @@ ARTIFACT_FILES = {
 
 MANAGER_TIMEOUT_SECONDS = {
     "BOSS": 900,
+    "merge-manager": 900,
     "wrapup-manager": 900,
     "watchdog": 120,
     "summary": 120,
 }
 BLACKBOX_MANAGER_TIMEOUT_SECONDS = {
     "BOSS": 1800,
+    "merge-manager": 1800,
     "wrapup-manager": 1800,
 }
 
-QUIET_CYCLE_FORCE_FULL_EVERY = 5
 WATCHDOG_STALE_COMMIT_MINUTES = 150
 WATCHDOG_NEAR_STALE_MARGIN_MINUTES = 10
 WATCHDOG_RECOVERY_NUDGE_MINUTES = 30
@@ -82,12 +86,14 @@ WAIT_HEARTBEAT_SECONDS = 300
 WAIT_RESCAN_SECONDS = 900
 THREAD_LIVENESS_MAX_AGE_SECONDS = 1200
 MERGE_RECOVERY_RESERVED_SLOTS = 2
+MERGE_MANAGER_CADENCE_CYCLES = 5
 LLM_PROFILE_PER_MINUTE_LIMIT = 20
 LLM_PROFILE_PER_DAY_LIMIT = 1000
 RATE_SNAPSHOT_SCRIPT_REL = Path("skills") / "minimal-rate-snapshot" / "scripts" / "minimal_rate_snapshot.py"
 RECOVERY_INSTRUCTIONS_FILE = Path("recovery_instructions.md")
 TERMINAL_WARNING_INSTRUCTIONS_FILE = Path("recovery_instructions_terminal_warning.md")
 WATCHDOG_RECOVERY_NUDGE_BODY_TEMPLATE_FILE = SCRIPT_DIR / "templates" / "watchdog_recovery_nudge_body.md"
+MERGE_JOURNAL_FILE = CURRENT_DIR / "merge_journal.jsonl"
 WATCHDOG_TERMINAL_WARNING_NUDGE_BODY_TEMPLATE_FILE = SCRIPT_DIR / "templates" / "watchdog_terminal_warning_nudge_body.md"
 WATCHDOG_RECOVERY_NUDGE_BODY_FALLBACK = """This nudge is broad by design. Run a full diagnostics sweep before deciding to skip repeatedly.
 
@@ -113,7 +119,6 @@ Prioritize merge/fan-in recovery now so run-base receives fresh commits before h
 After applying this warning, rename this file to `recovery_instructions_terminal_warning_CONSUMED.md`."""
 NON_TERMINAL_STOP_REASONS = {
     "skip_cycle",
-    "active_workers_in_progress_no_safe_new_dispatch",
 }
 TERMINAL_STOP_REASONS = {
     "project_done",
@@ -284,7 +289,14 @@ def _normalize_selected_aliases(value: Any) -> list[str] | None:
 
 
 def _repo_workstation_prefix(repo_root: Path) -> str:
-    raw = str(repo_root.name or "").strip().lower()
+    # Workstation-preparation validates optional prefixes against the git toplevel
+    # repository name, so nested repo-root runs (e.g. op-tools/strategy) must
+    # derive the same prefix to avoid false invalid-name failures.
+    toplevel = _git_text(repo_root, "rev-parse", "--show-toplevel")
+    if toplevel:
+        raw = str(Path(toplevel).name or "").strip().lower()
+    else:
+        raw = str(repo_root.name or "").strip().lower()
     normalized = re.sub(r"[^a-z0-9._-]+", "-", raw)
     normalized = re.sub(r"-{2,}", "-", normalized).strip("-._")
     return normalized or "repo"
@@ -1173,6 +1185,205 @@ def _git_is_ancestor_commit(repo_root: Path, *, ancestor: str, descendant: str) 
     return None
 
 
+def _git_branch_exists(repo_root: Path, branch_name: str) -> bool:
+    branch_text = str(branch_name or "").strip()
+    if not branch_text:
+        return False
+    return bool(_git_text(repo_root, "rev-parse", "--verify", f"refs/heads/{branch_text}"))
+
+
+def _git_resolve_commit(repo_root: Path, ref: str) -> str:
+    ref_text = str(ref or "").strip()
+    if not ref_text:
+        return ""
+    return _git_text(repo_root, "rev-parse", "--verify", f"{ref_text}^{{commit}}")
+
+
+def _git_current_branch(repo_root: Path) -> str:
+    return _git_text(repo_root, "branch", "--show-current")
+
+
+def _git_conflicted_files(repo_root: Path) -> list[str]:
+    code, out, _err = _git_run(repo_root, "diff", "--name-only", "--diff-filter=U")
+    if code != 0:
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def _git_abort_merge_if_needed(repo_root: Path) -> None:
+    merge_head = repo_root / ".git" / "MERGE_HEAD"
+    if not merge_head.exists():
+        return
+    _git_run(repo_root, "merge", "--abort")
+
+
+def _queue_payload(cycle_number: int, items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": int(cycle_number),
+        "items": items or [],
+    }
+
+
+def _load_queue_items(path: Path) -> list[dict[str, Any]]:
+    payload = _read_json(path, default={})
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return []
+    return [row for row in items if isinstance(row, dict)]
+
+
+def _write_queue_items(path: Path, *, cycle_number: int, items: list[dict[str, Any]]) -> None:
+    _atomic_write_json(path, _queue_payload(cycle_number, items))
+
+
+def _merge_queue_item_id(kind: str, target_branch: str, source_commit: str) -> str:
+    raw = f"{str(kind or '').strip()}::{str(target_branch or '').strip()}::{str(source_commit or '').strip()}"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return f"merge-{digest}"
+
+
+def _append_merge_journal(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    event: str,
+    kind: str,
+    lane_id: str,
+    task_id: str | None,
+    target_branch: str,
+    source_commit: str,
+    status: str,
+    message: str,
+    source_ref: str | None = None,
+    queue_item_id: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    row = {
+        "schema_version": SCHEMA_VERSION,
+        "timestamp": utc_now_iso(),
+        "cycle_number": int(cycle_number),
+        "event": str(event or "").strip() or "unknown",
+        "kind": str(kind or "").strip(),
+        "lane_id": str(lane_id or "").strip(),
+        "task_id": str(task_id or "").strip() or None,
+        "target_branch": str(target_branch or "").strip(),
+        "source_commit": str(source_commit or "").strip(),
+        "source_ref": str(source_ref or "").strip() or None,
+        "queue_item_id": str(queue_item_id or "").strip() or None,
+        "status": str(status or "").strip() or "unknown",
+        "message": str(message or "").strip(),
+        "details": details if isinstance(details, dict) else {},
+    }
+    _append_jsonl(cfg.repo_root / MERGE_JOURNAL_FILE, row)
+
+
+def _upsert_merge_queue_item(
+    items_by_id: dict[str, dict[str, Any]],
+    *,
+    cycle_number: int,
+    kind: str,
+    lane_id: str,
+    task_id: str | None,
+    target_branch: str,
+    source_commit: str,
+    source_ref: str | None,
+    failure_reason_code: str,
+    failure_message: str,
+) -> dict[str, Any]:
+    queue_item_id = _merge_queue_item_id(kind, target_branch, source_commit)
+    existing = items_by_id.get(queue_item_id)
+    now_iso = utc_now_iso()
+    if existing is None:
+        row = {
+            "queue_item_id": queue_item_id,
+            "kind": str(kind or "").strip(),
+            "lane_id": str(lane_id or "").strip(),
+            "task_id": str(task_id or "").strip() or None,
+            "target_branch": str(target_branch or "").strip(),
+            "source_commit": str(source_commit or "").strip(),
+            "source_ref": str(source_ref or "").strip() or None,
+            "first_failed_cycle": int(cycle_number),
+            "last_failed_cycle": int(cycle_number),
+            "attempt_count": 1,
+            "failure_reason_code": str(failure_reason_code or "").strip() or "merge_failed",
+            "failure_message": str(failure_message or "").strip() or "merge failed",
+            "status": "queued",
+            "updated_at": now_iso,
+        }
+        items_by_id[queue_item_id] = row
+        return row
+    existing["last_failed_cycle"] = int(cycle_number)
+    existing["attempt_count"] = int(existing.get("attempt_count") or 0) + 1
+    existing["failure_reason_code"] = str(failure_reason_code or "").strip() or "merge_failed"
+    existing["failure_message"] = str(failure_message or "").strip() or "merge failed"
+    existing["status"] = "queued"
+    existing["updated_at"] = now_iso
+    if task_id:
+        existing["task_id"] = str(task_id).strip()
+    if source_ref:
+        existing["source_ref"] = str(source_ref).strip()
+    return existing
+
+
+def _remove_queue_item(items_by_id: dict[str, dict[str, Any]], kind: str, target_branch: str, source_commit: str) -> str | None:
+    queue_item_id = _merge_queue_item_id(kind, target_branch, source_commit)
+    removed = items_by_id.pop(queue_item_id, None)
+    if isinstance(removed, dict):
+        return queue_item_id
+    return None
+
+
+def _git_merge_source_into_target(
+    repo_root: Path,
+    *,
+    target_branch: str,
+    source_spec: str,
+) -> dict[str, Any]:
+    target_text = str(target_branch or "").strip()
+    source_text = str(source_spec or "").strip()
+    if not target_text or not source_text:
+        return {"ok": False, "reason_code": "merge_input_invalid", "message": "missing merge target or source"}
+
+    original_branch = _git_current_branch(repo_root) or target_text
+    checked_out_target = False
+    try:
+        if original_branch != target_text:
+            code, _out, err = _git_run(repo_root, "checkout", target_text)
+            if code != 0:
+                return {
+                    "ok": False,
+                    "reason_code": "target_checkout_failed",
+                    "message": f"cannot checkout target branch '{target_text}': {err or 'unknown git error'}",
+                }
+            checked_out_target = True
+
+        code, out, err = _git_run(repo_root, "merge", "--no-ff", "--no-edit", source_text)
+        if code == 0:
+            merged_sha = _git_text(repo_root, "rev-parse", "HEAD")
+            return {
+                "ok": True,
+                "reason_code": "merged",
+                "message": out or f"merged {source_text} into {target_text}",
+                "merged_sha": merged_sha,
+            }
+
+        conflicted_files = _git_conflicted_files(repo_root)
+        _git_abort_merge_if_needed(repo_root)
+        return {
+            "ok": False,
+            "reason_code": "git_merge_conflict" if conflicted_files else "git_merge_failed",
+            "message": err or out or f"git merge failed for {source_text} -> {target_text}",
+            "conflicted_files": conflicted_files,
+        }
+    finally:
+        if checked_out_target and original_branch and original_branch != target_text:
+            _git_run(repo_root, "checkout", original_branch)
+
+
 def _reason_code(value: Any, *, fallback: str) -> str:
     text = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "")).strip("_").upper()
     if not text:
@@ -1985,8 +2196,8 @@ def _create_run_base_branch(cfg: RunConfig) -> dict[str, Any]:
     )
 
 
-def _load_resume_run_base_meta(cfg: RunConfig) -> dict[str, Any]:
-    state = _read_json(cfg.repo_root / INITIALIZE_STATE_FILE, default={})
+def inspect_resume_run_base_meta(repo_root: Path, *, run_base_source_branch: str | None = None) -> dict[str, Any]:
+    state = _read_json(repo_root / INITIALIZE_STATE_FILE, default={})
     if not isinstance(state, dict):
         state = {}
     run_context = state.get("run_context") if isinstance(state.get("run_context"), dict) else {}
@@ -1999,29 +2210,34 @@ def _load_resume_run_base_meta(cfg: RunConfig) -> dict[str, Any]:
         )
 
     ref = f"refs/heads/{run_base_branch}"
-    branch_commit = _git_text(cfg.repo_root, "rev-parse", "--verify", ref)
+    branch_commit = _git_text(repo_root, "rev-parse", "--verify", ref)
     if not branch_commit:
         raise SimpleBuildError(
             "op_simple_resume_missing_branch",
             f"Cannot resume /op-simple-build: run base branch '{run_base_branch}' does not exist.",
         )
 
-    if not cfg.dry_run:
-        code, _out, err = _git_run(cfg.repo_root, "checkout", run_base_branch)
-        if code != 0:
-            raise SimpleBuildError(
-                "op_simple_resume_checkout_failed",
-                f"Cannot checkout run base branch '{run_base_branch}' for resume: {err or 'unknown git error'}",
-            )
-
     return {
         "run_base_branch": run_base_branch,
-        "run_base_from_branch": str(run_context.get("run_base_from_branch") or cfg.run_base_source_branch or "main"),
+        "run_base_from_branch": str(run_context.get("run_base_from_branch") or run_base_source_branch or "main"),
         "run_base_from_commit": str(run_context.get("run_base_from_commit") or branch_commit),
         "run_base_created_at": str(run_context.get("run_base_created_at") or utc_now_iso()),
         "created_new": False,
-        "dry_run": bool(cfg.dry_run),
+        "dry_run": False,
     }
+
+
+def _load_resume_run_base_meta(cfg: RunConfig) -> dict[str, Any]:
+    out = inspect_resume_run_base_meta(cfg.repo_root, run_base_source_branch=cfg.run_base_source_branch)
+    if not cfg.dry_run:
+        code, _out, err = _git_run(cfg.repo_root, "checkout", str(out["run_base_branch"]))
+        if code != 0:
+            raise SimpleBuildError(
+                "op_simple_resume_checkout_failed",
+                f"Cannot checkout run base branch '{str(out['run_base_branch'])}' for resume: {err or 'unknown git error'}",
+            )
+    out["dry_run"] = bool(cfg.dry_run)
+    return out
 
 
 def _default_initialize_state(repo_root: Path, max_parallel_workers: int, run_meta: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2438,6 +2654,27 @@ def _ensure_default_artifacts(cfg: RunConfig) -> None:
                 "lane_to_run_merge_ready": 0,
             },
         },
+        "merge_queue": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "cycle_number": 0,
+            "items": [],
+        },
+        "unmergable_merges": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "cycle_number": 0,
+            "items": [],
+        },
+        "merge_manager_report": {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": utc_now_iso(),
+            "cycle_number": 0,
+            "status": "not_started",
+            "summary": "",
+            "resolved_items": [],
+            "unresolved_items": [],
+        },
         "terminal_capsule": {
             "schema_version": SCHEMA_VERSION,
             "updated_at": utc_now_iso(),
@@ -2564,6 +2801,9 @@ def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
         "dispatch_registry",
         "cycle_summary",
         "mergeability_report",
+        "merge_queue",
+        "unmergable_merges",
+        "merge_manager_report",
         "terminal_capsule",
         "wrapup_manager_report",
         "watchdog_state",
@@ -2579,6 +2819,7 @@ def _reset_runtime_state_for_new_run(cfg: RunConfig) -> None:
         _safe_unlink(path)
     _safe_unlink(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE)
     _safe_unlink(cfg.repo_root / BOSS_SESSION_STATE_FILE)
+    _safe_unlink(cfg.repo_root / MERGE_JOURNAL_FILE)
 
 
 def _seed_plan_artifacts_from_planner(cfg: RunConfig) -> bool:
@@ -3253,6 +3494,19 @@ def _write_wrapup_stub(cfg: RunConfig, cycle_number: int) -> None:
     _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["wrapup_manager_report"], payload)
 
 
+def _write_merge_manager_stub(cfg: RunConfig, cycle_number: int) -> None:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": cycle_number,
+        "status": "dry_run",
+        "summary": "dry run merge-manager report",
+        "resolved_items": [],
+        "unresolved_items": [],
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["merge_manager_report"], payload)
+
+
 def _validate_manager_artifacts(
     cfg: RunConfig,
     manager_name: str,
@@ -3320,8 +3574,8 @@ def _invoke_manager(
     context: dict[str, Any],
     expected_artifacts: list[str],
 ) -> ManagerResult:
-    manager_uses_boss_profile = manager_name in {"BOSS", "wrapup-manager"}
-    manager_uses_boss_model = manager_name in {"BOSS", "wrapup-manager"}
+    manager_uses_boss_profile = manager_name in {"BOSS", "merge-manager", "wrapup-manager"}
+    manager_uses_boss_model = manager_name in {"BOSS", "merge-manager", "wrapup-manager"}
     log_executor_provider = _normalize_executor_provider(cfg.executor_provider)
     log_executor_model = _resolve_executor_model(
         cfg,
@@ -3332,10 +3586,12 @@ def _invoke_manager(
     if not _executor_uses_codex_backend(log_executor_provider):
         log_profile_alias = None
     log_reasoning_effort = str(cfg.boss_reasoning_effort).strip() if manager_uses_boss_model else None
-    log_tooling_effort = "medium_tooling" if manager_name in {"BOSS", "wrapup-manager"} else None
+    log_tooling_effort = "medium_tooling" if manager_name in {"BOSS", "merge-manager", "wrapup-manager"} else None
     if cfg.dry_run:
         if manager_name == "BOSS":
             _write_boss_stub(cfg, cycle_number)
+        if manager_name == "merge-manager":
+            _write_merge_manager_stub(cfg, cycle_number)
         if manager_name == "wrapup-manager":
             _write_wrapup_stub(cfg, cycle_number)
         started = utc_now_iso()
@@ -6316,77 +6572,863 @@ def _mergeability_progress_fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(seed, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def _task_last_handoff_head_commit(task_row: dict[str, Any]) -> str:
+    last = task_row.get("last_handoff_outcome")
+    if not isinstance(last, dict):
+        return ""
+    return str(last.get("head_commit") or "").strip()
+
+
+def _task_last_handoff_branch(task_row: dict[str, Any]) -> str:
+    last = task_row.get("last_handoff_outcome")
+    if not isinstance(last, dict):
+        return ""
+    return str(last.get("branch") or "").strip()
+
+
+def _lane_task_counts(task_rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    lane_counts: dict[str, dict[str, int]] = {}
+    for row in task_rows:
+        lane_id = str(row.get("lane_id") or "").strip() or "unscoped"
+        counts = lane_counts.setdefault(lane_id, {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0})
+        status = str(row.get("status") or "").strip()
+        if status in counts:
+            counts[status] += 1
+    return lane_counts
+
+
+def _all_lane_tasks_done(counts: dict[str, int]) -> bool:
+    pending = int(counts.get("pending") or 0)
+    in_progress = int(counts.get("in_progress") or 0)
+    blocked = int(counts.get("blocked") or 0)
+    done = int(counts.get("done") or 0)
+    return pending == 0 and in_progress == 0 and blocked == 0 and done > 0
+
+
+def _retire_queue_item(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    queue_items_by_id: dict[str, dict[str, Any]],
+    queue_item_id: str,
+    retirement_reason_code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> bool:
+    queue_item = queue_items_by_id.pop(queue_item_id, None)
+    if not isinstance(queue_item, dict):
+        return False
+    _append_merge_journal(
+        cfg,
+        cycle_number=cycle_number,
+        event="retired",
+        kind=str(queue_item.get("kind") or "").strip(),
+        lane_id=str(queue_item.get("lane_id") or "").strip(),
+        task_id=str(queue_item.get("task_id") or "").strip() or None,
+        target_branch=str(queue_item.get("target_branch") or "").strip(),
+        source_commit=str(queue_item.get("source_commit") or "").strip(),
+        source_ref=str(queue_item.get("source_ref") or "").strip() or None,
+        queue_item_id=queue_item_id,
+        status="retired",
+        message=message,
+        details={
+            "retirement_reason_code": str(retirement_reason_code or "").strip() or "queue_item_obsolete",
+            **(details if isinstance(details, dict) else {}),
+        },
+    )
+    return True
+
+
+def _reconcile_merge_queue_items(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    run_base_ref: str,
+    task_rows: list[dict[str, Any]],
+    lane_map: dict[str, str],
+    queue_items_by_id: dict[str, dict[str, Any]],
+) -> dict[str, int]:
+    retired_count = 0
+    task_rows_by_id = {
+        str(row.get("task_id") or "").strip(): row
+        for row in task_rows
+        if isinstance(row, dict) and str(row.get("task_id") or "").strip()
+    }
+    lane_counts = _lane_task_counts(task_rows)
+    for queue_item_id, queue_item in list(queue_items_by_id.items()):
+        kind = str(queue_item.get("kind") or "").strip()
+        lane_id = str(queue_item.get("lane_id") or "").strip() or "unscoped"
+        task_id = str(queue_item.get("task_id") or "").strip()
+        target_branch = str(queue_item.get("target_branch") or "").strip()
+        source_commit = str(queue_item.get("source_commit") or "").strip()
+        if _merge_item_has_git_proof(cfg, queue_item):
+            if _retire_queue_item(
+                cfg,
+                cycle_number=cycle_number,
+                queue_items_by_id=queue_items_by_id,
+                queue_item_id=queue_item_id,
+                retirement_reason_code="git_proof_present",
+                message="queue item retired because git ancestry already proves merge completion",
+            ):
+                retired_count += 1
+            continue
+        if kind == "task_to_lane":
+            task_row = task_rows_by_id.get(task_id)
+            if not isinstance(task_row, dict):
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="task_missing",
+                    message=f"queue item retired because task '{task_id or 'unknown'}' no longer exists in task state",
+                ):
+                    retired_count += 1
+                continue
+            current_status = str(task_row.get("status") or "").strip()
+            current_lane_id = str(task_row.get("lane_id") or "").strip() or "unscoped"
+            current_head_commit = _task_last_handoff_head_commit(task_row)
+            current_target_branch = str(lane_map.get(current_lane_id) or "").strip()
+            if current_status != "done" or not current_head_commit:
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="task_no_longer_done",
+                    message=f"queue item retired because task '{task_id or 'unknown'}' is no longer done with authoritative head commit",
+                ):
+                    retired_count += 1
+                continue
+            if current_lane_id != lane_id:
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="task_lane_changed",
+                    message=f"queue item retired because task '{task_id or 'unknown'}' moved to lane '{current_lane_id}'",
+                    details={"current_lane_id": current_lane_id},
+                ):
+                    retired_count += 1
+                continue
+            if current_head_commit != source_commit:
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="superseded_by_newer_head_commit",
+                    message=f"queue item retired because task '{task_id or 'unknown'}' advanced to newer head commit '{current_head_commit}'",
+                    details={"current_head_commit": current_head_commit},
+                ):
+                    retired_count += 1
+                continue
+            if current_target_branch and target_branch != current_target_branch:
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="target_branch_changed",
+                    message=f"queue item retired because lane target branch changed to '{current_target_branch}'",
+                    details={"current_target_branch": current_target_branch},
+                ):
+                    retired_count += 1
+                continue
+        elif kind == "lane_to_run":
+            counts = lane_counts.get(lane_id, {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0})
+            current_source_ref = str(lane_map.get(lane_id) or "").strip()
+            current_lane_tip = _git_resolve_commit(cfg.repo_root, current_source_ref) if current_source_ref else ""
+            if target_branch != str(run_base_ref or "").strip():
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="run_base_target_changed",
+                    message=f"queue item retired because run-base target changed to '{run_base_ref}'",
+                    details={"current_run_base_ref": str(run_base_ref or "").strip()},
+                ):
+                    retired_count += 1
+                continue
+            if not _all_lane_tasks_done(counts):
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="lane_no_longer_complete",
+                    message=f"queue item retired because lane '{lane_id}' no longer satisfies all-tasks-done gate",
+                ):
+                    retired_count += 1
+                continue
+            if current_source_ref and current_lane_tip and current_lane_tip != source_commit:
+                if _retire_queue_item(
+                    cfg,
+                    cycle_number=cycle_number,
+                    queue_items_by_id=queue_items_by_id,
+                    queue_item_id=queue_item_id,
+                    retirement_reason_code="superseded_by_newer_lane_tip",
+                    message=f"queue item retired because lane '{lane_id}' advanced to newer tip '{current_lane_tip}'",
+                    details={"current_lane_tip": current_lane_tip, "current_source_ref": current_source_ref},
+                ):
+                    retired_count += 1
+                continue
+    return {"retired_count": int(retired_count)}
+
+
+def _deterministic_merge_sweep(cfg: RunConfig, *, cycle_number: int, run_base_ref: str) -> dict[str, Any]:
+    task_path = cfg.repo_root / ARTIFACT_FILES["task_execution_state"]
+    task_payload = _read_json(task_path, default={})
+    if not isinstance(task_payload, dict):
+        task_payload = {}
+    task_rows_raw = task_payload.get("tasks")
+    task_rows = [row for row in task_rows_raw if isinstance(row, dict)] if isinstance(task_rows_raw, list) else []
+    lane_map, _plan_cycle = _lane_base_watchdog_branch_map(cfg)
+    queue_path = cfg.repo_root / ARTIFACT_FILES["merge_queue"]
+    queue_items_by_id = {
+        str(row.get("queue_item_id") or "").strip(): dict(row)
+        for row in _load_queue_items(queue_path)
+        if str(row.get("queue_item_id") or "").strip()
+    }
+
+    task_merge_attempts = 0
+    task_merge_successes = 0
+    task_merge_skips = 0
+    lane_merge_attempts = 0
+    lane_merge_successes = 0
+    lane_merge_skips = 0
+    lane_merge_deferred = 0
+    queue_updates = 0
+    queue_resolved = 0
+    queue_reconciliation = _reconcile_merge_queue_items(
+        cfg,
+        cycle_number=cycle_number,
+        run_base_ref=run_base_ref,
+        task_rows=task_rows,
+        lane_map=lane_map,
+        queue_items_by_id=queue_items_by_id,
+    )
+    queue_resolved += int(queue_reconciliation.get("retired_count") or 0)
+
+    for task_row in task_rows:
+        if str(task_row.get("status") or "").strip() != "done":
+            continue
+        task_id = str(task_row.get("task_id") or "").strip()
+        lane_id = str(task_row.get("lane_id") or "").strip() or "unscoped"
+        head_commit = _task_last_handoff_head_commit(task_row)
+        if not head_commit:
+            continue
+        target_branch = str(lane_map.get(lane_id) or "").strip()
+        source_ref = _task_last_handoff_branch(task_row) or None
+        task_merge_attempts += 1
+
+        if not target_branch:
+            queued = _upsert_merge_queue_item(
+                queue_items_by_id,
+                cycle_number=cycle_number,
+                kind="task_to_lane",
+                lane_id=lane_id,
+                task_id=task_id,
+                target_branch="",
+                source_commit=head_commit,
+                source_ref=source_ref,
+                failure_reason_code="lane_base_branch_missing",
+                failure_message=f"no lane-base branch mapping found for lane '{lane_id}'",
+            )
+            queue_updates += 1
+            _append_merge_journal(
+                cfg,
+                cycle_number=cycle_number,
+                event="queued",
+                kind="task_to_lane",
+                lane_id=lane_id,
+                task_id=task_id,
+                target_branch="",
+                source_commit=head_commit,
+                source_ref=source_ref,
+                queue_item_id=str(queued.get("queue_item_id") or ""),
+                status="queued",
+                message=str(queued.get("failure_message") or ""),
+                details={"failure_reason_code": str(queued.get("failure_reason_code") or "")},
+            )
+            continue
+        if not _git_branch_exists(cfg.repo_root, target_branch):
+            queued = _upsert_merge_queue_item(
+                queue_items_by_id,
+                cycle_number=cycle_number,
+                kind="task_to_lane",
+                lane_id=lane_id,
+                task_id=task_id,
+                target_branch=target_branch,
+                source_commit=head_commit,
+                source_ref=source_ref,
+                failure_reason_code="target_branch_missing",
+                failure_message=f"lane-base branch '{target_branch}' does not exist",
+            )
+            queue_updates += 1
+            _append_merge_journal(
+                cfg,
+                cycle_number=cycle_number,
+                event="queued",
+                kind="task_to_lane",
+                lane_id=lane_id,
+                task_id=task_id,
+                target_branch=target_branch,
+                source_commit=head_commit,
+                source_ref=source_ref,
+                queue_item_id=str(queued.get("queue_item_id") or ""),
+                status="queued",
+                message=str(queued.get("failure_message") or ""),
+                details={"failure_reason_code": str(queued.get("failure_reason_code") or "")},
+            )
+            continue
+        if not _git_resolve_commit(cfg.repo_root, head_commit):
+            queued = _upsert_merge_queue_item(
+                queue_items_by_id,
+                cycle_number=cycle_number,
+                kind="task_to_lane",
+                lane_id=lane_id,
+                task_id=task_id,
+                target_branch=target_branch,
+                source_commit=head_commit,
+                source_ref=source_ref,
+                failure_reason_code="source_commit_missing",
+                failure_message=f"done head commit '{head_commit}' is not resolvable locally",
+            )
+            queue_updates += 1
+            _append_merge_journal(
+                cfg,
+                cycle_number=cycle_number,
+                event="queued",
+                kind="task_to_lane",
+                lane_id=lane_id,
+                task_id=task_id,
+                target_branch=target_branch,
+                source_commit=head_commit,
+                source_ref=source_ref,
+                queue_item_id=str(queued.get("queue_item_id") or ""),
+                status="queued",
+                message=str(queued.get("failure_message") or ""),
+                details={"failure_reason_code": str(queued.get("failure_reason_code") or "")},
+            )
+            continue
+        if _git_is_ancestor_commit(cfg.repo_root, ancestor=head_commit, descendant=target_branch) is True:
+            task_merge_skips += 1
+            removed_queue_item_id = _remove_queue_item(queue_items_by_id, "task_to_lane", target_branch, head_commit)
+            if removed_queue_item_id:
+                queue_resolved += 1
+            _append_merge_journal(
+                cfg,
+                cycle_number=cycle_number,
+                event="skip",
+                kind="task_to_lane",
+                lane_id=lane_id,
+                task_id=task_id,
+                target_branch=target_branch,
+                source_commit=head_commit,
+                source_ref=source_ref,
+                queue_item_id=removed_queue_item_id,
+                status="already_merged",
+                message=f"task commit already present in lane-base '{target_branch}'",
+            )
+            continue
+
+        merge_result = _git_merge_source_into_target(cfg.repo_root, target_branch=target_branch, source_spec=head_commit)
+        if bool(merge_result.get("ok")):
+            task_merge_successes += 1
+            removed_queue_item_id = _remove_queue_item(queue_items_by_id, "task_to_lane", target_branch, head_commit)
+            if removed_queue_item_id:
+                queue_resolved += 1
+            _append_merge_journal(
+                cfg,
+                cycle_number=cycle_number,
+                event="merged",
+                kind="task_to_lane",
+                lane_id=lane_id,
+                task_id=task_id,
+                target_branch=target_branch,
+                source_commit=head_commit,
+                source_ref=source_ref,
+                queue_item_id=removed_queue_item_id,
+                status="merged",
+                message=str(merge_result.get("message") or f"merged task commit into '{target_branch}'"),
+                details={"merged_sha": str(merge_result.get("merged_sha") or "")},
+            )
+            continue
+
+        queued = _upsert_merge_queue_item(
+            queue_items_by_id,
+            cycle_number=cycle_number,
+            kind="task_to_lane",
+            lane_id=lane_id,
+            task_id=task_id,
+            target_branch=target_branch,
+            source_commit=head_commit,
+            source_ref=source_ref,
+            failure_reason_code=str(merge_result.get("reason_code") or "git_merge_failed"),
+            failure_message=str(merge_result.get("message") or "git merge failed"),
+        )
+        queue_updates += 1
+        _append_merge_journal(
+            cfg,
+            cycle_number=cycle_number,
+            event="queued",
+            kind="task_to_lane",
+            lane_id=lane_id,
+            task_id=task_id,
+            target_branch=target_branch,
+            source_commit=head_commit,
+            source_ref=source_ref,
+            queue_item_id=str(queued.get("queue_item_id") or ""),
+            status="queued",
+            message=str(queued.get("failure_message") or ""),
+            details={
+                "failure_reason_code": str(queued.get("failure_reason_code") or ""),
+                "conflicted_files": merge_result.get("conflicted_files") if isinstance(merge_result.get("conflicted_files"), list) else [],
+            },
+        )
+
+    lane_counts = _lane_task_counts(task_rows)
+    for lane_id, counts in sorted(lane_counts.items(), key=lambda item: item[0]):
+        if not _all_lane_tasks_done(counts):
+            continue
+        lane_task_queue_items = [
+            row
+            for row in queue_items_by_id.values()
+            if str(row.get("lane_id") or "").strip() == lane_id and str(row.get("kind") or "").strip() == "task_to_lane"
+        ]
+        if lane_task_queue_items:
+            lane_merge_deferred += 1
+            _append_merge_journal(
+                cfg,
+                cycle_number=cycle_number,
+                event="deferred",
+                kind="lane_to_run",
+                lane_id=lane_id,
+                task_id=None,
+                target_branch=str(run_base_ref or "").strip(),
+                source_commit="",
+                source_ref=str(lane_map.get(lane_id) or "").strip() or None,
+                status="blocked_on_task_fan_in",
+                message=f"lane->run merge deferred because lane '{lane_id}' still has active task->lane merge debt",
+                details={"active_task_queue_items": len(lane_task_queue_items)},
+            )
+            continue
+        target_branch = str(run_base_ref or "").strip()
+        source_ref = str(lane_map.get(lane_id) or "").strip()
+        if not source_ref:
+            continue
+        lane_tip = _git_resolve_commit(cfg.repo_root, source_ref)
+        if not lane_tip:
+            continue
+        lane_merge_attempts += 1
+        if _git_is_ancestor_commit(cfg.repo_root, ancestor=lane_tip, descendant=target_branch) is True:
+            lane_merge_skips += 1
+            removed_queue_item_id = _remove_queue_item(queue_items_by_id, "lane_to_run", target_branch, lane_tip)
+            if removed_queue_item_id:
+                queue_resolved += 1
+            _append_merge_journal(
+                cfg,
+                cycle_number=cycle_number,
+                event="skip",
+                kind="lane_to_run",
+                lane_id=lane_id,
+                task_id=None,
+                target_branch=target_branch,
+                source_commit=lane_tip,
+                source_ref=source_ref,
+                queue_item_id=removed_queue_item_id,
+                status="already_merged",
+                message=f"lane-base '{source_ref}' already present in run-base '{target_branch}'",
+            )
+            continue
+
+        merge_result = _git_merge_source_into_target(cfg.repo_root, target_branch=target_branch, source_spec=source_ref)
+        if bool(merge_result.get("ok")):
+            lane_merge_successes += 1
+            removed_queue_item_id = _remove_queue_item(queue_items_by_id, "lane_to_run", target_branch, lane_tip)
+            if removed_queue_item_id:
+                queue_resolved += 1
+            _append_merge_journal(
+                cfg,
+                cycle_number=cycle_number,
+                event="merged",
+                kind="lane_to_run",
+                lane_id=lane_id,
+                task_id=None,
+                target_branch=target_branch,
+                source_commit=lane_tip,
+                source_ref=source_ref,
+                queue_item_id=removed_queue_item_id,
+                status="merged",
+                message=str(merge_result.get("message") or f"merged lane-base '{source_ref}' into '{target_branch}'"),
+                details={"merged_sha": str(merge_result.get("merged_sha") or "")},
+            )
+            continue
+
+        queued = _upsert_merge_queue_item(
+            queue_items_by_id,
+            cycle_number=cycle_number,
+            kind="lane_to_run",
+            lane_id=lane_id,
+            task_id=None,
+            target_branch=target_branch,
+            source_commit=lane_tip,
+            source_ref=source_ref,
+            failure_reason_code=str(merge_result.get("reason_code") or "git_merge_failed"),
+            failure_message=str(merge_result.get("message") or "git merge failed"),
+        )
+        queue_updates += 1
+        _append_merge_journal(
+            cfg,
+            cycle_number=cycle_number,
+            event="queued",
+            kind="lane_to_run",
+            lane_id=lane_id,
+            task_id=None,
+            target_branch=target_branch,
+            source_commit=lane_tip,
+            source_ref=source_ref,
+            queue_item_id=str(queued.get("queue_item_id") or ""),
+            status="queued",
+            message=str(queued.get("failure_message") or ""),
+            details={
+                "failure_reason_code": str(queued.get("failure_reason_code") or ""),
+                "conflicted_files": merge_result.get("conflicted_files") if isinstance(merge_result.get("conflicted_files"), list) else [],
+            },
+        )
+
+    queue_items = sorted(
+        queue_items_by_id.values(),
+        key=lambda row: (
+            str(row.get("kind") or ""),
+            str(row.get("target_branch") or ""),
+            str(row.get("source_commit") or ""),
+        ),
+    )
+    _write_queue_items(queue_path, cycle_number=cycle_number, items=queue_items)
+    return {
+        "cycle_number": int(cycle_number),
+        "task_merge_attempts": int(task_merge_attempts),
+        "task_merge_successes": int(task_merge_successes),
+        "task_merge_skips": int(task_merge_skips),
+        "lane_merge_attempts": int(lane_merge_attempts),
+        "lane_merge_successes": int(lane_merge_successes),
+        "lane_merge_skips": int(lane_merge_skips),
+        "lane_merge_deferred": int(lane_merge_deferred),
+        "queue_item_count": len(queue_items),
+        "queue_updates": int(queue_updates),
+        "queue_resolved": int(queue_resolved),
+    }
+
+
+def _merge_item_has_git_proof(cfg: RunConfig, item: dict[str, Any]) -> bool:
+    kind = str(item.get("kind") or "").strip()
+    target_branch = str(item.get("target_branch") or "").strip()
+    source_commit = str(item.get("source_commit") or "").strip()
+    if kind not in {"task_to_lane", "lane_to_run"}:
+        return False
+    if not target_branch or not source_commit:
+        return False
+    return _git_is_ancestor_commit(cfg.repo_root, ancestor=source_commit, descendant=target_branch) is True
+
+
+def _write_merge_manager_runtime_report(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    status: str,
+    summary: str,
+    result: ManagerResult | None = None,
+    resolved_items: list[dict[str, Any]] | None = None,
+    unresolved_items: list[dict[str, Any]] | None = None,
+    queue_count_before: int = 0,
+    queue_count_after: int = 0,
+) -> dict[str, Any]:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": int(cycle_number),
+        "status": str(status or "").strip() or "unknown",
+        "summary": str(summary or "").strip(),
+        "queue_count_before": int(queue_count_before),
+        "queue_count_after": int(queue_count_after),
+        "resolved_items": resolved_items or [],
+        "unresolved_items": unresolved_items or [],
+        "manager_status": str((result.status if isinstance(result, ManagerResult) else "") or "").strip(),
+        "manager_timeout": bool(result.timeout) if isinstance(result, ManagerResult) else False,
+        "manager_message": str((result.message if isinstance(result, ManagerResult) else "") or "").strip(),
+        "manager_reason_code": str((result.reason_code if isinstance(result, ManagerResult) else "") or "").strip(),
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["merge_manager_report"], payload)
+    return payload
+
+
+def _run_periodic_merge_manager(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    run_base_ref: str,
+) -> dict[str, Any]:
+    queue_path = cfg.repo_root / ARTIFACT_FILES["merge_queue"]
+    queue_items = _load_queue_items(queue_path)
+    if not queue_items:
+        return {
+            "ran": False,
+            "status": "skipped",
+            "reason": "empty_queue",
+            "queue_count_before": 0,
+            "queue_count_after": 0,
+        }
+    if int(cycle_number) % int(MERGE_MANAGER_CADENCE_CYCLES) != 0:
+        return {
+            "ran": False,
+            "status": "skipped",
+            "reason": "non_cadence_cycle",
+            "queue_count_before": len(queue_items),
+            "queue_count_after": len(queue_items),
+        }
+
+    result = _invoke_manager(
+        cfg,
+        manager_name="merge-manager",
+        cycle_number=cycle_number,
+        context={
+            "run_base_branch": str(run_base_ref or "").strip(),
+            "merge_queue_path": str(queue_path.resolve()),
+            "unmergable_merges_path": str((cfg.repo_root / ARTIFACT_FILES["unmergable_merges"]).resolve()),
+            "merge_journal_path": str((cfg.repo_root / MERGE_JOURNAL_FILE).resolve()),
+            "plan_packets_path": str((cfg.repo_root / ARTIFACT_FILES["plan_packets"]).resolve()),
+            "task_execution_state_path": str((cfg.repo_root / ARTIFACT_FILES["task_execution_state"]).resolve()),
+            "merge_queue": queue_items,
+        },
+        expected_artifacts=[],
+    )
+    queue_count_before = len(queue_items)
+    if result.status != "ok":
+        report = _write_merge_manager_runtime_report(
+            cfg,
+            cycle_number=cycle_number,
+            status="manager_failed",
+            summary=result.message or "merge-manager failed",
+            result=result,
+            queue_count_before=queue_count_before,
+            queue_count_after=queue_count_before,
+        )
+        return {
+            "ran": True,
+            "status": "failed",
+            "reason": str(result.reason_code or "manager_failed"),
+            "result": result,
+            "report": report,
+            "queue_count_before": queue_count_before,
+            "queue_count_after": queue_count_before,
+        }
+
+    report_path = cfg.repo_root / ARTIFACT_FILES["merge_manager_report"]
+    report_payload = _read_json(report_path, default={})
+    if not isinstance(report_payload, dict):
+        report_payload = {}
+    resolved_rows = report_payload.get("resolved_items")
+    unresolved_rows = report_payload.get("unresolved_items")
+    resolved_items = [row for row in resolved_rows if isinstance(row, dict)] if isinstance(resolved_rows, list) else []
+    unresolved_items = [row for row in unresolved_rows if isinstance(row, dict)] if isinstance(unresolved_rows, list) else []
+    expected_ids = {
+        str(row.get("queue_item_id") or "").strip()
+        for row in queue_items
+        if str(row.get("queue_item_id") or "").strip()
+    }
+    resolved_ids = {
+        str(row.get("queue_item_id") or "").strip()
+        for row in resolved_items
+        if str(row.get("queue_item_id") or "").strip()
+    }
+    unresolved_ids = {
+        str(row.get("queue_item_id") or "").strip()
+        for row in unresolved_items
+        if str(row.get("queue_item_id") or "").strip()
+    }
+    accounted_ids = resolved_ids | unresolved_ids
+    valid_report = (
+        int(report_payload.get("cycle_number") or 0) == int(cycle_number)
+        and bool(expected_ids)
+        and resolved_ids.isdisjoint(unresolved_ids)
+        and accounted_ids == expected_ids
+    )
+    if not valid_report:
+        report = _write_merge_manager_runtime_report(
+            cfg,
+            cycle_number=cycle_number,
+            status="invalid_report",
+            summary="merge-manager completed without a valid queue consumption report",
+            result=result,
+            queue_count_before=queue_count_before,
+            queue_count_after=queue_count_before,
+        )
+        return {
+            "ran": True,
+            "status": "invalid_report",
+            "reason": "merge_manager_invalid_report",
+            "result": result,
+            "report": report,
+            "queue_count_before": queue_count_before,
+            "queue_count_after": queue_count_before,
+        }
+
+    queue_by_id = {str(row.get("queue_item_id") or "").strip(): row for row in queue_items}
+    unmergable_path = cfg.repo_root / ARTIFACT_FILES["unmergable_merges"]
+    unmergable_items = _load_queue_items(unmergable_path)
+    report_ref = str(report_path.resolve())
+    normalized_resolved: list[dict[str, Any]] = []
+    normalized_unresolved: list[dict[str, Any]] = []
+    timestamp = utc_now_iso()
+
+    for resolved_row in resolved_items:
+        queue_item_id = str(resolved_row.get("queue_item_id") or "").strip()
+        queue_item = queue_by_id.get(queue_item_id)
+        if not isinstance(queue_item, dict):
+            continue
+        if _merge_item_has_git_proof(cfg, queue_item):
+            normalized_resolved.append(
+                {
+                    "queue_item_id": queue_item_id,
+                    "kind": str(queue_item.get("kind") or "").strip(),
+                    "target_branch": str(queue_item.get("target_branch") or "").strip(),
+                    "source_commit": str(queue_item.get("source_commit") or "").strip(),
+                    "resolution_summary": str(resolved_row.get("resolution_summary") or "").strip(),
+                }
+            )
+            _append_merge_journal(
+                cfg,
+                cycle_number=cycle_number,
+                event="manager_resolved",
+                kind=str(queue_item.get("kind") or "").strip(),
+                lane_id=str(queue_item.get("lane_id") or "").strip(),
+                task_id=str(queue_item.get("task_id") or "").strip() or None,
+                target_branch=str(queue_item.get("target_branch") or "").strip(),
+                source_commit=str(queue_item.get("source_commit") or "").strip(),
+                source_ref=str(queue_item.get("source_ref") or "").strip() or None,
+                queue_item_id=queue_item_id,
+                status="resolved",
+                message=str(resolved_row.get("resolution_summary") or "merge-manager resolved queued merge"),
+            )
+            continue
+        moved_row = dict(queue_item)
+        moved_row["moved_at"] = timestamp
+        moved_row["moved_cycle"] = int(cycle_number)
+        moved_row["last_manager_reason"] = "manager_marked_resolved_without_git_proof"
+        moved_row["manager_report_ref"] = report_ref
+        unmergable_items.append(moved_row)
+        normalized_unresolved.append({"queue_item_id": queue_item_id, "last_manager_reason": moved_row["last_manager_reason"]})
+        _append_merge_journal(
+            cfg,
+            cycle_number=cycle_number,
+            event="manager_unresolved",
+            kind=str(queue_item.get("kind") or "").strip(),
+            lane_id=str(queue_item.get("lane_id") or "").strip(),
+            task_id=str(queue_item.get("task_id") or "").strip() or None,
+            target_branch=str(queue_item.get("target_branch") or "").strip(),
+            source_commit=str(queue_item.get("source_commit") or "").strip(),
+            source_ref=str(queue_item.get("source_ref") or "").strip() or None,
+            queue_item_id=queue_item_id,
+            status="unmergable",
+            message="merge-manager marked item resolved but git proof was missing; moved to unmergable",
+        )
+
+    for unresolved_row in unresolved_items:
+        queue_item_id = str(unresolved_row.get("queue_item_id") or "").strip()
+        queue_item = queue_by_id.get(queue_item_id)
+        if not isinstance(queue_item, dict):
+            continue
+        moved_row = dict(queue_item)
+        moved_row["moved_at"] = timestamp
+        moved_row["moved_cycle"] = int(cycle_number)
+        moved_row["last_manager_reason"] = str(unresolved_row.get("last_manager_reason") or "").strip() or "merge_manager_unresolved"
+        moved_row["manager_report_ref"] = report_ref
+        unmergable_items.append(moved_row)
+        normalized_unresolved.append({"queue_item_id": queue_item_id, "last_manager_reason": moved_row["last_manager_reason"]})
+        _append_merge_journal(
+            cfg,
+            cycle_number=cycle_number,
+            event="manager_unresolved",
+            kind=str(queue_item.get("kind") or "").strip(),
+            lane_id=str(queue_item.get("lane_id") or "").strip(),
+            task_id=str(queue_item.get("task_id") or "").strip() or None,
+            target_branch=str(queue_item.get("target_branch") or "").strip(),
+            source_commit=str(queue_item.get("source_commit") or "").strip(),
+            source_ref=str(queue_item.get("source_ref") or "").strip() or None,
+            queue_item_id=queue_item_id,
+            status="unmergable",
+            message=moved_row["last_manager_reason"],
+        )
+
+    _write_queue_items(queue_path, cycle_number=cycle_number, items=[])
+    _write_queue_items(unmergable_path, cycle_number=cycle_number, items=unmergable_items)
+    report = _write_merge_manager_runtime_report(
+        cfg,
+        cycle_number=cycle_number,
+        status="consumed",
+        summary="merge-manager consumed active merge queue",
+        result=result,
+        resolved_items=normalized_resolved,
+        unresolved_items=normalized_unresolved,
+        queue_count_before=queue_count_before,
+        queue_count_after=0,
+    )
+    return {
+        "ran": True,
+        "status": "consumed",
+        "reason": "merge_manager_consumed_queue",
+        "result": result,
+        "report": report,
+        "queue_count_before": queue_count_before,
+        "queue_count_after": 0,
+    }
+
+
 def _build_mergeability_report(cfg: RunConfig, *, cycle_number: int, cycle_mode: str) -> dict[str, Any]:
     task_path = cfg.repo_root / ARTIFACT_FILES["task_execution_state"]
     task_payload = _read_json(task_path, default={})
     tasks = task_payload.get("tasks") if isinstance(task_payload, dict) else None
     task_rows = [row for row in tasks if isinstance(row, dict)] if isinstance(tasks, list) else []
-
-    lane_task_counts: dict[str, dict[str, int]] = {}
-    lane_gate_pending_rows: dict[str, list[dict[str, Any]]] = {}
-    task_to_lane: dict[str, str] = {}
-    for row in task_rows:
-        lane_id = str(row.get("lane_id") or "").strip() or "unscoped"
-        task_id = str(row.get("task_id") or "").strip()
-        if task_id:
-            task_to_lane[task_id] = lane_id
-        counts = lane_task_counts.setdefault(lane_id, {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0})
-        status = str(row.get("status") or "").strip()
-        if status in counts:
-            counts[status] += 1
-        if bool(row.get("lane_merge_gate_pending")):
-            lane_gate_pending_rows.setdefault(lane_id, []).append(row)
-
-    worker_payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
-    workers = worker_payload.get("workers") if isinstance(worker_payload, dict) else None
-    worker_rows = [row for row in workers if isinstance(row, dict)] if isinstance(workers, list) else []
-
+    lane_counts = _lane_task_counts(task_rows)
+    lane_map, _plan_cycle = _lane_base_watchdog_branch_map(cfg)
+    queue_items = _load_queue_items(cfg.repo_root / ARTIFACT_FILES["merge_queue"])
     run_base_ref = _mergeability_run_base_ref(cfg)
     run_base_sha = _git_text(cfg.repo_root, "rev-parse", run_base_ref) or _git_text(cfg.repo_root, "rev-parse", "HEAD")
-    lane_sha_sets: dict[str, set[str]] = {}
-    done_worker_commits = 0
-    for row in worker_rows:
-        status = str(row.get("status") or "").strip()
-        if status != "done":
-            continue
-        done_worker_commits += 1
-        task_id = str(row.get("current_task_id") or "").strip()
-        if not task_id:
-            continue
-        lane_id = task_to_lane.get(task_id) or "unscoped"
-        branch = str(row.get("branch") or "").strip()
-        if not branch:
-            continue
-        branch_sha = _git_text(cfg.repo_root, "rev-parse", branch)
-        if not branch_sha:
-            continue
-        if run_base_sha and branch_sha == run_base_sha:
-            continue
-        if run_base_sha and _git_is_ancestor_commit(cfg.repo_root, ancestor=branch_sha, descendant=run_base_sha) is True:
-            continue
-        lane_sha_sets.setdefault(lane_id, set()).add(branch_sha)
 
-    lane_ids = set(lane_task_counts.keys()) | set(lane_sha_sets.keys())
+    lane_sha_sets: dict[str, set[str]] = {}
+    for queue_row in queue_items:
+        lane_id = str(queue_row.get("lane_id") or "").strip() or "unscoped"
+        source_commit = str(queue_row.get("source_commit") or "").strip()
+        if source_commit:
+            lane_sha_sets.setdefault(lane_id, set()).add(source_commit)
+
+    lane_ids = set(lane_counts.keys()) | set(lane_map.keys()) | set(lane_sha_sets.keys())
     lane_status: dict[str, dict[str, Any]] = {}
     merge_blockers: list[dict[str, Any]] = []
-    lane_merge_gate_pending_cleared_count = 0
     progression = {
-        "done_worker_commits": int(done_worker_commits),
-        "lane_fan_in_ready": 0,
-        "lane_tester_gate_passed": 0,
-        "lane_to_run_merge_ready": 0,
+        "task_to_lane_queue_items": 0,
+        "lane_to_run_queue_items": 0,
+        "lane_ready_for_run_merge": 0,
     }
 
     for lane_id in sorted(lane_ids):
-        counts = lane_task_counts.get(lane_id, {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0})
+        counts = lane_counts.get(lane_id, {"pending": 0, "in_progress": 0, "done": 0, "blocked": 0})
         done_count = int(counts.get("done") or 0)
         pending_count = int(counts.get("pending") or 0)
         in_progress_count = int(counts.get("in_progress") or 0)
         blocked_count = int(counts.get("blocked") or 0)
-        has_work_remaining = pending_count > 0 or in_progress_count > 0
-        fan_in_ready = done_count > 0
-        gate_pending_rows = lane_gate_pending_rows.get(lane_id, [])
-        lane_merge_gate_pending = bool(gate_pending_rows)
+        lane_queue_items = [row for row in queue_items if str(row.get("lane_id") or "").strip() == lane_id]
+        task_queue_items = [row for row in lane_queue_items if str(row.get("kind") or "").strip() == "task_to_lane"]
+        lane_to_run_queue_items = [row for row in lane_queue_items if str(row.get("kind") or "").strip() == "lane_to_run"]
+        progression["task_to_lane_queue_items"] += len(task_queue_items)
+        progression["lane_to_run_queue_items"] += len(lane_to_run_queue_items)
+
+        lane_base_branch = str(lane_map.get(lane_id) or "").strip()
+        lane_base_sha = _git_resolve_commit(cfg.repo_root, lane_base_branch) if lane_base_branch else ""
 
         if blocked_count > 0:
             tester_gate_status = "blocked_tasks_present"
@@ -6395,45 +7437,58 @@ def _build_mergeability_report(cfg: RunConfig, *, cycle_number: int, cycle_mode:
                 {
                     "lane_id": lane_id,
                     "reason_code": "lane_blocked_tasks",
-                    "owner": "BOSS",
+                    "owner": "runtime",
                     "message": f"lane has blocked tasks={blocked_count}",
                 }
             )
-        elif has_work_remaining:
+        elif pending_count > 0 or in_progress_count > 0:
             tester_gate_status = "pending_lane_completion"
             lane_to_run_merge_status = "waiting_for_lane_completion"
             merge_blockers.append(
                 {
                     "lane_id": lane_id,
                     "reason_code": "lane_pending_tasks",
-                    "owner": "BOSS",
-                    "message": (
-                        "lane has unfinished tasks "
-                        f"(pending={pending_count}, in_progress={in_progress_count})"
-                    ),
+                    "owner": "runtime",
+                    "message": f"lane has unfinished tasks (pending={pending_count}, in_progress={in_progress_count})",
                 }
             )
-        elif fan_in_ready:
+        elif task_queue_items:
+            tester_gate_status = "pending_task_fan_in"
+            lane_to_run_merge_status = "blocked_on_task_fan_in"
+            merge_blockers.append(
+                {
+                    "lane_id": lane_id,
+                    "reason_code": "lane_task_merge_debt",
+                    "owner": "runtime",
+                    "message": f"lane has {len(task_queue_items)} active task->lane merge debt item(s)",
+                }
+            )
+        elif lane_to_run_queue_items:
+            tester_gate_status = "pass"
+            lane_to_run_merge_status = "queued"
+            merge_blockers.append(
+                {
+                    "lane_id": lane_id,
+                    "reason_code": "lane_to_run_merge_queued",
+                    "owner": "merge-manager",
+                    "message": f"lane has {len(lane_to_run_queue_items)} queued lane->run merge failure(s)",
+                }
+            )
+        elif lane_base_sha and run_base_sha and _git_is_ancestor_commit(cfg.repo_root, ancestor=lane_base_sha, descendant=run_base_sha) is True:
+            tester_gate_status = "pass"
+            lane_to_run_merge_status = "merged"
+        elif _all_lane_tasks_done(counts):
             tester_gate_status = "pass"
             lane_to_run_merge_status = "ready"
+            progression["lane_ready_for_run_merge"] += 1
+        elif done_count > 0:
+            tester_gate_status = "pending_lane_completion"
+            lane_to_run_merge_status = "waiting_for_lane_completion"
         else:
             tester_gate_status = "not_required"
             lane_to_run_merge_status = "idle"
 
-        if lane_merge_gate_pending and tester_gate_status == "pass":
-            for row in gate_pending_rows:
-                row["lane_merge_gate_pending"] = False
-                row["lane_merge_gate_cleared_at"] = utc_now_iso()
-            lane_merge_gate_pending_cleared_count += len(gate_pending_rows)
-            lane_merge_gate_pending = False
-
-        if fan_in_ready:
-            progression["lane_fan_in_ready"] += 1
-        if tester_gate_status == "pass":
-            progression["lane_tester_gate_passed"] += 1
-        if lane_to_run_merge_status == "ready":
-            progression["lane_to_run_merge_ready"] += 1
-
+        fan_in_status = "queued" if task_queue_items else ("ready" if done_count > 0 else "idle")
         lane_status[lane_id] = {
             "task_counts": {
                 "pending": pending_count,
@@ -6441,19 +7496,12 @@ def _build_mergeability_report(cfg: RunConfig, *, cycle_number: int, cycle_mode:
                 "done": done_count,
                 "blocked": blocked_count,
             },
-            "fan_in_status": "ready" if fan_in_ready else "idle",
+            "fan_in_status": fan_in_status,
             "tester_gate_status": tester_gate_status,
             "lane_to_run_merge_status": lane_to_run_merge_status,
-            "lane_merge_gate_pending": lane_merge_gate_pending,
-            "lane_unmerged_commit_count": len(lane_sha_sets.get(lane_id, set())),
+            "lane_merge_gate_pending": False,
+            "lane_unmerged_commit_count": len(task_queue_items) + len(lane_to_run_queue_items),
         }
-
-    if lane_merge_gate_pending_cleared_count > 0 and isinstance(task_payload, dict):
-        task_payload["schema_version"] = SCHEMA_VERSION
-        task_payload["updated_at"] = utc_now_iso()
-        task_payload["cycle_number"] = int(cycle_number)
-        task_payload["tasks"] = task_rows
-        _atomic_write_json(task_path, task_payload)
 
     lane_shas = {lane_id: sorted(values) for lane_id, values in sorted(lane_sha_sets.items(), key=lambda item: item[0])}
     unmerged_commit_count = sum(len(values) for values in lane_shas.values())
@@ -6467,9 +7515,9 @@ def _build_mergeability_report(cfg: RunConfig, *, cycle_number: int, cycle_mode:
         "lane_shas": lane_shas,
         "unmerged_commit_count": int(unmerged_commit_count),
         "merge_blockers": merge_blockers,
-        "gate_owner": "BOSS" if merge_blockers else "none",
+        "gate_owner": "runtime" if merge_blockers else "none",
         "lane_status": lane_status,
-        "lane_merge_gate_pending_cleared_count": int(lane_merge_gate_pending_cleared_count),
+        "lane_merge_gate_pending_cleared_count": 0,
         "progression": progression,
     }
     report_payload["progress_fingerprint"] = _mergeability_progress_fingerprint(report_payload)
@@ -6486,12 +7534,6 @@ def _build_mergeability_report(cfg: RunConfig, *, cycle_number: int, cycle_mode:
     return report_payload
 
 
-def _merge_progression_blocker_id(lane_id: str) -> str:
-    lane_text = str(lane_id or "").strip().lower() or "unscoped"
-    digest = hashlib.sha256(lane_text.encode("utf-8")).hexdigest()[:16]
-    return f"lane-merge-{digest}"
-
-
 def _run_merge_progression_engine(
     cfg: RunConfig,
     *,
@@ -6500,184 +7542,19 @@ def _run_merge_progression_engine(
     mergeability_report: dict[str, Any] | None,
 ) -> dict[str, Any]:
     report_payload = mergeability_report if isinstance(mergeability_report, dict) else {}
-    lane_status = report_payload.get("lane_status") if isinstance(report_payload.get("lane_status"), dict) else {}
-    lane_shas = report_payload.get("lane_shas") if isinstance(report_payload.get("lane_shas"), dict) else {}
-    run_base_sha = str(report_payload.get("run_base_sha") or "").strip()
-
-    task_path = cfg.repo_root / ARTIFACT_FILES["task_execution_state"]
-    task_payload = _read_json(task_path, default={})
-    if not isinstance(task_payload, dict):
-        task_payload = {}
-    task_rows = task_payload.get("tasks")
-    tasks = [row for row in task_rows if isinstance(row, dict)] if isinstance(task_rows, list) else []
-
-    worker_path = cfg.repo_root / ARTIFACT_FILES["worker_registry"]
-    worker_payload = _read_json(worker_path, default={})
-    if not isinstance(worker_payload, dict):
-        worker_payload = {}
-    worker_rows = worker_payload.get("workers")
-    workers = [row for row in worker_rows if isinstance(row, dict)] if isinstance(worker_rows, list) else []
-
-    task_to_lane: dict[str, str] = {}
-    lane_done_task_rows: dict[str, list[dict[str, Any]]] = {}
-    for row in tasks:
-        task_id = str(row.get("task_id") or "").strip()
-        lane_id = str(row.get("lane_id") or "").strip() or "unscoped"
-        if task_id:
-            task_to_lane[task_id] = lane_id
-        if str(row.get("status") or "").strip() == "done":
-            lane_done_task_rows.setdefault(lane_id, []).append(row)
-
-    now_iso = utc_now_iso()
-    state_changed = False
-    fan_in_accept_count = 0
-    lane_merge_ready_count = 0
-    lane_merge_completed_count = 0
-    lane_merge_blocked_count = 0
-    workers_released_count = 0
-    blockers_opened_count = 0
-    blockers_resolved_count = 0
-
-    blockers = task_payload.get("blockers")
-    blocker_rows = [row for row in blockers if isinstance(row, dict)] if isinstance(blockers, list) else []
-    blocker_index: dict[str, dict[str, Any]] = {}
-    for row in blocker_rows:
-        blocker_id = str(row.get("blocker_id") or "").strip()
-        if blocker_id:
-            blocker_index[blocker_id] = row
-
-    for lane_id in sorted(lane_status.keys()):
-        lane_row = lane_status.get(lane_id)
-        if not isinstance(lane_row, dict):
-            continue
-        if str(lane_row.get("tester_gate_status") or "").strip() != "pass":
-            continue
-        if str(lane_row.get("lane_to_run_merge_status") or "").strip() != "ready":
-            continue
-        lane_merge_ready_count += 1
-
-        for task_row in lane_done_task_rows.get(lane_id, []):
-            if not str(task_row.get("lane_fan_in_accepted_at") or "").strip():
-                task_row["lane_fan_in_accepted_at"] = now_iso
-                task_row["lane_fan_in_cycle"] = int(cycle_number)
-                state_changed = True
-                fan_in_accept_count += 1
-            if bool(task_row.get("lane_merge_gate_pending")):
-                task_row["lane_merge_gate_pending"] = False
-                task_row["lane_merge_gate_cleared_at"] = now_iso
-                state_changed = True
-
-        for worker_row in workers:
-            if str(worker_row.get("status") or "").strip() != "done":
-                continue
-            task_id = str(worker_row.get("current_task_id") or "").strip()
-            if task_to_lane.get(task_id, "unscoped") != lane_id:
-                continue
-            if str(worker_row.get("fan_in_status") or "").strip() != "accepted":
-                worker_row["fan_in_status"] = "accepted"
-                worker_row["fan_in_cycle"] = int(cycle_number)
-                worker_row["fan_in_accepted_at"] = now_iso
-                state_changed = True
-
-        lane_sha_values = lane_shas.get(lane_id)
-        lane_sha_list = [str(item).strip() for item in lane_sha_values if str(item).strip()] if isinstance(lane_sha_values, list) else []
-        unresolved_shas: list[str] = []
-        for lane_sha in lane_sha_list:
-            ancestor = _git_is_ancestor_commit(cfg.repo_root, ancestor=lane_sha, descendant=run_base_sha)
-            if ancestor is True:
-                continue
-            unresolved_shas.append(lane_sha)
-
-        blocker_id = _merge_progression_blocker_id(lane_id)
-        blocker_row = blocker_index.get(blocker_id)
-        if unresolved_shas:
-            lane_merge_blocked_count += 1
-            message = (
-                f"lane ready for merge but {len(unresolved_shas)} commit(s) are not in run-base; "
-                "operator merge/fan-in action required"
-            )
-            details = {
-                "cycle_number": int(cycle_number),
-                "cycle_mode": str(cycle_mode or "").strip() or "normal",
-                "run_base_sha": run_base_sha,
-                "pending_lane_shas": sorted(unresolved_shas),
-            }
-            if blocker_row is None:
-                blocker_row = {
-                    "blocker_id": blocker_id,
-                    "lane_id": lane_id,
-                    "status": "open",
-                    "owner": "BOSS",
-                    "reason_code": "lane_run_merge_pending_commit_not_in_run_base",
-                    "message": message,
-                    "updated_at": now_iso,
-                    "details": details,
-                }
-                blocker_rows.append(blocker_row)
-                blocker_index[blocker_id] = blocker_row
-                blockers_opened_count += 1
-                state_changed = True
-            else:
-                if str(blocker_row.get("status") or "").strip() != "open":
-                    blocker_row["status"] = "open"
-                    state_changed = True
-                if str(blocker_row.get("message") or "").strip() != message:
-                    blocker_row["message"] = message
-                    state_changed = True
-                blocker_row["updated_at"] = now_iso
-                blocker_row["details"] = details
-        else:
-            lane_merge_completed_count += 1
-            for task_row in lane_done_task_rows.get(lane_id, []):
-                if not str(task_row.get("lane_to_run_merged_at") or "").strip():
-                    task_row["lane_to_run_merged_at"] = now_iso
-                    task_row["lane_to_run_merge_cycle"] = int(cycle_number)
-                    state_changed = True
-            for worker_row in workers:
-                if str(worker_row.get("status") or "").strip() != "done":
-                    continue
-                task_id = str(worker_row.get("current_task_id") or "").strip()
-                if task_to_lane.get(task_id, "unscoped") != lane_id:
-                    continue
-                worker_row["status"] = "idle"
-                worker_row["current_task_id"] = None
-                worker_row["current_packet_id"] = None
-                worker_row["last_update"] = now_iso
-                worker_row["merge_lane_last_merged_at"] = now_iso
-                worker_row["merge_lane_last_merged_cycle"] = int(cycle_number)
-                workers_released_count += 1
-                state_changed = True
-            if blocker_row is not None and str(blocker_row.get("status") or "").strip() != "resolved":
-                blocker_row["status"] = "resolved"
-                blocker_row["resolved_at"] = now_iso
-                blocker_row["updated_at"] = now_iso
-                blockers_resolved_count += 1
-                state_changed = True
-
-    if state_changed:
-        task_payload["schema_version"] = SCHEMA_VERSION
-        task_payload["updated_at"] = now_iso
-        task_payload["cycle_number"] = int(cycle_number)
-        task_payload["tasks"] = tasks
-        task_payload["blockers"] = blocker_rows
-        _atomic_write_json(task_path, task_payload)
-
-        worker_payload["schema_version"] = SCHEMA_VERSION
-        worker_payload["updated_at"] = now_iso
-        worker_payload["cycle_number"] = int(cycle_number)
-        worker_payload["workers"] = workers
-        _atomic_write_json(worker_path, worker_payload)
-
+    queue_items = _load_queue_items(cfg.repo_root / ARTIFACT_FILES["merge_queue"])
+    lane_queue_count = sum(1 for row in queue_items if str(row.get("kind") or "").strip() == "lane_to_run")
+    task_queue_count = sum(1 for row in queue_items if str(row.get("kind") or "").strip() == "task_to_lane")
     return {
         "cycle_number": int(cycle_number),
-        "state_changed": bool(state_changed),
-        "fan_in_accept_count": int(fan_in_accept_count),
-        "lane_merge_ready_count": int(lane_merge_ready_count),
-        "lane_merge_completed_count": int(lane_merge_completed_count),
-        "lane_merge_blocked_count": int(lane_merge_blocked_count),
-        "workers_released_count": int(workers_released_count),
-        "blockers_opened_count": int(blockers_opened_count),
-        "blockers_resolved_count": int(blockers_resolved_count),
+        "state_changed": bool(report_payload.get("mergeability_advanced")),
+        "fan_in_accept_count": 0,
+        "lane_merge_ready_count": int((report_payload.get("progression") or {}).get("lane_ready_for_run_merge") or 0),
+        "lane_merge_completed_count": 0,
+        "lane_merge_blocked_count": int(lane_queue_count),
+        "workers_released_count": 0,
+        "blockers_opened_count": int(task_queue_count + lane_queue_count),
+        "blockers_resolved_count": 0,
     }
 
 
@@ -7176,13 +8053,6 @@ def _release_run_lock(cfg: RunConfig, lock_id: str | None) -> None:
 
 def _build_config(req: Any) -> RunConfig:
     repo_root = Path(req.repo_root).resolve()
-    sleep_minutes_raw = getattr(req, "sleep_minutes", None)
-    if sleep_minutes_raw is None:
-        sleep_minutes = 5.0
-    else:
-        sleep_minutes = float(sleep_minutes_raw)
-    if sleep_minutes < 0:
-        sleep_minutes = 0.0
     max_cycles = getattr(req, "max_build_cycles", None)
     if max_cycles is not None:
         try:
@@ -7263,7 +8133,7 @@ def _build_config(req: Any) -> RunConfig:
 
     return RunConfig(
         repo_root=repo_root,
-        sleep_minutes=sleep_minutes,
+        sleep_minutes=0.0,
         max_build_cycles=max_cycles,
         max_parallel_workers=max_parallel_workers,
         dry_run=bool(getattr(req, "dry_run", False)),
@@ -7426,7 +8296,6 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         )
         cycles_this_run = 0
         previous_state_signature: str | None = None
-        quiet_cycle_streak = 0
         watchdog_reset_pending = bool(cfg.resume_mode)
 
         while True:
@@ -7462,61 +8331,192 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             dispatch_counts = {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0}
             cycle_mode = "normal"
             mergeability_report: dict[str, Any] | None = None
-            state_signature, in_progress_workers = _worker_task_state_signature(cfg)
-            live_pid_in_progress_workers = _live_pid_in_progress_worker_count(cfg)
+            state_signature, _ = _worker_task_state_signature(cfg)
             task_counts_snapshot = _task_counts_from_execution_state(cfg)
-            task_in_progress_count = int(task_counts_snapshot.get("in_progress") or 0)
-            state_changed = previous_state_signature is None or state_signature != previous_state_signature
-            force_full_cycle = quiet_cycle_streak >= (QUIET_CYCLE_FORCE_FULL_EVERY - 1)
-            has_recovery_nudge = (cfg.repo_root / RECOVERY_INSTRUCTIONS_FILE).exists()
-            has_boss_timeout_marker = (cfg.repo_root / BOSS_EVIDENCE_FILE).exists()
-            near_watchdog_idle = _watchdog_near_idle_threshold(cfg)
-            has_lease_recovery = bool(lease_recovery["reclaimed_workers"] or lease_recovery["requeued_tasks"])
+            run_base_ref = _mergeability_run_base_ref(cfg)
+            watchdog_stop = False
+            watchdog_signal: dict[str, Any] = {}
+            merge_sweep_result: dict[str, Any] | None = None
+            merge_manager_result: dict[str, Any] | None = None
 
-            skip_boss_for_quiet_cycle = (
-                not has_lease_recovery
-                and not has_recovery_nudge
-                and not has_boss_timeout_marker
-                and not near_watchdog_idle
-                and not state_changed
-                and in_progress_workers > 0
-                and live_pid_in_progress_workers > 0
-                and task_in_progress_count > 0
-                and not force_full_cycle
-            )
-            boss_result: ManagerResult | None = None
-            quiet_skip_reason = ""
-
-            if skip_boss_for_quiet_cycle:
-                quiet_cycle_streak += 1
-                quiet_skip_reason = "active_workers_in_progress_no_safe_new_dispatch"
-                manager_statuses["BOSS"] = {
-                    "status": "skipped",
+            try:
+                merge_sweep_result = _deterministic_merge_sweep(
+                    cfg,
+                    cycle_number=cycle_number,
+                    run_base_ref=run_base_ref,
+                )
+                manager_statuses["merge-sweep"] = {
+                    "status": "ok",
                     "note": (
-                        f"quiet-cycle gate: no worker/task state change with {in_progress_workers} "
-                        f"in-progress workers (quiet_streak={quiet_cycle_streak})"
+                        "pre-BOSS deterministic merge sweep completed "
+                        f"task_merges={int(merge_sweep_result.get('task_merge_successes') or 0)}/"
+                        f"{int(merge_sweep_result.get('task_merge_attempts') or 0)} "
+                        f"lane_merges={int(merge_sweep_result.get('lane_merge_successes') or 0)}/"
+                        f"{int(merge_sweep_result.get('lane_merge_attempts') or 0)} "
+                        f"queue_items={int(merge_sweep_result.get('queue_item_count') or 0)}"
                     ),
                 }
-                manager_statuses["rate-gate"] = {"status": "skipped", "note": "quiet-cycle gate skipped BOSS"}
-                manager_statuses["work-dispatcher"] = {"status": "skipped", "note": "quiet-cycle gate skipped BOSS"}
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} merge-sweep "
+                    f"task_merges={int(merge_sweep_result.get('task_merge_successes') or 0)}/"
+                    f"{int(merge_sweep_result.get('task_merge_attempts') or 0)} "
+                    f"lane_merges={int(merge_sweep_result.get('lane_merge_successes') or 0)}/"
+                    f"{int(merge_sweep_result.get('lane_merge_attempts') or 0)} "
+                    f"queue_items={int(merge_sweep_result.get('queue_item_count') or 0)}",
+                    flush=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                manager_statuses["merge-sweep"] = {"status": "failed", "note": f"deterministic merge sweep failed: {exc}"}
+                warnings.append(
+                    {
+                        "code": "deterministic_merge_sweep_failed",
+                        "message": str(exc),
+                        "stage": "op-simple-build",
+                        "details": {"cycle_number": cycle_number},
+                    }
+                )
+
+            try:
+                merge_manager_result = _run_periodic_merge_manager(
+                    cfg,
+                    cycle_number=cycle_number,
+                    run_base_ref=run_base_ref,
+                )
+                manager_statuses["merge-manager"] = {
+                    "status": str(merge_manager_result.get("status") or "unknown"),
+                    "note": (
+                        f"reason={str(merge_manager_result.get('reason') or 'unknown')} "
+                        f"queue_before={int(merge_manager_result.get('queue_count_before') or 0)} "
+                        f"queue_after={int(merge_manager_result.get('queue_count_after') or 0)}"
+                    ),
+                }
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} merge-manager "
+                    f"status={str(merge_manager_result.get('status') or 'unknown')} "
+                    f"reason={str(merge_manager_result.get('reason') or 'unknown')} "
+                    f"queue_before={int(merge_manager_result.get('queue_count_before') or 0)} "
+                    f"queue_after={int(merge_manager_result.get('queue_count_after') or 0)}",
+                    flush=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                manager_statuses["merge-manager"] = {"status": "failed", "note": f"merge-manager stage failed: {exc}"}
+                warnings.append(
+                    {
+                        "code": "merge_manager_stage_failed",
+                        "message": str(exc),
+                        "stage": "op-simple-build",
+                        "details": {"cycle_number": cycle_number},
+                    }
+                )
+
+            try:
+                mergeability_report = _build_mergeability_report(
+                    cfg,
+                    cycle_number=cycle_number,
+                    cycle_mode=cycle_mode,
+                )
+            except Exception as exc:  # noqa: BLE001
+                manager_statuses["merge-engine"] = {"status": "failed", "note": f"mergeability refresh failed: {exc}"}
+                warnings.append(
+                    {
+                        "code": "mergeability_report_failed",
+                        "message": str(exc),
+                        "stage": "op-simple-build",
+                        "details": {"cycle_number": cycle_number},
+                    }
+                )
+
+            watchdog_stop, watchdog_signal = _watchdog_tick(
+                cfg,
+                cycle_number,
+                force_reset_target=watchdog_reset_pending,
+            )
+            watchdog_reset_pending = False
+            if watchdog_stop:
+                cycle_mode = "terminal_stale"
+            elif bool(watchdog_signal.get("near_stale")):
+                cycle_mode = "merge_recovery"
+
+            if cycle_mode != "normal":
+                try:
+                    mergeability_report = _build_mergeability_report(
+                        cfg,
+                        cycle_number=cycle_number,
+                        cycle_mode=cycle_mode,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    manager_statuses["merge-engine"] = {"status": "failed", "note": f"mergeability refresh failed: {exc}"}
+                    warnings.append(
+                        {
+                            "code": "mergeability_report_failed",
+                            "message": str(exc),
+                            "stage": "op-simple-build",
+                            "details": {"cycle_number": cycle_number, "cycle_mode": cycle_mode},
+                        }
+                    )
+
+            if isinstance(mergeability_report, dict):
+                progression = mergeability_report.get("progression") if isinstance(mergeability_report.get("progression"), dict) else {}
+                manager_statuses["merge-engine"] = {
+                    "status": "ok",
+                    "note": (
+                        "mergeability report refreshed before watchdog/BOSS "
+                        f"unmerged_commits={int(mergeability_report.get('unmerged_commit_count') or 0)} "
+                        f"advanced={str(bool(mergeability_report.get('mergeability_advanced'))).lower()} "
+                        f"task_queue={int(progression.get('task_to_lane_queue_items') or 0)} "
+                        f"lane_queue={int(progression.get('lane_to_run_queue_items') or 0)}"
+                    ),
+                }
+
+            boss_result: ManagerResult | None = None
+
+            manager_statuses["watchdog"] = {
+                "status": "stop" if watchdog_stop else "ok",
+                "note": (
+                    watchdog_signal.get("message")
+                    if watchdog_stop
+                    else (
+                        "watchdog near-stale threshold reached; merge recovery mode enabled"
+                        if cycle_mode == "merge_recovery"
+                        else "watchdog healthy"
+                    )
+                ),
+            }
+
+            if watchdog_stop:
+                manager_statuses["BOSS"] = {
+                    "status": "skipped",
+                    "note": "terminal stale detected before BOSS; runtime stopped dispatch work for this cycle",
+                }
+                manager_statuses["rate-gate"] = {
+                    "status": "skipped",
+                    "note": "terminal stale detected pre-BOSS",
+                }
+                manager_statuses["work-dispatcher"] = {
+                    "status": "skipped",
+                    "note": "terminal stale detected pre-BOSS",
+                }
                 _write_cycle_manager_decision(
                     cfg,
                     cycle_number,
                     decision="skip_cycle",
-                    reason_code=quiet_skip_reason,
-                    message=manager_statuses["BOSS"]["note"],
+                    reason_code=str(watchdog_signal.get("reason_code") or "stale_base_branch_commit"),
+                    message=str(watchdog_signal.get("message") or "watchdog terminal stale stop"),
                     worker_registry_ready=True,
                     cycle_mode=cycle_mode,
                 )
                 print(
                     "[op-simple-build] "
                     f"[{utc_now_iso()}] "
-                    f"cycle={cycle_number} quiet-cycle gate skipped BOSS "
-                    f"in_progress_workers={in_progress_workers} quiet_streak={quiet_cycle_streak}",
+                    f"cycle={cycle_number} watchdog terminal stop before BOSS "
+                    f"reason={str(watchdog_signal.get('reason_code') or 'stale_base_branch_commit')}",
                     flush=True,
                 )
             else:
-                quiet_cycle_streak = 0
                 boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
                 print(
                     "[op-simple-build] "
@@ -7591,10 +8591,6 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "status": "skipped",
                     "note": "cycle fail-closed after BOSS timeout",
                 }
-                manager_statuses["watchdog"] = {
-                    "status": "skipped",
-                    "note": "watchdog skipped after BOSS timeout fail-closed decision",
-                }
                 manager_statuses["summary"] = {"status": "ok", "note": "summary written"}
                 _write_cycle_manager_decision(
                     cfg,
@@ -7642,26 +8638,19 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                         cycle_number=cycle_number,
                         cycle_mode=cycle_mode,
                     )
-                    progression = _run_merge_progression_engine(
-                        cfg,
-                        cycle_number=cycle_number,
-                        cycle_mode=cycle_mode,
-                        mergeability_report=mergeability_report,
+                    progression = (
+                        mergeability_report.get("progression")
+                        if isinstance(mergeability_report.get("progression"), dict)
+                        else {}
                     )
-                    if bool(progression.get("state_changed")):
-                        mergeability_report = _build_mergeability_report(
-                            cfg,
-                            cycle_number=cycle_number,
-                            cycle_mode=cycle_mode,
-                        )
                     manager_statuses["merge-engine"] = {
                         "status": "ok",
                         "note": (
                             "mergeability report refreshed after timeout cycle "
                             f"unmerged_commits={int(mergeability_report.get('unmerged_commit_count') or 0)} "
-                            f"state_changed={str(bool(progression.get('state_changed'))).lower()} "
-                            f"lane_merge_completed={int(progression.get('lane_merge_completed_count') or 0)} "
-                            f"lane_merge_blocked={int(progression.get('lane_merge_blocked_count') or 0)}"
+                            f"advanced={str(bool(mergeability_report.get('mergeability_advanced'))).lower()} "
+                            f"task_queue={int(progression.get('task_to_lane_queue_items') or 0)} "
+                            f"lane_queue={int(progression.get('lane_to_run_queue_items') or 0)}"
                         ),
                     }
                 except Exception as exc:  # noqa: BLE001
@@ -7734,46 +8723,6 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "status": "skipped",
                     "note": "cycle skipped after BOSS failure",
                 }
-            watchdog_stop, watchdog_signal = _watchdog_tick(
-                cfg,
-                cycle_number,
-                force_reset_target=watchdog_reset_pending,
-            )
-            watchdog_reset_pending = False
-            if watchdog_stop:
-                cycle_mode = "terminal_stale"
-            elif bool(watchdog_signal.get("near_stale")):
-                cycle_mode = "merge_recovery"
-            manager_statuses["watchdog"] = {
-                "status": "stop" if watchdog_stop else "ok",
-                "note": (
-                    watchdog_signal.get("message")
-                    if watchdog_stop
-                    else (
-                        "watchdog near-stale threshold reached; merge recovery mode enabled"
-                        if cycle_mode == "merge_recovery"
-                        else "watchdog healthy"
-                    )
-                ),
-            }
-            if watchdog_stop:
-                manager_statuses.setdefault(
-                    "rate-gate",
-                    {"status": "skipped", "note": "terminal stale detected pre-dispatch"},
-                )
-                manager_statuses.setdefault(
-                    "work-dispatcher",
-                    {"status": "skipped", "note": "terminal stale detected pre-dispatch"},
-                )
-                _write_cycle_manager_decision(
-                    cfg,
-                    cycle_number,
-                    decision="skip_cycle",
-                    reason_code=str(watchdog_signal.get("reason_code") or "stale_base_branch_commit"),
-                    message=str(watchdog_signal.get("message") or "watchdog terminal stale stop"),
-                    worker_registry_ready=True,
-                    cycle_mode=cycle_mode,
-                )
             elif boss_result is not None and boss_result.status == "ok":
                 _run_rate_gate_wait(cfg, cycle_number, warnings)
                 manager_statuses["rate-gate"] = {"status": "ok", "note": "rate gate completed"}
@@ -7801,27 +8750,19 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     cycle_number=cycle_number,
                     cycle_mode=cycle_mode,
                 )
-                progression = _run_merge_progression_engine(
-                    cfg,
-                    cycle_number=cycle_number,
-                    cycle_mode=cycle_mode,
-                    mergeability_report=mergeability_report,
+                progression = (
+                    mergeability_report.get("progression")
+                    if isinstance(mergeability_report.get("progression"), dict)
+                    else {}
                 )
-                if bool(progression.get("state_changed")):
-                    mergeability_report = _build_mergeability_report(
-                        cfg,
-                        cycle_number=cycle_number,
-                        cycle_mode=cycle_mode,
-                    )
                 manager_statuses["merge-engine"] = {
                     "status": "ok",
                     "note": (
                         "mergeability report refreshed "
                         f"unmerged_commits={int(mergeability_report.get('unmerged_commit_count') or 0)} "
                         f"advanced={str(bool(mergeability_report.get('mergeability_advanced'))).lower()} "
-                        f"state_changed={str(bool(progression.get('state_changed'))).lower()} "
-                        f"lane_merge_completed={int(progression.get('lane_merge_completed_count') or 0)} "
-                        f"lane_merge_blocked={int(progression.get('lane_merge_blocked_count') or 0)}"
+                        f"task_queue={int(progression.get('task_to_lane_queue_items') or 0)} "
+                        f"lane_queue={int(progression.get('lane_to_run_queue_items') or 0)}"
                     ),
                 }
             except Exception as exc:  # noqa: BLE001
@@ -7837,21 +8778,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
             manager_statuses["summary"] = {"status": "ok", "note": "summary written"}
             base_summary: dict[str, Any] | None = None
-            if skip_boss_for_quiet_cycle:
-                base_summary = {
-                    "schema_version": SCHEMA_VERSION,
-                    "cycle_number": cycle_number,
-                    "cycle_mode": cycle_mode,
-                    "manager_statuses": {},
-                    "task_counts": task_counts_snapshot,
-                    "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
-                    "project_done": False,
-                    "insurmountable_blocker": False,
-                    "termination": {"reason_code": quiet_skip_reason},
-                    "stop_reason": "skip_cycle",
-                    "notes": manager_statuses["BOSS"]["note"],
-                }
-            elif boss_result is not None and boss_result.status != "ok":
+            if boss_result is not None and boss_result.status != "ok":
                 base_summary = {
                     "schema_version": SCHEMA_VERSION,
                     "cycle_number": cycle_number,
@@ -7864,6 +8791,20 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "termination": {},
                     "stop_reason": "",
                     "notes": f"cycle skipped by runtime safety rules: {boss_result.message or 'BOSS failed'}",
+                }
+            elif watchdog_stop:
+                base_summary = {
+                    "schema_version": SCHEMA_VERSION,
+                    "cycle_number": cycle_number,
+                    "cycle_mode": cycle_mode,
+                    "manager_statuses": {},
+                    "task_counts": task_counts_snapshot,
+                    "dispatch_counts": {"attempted": 0, "launched": 0, "launch_failed": 0, "unknown": 0},
+                    "project_done": False,
+                    "insurmountable_blocker": False,
+                    "termination": {"reason_code": str(watchdog_signal.get("reason_code") or "stale_base_branch_commit")},
+                    "stop_reason": "",
+                    "notes": str(watchdog_signal.get("message") or "watchdog terminal stale stop"),
                 }
             summary = _render_cycle_summary(
                 cfg,
@@ -7978,13 +8919,10 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 final_summary = f"Reached max_build_cycles={cfg.max_build_cycles}."
                 break
 
-            if cfg.sleep_minutes > 0:
-                sleep_seconds = max(0.0, float(cfg.sleep_minutes) * 60.0)
-                if sleep_seconds > 0:
-                    _await_cycle_release_signal(
-                        cfg,
-                        cycle_number=cycle_number,
-                    )
+            _await_cycle_release_signal(
+                cfg,
+                cycle_number=cycle_number,
+            )
 
         if stop_reason:
             _persist_cycle_summary_stop_reason(cfg, cycle_number=cycle_number, stop_reason=stop_reason)

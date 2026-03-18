@@ -155,18 +155,18 @@
       <section class="card">
         <h2>Core Rules</h2>
         <ul>
-          <li>Test only the assigned packet scope and acceptance criteria.</li>
+          <li>Test only the assigned lane_test packet scope and acceptance criteria.</li>
           <li>Validate packet start anchor before certifying test outcome.</li>
           <li>Use minimum checks needed to prove pass/fail.</li>
           <li>Do not modify external trackers or orchestration files.</li>
-          <li>Do not start next task until reviewer outcome is known for current task.</li>
+          <li>Do not start next task until Optimus closes or reroutes the current lane-test packet.</li>
         </ul>
       </section>
 
       <section class="card half">
         <h2>Decision Contract</h2>
         <ul>
-          <li><strong>ready_for_review</strong>: acceptance criteria proven.</li>
+          <li><strong>completed</strong>: lane-level acceptance criteria proven.</li>
           <li><strong>needs_dev_fix</strong>: reproducible defect or regression exists.</li>
           <li><strong>blocked</strong>: external dependency prevents valid testing.</li>
         </ul>
@@ -200,7 +200,7 @@
         <h2>Tester Boundary</h2>
         <ul>
           <li>No queue management.</li>
-          <li>No orchestration logic.</li>
+          <li>No per-task routing logic.</li>
           <li>No task reprioritization.</li>
         </ul>
       </section>
@@ -208,6 +208,7 @@
       <section class="card">
         <h2>Summary Payload</h2>
         <div class="payload">task_identifier: MYO-23
+task_kind: lane_test
 branch: MYO-23-make-menu-navbar-test
 branch_fallback_from: MYO-23-make-menu-navbar
 start_from_branch: MYO-22-menu-shell
@@ -216,7 +217,7 @@ head_commit: a1b2c3d
 checks:
 - npm run test -- navbar: pass
 - npm run build: pass
-decision: ready_for_review
+decision: completed
 findings:
 - none
 blockers: none</div>

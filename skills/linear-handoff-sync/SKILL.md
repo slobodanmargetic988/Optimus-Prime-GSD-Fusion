@@ -36,7 +36,7 @@ Default local sync log path:
     "task_identifier": "MYO-###",
     "branch": "string|null",
     "head_commit": "sha|null",
-    "decision": "ready_for_test|ready_for_review|blocked|ready_for_cloud_review|done|...",
+    "decision": "completed|blocked|ready_for_cloud_review|done|...",
     "checks": [
       {"name": "string", "result": "pass|fail|skip", "details": "string|null"}
     ],
@@ -77,7 +77,7 @@ cat <<'JSON' | python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/
     "task_identifier": "MYO-155",
     "branch": "codex/dev-1/MYO-155",
     "head_commit": "abc123",
-    "decision": "ready_for_review",
+    "decision": "completed",
     "checks": [{"name": "unit", "result": "pass", "details": null}],
     "blockers": []
   },
@@ -93,7 +93,7 @@ LINEAR_API_KEY="<your-key>" \
 python3 /Users/slobodan/projects/Optimus-Prime-GSD-Fusion/skills/linear-handoff-sync/scripts/linear_handoff_sync.py \
   --issue-identifier MYO-155 \
   --target-phase agent_testing \
-  --summary-payload-json '{"task_identifier":"MYO-155","branch":"codex/dev-1/MYO-155","head_commit":"abc123","decision":"ready_for_review","checks":[{"name":"unit","result":"pass"}],"blockers":[]}' \
+  --summary-payload-json '{"task_identifier":"MYO-155","branch":"codex/dev-1/MYO-155","head_commit":"abc123","decision":"completed","checks":[{"name":"unit","result":"pass"}],"blockers":[]}' \
   --repo-root /Users/slobodan/projects/Optimus-Prime-GSD-Fusion \
   --json-pretty
 ```

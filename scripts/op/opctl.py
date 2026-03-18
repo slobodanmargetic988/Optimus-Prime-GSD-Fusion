@@ -117,13 +117,6 @@ def _resolve_configured_workflow(repo_root: str) -> dict[str, Any]:
         workflow = effective.get("workflow") if isinstance(effective, dict) else None
         if not isinstance(workflow, dict):
             continue
-        value = workflow.get("sleep_minutes")
-        try:
-            sleep = float(value)
-        except (TypeError, ValueError):
-            sleep = None
-        if isinstance(sleep, float) and sleep > 0:
-            resolved["sleep_minutes"] = sleep
         configured_parallel = workflow.get("max_parallel_workers")
         try:
             parallel_workers = int(configured_parallel)
@@ -166,7 +159,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-build-cycles", type=int)
     parser.add_argument("--max-parallel-workers", type=int)
     parser.add_argument("--worktrees-parent")
-    parser.add_argument("--sleep-minutes", type=float)
+    parser.add_argument("--start-policy", choices=["auto", "new", "resume"], default=None)
     parser.add_argument("--run-base-source-branch")
     parser.add_argument("--profile")
     parser.add_argument("--selected-aliases")
@@ -216,8 +209,8 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["max_parallel_workers"] = args.max_parallel_workers
     if args.worktrees_parent is not None:
         payload["worktrees_parent"] = args.worktrees_parent
-    if args.sleep_minutes is not None:
-        payload["sleep_minutes"] = args.sleep_minutes
+    if args.start_policy is not None:
+        payload["start_policy"] = args.start_policy
     if args.run_base_source_branch is not None:
         payload["run_base_source_branch"] = args.run_base_source_branch
     if args.profile is not None:
@@ -266,10 +259,6 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
 
     if canonical in {"op-build", "op-resume", "op-simple-build", "op-initialize"}:
         workflow = _resolve_configured_workflow(str(payload["repo_root"]))
-        if "sleep_minutes" not in payload:
-            configured_sleep = workflow.get("sleep_minutes")
-            if isinstance(configured_sleep, (int, float)):
-                payload["sleep_minutes"] = float(configured_sleep)
         if "max_parallel_workers" not in payload:
             configured_parallel = workflow.get("max_parallel_workers")
             if isinstance(configured_parallel, int) and configured_parallel > 0:
@@ -282,25 +271,14 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
             configured_worktrees_parent = workflow.get("worktrees_parent")
             if isinstance(configured_worktrees_parent, str) and configured_worktrees_parent.strip():
                 payload["worktrees_parent"] = configured_worktrees_parent.strip()
-        if canonical == "op-simple-build" and "boss_model" not in payload:
+        if canonical in {"op-build", "op-resume", "op-simple-build"} and "boss_model" not in payload:
             configured_model = workflow.get("boss_model")
             if isinstance(configured_model, str) and configured_model.strip():
                 payload["boss_model"] = configured_model.strip()
-        if canonical == "op-simple-build" and "boss_reasoning_effort" not in payload:
+        if canonical in {"op-build", "op-resume", "op-simple-build"} and "boss_reasoning_effort" not in payload:
             configured_effort = workflow.get("boss_reasoning_effort")
             if isinstance(configured_effort, str) and configured_effort.strip():
                 payload["boss_reasoning_effort"] = configured_effort.strip()
-
-    if "sleep_minutes" not in payload:
-        command_raw = str(payload.get("command") or "").strip()
-        try:
-            canonical = normalize_command(command_raw).canonical
-        except ValueError:
-            canonical = ""
-        if canonical in {"op-build", "op-resume"}:
-            payload["sleep_minutes"] = 2.0
-        elif canonical == "op-simple-build":
-            payload["sleep_minutes"] = 5.0
 
     if "enable_artifact_fan_in" not in payload:
         command_raw = str(payload.get("command") or "").strip()
