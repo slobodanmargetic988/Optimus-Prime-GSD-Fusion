@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -152,6 +153,73 @@ def _as_rel_path(path_text: str, repo_root: Path) -> Path:
     if candidate.is_absolute():
         return candidate
     return (repo_root / candidate).resolve()
+
+
+def _to_rel(path: Path, repo_root: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(repo_root.resolve()))
+    except ValueError:
+        return str(path.resolve())
+
+
+def _git_stdout(repo_root: Path, args: list[str]) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), *args],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.strip()
+
+
+def _git_ok(repo_root: Path, args: list[str]) -> bool:
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), *args],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return proc.returncode == 0
+
+
+def _resolve_commit(repo_root: Path, ref: str) -> str:
+    if not _as_str(ref):
+        return ""
+    return _git_stdout(repo_root, ["rev-parse", "--verify", f"{ref}^{{commit}}"])
+
+
+def _load_lane_merge_evidence(
+    *,
+    repo_root: Path,
+    task_id: str,
+    lane_id: str,
+) -> tuple[Path | None, dict[str, Any] | None]:
+    candidates: list[tuple[str, str, Path, dict[str, Any]]] = []
+    for path in sorted(repo_root.rglob("*MERGE_EVIDENCE*.json")):
+        if not path.is_file():
+            continue
+        try:
+            payload = _load_json(path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if _as_str(payload.get("task_identifier")) != task_id:
+            continue
+        if _as_str(payload.get("lane_id")) != lane_id:
+            continue
+        updated_at = _as_str(payload.get("updated_at"))
+        candidates.append((updated_at, _to_rel(path, repo_root), path, payload))
+
+    if not candidates:
+        return None, None
+
+    # Pick the newest timestamp; use relative path as deterministic tie-breaker.
+    candidates.sort(key=lambda row: (row[0], row[1]))
+    _, _, selected_path, selected_payload = candidates[-1]
+    return selected_path, selected_payload
 
 
 def _task_result(
@@ -424,6 +492,274 @@ def check_merge_evidence(
     }
 
 
+def check_lane_merge_evidence(
+    *,
+    repo_root: Path,
+    required_task_ids: list[str],
+    lane_id: str,
+    require_ancestor: bool,
+) -> dict[str, Any]:
+    checked_at = utc_now_iso()
+    tasks = _normalize_task_ids(required_task_ids)
+    normalized_lane_id = _as_str(lane_id)
+    errors: list[dict[str, str]] = []
+    task_results: list[dict[str, Any]] = []
+
+    for task_id in tasks:
+        issues: list[dict[str, str]] = []
+        evidence_path, payload = _load_lane_merge_evidence(
+            repo_root=repo_root,
+            task_id=task_id,
+            lane_id=normalized_lane_id,
+        )
+        if evidence_path is None or payload is None:
+            issues.append(
+                {
+                    "code": "lane_merge_evidence_missing",
+                    "message": (
+                        f"lane merge evidence not found for task {task_id} lane {normalized_lane_id}; "
+                        "expected a *MERGE_EVIDENCE*.json file with matching task_identifier/lane_id"
+                    ),
+                }
+            )
+            task_results.append(
+                _task_result(
+                    task_id,
+                    ok=False,
+                    merged_commit=None,
+                    verification_ref=None,
+                    branch=None,
+                    issues=issues,
+                )
+            )
+            errors.extend(issues)
+            continue
+
+        run_base_before_sha = _as_str(payload.get("run_base_before_sha"))
+        run_base_after_sha = _as_str(payload.get("run_base_after_sha"))
+        merge_commit_sha = _as_str(payload.get("merge_commit_sha"))
+        lane_base_branch = _as_str(payload.get("lane_base_branch"))
+        run_base_branch = _as_str(payload.get("run_base_branch"))
+
+        if not run_base_before_sha:
+            issues.append(
+                {
+                    "code": "run_base_before_missing",
+                    "message": f"task {task_id} merge evidence missing run_base_before_sha",
+                }
+            )
+        if not run_base_after_sha:
+            issues.append(
+                {
+                    "code": "run_base_after_missing",
+                    "message": f"task {task_id} merge evidence missing run_base_after_sha",
+                }
+            )
+        if not merge_commit_sha:
+            issues.append(
+                {
+                    "code": "merge_commit_missing",
+                    "message": f"task {task_id} merge evidence missing merge_commit_sha",
+                }
+            )
+
+        if run_base_before_sha and not _resolve_commit(repo_root, run_base_before_sha):
+            issues.append(
+                {
+                    "code": "run_base_before_unresolvable",
+                    "message": f"task {task_id} run_base_before_sha does not resolve to a commit: {run_base_before_sha}",
+                }
+            )
+
+        if run_base_after_sha and not _resolve_commit(repo_root, run_base_after_sha):
+            issues.append(
+                {
+                    "code": "run_base_after_unresolvable",
+                    "message": f"task {task_id} run_base_after_sha does not resolve to a commit: {run_base_after_sha}",
+                }
+            )
+
+        if merge_commit_sha and not _resolve_commit(repo_root, merge_commit_sha):
+            issues.append(
+                {
+                    "code": "merge_commit_unresolvable",
+                    "message": f"task {task_id} merge_commit_sha does not resolve to a commit: {merge_commit_sha}",
+                }
+            )
+
+        if run_base_before_sha and run_base_after_sha and not _git_ok(
+            repo_root, ["merge-base", "--is-ancestor", run_base_before_sha, run_base_after_sha]
+        ):
+            issues.append(
+                {
+                    "code": "run_base_lineage_mismatch",
+                    "message": (
+                        f"task {task_id} run_base_before_sha is not an ancestor of run_base_after_sha "
+                        f"({run_base_before_sha} !<= {run_base_after_sha})"
+                    ),
+                }
+            )
+
+        resolved_run_base_tip = _resolve_commit(repo_root, run_base_branch)
+        if not run_base_branch:
+            issues.append(
+                {
+                    "code": "run_base_branch_missing",
+                    "message": f"task {task_id} merge evidence missing run_base_branch",
+                }
+            )
+        elif not resolved_run_base_tip:
+            issues.append(
+                {
+                    "code": "run_base_branch_unresolvable",
+                    "message": f"task {task_id} run_base_branch does not resolve to a commit: {run_base_branch}",
+                }
+            )
+        elif run_base_after_sha and resolved_run_base_tip != run_base_after_sha:
+            issues.append(
+                {
+                    "code": "run_base_after_mismatch",
+                    "message": (
+                        f"task {task_id} run_base_after_sha does not match {run_base_branch} tip "
+                        f"({run_base_after_sha} != {resolved_run_base_tip})"
+                    ),
+                }
+            )
+
+        if require_ancestor and run_base_after_sha and not _git_ok(
+            repo_root, ["merge-base", "--is-ancestor", run_base_after_sha, "HEAD"]
+        ):
+            issues.append(
+                {
+                    "code": "required_ancestor_missing",
+                    "message": (
+                        f"task {task_id} requires run_base_after_sha to be ancestor of HEAD, "
+                        f"but check failed for {run_base_after_sha}"
+                    ),
+                }
+            )
+
+        targeted_test = payload.get("targeted_test")
+        if not isinstance(targeted_test, dict):
+            issues.append(
+                {
+                    "code": "targeted_test_missing",
+                    "message": f"task {task_id} merge evidence missing targeted_test object",
+                }
+            )
+        else:
+            if _as_str(targeted_test.get("result")).lower() != "pass":
+                issues.append(
+                    {
+                        "code": "targeted_test_not_passed",
+                        "message": f"task {task_id} targeted_test.result must be pass",
+                    }
+                )
+            if not _as_str(targeted_test.get("command")):
+                issues.append(
+                    {
+                        "code": "targeted_test_command_missing",
+                        "message": f"task {task_id} targeted_test.command is missing",
+                    }
+                )
+
+        review_summary = payload.get("review_summary")
+        if not isinstance(review_summary, dict):
+            issues.append(
+                {
+                    "code": "review_summary_missing",
+                    "message": f"task {task_id} merge evidence missing review_summary object",
+                }
+            )
+        else:
+            review_status = _as_str(review_summary.get("review_status")).lower()
+            blocker_status = _as_str(review_summary.get("blocker_status")).lower()
+            if review_status != "pass":
+                issues.append(
+                    {
+                        "code": "review_not_passed",
+                        "message": f"task {task_id} review_summary.review_status must be pass",
+                    }
+                )
+            if blocker_status != "none":
+                issues.append(
+                    {
+                        "code": "review_has_blockers",
+                        "message": f"task {task_id} review_summary.blocker_status must be none",
+                    }
+                )
+
+        fan_in = payload.get("fan_in")
+        conflicts = fan_in.get("conflicts") if isinstance(fan_in, dict) else []
+        has_conflicts = isinstance(conflicts, list) and len(conflicts) > 0
+        llm_route = payload.get("llm_merge_recovery_routing")
+        if has_conflicts:
+            if not isinstance(llm_route, dict):
+                issues.append(
+                    {
+                        "code": "llm_merge_recovery_missing",
+                        "message": (
+                            f"task {task_id} has merge conflicts in fan_in.conflicts but missing "
+                            "llm_merge_recovery_routing evidence"
+                        ),
+                    }
+                )
+            else:
+                if not _as_bool(llm_route.get("triggered")):
+                    issues.append(
+                        {
+                            "code": "llm_merge_recovery_not_triggered",
+                            "message": (
+                                f"task {task_id} has merge conflicts but llm_merge_recovery_routing.triggered is false"
+                            ),
+                        }
+                    )
+                if not _as_str(llm_route.get("route")):
+                    issues.append(
+                        {
+                            "code": "llm_merge_recovery_route_missing",
+                            "message": f"task {task_id} llm_merge_recovery_routing.route is missing",
+                        }
+                    )
+                if _as_str(llm_route.get("status")).lower() != "applied":
+                    issues.append(
+                        {
+                            "code": "llm_merge_recovery_not_applied",
+                            "message": f"task {task_id} llm_merge_recovery_routing.status must be applied",
+                        }
+                    )
+
+        task_ok = len(issues) == 0
+        task_results.append(
+            _task_result(
+                task_id,
+                ok=task_ok,
+                merged_commit=merge_commit_sha or None,
+                verification_ref=_to_rel(evidence_path, repo_root),
+                branch=lane_base_branch or None,
+                issues=issues,
+            )
+        )
+        if not task_ok:
+            errors.extend(issues)
+
+    return {
+        "ok": len(errors) == 0,
+        "tool": TOOL_NAME,
+        "tool_version": TOOL_VERSION,
+        "checked_at": checked_at,
+        "repo_root": str(repo_root),
+        "mode": "lane-evidence",
+        "lane_id": normalized_lane_id,
+        "require_ancestor": require_ancestor,
+        "required_task_ids": tasks,
+        "expected_branch": "lane merge evidence",
+        "done_registry": "",
+        "tasks": task_results,
+        "errors": errors,
+    }
+
+
 def _emit_human_report(result: dict[str, Any], *, log_root: Path) -> None:
     required_tasks = result.get("required_task_ids")
     tasks = result.get("tasks")
@@ -432,6 +768,10 @@ def _emit_human_report(result: dict[str, Any], *, log_root: Path) -> None:
     error_count = len(errors) if isinstance(errors, list) else 0
 
     _emit(log_root, "Merge evidence checker started.")
+    _emit(log_root, f"Mode: {_as_str(result.get('mode')) or 'done-registry'}")
+    lane_id = _as_str(result.get("lane_id"))
+    if lane_id:
+        _emit(log_root, f"Lane id: {lane_id}")
     _emit(log_root, f"Repo root: {result.get('repo_root')}")
     _emit(log_root, f"Done registry: {result.get('done_registry')}")
     _emit(log_root, f"Expected branch: {result.get('expected_branch')}")
@@ -490,6 +830,16 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Task ID to verify (repeatable). Defaults to TASK-003, TASK-006, TASK-009 when omitted.",
     )
+    parser.add_argument(
+        "--lane-id",
+        default="",
+        help="Optional lane id for lane-evidence mode (for example phase-1/lane-a).",
+    )
+    parser.add_argument(
+        "--require-ancestor",
+        action="store_true",
+        help="When --lane-id is provided, require run_base_after_sha to be ancestor of HEAD.",
+    )
     parser.add_argument("--expected-branch", default="RAB-BASE", help="Expected merge target branch in merged rows")
     parser.add_argument(
         "--log-root",
@@ -504,16 +854,48 @@ def main() -> int:
     repo_root = Path(args.repo_root).expanduser().resolve()
     done_registry_arg = Path(args.done_registry).expanduser()
     done_registry_path = done_registry_arg if done_registry_arg.is_absolute() else (repo_root / done_registry_arg).resolve()
-    task_ids = _normalize_task_ids(args.task_id) or list(DEFAULT_TASK_IDS)
+    explicit_task_ids = _normalize_task_ids(args.task_id)
     expected_branch = _as_str(args.expected_branch) or "RAB-BASE"
     log_root = Path(args.log_root).expanduser().resolve()
+    lane_id = _as_str(args.lane_id)
 
-    result = check_merge_evidence(
-        repo_root=repo_root,
-        done_registry_path=done_registry_path,
-        required_task_ids=task_ids,
-        expected_branch=expected_branch,
-    )
+    if lane_id:
+        if not explicit_task_ids:
+            result = {
+                "ok": False,
+                "tool": TOOL_NAME,
+                "tool_version": TOOL_VERSION,
+                "checked_at": utc_now_iso(),
+                "repo_root": str(repo_root),
+                "mode": "lane-evidence",
+                "lane_id": lane_id,
+                "require_ancestor": bool(args.require_ancestor),
+                "required_task_ids": [],
+                "expected_branch": "lane merge evidence",
+                "done_registry": "",
+                "tasks": [],
+                "errors": [
+                    {
+                        "code": "lane_mode_requires_task_id",
+                        "message": "--lane-id requires at least one --task-id",
+                    }
+                ],
+            }
+        else:
+            result = check_lane_merge_evidence(
+                repo_root=repo_root,
+                required_task_ids=explicit_task_ids,
+                lane_id=lane_id,
+                require_ancestor=bool(args.require_ancestor),
+            )
+    else:
+        task_ids = explicit_task_ids or list(DEFAULT_TASK_IDS)
+        result = check_merge_evidence(
+            repo_root=repo_root,
+            done_registry_path=done_registry_path,
+            required_task_ids=task_ids,
+            expected_branch=expected_branch,
+        )
     _emit_human_report(result, log_root=log_root)
     return 0 if result.get("ok") else 1
 

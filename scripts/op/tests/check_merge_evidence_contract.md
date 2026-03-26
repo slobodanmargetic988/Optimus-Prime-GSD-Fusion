@@ -5,6 +5,12 @@
 - `reports/optimus-prime/planning/DONE_TASKS_REGISTRY.json`
 - each task's referenced `MERGE_VALIDATION.json`
 
+When `--lane-id` is provided, the checker switches to lane-evidence mode and validates
+`*MERGE_EVIDENCE*.json` packets that match both:
+
+- `task_identifier == --task-id`
+- `lane_id == --lane-id`
+
 Default required tasks are:
 
 - `TASK-003`
@@ -26,3 +32,4 @@ Failure behavior:
 - non-zero exit code on any blocking issue
 
 Future lane merge tasks can be checked by adding `--task-id` arguments.
+Lane-evidence mode can additionally enforce ancestry with `--require-ancestor`.
