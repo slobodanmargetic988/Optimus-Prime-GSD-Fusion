@@ -20,16 +20,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 from boss_config import (
     DEFAULT_BOSS_MODEL,
     DEFAULT_BOSS_REASONING_EFFORT,
     sanitize_boss_model,
     sanitize_boss_reasoning_effort,
 )
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
 
 ENGINE_ROOT = SCRIPT_DIR.parents[1]
 SKILLS_ROOT = ENGINE_ROOT / "skills"
