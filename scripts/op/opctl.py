@@ -16,6 +16,7 @@ for candidate in (REPO_ROOT, SCRIPTS_ROOT, SCRIPT_DIR):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
+from boss_config import sanitize_boss_model, sanitize_boss_reasoning_effort
 from op_core import OpError, run_from_payload
 from op_router import normalize_command
 
@@ -140,10 +141,10 @@ def _resolve_configured_workflow(repo_root: str) -> dict[str, Any]:
         fan_in_value = workflow.get("enable_artifact_fan_in")
         if isinstance(fan_in_value, bool):
             resolved["enable_artifact_fan_in"] = fan_in_value
-        boss_model = workflow.get("boss_model")
+        boss_model = sanitize_boss_model(workflow.get("boss_model"))
         if isinstance(boss_model, str) and boss_model.strip():
             resolved["boss_model"] = boss_model.strip()
-        boss_reasoning_effort = workflow.get("boss_reasoning_effort")
+        boss_reasoning_effort = sanitize_boss_reasoning_effort(workflow.get("boss_reasoning_effort"))
         if isinstance(boss_reasoning_effort, str) and boss_reasoning_effort.strip():
             resolved["boss_reasoning_effort"] = boss_reasoning_effort.strip()
         if resolved:
@@ -252,9 +253,13 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
     if args.cycle_release_poll_seconds is not None:
         payload["cycle_release_poll_seconds"] = args.cycle_release_poll_seconds
     if args.boss_model is not None:
-        payload["boss_model"] = args.boss_model
+        sanitized = sanitize_boss_model(args.boss_model, default=None)
+        if sanitized is not None:
+            payload["boss_model"] = sanitized
     if args.boss_reasoning_effort is not None:
-        payload["boss_reasoning_effort"] = args.boss_reasoning_effort
+        sanitized = sanitize_boss_reasoning_effort(args.boss_reasoning_effort, default=None)
+        if sanitized is not None:
+            payload["boss_reasoning_effort"] = sanitized
     if args.dry_run:
         payload["dry_run"] = True
     if args.reset_exhausted_retries:

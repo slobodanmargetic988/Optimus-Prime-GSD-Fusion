@@ -1426,6 +1426,22 @@ def test_op_simple_build_accepts_boss_model_and_reasoning_override():
         assert req.boss_reasoning_effort == "medium"
 
 
+def test_op_simple_build_invalid_boss_model_and_reasoning_fall_back_to_defaults():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-simple-build",
+                "repo_root": str(root),
+                "boss_model": "not-a-real-model",
+                "boss_reasoning_effort": "ultra",
+            }
+        )
+        assert req.boss_model == "gpt-5.3-codex"
+        assert req.boss_reasoning_effort == "xhigh"
+
+
 def test_op_simple_build_accepts_run_base_source_branch_override():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

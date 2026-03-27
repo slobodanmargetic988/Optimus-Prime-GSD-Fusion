@@ -20,6 +20,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from boss_config import (
+    DEFAULT_BOSS_MODEL,
+    DEFAULT_BOSS_REASONING_EFFORT,
+    sanitize_boss_model,
+    sanitize_boss_reasoning_effort,
+)
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -322,8 +329,8 @@ class OpRequest:
     skip_strategy: bool = False
     start_policy: str | None = None
     run_base_source_branch: str | None = None
-    boss_model: str = "gpt-5.3-codex"
-    boss_reasoning_effort: str = "xhigh"
+    boss_model: str = DEFAULT_BOSS_MODEL
+    boss_reasoning_effort: str = DEFAULT_BOSS_REASONING_EFFORT
     profile: str | None = None
     codex_profile: str | None = None
     executor_provider: str = "codex"
@@ -12081,8 +12088,10 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             stage="input",
         )
 
-    boss_model = _as_str(payload.get("boss_model")) or "gpt-5.3-codex"
-    boss_reasoning_effort = _as_str(payload.get("boss_reasoning_effort")) or "xhigh"
+    boss_model = sanitize_boss_model(payload.get("boss_model")) or DEFAULT_BOSS_MODEL
+    boss_reasoning_effort = (
+        sanitize_boss_reasoning_effort(payload.get("boss_reasoning_effort")) or DEFAULT_BOSS_REASONING_EFFORT
+    )
     profile = _as_str(payload.get("profile"))
     codex_profile = _as_str(payload.get("codex_profile")) or profile
     executor_provider = (_as_str(payload.get("executor_provider")) or "codex").lower()

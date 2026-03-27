@@ -231,6 +231,36 @@ def test_merge_payload_preserves_explicit_boss_model_and_reasoning_override(monk
     assert payload.get("boss_reasoning_effort") == "medium"
 
 
+def test_merge_payload_ignores_invalid_explicit_boss_model_and_reasoning_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {
+            "boss_model": "gpt-5.4",
+            "boss_reasoning_effort": "xhigh",
+        },
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-simple-build",
+            "--repo-root",
+            "/tmp/repo",
+            "--boss-model",
+            "not-a-real-model",
+            "--boss-reasoning-effort",
+            "ultra",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("boss_model") == "gpt-5.4"
+    assert payload.get("boss_reasoning_effort") == "xhigh"
+
+
 def test_merge_payload_applies_configured_boss_overrides_for_build(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         MODULE,

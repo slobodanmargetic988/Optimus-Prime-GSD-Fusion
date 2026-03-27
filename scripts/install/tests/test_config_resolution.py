@@ -118,8 +118,6 @@ def test_config_validation_reports_fix_guidance():
         assert "workflow.sleep_minutes" in fields
         assert "workflow.enable_artifact_fan_in" in fields
         assert "workflow.worktrees_parent" in fields
-        assert "workflow.boss_model" in fields
-        assert "workflow.boss_reasoning_effort" in fields
         assert "rate_gate.max_wait_hours" in fields
         assert all("fix" in item for item in resolved["errors"])
 
@@ -212,3 +210,20 @@ def test_cli_boss_reasoning_effort_override_wins():
         resolved = CONFIG.resolve_effective_config(payload, ctx)
         assert resolved["errors"] == []
         assert resolved["effective_config"]["workflow"]["boss_reasoning_effort"] == "medium"
+
+
+def test_invalid_boss_cli_values_fall_back_to_known_good_defaults():
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp) / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "mode": "global",
+            "home_override": str(home),
+            "boss_model": "not-a-real-model",
+            "boss_reasoning_effort": "ultra",
+        }
+        ctx = COMMON.resolve_context(payload)
+        resolved = CONFIG.resolve_effective_config(payload, ctx)
+        assert resolved["errors"] == []
+        assert resolved["effective_config"]["workflow"]["boss_model"] == "gpt-5.3-codex"
+        assert resolved["effective_config"]["workflow"]["boss_reasoning_effort"] == "xhigh"

@@ -9,6 +9,12 @@ import os
 from pathlib import Path
 from typing import Any
 
+from scripts.op.boss_config import (
+    DEFAULT_BOSS_MODEL,
+    DEFAULT_BOSS_REASONING_EFFORT,
+    sanitize_boss_model,
+    sanitize_boss_reasoning_effort,
+)
 from scripts.install.common import InstallContext, InstallError, as_bool, as_str
 
 PROFILES = {
@@ -20,8 +26,8 @@ PROFILES = {
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 8,
             "worktrees_parent": "/Users/slobodan/Forest",
-            "boss_model": "gpt-5.3-codex",
-            "boss_reasoning_effort": "xhigh",
+            "boss_model": DEFAULT_BOSS_MODEL,
+            "boss_reasoning_effort": DEFAULT_BOSS_REASONING_EFFORT,
         },
         "rate_gate": {"max_wait_hours": 2.0},
     },
@@ -33,8 +39,8 @@ PROFILES = {
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 8,
             "worktrees_parent": "/Users/slobodan/Forest",
-            "boss_model": "gpt-5.3-codex",
-            "boss_reasoning_effort": "xhigh",
+            "boss_model": DEFAULT_BOSS_MODEL,
+            "boss_reasoning_effort": DEFAULT_BOSS_REASONING_EFFORT,
         },
         "rate_gate": {"max_wait_hours": 2.0},
     },
@@ -46,8 +52,8 @@ PROFILES = {
             "enable_artifact_fan_in": False,
             "max_parallel_workers": 8,
             "worktrees_parent": "/Users/slobodan/Forest",
-            "boss_model": "gpt-5.3-codex",
-            "boss_reasoning_effort": "xhigh",
+            "boss_model": DEFAULT_BOSS_MODEL,
+            "boss_reasoning_effort": DEFAULT_BOSS_REASONING_EFFORT,
         },
         "rate_gate": {"max_wait_hours": 1.0},
     },
@@ -62,8 +68,8 @@ DEFAULT_CONFIG = {
         "enable_artifact_fan_in": False,
         "max_parallel_workers": 8,
         "worktrees_parent": "/Users/slobodan/Forest",
-        "boss_model": "gpt-5.3-codex",
-        "boss_reasoning_effort": "xhigh",
+        "boss_model": DEFAULT_BOSS_MODEL,
+        "boss_reasoning_effort": DEFAULT_BOSS_REASONING_EFFORT,
     },
     "rate_gate": {"max_wait_hours": 2.0},
     "paths": {},
@@ -321,18 +327,27 @@ def resolve_effective_config(payload: dict[str, Any], ctx: InstallContext) -> di
         sources.append({"source": "cli_worktrees_parent", "path": None})
 
     cli_boss_model = as_str(payload.get("boss_model"))
-    if cli_boss_model:
+    sanitized_cli_boss_model = sanitize_boss_model(cli_boss_model, default=None)
+    if sanitized_cli_boss_model:
         workflow = effective.get("workflow") if isinstance(effective.get("workflow"), dict) else {}
-        workflow["boss_model"] = cli_boss_model
+        workflow["boss_model"] = sanitized_cli_boss_model
         effective["workflow"] = workflow
         sources.append({"source": "cli_boss_model", "path": None})
 
     cli_boss_reasoning_effort = as_str(payload.get("boss_reasoning_effort"))
-    if cli_boss_reasoning_effort:
+    sanitized_cli_boss_reasoning_effort = sanitize_boss_reasoning_effort(cli_boss_reasoning_effort, default=None)
+    if sanitized_cli_boss_reasoning_effort:
         workflow = effective.get("workflow") if isinstance(effective.get("workflow"), dict) else {}
-        workflow["boss_reasoning_effort"] = cli_boss_reasoning_effort
+        workflow["boss_reasoning_effort"] = sanitized_cli_boss_reasoning_effort
         effective["workflow"] = workflow
         sources.append({"source": "cli_boss_reasoning_effort", "path": None})
+
+    workflow = effective.get("workflow") if isinstance(effective.get("workflow"), dict) else {}
+    workflow["boss_model"] = sanitize_boss_model(workflow.get("boss_model")) or DEFAULT_BOSS_MODEL
+    workflow["boss_reasoning_effort"] = (
+        sanitize_boss_reasoning_effort(workflow.get("boss_reasoning_effort")) or DEFAULT_BOSS_REASONING_EFFORT
+    )
+    effective["workflow"] = workflow
 
     errors = _validate_config(effective)
     return {
