@@ -95,3 +95,18 @@ Before completing any code modification task, verify:
 - Generate docs: `npx gitnexus wiki`
 
 <!-- gitnexus:end -->
+
+## OP-Build Alignment (Mandatory)
+- Earth root policy lives in `/Users/slobodan/projects/Earth/AGENTS.md`.
+- Canonical Earth `op-build` guidance lives in `/Users/slobodan/projects/Earth/OP_BUILD_ECOSYSTEM_GUIDE.md`.
+- This repo owns Earth-wide `op-build` runtime behavior; changes here affect how the rest of the ecosystem builds.
+- Repo-local experiments here may extend `op-build`, but they should preserve clear contracts for every downstream repo that depends on it.
+- If you make a commit during an `op-build` task, push it immediately after the commit.
+
+## Repo-Specific OP-Build Role Guidance
+- `planner`: define runtime changes in terms of operator-visible build outcomes, resume behavior, executor routing, and downstream compatibility.
+- `architect`: protect the contract between orchestration state, repo-local overrides, executor selection, and recovery semantics.
+- `implementer`: prefer auditable runtime improvements over prompt-only magic, hidden branching, or one-off repo hacks.
+- `tester`: prove resume safety, bounded-cycle behavior, executor selection, and evidence clarity with runnable checks.
+- `reviewer`: treat regressions in orchestration correctness, packet generation, merge behavior, or downstream repo assumptions as high severity.
+- `documenter`: update this file and supporting OP docs whenever runtime contracts, flags, or worker expectations change.
