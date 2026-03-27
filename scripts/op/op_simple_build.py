@@ -142,6 +142,16 @@ BOSS_REQUIRED_ARTIFACTS = [
 TASK_ATTEMPT_STAGES = ("dev", "lane_test", "test_fix", "lane_review", "review_fix", "deep_review", "deep_fix")
 SESSION_ID_REGEX = re.compile(r"(?:session id|session_id)\s*[:=]\s*([0-9a-fA-F-]{36})", re.IGNORECASE)
 MANAGER_PROFILE_ALIAS_REGEX = re.compile(r"manager_profile_alias=([A-Za-z0-9._-]+)")
+RETRYABLE_BOSS_PROFILE_ERROR_PATTERNS = (
+    "unexpected status 402 payment required",
+    "unexpected status 401 unauthorized",
+    '"code":"deactivated_workspace"',
+    '"code":"invalid_api_key"',
+    "auth error: 402",
+    "auth error: 401",
+    "failed to connect to websocket: http error: 402 payment required",
+    "failed to connect to websocket: http error: 401 unauthorized",
+)
 EXECUTOR_PROVIDERS = {"codex", "openrouter", "blackbox"}
 BLACKBOX_LANES = {"free", "api_key"}
 BLACKBOX_DEFAULT_MODELS = {
@@ -1058,6 +1068,94 @@ def _boss_non_timeout_excluded_alias(timeout_state: dict[str, Any]) -> str:
         return ""
     failed_alias = str(timeout_state.get("last_non_timeout_failed_profile_alias") or "").strip()
     return failed_alias
+
+
+def _profile_snapshot_source(cfg: RunConfig) -> str:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], default={})
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("source") or "").strip()
+
+
+def _refresh_profile_snapshot_before_boss_selection(cfg: RunConfig, *, cycle_number: int) -> tuple[bool, str]:
+    if _llm_profile_mode_enabled(cfg):
+        return False, "profile snapshot refresh skipped in llm profile mode"
+    snapshot_source = _profile_snapshot_source(cfg)
+    if snapshot_source != "filesystem-profile-discovery-bootstrap":
+        return False, f"profile snapshot refresh skipped source={snapshot_source}"
+    refreshed, message = _refresh_profile_snapshot_via_skill(cfg, cycle_number)
+    return refreshed, message
+
+
+def _read_manager_output_text(path_text: str | None) -> str:
+    candidate = str(path_text or "").strip()
+    if not candidate:
+        return ""
+    try:
+        return Path(candidate).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _manager_result_has_retryable_profile_auth_failure(result: ManagerResult | None) -> bool:
+    if not isinstance(result, ManagerResult):
+        return False
+    haystacks = [
+        str(result.message or ""),
+        _read_manager_output_text(result.stderr_path),
+        _read_manager_output_text(result.stdout_path),
+    ]
+    lowered = "\n".join(haystacks).lower()
+    return any(pattern in lowered for pattern in RETRYABLE_BOSS_PROFILE_ERROR_PATTERNS)
+
+
+def _mark_profile_snapshot_alias_unavailable(cfg: RunConfig, *, alias: str, reason: str) -> bool:
+    alias_text = str(alias or "").strip()
+    if not alias_text:
+        return False
+    snapshot_path = cfg.repo_root / ARTIFACT_FILES["profile_snapshot"]
+    payload = _read_json(snapshot_path, default={})
+    if not isinstance(payload, dict):
+        return False
+    rows = payload.get("profiles")
+    if not isinstance(rows, list):
+        return False
+    updated = False
+    normalized_reason = str(reason or "").strip() or "profile_marked_unavailable"
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("alias") or "").strip() != alias_text:
+            continue
+        row["hard_gated"] = True
+        row["soft_gated"] = False
+        row["recommended_action"] = "wind_down"
+        row["availability_reason"] = normalized_reason
+        updated = True
+    if not updated:
+        return False
+    payload["schema_version"] = SCHEMA_VERSION
+    payload["updated_at"] = utc_now_iso()
+    payload["profiles"] = rows
+    _atomic_write_json(snapshot_path, payload)
+    return True
+
+
+def _preserve_manager_attempt_logs(result: ManagerResult | None, *, label: str) -> None:
+    if not isinstance(result, ManagerResult):
+        return
+    for attr_name, suffix in (("stdout_path", "stdout.log"), ("stderr_path", "stderr.log")):
+        source_text = str(getattr(result, attr_name, "") or "").strip()
+        if not source_text:
+            continue
+        source_path = Path(source_text)
+        if not source_path.exists():
+            continue
+        target_path = source_path.with_name(f"{source_path.stem}.{label}.{suffix}")
+        try:
+            shutil.copyfile(source_path, target_path)
+        except OSError:
+            continue
 
 
 def _record_boss_non_timeout_exclusion_evidence(
@@ -3621,6 +3719,20 @@ def _invoke_manager(
         prior_previous_profile_alias: str | None = None
         timeout_state = _load_timeout_adaptation_state(cfg) if manager_name == "BOSS" else {}
         rotation_selection_evidence: dict[str, Any] = {}
+        if manager_name == "BOSS" and uses_codex_backend:
+            refreshed, refresh_message = _refresh_profile_snapshot_before_boss_selection(cfg, cycle_number=cycle_number)
+            rotation_selection_evidence["profile_snapshot_refresh"] = {
+                "attempted": True,
+                "refreshed": bool(refreshed),
+                "message": refresh_message,
+            }
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle={cycle_number} manager=BOSS profile-snapshot-refresh "
+                f"status={'ok' if refreshed else 'skipped'} message={refresh_message}",
+                flush=True,
+            )
         if manager_uses_boss_profile and uses_codex_backend:
             boss_session_state = _read_boss_session_state(cfg)
             prior_session_id = str(boss_session_state.get("session_id") or "").strip() or None
@@ -3845,6 +3957,83 @@ def _invoke_manager(
                             if result.message
                             else "fresh_session_retry_failed"
                         )
+                if manager_name == "BOSS" and result.status == "failed" and not result.timeout:
+                    auth_retry_triggered = _manager_result_has_retryable_profile_auth_failure(result)
+                    if auth_retry_triggered and selected_manager_alias:
+                        failure_reason = "retryable_profile_auth_failure"
+                        _preserve_manager_attempt_logs(result, label="initial-auth-failure")
+                        _mark_profile_snapshot_alias_unavailable(
+                            cfg,
+                            alias=selected_manager_alias,
+                            reason=failure_reason,
+                        )
+                        refreshed, refresh_message = _refresh_profile_snapshot_via_skill(cfg, cycle_number)
+                        retry_excluded_aliases = set(excluded_aliases)
+                        retry_excluded_aliases.add(selected_manager_alias)
+                        retry_alias, retry_home, retry_evidence = _select_boss_profile_from_snapshot_with_evidence(
+                            cfg,
+                            preferred_alias=None,
+                            excluded_aliases=retry_excluded_aliases,
+                        )
+                        same_cycle_retry = {
+                            "triggered": True,
+                            "reason": failure_reason,
+                            "failed_alias": selected_manager_alias,
+                            "snapshot_refreshed": bool(refreshed),
+                            "snapshot_refresh_message": refresh_message,
+                            "retry_selected_alias": retry_alias,
+                            "retry_selection_evidence": retry_evidence,
+                        }
+                        rotation_selection_evidence["same_cycle_profile_retry"] = same_cycle_retry
+                        if retry_alias and retry_home:
+                            print(
+                                "[op-simple-build] "
+                                f"[{utc_now_iso()}] "
+                                f"cycle={cycle_number} manager=BOSS profile-rotation-retry status=started "
+                                f"failed_alias={selected_manager_alias} retry_alias={retry_alias} reason={failure_reason}",
+                                flush=True,
+                            )
+                            retry_result = _codex_exec_prompt(
+                                cfg,
+                                manager_name,
+                                cycle_number,
+                                timeout,
+                                prompt_text,
+                                codex_home=retry_home,
+                                resume_session_id=None,
+                                model=manager_model,
+                                reasoning_effort=cfg.boss_reasoning_effort if manager_uses_boss_model else None,
+                                codex_profile=cfg.codex_profile,
+                            )
+                            retry_result.details = dict(retry_result.details or {})
+                            retry_result.details["same_cycle_profile_retry"] = same_cycle_retry
+                            result = retry_result
+                            selected_manager_alias = retry_alias
+                            selected_manager_home = retry_home
+                        else:
+                            print(
+                                "[op-simple-build] "
+                                f"[{utc_now_iso()}] "
+                                f"cycle={cycle_number} manager=BOSS profile-rotation-retry status=skipped "
+                                f"failed_alias={selected_manager_alias} reason=no_alternate_profile",
+                                flush=True,
+                            )
+                if manager_name == "BOSS":
+                    _record_boss_rotation_decision(
+                        cfg,
+                        decision={
+                            "cycle_number": int(cycle_number),
+                            "rotation_required": bool(timeout_state.get("rotation_required")),
+                            "last_timeout_profile_alias": str(timeout_state.get("last_timeout_profile_alias") or "").strip(),
+                            "last_non_timeout_failed_profile_alias": str(
+                                timeout_state.get("last_non_timeout_failed_profile_alias") or ""
+                            ).strip(),
+                            "preferred_alias": prior_profile_alias,
+                            "selected_alias": selected_manager_alias,
+                            "selected_home": selected_manager_home,
+                            "selection_evidence": rotation_selection_evidence,
+                        },
+                    )
         else:
             result = _blackbox_exec_prompt(
                 cfg,

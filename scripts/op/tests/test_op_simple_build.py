@@ -5773,6 +5773,213 @@ def test_invoke_manager_boss_rotates_after_non_timeout_failure(tmp_path: Path, m
     assert evidence.get("non_timeout_failed_excluded_alias") == "codex-old"
 
 
+
+def test_invoke_manager_boss_refreshes_bootstrap_snapshot_before_selection(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    codex_old_home = tmp_path / ".codex-old"
+    codex_new_home = tmp_path / ".codex-new"
+    codex_old_home.mkdir(parents=True, exist_ok=True)
+    codex_new_home.mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "source": "filesystem-profile-discovery-bootstrap",
+            "profiles": [
+                {
+                    "alias": "codex-old",
+                    "codex_home": str(codex_old_home),
+                    "window_5h_remaining_pct": 100.0,
+                    "window_week_remaining_pct": 100.0,
+                    "hard_gated": False,
+                },
+                {
+                    "alias": "codex-new",
+                    "codex_home": str(codex_new_home),
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 80.0,
+                    "hard_gated": False,
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+
+    refresh_calls: list[int] = []
+    used_homes: list[str] = []
+
+    def fake_refresh(_cfg, cycle_number):
+        refresh_calls.append(int(cycle_number))
+        MODULE._atomic_write_json(
+            tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+            {
+                "schema_version": "1.0",
+                "source": "minimal-rate-snapshot",
+                "profiles": [
+                    {
+                        "alias": "codex-old",
+                        "codex_home": str(codex_old_home),
+                        "window_5h_remaining_pct": 0.0,
+                        "window_week_remaining_pct": 0.0,
+                        "hard_gated": True,
+                    },
+                    {
+                        "alias": "codex-new",
+                        "codex_home": str(codex_new_home),
+                        "window_5h_remaining_pct": 70.0,
+                        "window_week_remaining_pct": 80.0,
+                        "hard_gated": False,
+                    },
+                ],
+            },
+        )
+        return True, "profile snapshot refreshed via minimal-rate-snapshot (2 profiles)"
+
+    def fake_codex_exec_prompt(*_args, **kwargs):
+        used_homes.append(str(kwargs.get("codex_home") or ""))
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            session_id="123e4567-e89b-12d3-a456-426614174001",
+        )
+
+    monkeypatch.setattr(MODULE, "_refresh_profile_snapshot_via_skill", fake_refresh)
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=11,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "ok"
+    assert refresh_calls == [11]
+    assert used_homes == [str(codex_new_home)]
+
+
+def test_invoke_manager_boss_retries_different_profile_after_workspace_auth_failure(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._ensure_default_artifacts(cfg)
+    codex_old_home = tmp_path / ".codex-old"
+    codex_new_home = tmp_path / ".codex-new"
+    codex_old_home.mkdir(parents=True, exist_ok=True)
+    codex_new_home.mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"],
+        {
+            "schema_version": "1.0",
+            "source": "minimal-rate-snapshot",
+            "profiles": [
+                {
+                    "alias": "codex-old",
+                    "codex_home": str(codex_old_home),
+                    "window_5h_remaining_pct": 80.0,
+                    "window_week_remaining_pct": 90.0,
+                    "hard_gated": False,
+                },
+                {
+                    "alias": "codex-new",
+                    "codex_home": str(codex_new_home),
+                    "window_5h_remaining_pct": 70.0,
+                    "window_week_remaining_pct": 85.0,
+                    "hard_gated": False,
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "prompt body")
+    monkeypatch.setattr(MODULE, "_refresh_profile_snapshot_via_skill", lambda *_args, **_kwargs: (False, "refresh unavailable in test"))
+
+    used_homes: list[str] = []
+
+    def fake_codex_exec_prompt(*args, **kwargs):
+        cycle_number = int(args[2])
+        used_homes.append(str(kwargs.get("codex_home") or ""))
+        cycle_dir = MODULE._ensure_history_cycle_dir(cfg, cycle_number)
+        stdout_path = cycle_dir / "manager-boss.stdout.log"
+        stderr_path = cycle_dir / "manager-boss.stderr.log"
+        if str(kwargs.get("codex_home") or "") == str(codex_old_home):
+            stdout_path.write_text("", encoding="utf-8")
+            stderr_path.write_text(
+                'ERROR: unexpected status 402 Payment Required: {"detail":{"code":"deactivated_workspace"}}\n',
+                encoding="utf-8",
+            )
+            return MODULE.ManagerResult(
+                manager="BOSS",
+                status="failed",
+                timeout=False,
+                returncode=1,
+                started_at="2026-01-01T00:00:00Z",
+                finished_at="2026-01-01T00:00:01Z",
+                duration_seconds=1.0,
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+                message="codex exec returned non-zero",
+                reason_code="manager_non_zero_exit",
+            )
+        stdout_path.write_text("ok\n", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="ok",
+            timeout=False,
+            returncode=0,
+            started_at="2026-01-01T00:00:02Z",
+            finished_at="2026-01-01T00:00:03Z",
+            duration_seconds=1.0,
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
+            session_id="123e4567-e89b-12d3-a456-426614174002",
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec_prompt)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=11,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.status == "ok"
+    assert used_homes == [str(codex_old_home), str(codex_new_home)]
+    assert "manager_profile_alias=codex-new" in str(out.message)
+    preserved_stderr = tmp_path / MODULE.HISTORY_DIR / "cycle-000011" / "manager-boss.stderr.initial-auth-failure.stderr.log"
+    assert preserved_stderr.exists()
+
+    timeout_state = MODULE._read_json(tmp_path / MODULE.ARTIFACT_FILES["timeout_adaptation_state"], default={})
+    decision = timeout_state.get("last_rotation_decision") if isinstance(timeout_state, dict) else {}
+    evidence = decision.get("selection_evidence") if isinstance(decision, dict) else {}
+    retry = evidence.get("same_cycle_profile_retry") if isinstance(evidence, dict) else {}
+    assert isinstance(retry, dict)
+    assert retry.get("failed_alias") == "codex-old"
+    assert retry.get("retry_selected_alias") == "codex-new"
+
 def test_invoke_manager_boss_fails_closed_when_runtime_context_invalid(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
