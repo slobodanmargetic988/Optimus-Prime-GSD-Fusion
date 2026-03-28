@@ -16,7 +16,8 @@ This file records decisions finalized in-session so no context is lost.
 - `BOSS` reads watchdog outputs and decides continuation/termination strategy.
 
 ## Rate-Gate Policy (Locked)
-- Always auto-wait on rate gates (no forced restart/abort due to wait length).
+- Auto-wait on rate gates only when the soonest reset is within 3 hours.
+- If all discovered profiles are hard-gated and the soonest reset is beyond 3 hours, or missing, stop cleanly with `all_rate_gates_blocking`.
 - During wait:
   - heartbeat log every 5 minutes.
   - profile snapshot every 15 minutes.

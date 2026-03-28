@@ -8,6 +8,7 @@ import tempfile
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -178,6 +179,79 @@ def build_repo(root: Path) -> None:
     os.environ["PATH"] = f"{fake_bin}:{os.environ.get('PATH', '')}"
     git(root, "add", ".")
     git(root, "commit", "-m", "seed")
+
+
+def write_build_state(root: Path, **overrides: object) -> Path:
+    path = MODULE._repo_path(root, MODULE.BUILD_STATE_JSON)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = MODULE._fresh_build_state_payload()
+    payload.update(overrides)
+    MODULE._atomic_write_json(path, payload)
+    return path
+
+
+def test_command_resume_syncs_all_rate_terminal_state(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    write_build_state(tmp_path)
+    init_state_path = tmp_path / ".op-simple" / "current" / "initialize_state.json"
+    init_state_path.parent.mkdir(parents=True, exist_ok=True)
+    init_state_path.write_text("{}", encoding="utf-8")
+    control_path = tmp_path / "reports" / "optimus-prime" / "control" / "ALL_RATE_GATES_BLOCKING.json"
+    control_path.parent.mkdir(parents=True, exist_ok=True)
+    control_path.write_text(json.dumps({"soonest_reset_at": "2026-03-16T12:00:00Z"}), encoding="utf-8")
+
+    fake_module = SimpleNamespace(
+        run_op_simple_build=lambda _req: {
+            "ok": True,
+            "status": "completed",
+            "summary": "stopped cleanly",
+            "warnings": [],
+            "errors": [],
+            "artifacts": [],
+            "next_action": "wait for rate reset, then /op-resume",
+            "state_ref": str(init_state_path),
+            "data": {"stop_reason": "all_rate_gates_blocking"},
+        }
+    )
+    monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+
+    req = MODULE.parse_request({"command": "/op-resume", "repo_root": str(tmp_path)})
+    out = MODULE.command_resume(req)
+
+    assert out["ok"] is True
+    build_state = MODULE._load_build_state(MODULE._repo_path(tmp_path, MODULE.BUILD_STATE_JSON))
+    assert build_state["terminal_state"] == "all_rate_gates_blocking"
+    assert build_state["rate_gate_state"]["min_reset_at"] == "2026-03-16T12:00:00Z"
+
+
+def test_command_resume_clears_stale_all_rate_terminal_state(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    write_build_state(tmp_path, terminal_state="all_rate_gates_blocking")
+    init_state_path = tmp_path / ".op-simple" / "current" / "initialize_state.json"
+    init_state_path.parent.mkdir(parents=True, exist_ok=True)
+    init_state_path.write_text("{}", encoding="utf-8")
+
+    fake_module = SimpleNamespace(
+        run_op_simple_build=lambda _req: {
+            "ok": True,
+            "status": "completed",
+            "summary": "resumed normally",
+            "warnings": [],
+            "errors": [],
+            "artifacts": [],
+            "next_action": None,
+            "state_ref": str(init_state_path),
+            "data": {"stop_reason": None},
+        }
+    )
+    monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+
+    req = MODULE.parse_request({"command": "/op-resume", "repo_root": str(tmp_path)})
+    out = MODULE.command_resume(req)
+
+    assert out["ok"] is True
+    build_state = MODULE._load_build_state(MODULE._repo_path(tmp_path, MODULE.BUILD_STATE_JSON))
+    assert build_state["terminal_state"] is None
 
 
 

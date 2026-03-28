@@ -8789,6 +8789,61 @@ def _load_build_state(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _sync_build_state_from_simple_result(repo_root: Path, result: dict[str, Any]) -> None:
+    build_state_path = _repo_path(repo_root, BUILD_STATE_JSON)
+    if not build_state_path.exists():
+        return
+    try:
+        build_state = _load_build_state(build_state_path)
+    except OpError:
+        return
+
+    data = result.get("data") if isinstance(result, dict) and isinstance(result.get("data"), dict) else {}
+    stop_reason = _as_str(data.get("stop_reason"))
+    current_terminal_state = _as_str(build_state.get("terminal_state"))
+    rate_gate_state = build_state.get("rate_gate_state") if isinstance(build_state.get("rate_gate_state"), dict) else {}
+    changed = False
+
+    if stop_reason == "all_rate_gates_blocking":
+        control_path = repo_root / "reports" / "optimus-prime" / "control" / "ALL_RATE_GATES_BLOCKING.json"
+        soonest_reset_at = None
+        if control_path.exists():
+            try:
+                payload = _read_json(control_path)
+            except OpError:
+                payload = None
+            if isinstance(payload, dict):
+                soonest_reset_at = _as_str(payload.get("soonest_reset_at")) or None
+        build_state["terminal_state"] = "all_rate_gates_blocking"
+        build_state["updated_at"] = utc_now_iso()
+        build_state["rate_gate_state"] = {
+            "hard_gated": True,
+            "min_reset_at": soonest_reset_at,
+            "sleep_until": None,
+            "manual_rerun_required": False,
+        }
+        cycle_gate = build_state.get("cycle_gate_decision") if isinstance(build_state.get("cycle_gate_decision"), dict) else {}
+        cycle_gate["terminal_reason"] = "all_rate_gates_blocking"
+        build_state["cycle_gate_decision"] = cycle_gate
+        changed = True
+    elif current_terminal_state == "all_rate_gates_blocking":
+        build_state["terminal_state"] = None
+        build_state["updated_at"] = utc_now_iso()
+        rate_gate_state["hard_gated"] = False
+        rate_gate_state["min_reset_at"] = None
+        rate_gate_state["sleep_until"] = None
+        rate_gate_state["manual_rerun_required"] = False
+        build_state["rate_gate_state"] = rate_gate_state
+        cycle_gate = build_state.get("cycle_gate_decision") if isinstance(build_state.get("cycle_gate_decision"), dict) else {}
+        if _as_str(cycle_gate.get("terminal_reason")) == "all_rate_gates_blocking":
+            cycle_gate["terminal_reason"] = None
+        build_state["cycle_gate_decision"] = cycle_gate
+        changed = True
+
+    if changed:
+        _atomic_write_json(build_state_path, build_state)
+
+
 def _run_controller_cycle(
     req: OpRequest,
     *,
@@ -10905,6 +10960,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
         simple_req = replace(req, command="op-resume")
 
     result = run_op_simple_build(simple_req)
+    _sync_build_state_from_simple_result(req.repo_root, result)
     simple_warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
     return _response(
         req,
@@ -11096,6 +11152,7 @@ def command_simple_build(req: OpRequest) -> dict[str, Any]:
     from op_simple_build import run_op_simple_build
 
     result = run_op_simple_build(req)
+    _sync_build_state_from_simple_result(req.repo_root, result)
     return _response(
         req,
         ok=bool(result.get("ok")),
@@ -11726,6 +11783,7 @@ def command_resume(req: OpRequest) -> dict[str, Any]:
 
     simple_req = replace(req, command="op-resume")
     result = run_op_simple_build(simple_req)
+    _sync_build_state_from_simple_result(req.repo_root, result)
     simple_warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
     return _response(
         req,

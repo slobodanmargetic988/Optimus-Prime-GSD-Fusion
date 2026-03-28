@@ -81,6 +81,26 @@ def make_req(root: Path, **overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**payload)
 
 
+def make_rate_gate_evaluation(
+    outcome: str,
+    *,
+    hard_gated_aliases: list[str] | None = None,
+    soonest_reset_at: str | None = None,
+    hours_until_reset: float | None = None,
+    live_worker_pids: list[int] | None = None,
+    message: str | None = None,
+) -> object:
+    return MODULE.RateGateEvaluation(
+        outcome=outcome,
+        hard_gated_aliases=list(hard_gated_aliases or []),
+        soonest_reset_at=soonest_reset_at,
+        hours_until_reset=hours_until_reset,
+        threshold_hours=int(MODULE.RATE_GATE_TERMINAL_THRESHOLD_HOURS),
+        live_worker_pids=list(live_worker_pids or []),
+        message=message or outcome,
+    )
+
+
 def test_build_config_defaults_boss_model_and_reasoning(tmp_path: Path) -> None:
     cfg = MODULE._build_config(make_req(tmp_path))
     assert cfg.boss_model == "gpt-5.3-codex"
@@ -1720,7 +1740,11 @@ def test_run_resume_detects_process_kill_resume_from_preexisting_lock(tmp_path: 
         },
     )
     monkeypatch.setattr(MODULE, "_watchdog_tick", lambda _cfg, _cycle, *, force_reset_target=False: (False, {"message": ""}))
-    monkeypatch.setattr(MODULE, "_run_rate_gate_wait", lambda _cfg, _cycle, _warnings: None)
+    monkeypatch.setattr(
+        MODULE,
+        "_run_rate_gate_wait",
+        lambda _cfg, _cycle, _warnings: make_rate_gate_evaluation("has_capacity", message="capacity available"),
+    )
     monkeypatch.setattr(
         MODULE,
         "_dispatch_packets",
@@ -2065,10 +2089,66 @@ def test_await_cycle_release_signal_returns_immediate_when_no_tracked_pids(tmp_p
         cycle_release_poll_seconds=1,
     )
     monkeypatch.setattr(MODULE, "_cycle_release_watchset_from_dispatch_cycle", lambda _cfg, _cycle: [])
+    monkeypatch.setattr(MODULE, "_cycle_release_watchset_from_live_workers", lambda _cfg: [])
     out = MODULE._await_cycle_release_signal(cfg, cycle_number=14)
     assert out["timed_out"] is False
     assert out["decision"] == "no_wait_no_tracked_pids"
     assert out["tracked_pid_count"] == 0
+
+
+def test_await_cycle_release_signal_token_conservative_falls_back_to_live_workers(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=5,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=True,
+        cycle_release_mode="token_conservative",
+        cycle_release_timeout_seconds=40,
+        cycle_release_poll_seconds=1,
+    )
+    alive_sequence = iter(
+        [
+            [401, 402],
+            [401, 402],
+            [401],
+            [],
+            [],
+        ]
+    )
+
+    def fake_alive_pids(_tracked_pids):
+        try:
+            return next(alive_sequence)
+        except StopIteration:
+            return []
+
+    ticks = {"t": 0.0}
+
+    def fake_monotonic():
+        return float(ticks["t"])
+
+    def fake_sleep(seconds):
+        ticks["t"] += float(seconds)
+
+    monkeypatch.setattr(MODULE, "_cycle_release_watchset_from_dispatch_cycle", lambda _cfg, _cycle: [])
+    monkeypatch.setattr(MODULE, "_cycle_release_watchset_from_live_workers", lambda _cfg: [401, 402])
+    monkeypatch.setattr(MODULE, "_cycle_release_alive_pids", fake_alive_pids)
+    monkeypatch.setattr(MODULE.time, "sleep", fake_sleep)
+    monkeypatch.setattr(MODULE.time, "monotonic", fake_monotonic)
+
+    out = MODULE._await_cycle_release_signal(
+        cfg,
+        cycle_number=15,
+    )
+
+    assert out["mode"] == "token_conservative"
+    assert out["watchset_source"] == "current_live_in_progress_workers_fallback"
+    assert out["timed_out"] is False
+    assert out["decision"] == "all_tracked_pids_dead_guarded"
+    assert out["tracked_pids"] == [401, 402]
+    assert out["alive_pids"] == []
 
 
 def test_live_in_progress_worker_does_not_skip_boss_when_state_unchanged(tmp_path: Path, monkeypatch) -> None:
@@ -2129,6 +2209,7 @@ def test_live_in_progress_worker_does_not_skip_boss_when_state_unchanged(tmp_pat
 
     def fake_rate_gate(_cfg, cycle_number: int, _warnings):
         rate_gate_calls.append(int(cycle_number))
+        return make_rate_gate_evaluation("has_capacity", message="capacity available")
 
     def fake_dispatch(_cfg, cycle_number: int):
         dispatch_calls.append(int(cycle_number))
@@ -2214,6 +2295,7 @@ def test_boss_runs_when_task_state_has_no_in_progress(tmp_path: Path, monkeypatc
 
     def fake_rate_gate(_cfg, cycle_number: int, _warnings):
         rate_gate_calls.append(int(cycle_number))
+        return make_rate_gate_evaluation("has_capacity", message="capacity available")
 
     def fake_dispatch(_cfg, cycle_number: int):
         dispatch_calls.append(int(cycle_number))
@@ -3365,13 +3447,31 @@ def test_rate_gate_wait_logs_heartbeat_and_rescan(tmp_path: Path, monkeypatch) -
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
 
-    states = iter(["all_hard_gated", "all_hard_gated", "has_ungated"])
+    evaluations = iter(
+        [
+            make_rate_gate_evaluation(
+                "short_wait_until_reset",
+                hard_gated_aliases=["codex-third"],
+                soonest_reset_at="2026-03-16T09:00:00Z",
+                hours_until_reset=1.5,
+                message="short wait",
+            ),
+            make_rate_gate_evaluation(
+                "short_wait_until_reset",
+                hard_gated_aliases=["codex-third"],
+                soonest_reset_at="2026-03-16T09:00:00Z",
+                hours_until_reset=1.5,
+                message="short wait",
+            ),
+            make_rate_gate_evaluation("has_capacity", message="capacity returned"),
+        ]
+    )
 
-    def fake_gate_state(_cfg):
+    def fake_evaluate(_cfg):
         try:
-            return next(states)
+            return next(evaluations)
         except StopIteration:  # pragma: no cover - defensive fallback
-            return "has_ungated"
+            return make_rate_gate_evaluation("has_capacity", message="capacity returned")
 
     refresh_calls = {"count": 0}
 
@@ -3379,16 +3479,18 @@ def test_rate_gate_wait_logs_heartbeat_and_rescan(tmp_path: Path, monkeypatch) -
         refresh_calls["count"] += 1
         return True, "snapshot refreshed"
 
-    monkeypatch.setattr(MODULE, "_profile_snapshot_gate_state", fake_gate_state)
+    monkeypatch.setattr(MODULE, "_evaluate_rate_exhaustion_state", fake_evaluate)
     monkeypatch.setattr(MODULE, "_refresh_profile_snapshot_via_skill", fake_refresh)
     monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(MODULE, "_profile_snapshot_gate_state", lambda _cfg: "all_hard_gated")
 
     warnings: list[dict[str, object]] = []
-    MODULE._run_rate_gate_wait(cfg, cycle_number=7, warnings=warnings)
+    out = MODULE._run_rate_gate_wait(cfg, cycle_number=7, warnings=warnings)
 
+    assert out.outcome == "has_capacity"
     assert refresh_calls["count"] >= 2
     rows = [json.loads(line) for line in (tmp_path / MODULE.MANAGER_CALL_LOG_FILE).read_text(encoding="utf-8").splitlines()]
-    assert any(row.get("manager") == "rate-gate" and row.get("status") == "heartbeat" for row in rows)
+    assert any(row.get("manager") == "rate-gate" and row.get("status") == "rate_gate_short_wait" for row in rows)
 
 
 def test_rate_gate_wait_is_skipped_for_blackbox_executor(tmp_path: Path, monkeypatch) -> None:
@@ -3426,25 +3528,33 @@ def test_rate_gate_wait_conservative_when_snapshot_unknown(tmp_path: Path, monke
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
 
-    states = iter(["unknown", "unknown", "has_ungated"])
+    evaluations = iter(
+        [
+            make_rate_gate_evaluation("short_wait_until_reset", message="unknown short wait"),
+            make_rate_gate_evaluation("short_wait_until_reset", message="unknown short wait"),
+            make_rate_gate_evaluation("has_capacity", message="capacity returned"),
+        ]
+    )
 
-    def fake_gate_state(_cfg):
+    def fake_evaluate(_cfg):
         try:
-            return next(states)
+            return next(evaluations)
         except StopIteration:  # pragma: no cover - defensive fallback
-            return "has_ungated"
+            return make_rate_gate_evaluation("has_capacity", message="capacity returned")
 
-    monkeypatch.setattr(MODULE, "_profile_snapshot_gate_state", fake_gate_state)
+    monkeypatch.setattr(MODULE, "_evaluate_rate_exhaustion_state", fake_evaluate)
+    monkeypatch.setattr(MODULE, "_profile_snapshot_gate_state", lambda _cfg: "unknown")
     monkeypatch.setattr(MODULE, "_refresh_profile_snapshot_via_skill", lambda *_args, **_kwargs: (False, "refresh failed"))
     monkeypatch.setattr(MODULE, "_refresh_rate_gate_snapshot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
 
     warnings: list[dict[str, object]] = []
-    MODULE._run_rate_gate_wait(cfg, cycle_number=8, warnings=warnings)
+    out = MODULE._run_rate_gate_wait(cfg, cycle_number=8, warnings=warnings)
 
+    assert out.outcome == "has_capacity"
     assert any(item.get("code") == "rate_gate_snapshot_unknown" for item in warnings)
     rows = [json.loads(line) for line in (tmp_path / MODULE.MANAGER_CALL_LOG_FILE).read_text(encoding="utf-8").splitlines()]
-    assert any(row.get("manager") == "rate-gate" and row.get("status") == "heartbeat" for row in rows)
+    assert any(row.get("manager") == "rate-gate" and row.get("status") == "rate_gate_short_wait" for row in rows)
 
 
 def test_rate_gate_rescan_logs_failure_returncode(tmp_path: Path, monkeypatch) -> None:
@@ -3458,13 +3568,19 @@ def test_rate_gate_rescan_logs_failure_returncode(tmp_path: Path, monkeypatch) -
     )
     (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
 
-    states = iter(["all_hard_gated", "all_hard_gated", "has_ungated"])
+    evaluations = iter(
+        [
+            make_rate_gate_evaluation("short_wait_until_reset", message="short wait"),
+            make_rate_gate_evaluation("short_wait_until_reset", message="short wait"),
+            make_rate_gate_evaluation("has_capacity", message="capacity returned"),
+        ]
+    )
 
-    def fake_gate_state(_cfg):
+    def fake_evaluate(_cfg):
         try:
-            return next(states)
+            return next(evaluations)
         except StopIteration:  # pragma: no cover - defensive fallback
-            return "has_ungated"
+            return make_rate_gate_evaluation("has_capacity", message="capacity returned")
 
     calls = {"count": 0}
 
@@ -3474,18 +3590,332 @@ def test_rate_gate_rescan_logs_failure_returncode(tmp_path: Path, monkeypatch) -
             return True, "entry refresh ok"
         return False, "rescan refresh failed"
 
-    monkeypatch.setattr(MODULE, "_profile_snapshot_gate_state", fake_gate_state)
+    monkeypatch.setattr(MODULE, "_evaluate_rate_exhaustion_state", fake_evaluate)
+    monkeypatch.setattr(MODULE, "_profile_snapshot_gate_state", lambda _cfg: "all_hard_gated")
     monkeypatch.setattr(MODULE, "_refresh_profile_snapshot_via_skill", fake_refresh)
     monkeypatch.setattr(MODULE, "_refresh_rate_gate_snapshot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
 
     warnings: list[dict[str, object]] = []
-    MODULE._run_rate_gate_wait(cfg, cycle_number=9, warnings=warnings)
+    out = MODULE._run_rate_gate_wait(cfg, cycle_number=9, warnings=warnings)
 
+    assert out.outcome == "has_capacity"
     rows = [json.loads(line) for line in (tmp_path / MODULE.MANAGER_CALL_LOG_FILE).read_text(encoding="utf-8").splitlines()]
     rescan_rows = [row for row in rows if row.get("manager") == "rate-gate" and row.get("status") == "rescan"]
     assert rescan_rows
     assert any(int(row.get("returncode") or 0) == 1 for row in rescan_rows)
+
+
+def test_rate_gate_wait_returns_terminal_when_all_profiles_hard_gated_without_reset(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        MODULE,
+        "_evaluate_rate_exhaustion_state",
+        lambda _cfg: make_rate_gate_evaluation(
+            "terminal_all_rate_gates_blocking",
+            hard_gated_aliases=["codex-first", "codex-second"],
+            soonest_reset_at=None,
+            hours_until_reset=None,
+            message="all discovered profiles are hard-gated and no valid reset_at is available",
+        ),
+    )
+    monkeypatch.setattr(MODULE, "_refresh_profile_snapshot_via_skill", lambda *_args, **_kwargs: (True, "snapshot refreshed"))
+
+    warnings: list[dict[str, object]] = []
+    out = MODULE._run_rate_gate_wait(cfg, cycle_number=10, warnings=warnings)
+
+    assert out.outcome == "terminal_all_rate_gates_blocking"
+    evidence = json.loads(
+        (tmp_path / "reports" / "optimus-prime" / "control" / "ALL_RATE_GATES_BLOCKING.json").read_text(encoding="utf-8")
+    )
+    assert evidence["hard_gated_aliases"] == ["codex-first", "codex-second"]
+    rows = [json.loads(line) for line in (tmp_path / MODULE.MANAGER_CALL_LOG_FILE).read_text(encoding="utf-8").splitlines()]
+    assert any(row.get("status") == "rate_gate_terminal_stop" for row in rows)
+
+
+def test_codex_exec_prompt_classifies_usage_limit_and_parses_reset(monkeypatch, tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+
+    completed = subprocess.CompletedProcess(
+        args=["codex", "exec"],
+        returncode=1,
+        stdout="",
+        stderr="ERROR: You've hit your usage limit. Please try again at 4:32 AM.",
+    )
+    monkeypatch.setattr(MODULE.subprocess, "run", lambda *_args, **_kwargs: completed)
+
+    out = MODULE._codex_exec_prompt(
+        cfg,
+        "BOSS",
+        cycle_number=12,
+        timeout_seconds=30,
+        prompt_text="test prompt",
+        codex_home=str(tmp_path / ".codex"),
+    )
+
+    assert out.status == "failed"
+    assert out.reason_code == "manager_rate_limited"
+    assert out.message and "usage limit" in out.message
+    assert isinstance(out.details, dict)
+    assert out.details.get("reset_at")
+
+
+def test_invoke_manager_boss_rate_limit_does_not_retry_fresh_session(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    (tmp_path / MODULE.CURRENT_DIR).mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        tmp_path / MODULE.BOSS_SESSION_STATE_FILE,
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-03-16T00:00:00Z",
+            "session_id": "12345678-1234-1234-1234-123456789abc",
+            "codex_home": str(tmp_path / ".codex-third"),
+            "profile_alias": "codex-third",
+            "previous_profile_alias": "codex-third",
+        },
+    )
+    (tmp_path / ".codex-third").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(MODULE, "_load_prompt_template", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(MODULE, "_artifact_path_map", lambda _cfg: {})
+    monkeypatch.setattr(
+        MODULE,
+        "_select_boss_profile_from_snapshot_with_evidence",
+        lambda *_args, **_kwargs: ("codex-third", str(tmp_path / ".codex-third"), {}),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_boss_profile_candidates_from_snapshot",
+        lambda _cfg: [{"alias": "codex-third", "eligible": True, "hard_gated": False}],
+    )
+    monkeypatch.setattr(MODULE, "_record_boss_runtime_checks", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(MODULE, "_record_boss_rotation_decision", lambda *_args, **_kwargs: {})
+
+    calls = {"count": 0}
+
+    def fake_codex_exec(*_args, **_kwargs):
+        calls["count"] += 1
+        return MODULE.ManagerResult(
+            manager="BOSS",
+            status="failed",
+            timeout=False,
+            returncode=1,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+            duration_seconds=1.0,
+            message="codex usage limit reached",
+            reason_code="manager_rate_limited",
+        )
+
+    monkeypatch.setattr(MODULE, "_codex_exec_prompt", fake_codex_exec)
+
+    out = MODULE._invoke_manager(
+        cfg,
+        manager_name="BOSS",
+        cycle_number=14,
+        context={},
+        expected_artifacts=[],
+    )
+
+    assert out.reason_code == "manager_rate_limited"
+    assert calls["count"] == 1
+
+
+def test_run_stops_cleanly_when_all_profiles_hard_gated_beyond_threshold(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+
+    monkeypatch.setattr(
+        MODULE,
+        "_evaluate_rate_exhaustion_state",
+        lambda _cfg: make_rate_gate_evaluation(
+            "terminal_all_rate_gates_blocking",
+            hard_gated_aliases=["codex-first", "codex-second"],
+            soonest_reset_at="2026-03-16T15:00:00Z",
+            hours_until_reset=6.0,
+            message="all discovered profiles are hard-gated and the soonest reset is beyond the terminal threshold",
+        ),
+    )
+    monkeypatch.setattr(MODULE, "_deterministic_merge_sweep", lambda *_args, **_kwargs: {"task_merge_successes": 0, "task_merge_attempts": 0, "lane_merge_successes": 0, "lane_merge_attempts": 0, "queue_item_count": 0})
+    monkeypatch.setattr(MODULE, "_run_periodic_merge_manager", lambda *_args, **_kwargs: {"status": "skipped", "reason": "queue_empty", "queue_count_before": 0, "queue_count_after": 0})
+    monkeypatch.setattr(MODULE, "_build_mergeability_report", lambda *_args, **_kwargs: {"unmerged_commit_count": 0, "mergeability_advanced": False, "progression": {"task_to_lane_queue_items": 0, "lane_to_run_queue_items": 0}})
+    monkeypatch.setattr(MODULE, "_watchdog_tick", lambda *_args, **_kwargs: (False, {"message": "watchdog healthy", "near_stale": False}))
+    monkeypatch.setattr(MODULE, "_invoke_manager", lambda *_args, **_kwargs: pytest.fail("BOSS should not run when rate exhaustion is terminal before BOSS"))
+    monkeypatch.setattr(MODULE, "_await_cycle_release_signal", lambda *_args, **_kwargs: None)
+
+    out = MODULE.run_op_simple_build(make_req(tmp_path, dry_run=True, max_build_cycles=1))
+
+    assert out["ok"] is True
+    assert out["data"]["stop_reason"] == "all_rate_gates_blocking"
+    evidence_path = tmp_path / "reports" / "optimus-prime" / "control" / "ALL_RATE_GATES_BLOCKING.json"
+    assert evidence_path.exists()
+
+
+def test_resolve_pre_boss_rate_evaluation_waits_when_short_wait(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        MODULE,
+        "_evaluate_rate_exhaustion_state",
+        lambda _cfg: make_rate_gate_evaluation(
+            "short_wait_until_reset",
+            hard_gated_aliases=["codex-first", "codex-second"],
+            soonest_reset_at="2026-03-16T09:00:00Z",
+            hours_until_reset=1.5,
+            message="short wait before boss",
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_run_rate_gate_wait",
+        lambda _cfg, _cycle_number, _warnings: (
+            calls.append("rate-gate"),
+            make_rate_gate_evaluation("has_capacity", message="capacity returned"),
+        )[1],
+    )
+
+    warnings: list[dict[str, object]] = []
+    out, waited = MODULE._resolve_pre_boss_rate_evaluation(
+        cfg,
+        cycle_number=16,
+        warnings=warnings,
+    )
+
+    assert waited is True
+    assert out.outcome == "has_capacity"
+    assert calls == ["rate-gate"]
+
+
+def test_resolve_pre_boss_rate_evaluation_returns_terminal_after_short_wait(tmp_path: Path, monkeypatch) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_evaluate_rate_exhaustion_state",
+        lambda _cfg: make_rate_gate_evaluation(
+            "short_wait_until_reset",
+            hard_gated_aliases=["codex-first", "codex-second"],
+            soonest_reset_at="2026-03-16T09:00:00Z",
+            hours_until_reset=1.5,
+            message="short wait before terminal",
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_run_rate_gate_wait",
+        lambda _cfg, _cycle_number, _warnings: make_rate_gate_evaluation(
+            "terminal_all_rate_gates_blocking",
+            hard_gated_aliases=["codex-first", "codex-second"],
+            soonest_reset_at="2026-03-16T15:00:00Z",
+            hours_until_reset=6.0,
+            message="all discovered profiles are hard-gated and the soonest reset is beyond the terminal threshold",
+        ),
+    )
+
+    warnings: list[dict[str, object]] = []
+    out, waited = MODULE._resolve_pre_boss_rate_evaluation(
+        cfg,
+        cycle_number=17,
+        warnings=warnings,
+    )
+
+    assert waited is True
+    assert out.outcome == "terminal_all_rate_gates_blocking"
+    assert out.soonest_reset_at == "2026-03-16T15:00:00Z"
+
+
+def test_mark_profile_snapshot_alias_hard_gated_updates_reset(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+    snapshot_path = tmp_path / MODULE.ARTIFACT_FILES["profile_snapshot"]
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    MODULE._atomic_write_json(
+        snapshot_path,
+        {
+            "schema_version": "1.0",
+            "updated_at": "2026-03-16T00:00:00Z",
+            "cycle_number": 0,
+            "source": "test",
+            "profiles": [
+                {
+                    "alias": "codex-third",
+                    "codex_home": str(tmp_path / ".codex-third"),
+                    "window_5h_remaining_pct": 0.0,
+                    "window_week_remaining_pct": 10.0,
+                    "hard_gated": False,
+                    "soft_gated": False,
+                    "reset_at": None,
+                    "recommended_action": "continue",
+                },
+                {
+                    "alias": "codex-fourth",
+                    "codex_home": str(tmp_path / ".codex-fourth"),
+                    "window_5h_remaining_pct": 50.0,
+                    "window_week_remaining_pct": 50.0,
+                    "hard_gated": False,
+                    "soft_gated": False,
+                    "reset_at": None,
+                    "recommended_action": "continue",
+                },
+            ],
+        },
+    )
+
+    updated = MODULE._mark_profile_snapshot_alias_hard_gated(
+        cfg,
+        alias="codex-third",
+        reset_at="2026-03-16T04:32:00Z",
+        cycle_number=7,
+    )
+
+    assert updated is True
+    snapshot = MODULE._read_json(snapshot_path, default={})
+    third_row = next(row for row in snapshot["profiles"] if row["alias"] == "codex-third")
+    assert third_row["hard_gated"] is True
+    assert third_row["soft_gated"] is False
+    assert third_row["reset_at"] == "2026-03-16T04:32:00Z"
+    assert third_row["recommended_action"] == "wait_until_reset"
 
 
 def test_dispatch_respects_parallel_worker_cap(tmp_path: Path, monkeypatch) -> None:
@@ -4135,7 +4565,11 @@ def test_run_persists_watchdog_terminal_stop_reason_to_cycle_summary(tmp_path: P
             },
         ),
     )
-    monkeypatch.setattr(MODULE, "_run_rate_gate_wait", lambda _cfg, _cycle, _warnings: None)
+    monkeypatch.setattr(
+        MODULE,
+        "_run_rate_gate_wait",
+        lambda _cfg, _cycle, _warnings: make_rate_gate_evaluation("has_capacity", message="capacity available"),
+    )
     dispatch_calls = {"count": 0}
 
     def fake_dispatch(_cfg, _cycle):
@@ -4209,7 +4643,11 @@ def test_run_near_stale_enters_merge_recovery_and_reserves_two_dispatch_slots(tm
             },
         ),
     )
-    monkeypatch.setattr(MODULE, "_run_rate_gate_wait", lambda _cfg, _cycle, _warnings: None)
+    monkeypatch.setattr(
+        MODULE,
+        "_run_rate_gate_wait",
+        lambda _cfg, _cycle, _warnings: make_rate_gate_evaluation("has_capacity", message="capacity available"),
+    )
     monkeypatch.setattr(
         MODULE,
         "_ensure_workstation_prep",

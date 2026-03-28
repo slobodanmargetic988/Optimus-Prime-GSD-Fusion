@@ -771,6 +771,7 @@ Invariant:
 Invariant:
 - Timeout cycles must still emit `terminal_capsule.json`, `cycle_summary.json`, and `cycle_manager_decision.json`.
 - Non-timeout fail-closed BOSS cycles must also emit `terminal_capsule.json` with `stop_reason=""` and failure `reason_code`.
+- `all_rate_gates_blocking` terminal cycles must also write `reports/optimus-prime/control/ALL_RATE_GATES_BLOCKING.json` with hard-gated aliases, soonest reset, threshold hours, and active-worker summary.
 
 ## 20) timeout_adaptation_state.json
 

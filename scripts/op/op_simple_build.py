@@ -36,6 +36,7 @@ BOSS_EVIDENCE_FILE = CURRENT_DIR / "boss_evidence.json"
 BOSS_SESSION_STATE_FILE = CURRENT_DIR / "boss_session_state.json"
 APP_LIFECYCLE_FILE = Path("app_lifecycle.json")
 TRACE_EVENT_LOG_FILE = CURRENT_DIR / "trace_event_envelope.jsonl"
+CONTROL_FLAGS_DIR = Path("reports") / "optimus-prime" / "control"
 
 ARTIFACT_FILES = {
     "cycle_manager_decision": CURRENT_DIR / "cycle_manager_decision.json",
@@ -84,6 +85,7 @@ WATCHDOG_TERMINAL_WARNING_LEAD_MINUTES = 20
 WATCHDOG_TERMINAL_WARNING_COOLDOWN_CYCLES = 4
 WAIT_HEARTBEAT_SECONDS = 300
 WAIT_RESCAN_SECONDS = 900
+RATE_GATE_TERMINAL_THRESHOLD_HOURS = 3
 THREAD_LIVENESS_MAX_AGE_SECONDS = 1200
 MERGE_RECOVERY_RESERVED_SLOTS = 2
 MERGE_MANAGER_CADENCE_CYCLES = 5
@@ -123,6 +125,7 @@ NON_TERMINAL_STOP_REASONS = {
 TERMINAL_STOP_REASONS = {
     "project_done",
     "insurmountable_blocker",
+    "all_rate_gates_blocking",
 }
 WATCHDOG_TERMINAL_STOP_REASONS = {
     "watchdog_idle_stop",
@@ -142,6 +145,8 @@ BOSS_REQUIRED_ARTIFACTS = [
 TASK_ATTEMPT_STAGES = ("dev", "lane_test", "test_fix", "lane_review", "review_fix", "deep_review", "deep_fix")
 SESSION_ID_REGEX = re.compile(r"(?:session id|session_id)\s*[:=]\s*([0-9a-fA-F-]{36})", re.IGNORECASE)
 MANAGER_PROFILE_ALIAS_REGEX = re.compile(r"manager_profile_alias=([A-Za-z0-9._-]+)")
+CODEX_USAGE_LIMIT_REGEX = re.compile(r"you'?ve hit your usage limit", re.IGNORECASE)
+CODEX_USAGE_LIMIT_RESET_REGEX = re.compile(r"try again at\s+([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM))", re.IGNORECASE)
 EXECUTOR_PROVIDERS = {"codex", "openrouter", "blackbox"}
 BLACKBOX_LANES = {"free", "api_key"}
 BLACKBOX_DEFAULT_MODELS = {
@@ -203,6 +208,17 @@ class ManagerResult:
     reason_code: str | None = None
     details: dict[str, Any] | None = None
     session_id: str | None = None
+
+
+@dataclass
+class RateGateEvaluation:
+    outcome: str
+    hard_gated_aliases: list[str]
+    soonest_reset_at: str | None
+    hours_until_reset: float | None
+    threshold_hours: int
+    live_worker_pids: list[int]
+    message: str
 
 
 @dataclass
@@ -3162,6 +3178,9 @@ def _codex_exec_prompt(
         stdout_path.write_text(completed.stdout or "", encoding="utf-8")
         stderr_path.write_text(completed.stderr or "", encoding="utf-8")
         finished_at = utc_now_iso()
+        rate_limit_details = None
+        if completed.returncode != 0:
+            rate_limit_details = _classify_codex_usage_limit(completed.stdout or "", completed.stderr or "")
         return ManagerResult(
             manager=manager_name,
             status="ok" if completed.returncode == 0 else "failed",
@@ -3172,8 +3191,23 @@ def _codex_exec_prompt(
             duration_seconds=round(time.monotonic() - start_time, 3),
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
-            message=None if completed.returncode == 0 else "codex exec returned non-zero",
-            reason_code=None if completed.returncode == 0 else "manager_non_zero_exit",
+            message=(
+                None
+                if completed.returncode == 0
+                else str((rate_limit_details or {}).get("message") or "codex exec returned non-zero")
+            ),
+            reason_code=(
+                None
+                if completed.returncode == 0
+                else str((rate_limit_details or {}).get("reason_code") or "manager_non_zero_exit")
+            ),
+            details=(
+                {
+                    "reset_at": rate_limit_details.get("reset_at"),
+                }
+                if rate_limit_details
+                else None
+            ),
             session_id=_extract_session_id(completed.stdout or "", completed.stderr or ""),
         )
     except subprocess.TimeoutExpired as exc:
@@ -3823,7 +3857,13 @@ def _invoke_manager(
                     reasoning_effort=cfg.boss_reasoning_effort if manager_uses_boss_model else None,
                     codex_profile=cfg.codex_profile,
                 )
-                if manager_name == "BOSS" and resume_session_id and result.status == "failed" and not result.timeout:
+                if (
+                    manager_name == "BOSS"
+                    and resume_session_id
+                    and result.status == "failed"
+                    and not result.timeout
+                    and str(result.reason_code or "").strip() != "manager_rate_limited"
+                ):
                     retry = _codex_exec_prompt(
                         cfg,
                         manager_name,
@@ -4702,6 +4742,282 @@ def _profile_snapshot_gate_state(cfg: RunConfig) -> str:
     return "all_hard_gated"
 
 
+def _profile_snapshot_rows(cfg: RunConfig) -> list[dict[str, Any]]:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], default={})
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("profiles")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _active_rate_gate_worker_summary(cfg: RunConfig) -> dict[str, Any]:
+    payload = _read_json(cfg.repo_root / ARTIFACT_FILES["worker_registry"], default={})
+    workers = payload.get("workers") if isinstance(payload, dict) else None
+    live_worker_rows: list[dict[str, Any]] = []
+    if isinstance(workers, list):
+        for row in workers:
+            if not isinstance(row, dict):
+                continue
+            pid = _coerce_pid(row.get("pid"))
+            if pid is None or not _is_pid_alive(pid):
+                continue
+            live_worker_rows.append(
+                {
+                    "worker_id": str(row.get("worker_id") or "").strip(),
+                    "task_id": str(row.get("current_task_id") or "").strip(),
+                    "lane_id": str(row.get("current_lane_id") or "").strip(),
+                    "pid": pid,
+                }
+            )
+    return {
+        "live_worker_pid_count": len(live_worker_rows),
+        "live_worker_pids": sorted(
+            pid
+            for pid in (_coerce_pid(row.get("pid")) for row in live_worker_rows)
+            if pid is not None
+        ),
+        "live_workers": live_worker_rows,
+    }
+
+
+def _soonest_profile_reset_at(rows: list[dict[str, Any]]) -> tuple[str | None, float | None]:
+    now = datetime.now(timezone.utc)
+    parsed_candidates: list[tuple[datetime, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if not bool(row.get("hard_gated")):
+            continue
+        reset_at_text = str(row.get("reset_at") or "").strip()
+        if not reset_at_text:
+            continue
+        parsed = _parse_iso_datetime(reset_at_text)
+        if parsed is None:
+            continue
+        if parsed <= now:
+            continue
+        parsed_candidates.append((parsed, reset_at_text))
+    if not parsed_candidates:
+        return None, None
+    parsed_candidates.sort(key=lambda item: item[0])
+    soonest_dt, soonest_text = parsed_candidates[0]
+    return soonest_text, round(max(0.0, (soonest_dt - now).total_seconds() / 3600.0), 3)
+
+
+def _evaluate_rate_exhaustion_state(cfg: RunConfig) -> RateGateEvaluation:
+    rows = _profile_snapshot_rows(cfg)
+    threshold_hours = int(RATE_GATE_TERMINAL_THRESHOLD_HOURS)
+    if not rows:
+        return RateGateEvaluation(
+            outcome="has_capacity",
+            hard_gated_aliases=[],
+            soonest_reset_at=None,
+            hours_until_reset=None,
+            threshold_hours=threshold_hours,
+            live_worker_pids=[],
+            message="profile snapshot is missing or malformed; staying conservative and non-terminal",
+        )
+
+    hard_gated_aliases: list[str] = []
+    saw_non_hard_gated = False
+    for row in rows:
+        alias = str(row.get("alias") or "").strip()
+        if bool(row.get("hard_gated")):
+            if alias:
+                hard_gated_aliases.append(alias)
+            continue
+        saw_non_hard_gated = True
+        break
+
+    if saw_non_hard_gated:
+        return RateGateEvaluation(
+            outcome="has_capacity",
+            hard_gated_aliases=sorted(set(hard_gated_aliases)),
+            soonest_reset_at=None,
+            hours_until_reset=None,
+            threshold_hours=threshold_hours,
+            live_worker_pids=[],
+            message="at least one discovered profile is not hard-gated",
+        )
+
+    soonest_reset_at, hours_until_reset = _soonest_profile_reset_at(rows)
+    live_worker_pids = _cycle_release_watchset_from_live_workers(cfg)
+    if hours_until_reset is not None and hours_until_reset <= float(threshold_hours):
+        return RateGateEvaluation(
+            outcome="short_wait_until_reset",
+            hard_gated_aliases=sorted(set(hard_gated_aliases)),
+            soonest_reset_at=soonest_reset_at,
+            hours_until_reset=hours_until_reset,
+            threshold_hours=threshold_hours,
+            live_worker_pids=live_worker_pids,
+            message=(
+                "all discovered profiles are hard-gated but the soonest reset is within the short-wait threshold"
+            ),
+        )
+
+    outcome = "drain_workers_then_stop" if live_worker_pids else "terminal_all_rate_gates_blocking"
+    if soonest_reset_at:
+        message = (
+            "all discovered profiles are hard-gated and the soonest reset is beyond the terminal threshold"
+        )
+    else:
+        message = "all discovered profiles are hard-gated and no valid reset_at is available"
+    return RateGateEvaluation(
+        outcome=outcome,
+        hard_gated_aliases=sorted(set(hard_gated_aliases)),
+        soonest_reset_at=soonest_reset_at,
+        hours_until_reset=hours_until_reset,
+        threshold_hours=threshold_hours,
+        live_worker_pids=live_worker_pids,
+        message=message,
+    )
+
+
+def _all_rate_gates_blocking_path(cfg: RunConfig) -> Path:
+    return cfg.repo_root / CONTROL_FLAGS_DIR / "ALL_RATE_GATES_BLOCKING.json"
+
+
+def _clear_all_rate_gates_blocking_evidence(cfg: RunConfig) -> None:
+    _safe_unlink(_all_rate_gates_blocking_path(cfg))
+
+
+def _write_all_rate_gates_blocking_evidence(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    source: str,
+    evaluation: RateGateEvaluation,
+) -> None:
+    path = _all_rate_gates_blocking_path(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "cycle_number": int(cycle_number),
+        "detected_at": utc_now_iso(),
+        "source": str(source or "").strip() or "unknown",
+        "hard_gated_aliases": sorted(set(evaluation.hard_gated_aliases)),
+        "soonest_reset_at": evaluation.soonest_reset_at,
+        "hours_until_reset": evaluation.hours_until_reset,
+        "threshold_hours": int(evaluation.threshold_hours),
+        "active_worker_summary": _active_rate_gate_worker_summary(cfg),
+        "profile_snapshot_ref": str((cfg.repo_root / ARTIFACT_FILES["profile_snapshot"]).resolve()),
+    }
+    _atomic_write_json(path, payload)
+
+
+def _log_rate_gate_state(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    status: str,
+    message: str,
+    evaluation: RateGateEvaluation,
+) -> None:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "cycle_number": cycle_number,
+        "manager": "rate-gate",
+        "status": status,
+        "timeout": False,
+        "returncode": 0,
+        "started_at": utc_now_iso(),
+        "finished_at": utc_now_iso(),
+        "duration_seconds": 0,
+        "message": message,
+        "details": {
+            "hard_gated_aliases": sorted(set(evaluation.hard_gated_aliases)),
+            "soonest_reset_at": evaluation.soonest_reset_at,
+            "hours_until_reset": evaluation.hours_until_reset,
+            "threshold_hours": evaluation.threshold_hours,
+            "live_worker_pids": list(evaluation.live_worker_pids),
+        },
+    }
+    _append_manager_log(cfg, payload)
+
+
+def _parse_codex_usage_limit_reset_at(text: str) -> str | None:
+    match = CODEX_USAGE_LIMIT_RESET_REGEX.search(text)
+    if not match:
+        return None
+    time_text = str(match.group(1) or "").strip().upper()
+    if not time_text:
+        return None
+    try:
+        parsed_time = datetime.strptime(time_text, "%I:%M %p")
+    except ValueError:
+        return None
+    local_now = datetime.now().astimezone()
+    candidate = local_now.replace(
+        hour=parsed_time.hour,
+        minute=parsed_time.minute,
+        second=0,
+        microsecond=0,
+    )
+    if candidate <= local_now:
+        candidate = candidate + timedelta(days=1)
+    return _utc_iso_from_datetime(candidate.astimezone(timezone.utc))
+
+
+def _classify_codex_usage_limit(stdout_text: str, stderr_text: str) -> dict[str, Any] | None:
+    combined = "\n".join(part for part in (stderr_text, stdout_text) if part).strip()
+    if not combined or not CODEX_USAGE_LIMIT_REGEX.search(combined):
+        return None
+    reset_at = _parse_codex_usage_limit_reset_at(combined)
+    return {
+        "reason_code": "manager_rate_limited",
+        "message": (
+            f"codex usage limit reached; retry after {reset_at}"
+            if reset_at
+            else "codex usage limit reached"
+        ),
+        "reset_at": reset_at,
+    }
+
+
+def _mark_profile_snapshot_alias_hard_gated(
+    cfg: RunConfig,
+    *,
+    alias: str,
+    reset_at: str | None,
+    cycle_number: int,
+) -> bool:
+    alias_text = str(alias or "").strip()
+    if not alias_text:
+        return False
+    snapshot_path = cfg.repo_root / ARTIFACT_FILES["profile_snapshot"]
+    payload = _read_json(snapshot_path, default={})
+    if not isinstance(payload, dict):
+        return False
+    rows = payload.get("profiles")
+    if not isinstance(rows, list):
+        return False
+
+    updated = False
+    candidate_aliases = set(_alias_candidates(alias_text))
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_alias = str(row.get("alias") or "").strip().lower()
+        if row_alias not in candidate_aliases:
+            continue
+        row["hard_gated"] = True
+        row["soft_gated"] = False
+        row["recommended_action"] = "wait_until_reset" if reset_at else "wind_down"
+        if reset_at:
+            row["reset_at"] = reset_at
+        updated = True
+        break
+    if not updated:
+        return False
+    payload["schema_version"] = SCHEMA_VERSION
+    payload["updated_at"] = utc_now_iso()
+    payload["cycle_number"] = int(cycle_number)
+    _atomic_write_json(snapshot_path, payload)
+    return True
+
+
 def _refresh_rate_gate_snapshot(cfg: RunConfig) -> bool:
     snapshot_path = cfg.repo_root / ARTIFACT_FILES["profile_snapshot"]
     payload = _read_json(snapshot_path, default={})
@@ -4733,11 +5049,27 @@ def _refresh_rate_gate_snapshot(cfg: RunConfig) -> bool:
     return changed
 
 
-def _run_rate_gate_wait(cfg: RunConfig, cycle_number: int, warnings: list[dict[str, Any]]) -> None:
+def _run_rate_gate_wait(cfg: RunConfig, cycle_number: int, warnings: list[dict[str, Any]]) -> RateGateEvaluation:
     if not _executor_uses_codex_backend(_normalize_executor_provider(cfg.executor_provider)):
-        return
+        return RateGateEvaluation(
+            outcome="has_capacity",
+            hard_gated_aliases=[],
+            soonest_reset_at=None,
+            hours_until_reset=None,
+            threshold_hours=int(RATE_GATE_TERMINAL_THRESHOLD_HOURS),
+            live_worker_pids=[],
+            message="rate-gate wait skipped for non-codex executor provider",
+        )
     if cfg.dry_run:
-        return
+        return RateGateEvaluation(
+            outcome="has_capacity",
+            hard_gated_aliases=[],
+            soonest_reset_at=None,
+            hours_until_reset=None,
+            threshold_hours=int(RATE_GATE_TERMINAL_THRESHOLD_HOURS),
+            live_worker_pids=[],
+            message="rate-gate wait skipped in dry-run mode",
+        )
     refreshed, refresh_message = _refresh_profile_snapshot_via_skill(cfg, cycle_number)
     entry_returncode = 0 if refreshed else 1
     if not refreshed:
@@ -4768,10 +5100,11 @@ def _run_rate_gate_wait(cfg: RunConfig, cycle_number: int, warnings: list[dict[s
                 "stage": "op-simple-build",
             }
         )
-    gate_state = _profile_snapshot_gate_state(cfg)
-    if gate_state == "has_ungated":
-        return
-    if gate_state == "unknown":
+    evaluation = _evaluate_rate_exhaustion_state(cfg)
+    if evaluation.outcome == "has_capacity":
+        _clear_all_rate_gates_blocking_evidence(cfg)
+        return evaluation
+    if _profile_snapshot_gate_state(cfg) == "unknown":
         warnings.append(
             {
                 "code": "rate_gate_snapshot_unknown",
@@ -4783,9 +5116,55 @@ def _run_rate_gate_wait(cfg: RunConfig, cycle_number: int, warnings: list[dict[s
     next_heartbeat = time.monotonic()
     next_rescan = time.monotonic()
     while True:
-        gate_state = _profile_snapshot_gate_state(cfg)
-        if gate_state == "has_ungated":
-            return
+        evaluation = _evaluate_rate_exhaustion_state(cfg)
+        if evaluation.outcome == "has_capacity":
+            _clear_all_rate_gates_blocking_evidence(cfg)
+            return evaluation
+        if evaluation.outcome == "terminal_all_rate_gates_blocking":
+            _write_all_rate_gates_blocking_evidence(
+                cfg,
+                cycle_number=cycle_number,
+                source="rate_gate_wait",
+                evaluation=evaluation,
+            )
+            _log_rate_gate_state(
+                cfg,
+                cycle_number=cycle_number,
+                status="rate_gate_terminal_stop",
+                message=evaluation.message,
+                evaluation=evaluation,
+            )
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle={cycle_number} rate-gate terminal stop "
+                f"reason=all_rate_gates_blocking soonest_reset_at={evaluation.soonest_reset_at or 'unknown'} "
+                f"hours_until_reset={evaluation.hours_until_reset if evaluation.hours_until_reset is not None else 'unknown'}",
+                flush=True,
+            )
+            return evaluation
+        if evaluation.outcome == "drain_workers_then_stop":
+            _write_all_rate_gates_blocking_evidence(
+                cfg,
+                cycle_number=cycle_number,
+                source="rate_gate_wait",
+                evaluation=evaluation,
+            )
+            _log_rate_gate_state(
+                cfg,
+                cycle_number=cycle_number,
+                status="rate_gate_drain",
+                message=evaluation.message,
+                evaluation=evaluation,
+            )
+            print(
+                "[op-simple-build] "
+                f"[{utc_now_iso()}] "
+                f"cycle={cycle_number} rate-gate drain "
+                f"live_worker_pids={evaluation.live_worker_pids}",
+                flush=True,
+            )
+            return evaluation
         if (cfg.repo_root / TERMINATE_FILE_NAME).exists():
             warnings.append(
                 {
@@ -4794,23 +5173,15 @@ def _run_rate_gate_wait(cfg: RunConfig, cycle_number: int, warnings: list[dict[s
                     "stage": "op-simple-build",
                 }
             )
-            return
+            return evaluation
         now = time.monotonic()
         if now >= next_heartbeat:
-            _append_manager_log(
+            _log_rate_gate_state(
                 cfg,
-                {
-                    "schema_version": SCHEMA_VERSION,
-                    "cycle_number": cycle_number,
-                    "manager": "rate-gate",
-                    "status": "heartbeat",
-                    "timeout": False,
-                    "returncode": 0,
-                    "started_at": utc_now_iso(),
-                    "finished_at": utc_now_iso(),
-                    "duration_seconds": 0,
-                    "message": "still waiting for rate gates to clear",
-                },
+                cycle_number=cycle_number,
+                status="rate_gate_short_wait",
+                message="still waiting for rate gates to clear",
+                evaluation=evaluation,
             )
             next_heartbeat = now + WAIT_HEARTBEAT_SECONDS
         if now >= next_rescan:
@@ -4846,6 +5217,33 @@ def _run_rate_gate_wait(cfg: RunConfig, cycle_number: int, warnings: list[dict[s
             )
             next_rescan = now + WAIT_RESCAN_SECONDS
         time.sleep(5)
+
+
+def _resolve_pre_boss_rate_evaluation(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    warnings: list[dict[str, Any]],
+) -> tuple[RateGateEvaluation, bool]:
+    evaluation = _evaluate_rate_exhaustion_state(cfg)
+    if evaluation.outcome != "short_wait_until_reset":
+        return evaluation, False
+    _log_rate_gate_state(
+        cfg,
+        cycle_number=cycle_number,
+        status="rate_gate_short_wait",
+        message=evaluation.message,
+        evaluation=evaluation,
+    )
+    print(
+        "[op-simple-build] "
+        f"[{utc_now_iso()}] "
+        f"cycle={cycle_number} rate-gate short wait before BOSS "
+        f"soonest_reset_at={evaluation.soonest_reset_at or 'unknown'} "
+        f"hours_until_reset={evaluation.hours_until_reset if evaluation.hours_until_reset is not None else 'unknown'}",
+        flush=True,
+    )
+    return _run_rate_gate_wait(cfg, cycle_number, warnings), True
 
 
 def _resolve_dispatch_script(cfg: RunConfig) -> Path | None:
@@ -5287,6 +5685,19 @@ def _await_cycle_release_signal(
     if mode == "token_conservative":
         tracked_pids = _cycle_release_watchset_from_dispatch_cycle(cfg, cycle_number)
         watchset_source = "current_cycle_dispatch"
+        if not tracked_pids:
+            fallback_tracked_pids = _cycle_release_watchset_from_live_workers(cfg)
+            if fallback_tracked_pids:
+                tracked_pids = fallback_tracked_pids
+                watchset_source = "current_live_in_progress_workers_fallback"
+                print(
+                    "[op-simple-build] "
+                    f"[{utc_now_iso()}] "
+                    f"cycle={cycle_number} cycle-release mode={mode} fallback_watchset "
+                    f"watchset_source={watchset_source} tracked_pid_count={len(tracked_pids)} "
+                    f"tracked_pids={tracked_pids}",
+                    flush=True,
+                )
     else:
         tracked_pids = _cycle_release_watchset_from_live_workers(cfg)
         watchset_source = "current_live_in_progress_workers"
@@ -8174,6 +8585,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             str((cfg.repo_root / RUN_LOCK_FILE).resolve()),
             str((cfg.repo_root / BOSS_SESSION_STATE_FILE).resolve()),
             str((cfg.repo_root / APP_LIFECYCLE_FILE).resolve()),
+            str(_all_rate_gates_blocking_path(cfg).resolve()),
         ]
     )
 
@@ -8253,6 +8665,9 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 f"cycle=0 profile-snapshot-bootstrap status=failed message={bootstrap_message}",
                 flush=True,
             )
+        startup_rate_evaluation = _evaluate_rate_exhaustion_state(cfg)
+        if startup_rate_evaluation.outcome not in {"terminal_all_rate_gates_blocking", "drain_workers_then_stop"}:
+            _clear_all_rate_gates_blocking_evidence(cfg)
         _seed_plan_artifacts_from_planner(cfg)
         lane_contract_ok, lane_contract = _plan_lane_base_branches_contract(cfg)
         if not lane_contract_ok:
@@ -8486,6 +8901,11 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     )
                 ),
             }
+            pre_boss_rate_evaluation, pre_boss_wait_handled = _resolve_pre_boss_rate_evaluation(
+                cfg,
+                cycle_number=cycle_number,
+                warnings=warnings,
+            )
 
             if watchdog_stop:
                 manager_statuses["BOSS"] = {
@@ -8517,43 +8937,133 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     flush=True,
                 )
             else:
-                boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
-                print(
-                    "[op-simple-build] "
-                    f"[{utc_now_iso()}] "
-                    f"cycle={cycle_number} BOSS started",
-                    flush=True,
-                )
-                boss_result = _invoke_manager(
-                    cfg,
-                    manager_name="BOSS",
-                    cycle_number=cycle_number,
-                    context={
-                        "max_parallel_workers": init_state.get("workflow", {}).get("max_parallel_workers"),
-                        "boss_evidence_path": str((cfg.repo_root / BOSS_EVIDENCE_FILE).resolve()),
-                        "llm_profile_mode_enabled": _llm_profile_mode_enabled(cfg),
-                        "llm_profile": str(cfg.codex_profile or "").strip() or None,
-                        "llm_profile_mode_ref": str((cfg.repo_root / ARTIFACT_FILES["llm_profile_mode"]).resolve()),
-                        "llm_profile_rate_registry_ref": str(
-                            (cfg.repo_root / ARTIFACT_FILES["llm_profile_rate_registry"]).resolve()
-                        ),
-                        "rate_snapshot_policy": (
-                            "use_local_counter_registry_skip_skill"
-                            if _llm_profile_mode_enabled(cfg)
-                            else "default_codex_rate_snapshot_skill"
-                        ),
-                    },
-                    expected_artifacts=boss_expected,
-                )
-                print(
-                    "[op-simple-build] "
-                    f"[{utc_now_iso()}] "
-                    f"cycle={cycle_number} BOSS done "
-                    f"status={boss_result.status} timeout={str(bool(boss_result.timeout)).lower()} "
-                    f"duration_s={boss_result.duration_seconds:.3f}",
-                    flush=True,
-                )
-                manager_statuses["BOSS"] = {"status": boss_result.status, "note": boss_result.message or ""}
+                if pre_boss_rate_evaluation.outcome == "terminal_all_rate_gates_blocking":
+                    stop_reason = "all_rate_gates_blocking"
+                    if not pre_boss_wait_handled:
+                        _write_all_rate_gates_blocking_evidence(
+                            cfg,
+                            cycle_number=cycle_number,
+                            source="pre_boss",
+                            evaluation=pre_boss_rate_evaluation,
+                        )
+                        _log_rate_gate_state(
+                            cfg,
+                            cycle_number=cycle_number,
+                            status="rate_gate_terminal_stop",
+                            message=pre_boss_rate_evaluation.message,
+                            evaluation=pre_boss_rate_evaluation,
+                        )
+                    manager_statuses["BOSS"] = {
+                        "status": "skipped",
+                        "note": "terminal rate exhaustion detected before BOSS",
+                    }
+                    manager_statuses["rate-gate"] = {
+                        "status": "stop",
+                        "note": pre_boss_rate_evaluation.message,
+                    }
+                    manager_statuses["work-dispatcher"] = {
+                        "status": "skipped",
+                        "note": "terminal rate exhaustion detected pre-BOSS",
+                    }
+                    _write_cycle_manager_decision(
+                        cfg,
+                        cycle_number,
+                        decision="skip_cycle",
+                        reason_code="all_rate_gates_blocking",
+                        message=pre_boss_rate_evaluation.message,
+                        worker_registry_ready=True,
+                        cycle_mode=cycle_mode,
+                    )
+                    print(
+                        "[op-simple-build] "
+                        f"[{utc_now_iso()}] "
+                        f"cycle={cycle_number} rate-gate terminal stop before BOSS "
+                        f"soonest_reset_at={pre_boss_rate_evaluation.soonest_reset_at or 'unknown'} "
+                        f"hours_until_reset={pre_boss_rate_evaluation.hours_until_reset if pre_boss_rate_evaluation.hours_until_reset is not None else 'unknown'}",
+                        flush=True,
+                    )
+                elif pre_boss_rate_evaluation.outcome == "drain_workers_then_stop":
+                    if not pre_boss_wait_handled:
+                        _write_all_rate_gates_blocking_evidence(
+                            cfg,
+                            cycle_number=cycle_number,
+                            source="pre_boss",
+                            evaluation=pre_boss_rate_evaluation,
+                        )
+                        _log_rate_gate_state(
+                            cfg,
+                            cycle_number=cycle_number,
+                            status="rate_gate_drain",
+                            message=pre_boss_rate_evaluation.message,
+                            evaluation=pre_boss_rate_evaluation,
+                        )
+                    manager_statuses["BOSS"] = {
+                        "status": "skipped",
+                        "note": "all profiles are hard-gated; waiting for live workers to drain before terminal stop",
+                    }
+                    manager_statuses["rate-gate"] = {
+                        "status": "drain",
+                        "note": pre_boss_rate_evaluation.message,
+                    }
+                    manager_statuses["work-dispatcher"] = {
+                        "status": "skipped",
+                        "note": "dispatch skipped while live workers drain before terminal rate stop",
+                    }
+                    _write_cycle_manager_decision(
+                        cfg,
+                        cycle_number,
+                        decision="skip_cycle",
+                        reason_code="rate_gate_drain_workers_then_stop",
+                        message=pre_boss_rate_evaluation.message,
+                        worker_registry_ready=True,
+                        cycle_mode=cycle_mode,
+                    )
+                    print(
+                        "[op-simple-build] "
+                        f"[{utc_now_iso()}] "
+                        f"cycle={cycle_number} rate-gate drain before BOSS "
+                        f"live_worker_pids={pre_boss_rate_evaluation.live_worker_pids}",
+                        flush=True,
+                    )
+                else:
+                    _clear_all_rate_gates_blocking_evidence(cfg)
+                    boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
+                    print(
+                        "[op-simple-build] "
+                        f"[{utc_now_iso()}] "
+                        f"cycle={cycle_number} BOSS started",
+                        flush=True,
+                    )
+                    boss_result = _invoke_manager(
+                        cfg,
+                        manager_name="BOSS",
+                        cycle_number=cycle_number,
+                        context={
+                            "max_parallel_workers": init_state.get("workflow", {}).get("max_parallel_workers"),
+                            "boss_evidence_path": str((cfg.repo_root / BOSS_EVIDENCE_FILE).resolve()),
+                            "llm_profile_mode_enabled": _llm_profile_mode_enabled(cfg),
+                            "llm_profile": str(cfg.codex_profile or "").strip() or None,
+                            "llm_profile_mode_ref": str((cfg.repo_root / ARTIFACT_FILES["llm_profile_mode"]).resolve()),
+                            "llm_profile_rate_registry_ref": str(
+                                (cfg.repo_root / ARTIFACT_FILES["llm_profile_rate_registry"]).resolve()
+                            ),
+                            "rate_snapshot_policy": (
+                                "use_local_counter_registry_skip_skill"
+                                if _llm_profile_mode_enabled(cfg)
+                                else "default_codex_rate_snapshot_skill"
+                            ),
+                        },
+                        expected_artifacts=boss_expected,
+                    )
+                    print(
+                        "[op-simple-build] "
+                        f"[{utc_now_iso()}] "
+                        f"cycle={cycle_number} BOSS done "
+                        f"status={boss_result.status} timeout={str(bool(boss_result.timeout)).lower()} "
+                        f"duration_s={boss_result.duration_seconds:.3f}",
+                        flush=True,
+                    )
+                    manager_statuses["BOSS"] = {"status": boss_result.status, "note": boss_result.message or ""}
 
             if boss_result is not None and boss_result.timeout:
                 timeout_state = _record_boss_timeout_state(
@@ -8706,43 +9216,199 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 worker_registry_ready = True
                 if isinstance(boss_result.details, dict) and boss_result.details.get("artifact_key") == "worker_registry":
                     worker_registry_ready = False
-                _write_cycle_manager_decision(
-                    cfg,
-                    cycle_number,
-                    decision="skip_cycle",
-                    reason_code=boss_result.reason_code or "boss_failed",
-                    message=boss_result.message or "BOSS failed",
-                    worker_registry_ready=worker_registry_ready,
-                    cycle_mode=cycle_mode,
-                )
-                manager_statuses["rate-gate"] = {
-                    "status": "skipped",
-                    "note": "cycle skipped after BOSS failure",
-                }
-                manager_statuses["work-dispatcher"] = {
-                    "status": "skipped",
-                    "note": "cycle skipped after BOSS failure",
-                }
-            elif boss_result is not None and boss_result.status == "ok":
-                _run_rate_gate_wait(cfg, cycle_number, warnings)
-                manager_statuses["rate-gate"] = {"status": "ok", "note": "rate gate completed"}
-                dispatch_reserved_slots = MERGE_RECOVERY_RESERVED_SLOTS if cycle_mode == "merge_recovery" else 0
-                if dispatch_reserved_slots > 0:
-                    dispatch_counts = _dispatch_packets(
+                if str(boss_result.reason_code or "").strip() == "manager_rate_limited":
+                    rate_limited_alias = _profile_alias_from_manager_result(boss_result)
+                    reset_at = (
+                        str((boss_result.details or {}).get("reset_at") or "").strip()
+                        if isinstance(boss_result.details, dict)
+                        else ""
+                    ) or None
+                    if rate_limited_alias:
+                        _mark_profile_snapshot_alias_hard_gated(
+                            cfg,
+                            alias=rate_limited_alias,
+                            reset_at=reset_at,
+                            cycle_number=cycle_number,
+                        )
+                    _append_manager_log(
+                        cfg,
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "cycle_number": cycle_number,
+                            "manager": "BOSS",
+                            "status": "manager_rate_limited",
+                            "timeout": False,
+                            "returncode": int(boss_result.returncode or 1),
+                            "started_at": utc_now_iso(),
+                            "finished_at": utc_now_iso(),
+                            "duration_seconds": 0,
+                            "message": (
+                                f"deterministic codex usage-limit classification alias={rate_limited_alias or 'unknown'} "
+                                f"reset_at={reset_at or 'unknown'}"
+                            ),
+                        },
+                    )
+                    print(
+                        "[op-simple-build] "
+                        f"[{utc_now_iso()}] "
+                        f"cycle={cycle_number} manager_rate_limited "
+                        f"manager=BOSS alias={rate_limited_alias or 'unknown'} "
+                        f"reset_at={reset_at or 'unknown'}",
+                        flush=True,
+                    )
+                    post_limit_evaluation = _evaluate_rate_exhaustion_state(cfg)
+                    if post_limit_evaluation.outcome == "terminal_all_rate_gates_blocking":
+                        stop_reason = "all_rate_gates_blocking"
+                        _write_all_rate_gates_blocking_evidence(
+                            cfg,
+                            cycle_number=cycle_number,
+                            source="boss_rate_limit",
+                            evaluation=post_limit_evaluation,
+                        )
+                        _log_rate_gate_state(
+                            cfg,
+                            cycle_number=cycle_number,
+                            status="rate_gate_terminal_stop",
+                            message=post_limit_evaluation.message,
+                            evaluation=post_limit_evaluation,
+                        )
+                        manager_statuses["rate-gate"] = {
+                            "status": "stop",
+                            "note": post_limit_evaluation.message,
+                        }
+                        manager_statuses["work-dispatcher"] = {
+                            "status": "skipped",
+                            "note": "terminal rate exhaustion detected after BOSS rate-limit failure",
+                        }
+                        _write_cycle_manager_decision(
+                            cfg,
+                            cycle_number,
+                            decision="skip_cycle",
+                            reason_code="all_rate_gates_blocking",
+                            message=post_limit_evaluation.message,
+                            worker_registry_ready=worker_registry_ready,
+                            cycle_mode=cycle_mode,
+                        )
+                    elif post_limit_evaluation.outcome == "drain_workers_then_stop":
+                        _write_all_rate_gates_blocking_evidence(
+                            cfg,
+                            cycle_number=cycle_number,
+                            source="boss_rate_limit",
+                            evaluation=post_limit_evaluation,
+                        )
+                        _log_rate_gate_state(
+                            cfg,
+                            cycle_number=cycle_number,
+                            status="rate_gate_drain",
+                            message=post_limit_evaluation.message,
+                            evaluation=post_limit_evaluation,
+                        )
+                        manager_statuses["rate-gate"] = {
+                            "status": "drain",
+                            "note": post_limit_evaluation.message,
+                        }
+                        manager_statuses["work-dispatcher"] = {
+                            "status": "skipped",
+                            "note": "dispatch skipped while live workers drain after BOSS rate-limit failure",
+                        }
+                        _write_cycle_manager_decision(
+                            cfg,
+                            cycle_number,
+                            decision="skip_cycle",
+                            reason_code="rate_gate_drain_workers_then_stop",
+                            message=post_limit_evaluation.message,
+                            worker_registry_ready=worker_registry_ready,
+                            cycle_mode=cycle_mode,
+                        )
+                    else:
+                        _clear_all_rate_gates_blocking_evidence(cfg)
+                        manager_statuses["rate-gate"] = {
+                            "status": "skipped",
+                            "note": "cycle skipped after deterministic BOSS rate-limit classification",
+                        }
+                        manager_statuses["work-dispatcher"] = {
+                            "status": "skipped",
+                            "note": "cycle skipped after deterministic BOSS rate-limit classification",
+                        }
+                        _write_cycle_manager_decision(
+                            cfg,
+                            cycle_number,
+                            decision="skip_cycle",
+                            reason_code="manager_rate_limited",
+                            message=boss_result.message or "BOSS rate-limited",
+                            worker_registry_ready=worker_registry_ready,
+                            cycle_mode=cycle_mode,
+                        )
+                else:
+                    _write_cycle_manager_decision(
                         cfg,
                         cycle_number,
-                        reserved_slots=dispatch_reserved_slots,
+                        decision="skip_cycle",
+                        reason_code=boss_result.reason_code or "boss_failed",
+                        message=boss_result.message or "BOSS failed",
+                        worker_registry_ready=worker_registry_ready,
+                        cycle_mode=cycle_mode,
                     )
-                    manager_statuses["work-dispatcher"] = {
-                        "status": "ok",
-                        "note": (
-                            "dispatch cycle completed with merge recovery reservation "
-                            f"reserved_slots={dispatch_reserved_slots}"
-                        ),
+                    manager_statuses["rate-gate"] = {
+                        "status": "skipped",
+                        "note": "cycle skipped after BOSS failure",
                     }
+                    manager_statuses["work-dispatcher"] = {
+                        "status": "skipped",
+                        "note": "cycle skipped after BOSS failure",
+                    }
+            elif boss_result is not None and boss_result.status == "ok":
+                rate_gate_result = _run_rate_gate_wait(cfg, cycle_number, warnings)
+                if rate_gate_result.outcome == "terminal_all_rate_gates_blocking":
+                    stop_reason = "all_rate_gates_blocking"
+                    manager_statuses["rate-gate"] = {"status": "stop", "note": rate_gate_result.message}
+                    manager_statuses["work-dispatcher"] = {
+                        "status": "skipped",
+                        "note": "terminal rate exhaustion detected after BOSS before dispatch",
+                    }
+                    _write_cycle_manager_decision(
+                        cfg,
+                        cycle_number,
+                        decision="skip_cycle",
+                        reason_code="all_rate_gates_blocking",
+                        message=rate_gate_result.message,
+                        worker_registry_ready=True,
+                        cycle_mode=cycle_mode,
+                    )
+                elif rate_gate_result.outcome == "drain_workers_then_stop":
+                    manager_statuses["rate-gate"] = {"status": "drain", "note": rate_gate_result.message}
+                    manager_statuses["work-dispatcher"] = {
+                        "status": "skipped",
+                        "note": "dispatch skipped while live workers drain before terminal rate stop",
+                    }
+                    _write_cycle_manager_decision(
+                        cfg,
+                        cycle_number,
+                        decision="skip_cycle",
+                        reason_code="rate_gate_drain_workers_then_stop",
+                        message=rate_gate_result.message,
+                        worker_registry_ready=True,
+                        cycle_mode=cycle_mode,
+                    )
                 else:
-                    dispatch_counts = _dispatch_packets(cfg, cycle_number)
-                    manager_statuses["work-dispatcher"] = {"status": "ok", "note": "dispatch cycle completed"}
+                    manager_statuses["rate-gate"] = {"status": "ok", "note": "rate gate completed"}
+                    dispatch_reserved_slots = MERGE_RECOVERY_RESERVED_SLOTS if cycle_mode == "merge_recovery" else 0
+                    if dispatch_reserved_slots > 0:
+                        dispatch_counts = _dispatch_packets(
+                            cfg,
+                            cycle_number,
+                            reserved_slots=dispatch_reserved_slots,
+                        )
+                        manager_statuses["work-dispatcher"] = {
+                            "status": "ok",
+                            "note": (
+                                "dispatch cycle completed with merge recovery reservation "
+                                f"reserved_slots={dispatch_reserved_slots}"
+                            ),
+                        }
+                    else:
+                        dispatch_counts = _dispatch_packets(cfg, cycle_number)
+                        manager_statuses["work-dispatcher"] = {"status": "ok", "note": "dispatch cycle completed"}
 
             try:
                 mergeability_report = _build_mergeability_report(
@@ -8837,8 +9503,10 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             if terminate_path.exists():
                 stop_reason = "operator_terminate_file"
             else:
-                stop_reason = _termination_from_summary(summary)
-                if stop_reason not in {"project_done", "insurmountable_blocker"} and watchdog_stop:
+                summary_stop_reason = _termination_from_summary(summary)
+                if summary_stop_reason:
+                    stop_reason = summary_stop_reason
+                if not stop_reason and watchdog_stop:
                     watchdog_reason = str(watchdog_signal.get("reason_code") or "").strip()
                     stop_reason = watchdog_reason or "watchdog_idle_stop"
 

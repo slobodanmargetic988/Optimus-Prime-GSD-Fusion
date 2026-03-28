@@ -57,6 +57,7 @@ Rule for this document:
 
 - #15 kept in principle:
   - Keep the behavior that avoids terminal exit on rate gates when reset is soon enough.
+  - Concrete threshold: wait when the soonest profile reset is within 3 hours; stop cleanly with `all_rate_gates_blocking` when it is beyond that threshold or missing.
   - Final position/order in new cycle may change.
 
 - #16 removed.
