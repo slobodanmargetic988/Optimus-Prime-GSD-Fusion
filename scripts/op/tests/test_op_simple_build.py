@@ -109,6 +109,7 @@ def test_build_config_accepts_run_base_source_branch_override(tmp_path: Path) ->
         )
     )
     assert cfg.run_base_source_branch == "op-simple-canary-prev"
+    assert cfg.run_base_source_branch_explicit is True
 
 
 def test_inspect_resume_run_base_meta_reads_existing_state_without_checkout(tmp_path: Path, monkeypatch) -> None:
@@ -1963,6 +1964,19 @@ def test_await_cycle_release_signal_token_conservative_waits_for_all_dead_with_g
     assert out["decision"] == "all_tracked_pids_dead_guarded"
     assert out["tracked_pids"] == [101, 102]
     assert out["alive_pids"] == []
+    trace_rows = [
+        json.loads(line)
+        for line in (tmp_path / MODULE.TRACE_EVENT_LOG_FILE).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    progress_steps = [
+        ((((row.get("operation") or {}).get("inputs") or {}).get("cycle_progress") or {}).get("step_key"))
+        for row in trace_rows
+        if row.get("event_name") == "runtime.cycle.progress"
+    ]
+    assert "cycle_release_wait" in progress_steps
+    assert "cycle_release_guard" in progress_steps
+    assert "cycle_release_complete" in progress_steps
 
 
 def test_await_cycle_release_signal_max_work_releases_on_first_dead_with_guard(tmp_path: Path, monkeypatch) -> None:
@@ -3116,10 +3130,11 @@ def test_watchdog_hard_limit_stops_even_when_lane_branch_is_active(tmp_path: Pat
         lambda _cfg: {"signal": "stable-progress-signal", "components": {}},
     )
     now_epoch = int(datetime.now(timezone.utc).timestamp())
+    hard_limit = MODULE._run_base_hard_limit_minutes(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
 
     def fake_commit_epoch(_repo_root: Path, ref: str) -> int:
         if ref == "main":
-            return now_epoch - int((MODULE.WATCHDOG_STALE_COMMIT_MINUTES * 2 + 1) * 60)
+            return now_epoch - int((hard_limit + 1) * 60)
         if ref == "lane-phase-1-a":
             return now_epoch - int(2 * 60)
         return now_epoch
@@ -3130,7 +3145,7 @@ def test_watchdog_hard_limit_stops_even_when_lane_branch_is_active(tmp_path: Pat
 
     assert stop is True
     assert signal["reason_code"] == "stale_run_base_hard_limit"
-    assert float(signal["run_base_hard_age_minutes"] or 0.0) > float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES * 2)
+    assert float(signal["run_base_hard_age_minutes"] or 0.0) > float(hard_limit)
     assert float(signal["lane_aggregate_watchdog_age_minutes"] or 0.0) < float(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
 
 
@@ -3236,7 +3251,11 @@ def test_watchdog_terminal_warning_nudge_has_cycle_cooldown(tmp_path: Path, monk
         lambda _cfg: {"signal": "stable-progress-signal", "components": {}},
     )
     now_epoch = int(datetime.now(timezone.utc).timestamp())
-    hard_warning_age = int((MODULE.WATCHDOG_STALE_COMMIT_MINUTES * 2) - MODULE.WATCHDOG_TERMINAL_WARNING_LEAD_MINUTES + 1)
+    hard_warning_age = (
+        MODULE._run_base_hard_limit_minutes(MODULE.WATCHDOG_STALE_COMMIT_MINUTES)
+        - MODULE.WATCHDOG_TERMINAL_WARNING_LEAD_MINUTES
+        + 1
+    )
 
     def fake_commit_epoch(_repo_root: Path, ref: str) -> int:
         if ref == "main":
@@ -4035,6 +4054,62 @@ def test_create_run_base_branch_uses_configured_source_branch(tmp_path: Path) ->
     assert run_meta["created_new"] is True
 
 
+def test_create_run_base_branch_falls_back_to_rab_base_when_default_main_missing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    git(tmp_path, "init", "-b", "RAB-BASE")
+    git(tmp_path, "config", "user.email", "test@example.com")
+    git(tmp_path, "config", "user.name", "Test User")
+    (tmp_path / "README.md").write_text("seed\n", encoding="utf-8")
+    git(tmp_path, "add", "README.md")
+    git(tmp_path, "commit", "-m", "seed")
+    before_rab_base = git(tmp_path, "rev-parse", "RAB-BASE")
+
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+    )
+
+    run_meta = MODULE._create_run_base_branch(cfg)
+
+    current = git(tmp_path, "branch", "--show-current")
+    captured = capsys.readouterr()
+    assert current == run_meta["run_base_branch"]
+    assert current.startswith("op-simple-canary-")
+    assert run_meta["run_base_from_branch"] == "RAB-BASE"
+    assert run_meta["run_base_from_commit"] == before_rab_base
+    assert run_meta["created_new"] is True
+    assert "reason=bootstrap_branch_fallback" in captured.out
+
+
+def test_create_run_base_branch_keeps_explicit_missing_source_branch_error(tmp_path: Path) -> None:
+    git(tmp_path, "init", "-b", "RAB-BASE")
+    git(tmp_path, "config", "user.email", "test@example.com")
+    git(tmp_path, "config", "user.name", "Test User")
+    (tmp_path / "README.md").write_text("seed\n", encoding="utf-8")
+    git(tmp_path, "add", "README.md")
+    git(tmp_path, "commit", "-m", "seed")
+
+    cfg = MODULE.RunConfig(
+        repo_root=tmp_path,
+        sleep_minutes=0,
+        max_build_cycles=1,
+        max_parallel_workers=8,
+        dry_run=False,
+        run_base_source_branch="main",
+        run_base_source_branch_explicit=True,
+    )
+
+    with pytest.raises(MODULE.SimpleBuildError) as exc:
+        MODULE._create_run_base_branch(cfg)
+
+    assert exc.value.code == "op_simple_missing_source_branch"
+
+
 def test_create_run_base_branch_dry_run_uses_current_branch(tmp_path: Path) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -4468,6 +4543,61 @@ def test_run_emits_cycle_trace_events_for_manager_and_dispatch(tmp_path: Path) -
         assert MODULE._validate_trace_event_envelope_v1(row) == []
 
 
+def test_run_emits_run_cycle_snapshot_trace_event(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+
+    MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            max_build_cycles=1,
+            dry_run=True,
+            sleep_minutes=0,
+            ground_sync_enabled=False,
+        )
+    )
+
+    trace_rows = [
+        json.loads(line)
+        for line in (tmp_path / MODULE.TRACE_EVENT_LOG_FILE).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    snapshot_event = next(row for row in trace_rows if row.get("event_name") == "runtime.run.cycle_snapshot")
+    snapshot = (((snapshot_event.get("operation") or {}).get("inputs") or {}).get("run_cycle_snapshot") or {})
+
+    assert snapshot_event["identity"]["run_id"].startswith("run.")
+    assert snapshot["cycle_number"] == 1
+    assert snapshot["task_counts"]["pending"] >= 0
+    assert snapshot["dispatch_counts"]["attempted"] >= 0
+
+
+def test_run_emits_terminal_run_summary_trace_event(tmp_path: Path) -> None:
+    build_repo(tmp_path)
+
+    MODULE.run_op_simple_build(
+        make_req(
+            tmp_path,
+            max_build_cycles=1,
+            dry_run=True,
+            sleep_minutes=0,
+            ground_sync_enabled=False,
+        )
+    )
+
+    trace_rows = [
+        json.loads(line)
+        for line in (tmp_path / MODULE.TRACE_EVENT_LOG_FILE).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    run_summary_event = next(row for row in trace_rows if row.get("event_name") == "runtime.run.summary")
+    run_summary = (((run_summary_event.get("operation") or {}).get("inputs") or {}).get("run_summary") or {})
+
+    assert run_summary_event["identity"]["project_id"].startswith("prj.")
+    assert run_summary["cycles_this_run"] == 1
+    assert run_summary["finished_at_utc"]
+    assert run_summary["wall_clock_duration_seconds"] >= 0
+    assert run_summary["summary"] == "Reached max_build_cycles=1."
+
+
 def test_run_wrapup_trace_includes_llm_hardening_from_report(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
 
@@ -4640,6 +4770,24 @@ def test_run_ground_sync_triggers_cadence_and_terminal(tmp_path: Path, monkeypat
     assert out["ok"] is True
     assert (2, "cadence") in sync_calls
     assert sync_calls[-1] == (3, "terminal")
+    trace_rows = [
+        json.loads(line)
+        for line in (tmp_path / MODULE.TRACE_EVENT_LOG_FILE).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    ground_sync_progress = [
+        (((row.get("operation") or {}).get("inputs") or {}).get("cycle_progress") or {})
+        for row in trace_rows
+        if row.get("event_name") == "runtime.cycle.progress"
+    ]
+    cadence_finish = next(
+        row for row in ground_sync_progress if row.get("step_key") == "ground_sync_finished" and row.get("trigger") == "cadence"
+    )
+    terminal_finish = next(
+        row for row in ground_sync_progress if row.get("step_key") == "ground_sync_finished" and row.get("trigger") == "terminal"
+    )
+    assert cadence_finish["manager_status"] == "ok"
+    assert terminal_finish["manager_status"] == "ok"
 
 
 def test_run_ground_sync_passes_checkpoint_and_lock_timeout(tmp_path: Path, monkeypatch) -> None:
@@ -5773,7 +5921,6 @@ def test_invoke_manager_boss_rotates_after_non_timeout_failure(tmp_path: Path, m
     assert evidence.get("non_timeout_failed_excluded_alias") == "codex-old"
 
 
-
 def test_invoke_manager_boss_refreshes_bootstrap_snapshot_before_selection(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)
     cfg = MODULE.RunConfig(
@@ -5979,6 +6126,7 @@ def test_invoke_manager_boss_retries_different_profile_after_workspace_auth_fail
     assert isinstance(retry, dict)
     assert retry.get("failed_alias") == "codex-old"
     assert retry.get("retry_selected_alias") == "codex-new"
+
 
 def test_invoke_manager_boss_fails_closed_when_runtime_context_invalid(tmp_path: Path, monkeypatch) -> None:
     build_repo(tmp_path)

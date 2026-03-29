@@ -21,6 +21,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SCRIPTS_ROOT = SCRIPT_DIR.parent
 
 SCHEMA_VERSION = "1.0"
+DEFAULT_RUN_BASE_SOURCE_BRANCH = "main"
+BOOTSTRAP_RUN_BASE_SOURCE_BRANCH = "RAB-BASE"
 
 TERMINATE_FILE_NAME = "terminate_run.json"
 SIMPLE_ROOT = Path(".op-simple")
@@ -79,7 +81,7 @@ BLACKBOX_MANAGER_TIMEOUT_SECONDS = {
 WATCHDOG_STALE_COMMIT_MINUTES = 150
 WATCHDOG_NEAR_STALE_MARGIN_MINUTES = 10
 WATCHDOG_RECOVERY_NUDGE_MINUTES = 30
-WATCHDOG_RUN_BASE_HARD_LIMIT_MULTIPLIER = 2
+WATCHDOG_RUN_BASE_HARD_LIMIT_MULTIPLIER = 2.6
 WATCHDOG_TERMINAL_WARNING_LEAD_MINUTES = 20
 WATCHDOG_TERMINAL_WARNING_COOLDOWN_CYCLES = 4
 WAIT_HEARTBEAT_SECONDS = 300
@@ -225,7 +227,8 @@ class RunConfig:
     worktrees_parent: Path = DEFAULT_WORKTREES_PARENT
     selected_aliases: list[str] | None = None
     resume_mode: bool = False
-    run_base_source_branch: str = "main"
+    run_base_source_branch: str = DEFAULT_RUN_BASE_SOURCE_BRANCH
+    run_base_source_branch_explicit: bool = False
     boss_model: str = "gpt-5.3-codex"
     boss_reasoning_effort: str = "xhigh"
     codex_profile: str | None = None
@@ -1223,6 +1226,10 @@ def _default_last_handoff_outcome() -> dict[str, Any]:
     }
 
 
+def _run_base_hard_limit_minutes(stale_after_minutes: int | float) -> int:
+    return max(1, int(round(float(stale_after_minutes) * float(WATCHDOG_RUN_BASE_HARD_LIMIT_MULTIPLIER))))
+
+
 def _task_execution_state_payload(cycle_number: int, tasks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1299,6 +1306,30 @@ def _git_resolve_commit(repo_root: Path, ref: str) -> str:
 
 def _git_current_branch(repo_root: Path) -> str:
     return _git_text(repo_root, "branch", "--show-current")
+
+
+def _resolve_run_base_source_branch(
+    repo_root: Path,
+    requested_branch: str | None,
+    *,
+    explicit: bool = False,
+) -> tuple[str, str | None]:
+    branch_text = str(requested_branch or "").strip() or DEFAULT_RUN_BASE_SOURCE_BRANCH
+    if _git_branch_exists(repo_root, branch_text):
+        return branch_text, None
+    if (
+        not explicit
+        and branch_text == DEFAULT_RUN_BASE_SOURCE_BRANCH
+        and _git_branch_exists(repo_root, BOOTSTRAP_RUN_BASE_SOURCE_BRANCH)
+    ):
+        return (
+            BOOTSTRAP_RUN_BASE_SOURCE_BRANCH,
+            (
+                f"default run-base source branch '{DEFAULT_RUN_BASE_SOURCE_BRANCH}' missing; "
+                f"falling back to '{BOOTSTRAP_RUN_BASE_SOURCE_BRANCH}'"
+            ),
+        )
+    return branch_text, None
 
 
 def _git_conflicted_files(repo_root: Path) -> list[str]:
@@ -1519,6 +1550,132 @@ def _trace_identity_context(cfg: RunConfig, cycle_number: int) -> dict[str, str]
     if isinstance(era_id, str) and era_id.strip():
         out["era_id"] = era_id
     return out
+
+
+def _trace_source_payload(cfg: RunConfig) -> dict[str, Any]:
+    repo_name = cfg.repo_root.name
+    repo_branch = _git_text(cfg.repo_root, "branch", "--show-current") or ""
+    commit_sha = _git_text(cfg.repo_root, "rev-parse", "HEAD") or ""
+    source_payload: dict[str, Any] = {
+        "repo": repo_name,
+        "branch": repo_branch,
+    }
+    if commit_sha and TRACE_EVENT_SOURCE_SHA_REGEX.fullmatch(commit_sha):
+        source_payload["commit_sha"] = commit_sha
+    return source_payload
+
+
+def _summary_task_counts(payload: Any) -> dict[str, int]:
+    row = payload if isinstance(payload, dict) else {}
+    return {
+        "pending": int(row.get("pending") or 0),
+        "in_progress": int(row.get("in_progress") or 0),
+        "done": int(row.get("done") or 0),
+        "blocked": int(row.get("blocked") or 0),
+    }
+
+
+def _emit_cycle_progress_trace_event(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    step_key: str,
+    step_label: str,
+    terminal_line: str,
+    detail_message: str,
+    step_state: str,
+    step_started_at_utc: str | None = None,
+    step_timeout_seconds: int | None = None,
+    cycle_mode: str | None = None,
+    extra_fields: dict[str, Any] | None = None,
+    event_timestamp_utc: str | None = None,
+) -> list[str]:
+    identity = _trace_identity_context(cfg, cycle_number)
+    source_payload = _trace_source_payload(cfg)
+    event_timestamp = str(event_timestamp_utc or utc_now_iso()).strip() or utc_now_iso()
+    progress_payload: dict[str, Any] = {
+        "step_key": str(step_key or "").strip() or "unknown_step",
+        "step_label": str(step_label or "").strip() or "Unknown step",
+        "step_state": str(step_state or "").strip() or "active",
+        "detail_message": str(detail_message or "").strip() or str(terminal_line or "").strip(),
+        "terminal_line": str(terminal_line or "").strip(),
+        "cycle_number": int(cycle_number),
+        "step_started_at_utc": str(step_started_at_utc or event_timestamp).strip() or event_timestamp,
+    }
+    if isinstance(step_timeout_seconds, int) and step_timeout_seconds > 0:
+        progress_payload["step_timeout_seconds"] = int(step_timeout_seconds)
+    if isinstance(cycle_mode, str) and cycle_mode.strip():
+        progress_payload["cycle_mode"] = cycle_mode.strip()
+    if isinstance(extra_fields, dict):
+        for key, value in extra_fields.items():
+            if value is None:
+                continue
+            progress_payload[key] = value
+
+    event = {
+        "schema_version": TRACE_EVENT_SCHEMA_VERSION,
+        "event_name": "runtime.cycle.progress",
+        "timestamp_utc": event_timestamp,
+        "identity": {
+            "project_id": identity["project_id"],
+            "era_id": identity.get("era_id"),
+            "plan_id": identity["plan_id"],
+            "phase_id": identity["phase_id"],
+            "lane_id": identity["lane_id"],
+            "task_id": identity["task_id"],
+            "run_id": identity["run_id"],
+            "thread_id": _canonical_id("thread", f"{identity['repo_slug']}-cycle-progress"),
+            "event_id": _canonical_id(
+                "event",
+                f"{identity['repo_slug']}-c{cycle_number:06d}-progress-{step_key}-{uuid.uuid4().hex[:8]}",
+            ),
+            "decision_id": _canonical_id(
+                "decision",
+                f"{identity['repo_slug']}-c{cycle_number:06d}-progress-{step_key}-{uuid.uuid4().hex[:8]}",
+            ),
+        },
+        "actor": {"type": "service", "id": "op-simple-build"},
+        "decision": {
+            "question": f"What cycle step is active or changing during cycle {cycle_number}?",
+            "rationale": str(detail_message or terminal_line or step_label or "cycle step progress recorded"),
+            "reason_codes": [_reason_code(step_key, fallback="CYCLE_PROGRESS_RECORDED")],
+        },
+        "operation": {
+            "name": "record_cycle_progress",
+            "intent": "Mirror cycle progress terminal output into Ground-visible trace telemetry.",
+            "inputs": {
+                "cycle_progress": progress_payload,
+                "terminal_line": str(terminal_line or "").strip(),
+            },
+        },
+        "outcome": {
+            "status": "partial" if str(step_state or "").strip() not in {"done", "completed", "released"} else "success",
+            "summary": str(detail_message or step_label or "cycle progress recorded"),
+            "metrics": {
+                "cycle_number": int(cycle_number),
+                "step_timeout_seconds": int(step_timeout_seconds) if isinstance(step_timeout_seconds, int) and step_timeout_seconds > 0 else 0,
+            },
+        },
+        "risk": {"level": "low"},
+        "evidence": {
+            "artifacts": [
+                {
+                    "artifact_id": _canonical_id("artifact", f"{identity['repo_slug']}-c{cycle_number:06d}-trace-log"),
+                    "kind": "trace_event_log",
+                    "uri": str(TRACE_EVENT_LOG_FILE),
+                }
+            ]
+        },
+        "source": source_payload,
+    }
+    event_identity = event.get("identity")
+    if isinstance(event_identity, dict):
+        event["identity"] = {k: v for k, v in event_identity.items() if v is not None}
+    try:
+        _emit_trace_event_envelope(cfg, cycle_number=cycle_number, payload=event)
+    except SimpleBuildError as exc:
+        return [f"cycle progress trace emission failed ({step_key}): {exc.message}"]
+    return []
 
 
 def _dispatch_events_for_cycle(cfg: RunConfig, cycle_number: int) -> list[dict[str, Any]]:
@@ -1925,15 +2082,7 @@ def _emit_cycle_trace_events(
     trace_errors: list[str] = []
     decision_payload = _read_cycle_decision(cfg)
     identity = _trace_identity_context(cfg, cycle_number)
-    repo_name = cfg.repo_root.name
-    repo_branch = _git_text(cfg.repo_root, "branch", "--show-current") or ""
-    commit_sha = _git_text(cfg.repo_root, "rev-parse", "HEAD") or ""
-    source_payload: dict[str, Any] = {
-        "repo": repo_name,
-        "branch": repo_branch,
-    }
-    if commit_sha and TRACE_EVENT_SOURCE_SHA_REGEX.fullmatch(commit_sha):
-        source_payload["commit_sha"] = commit_sha
+    source_payload = _trace_source_payload(cfg)
 
     def _normalize_event_ts(value: Any) -> str:
         text = str(value or "").strip()
@@ -2139,6 +2288,224 @@ def _emit_cycle_trace_events(
     return trace_errors
 
 
+def _emit_run_cycle_snapshot_trace_event(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    summary: dict[str, Any],
+) -> list[str]:
+    identity = _trace_identity_context(cfg, cycle_number)
+    source_payload = _trace_source_payload(cfg)
+    task_counts = _summary_task_counts(summary.get("task_counts"))
+    dispatch_counts = _normalized_dispatch_counts(summary.get("dispatch_counts"))
+    manager_statuses = summary.get("manager_statuses") if isinstance(summary.get("manager_statuses"), dict) else {}
+    run_snapshot = {
+        "cycle_number": int(cycle_number),
+        "cycle_mode": str(summary.get("cycle_mode") or "").strip() or "normal",
+        "task_counts": task_counts,
+        "dispatch_counts": dispatch_counts,
+        "project_done": bool(summary.get("project_done")),
+        "insurmountable_blocker": bool(summary.get("insurmountable_blocker")),
+        "termination": summary.get("termination") if isinstance(summary.get("termination"), dict) else {},
+        "stop_reason": str(summary.get("stop_reason") or "").strip(),
+        "notes": str(summary.get("notes") or "").strip(),
+        "manager_statuses": manager_statuses,
+    }
+    event = {
+        "schema_version": TRACE_EVENT_SCHEMA_VERSION,
+        "event_name": "runtime.run.cycle_snapshot",
+        "timestamp_utc": utc_now_iso(),
+        "identity": {
+            "project_id": identity["project_id"],
+            "era_id": identity.get("era_id"),
+            "plan_id": identity["plan_id"],
+            "phase_id": identity["phase_id"],
+            "lane_id": identity["lane_id"],
+            "task_id": identity["task_id"],
+            "run_id": identity["run_id"],
+            "thread_id": _canonical_id("thread", f"{identity['repo_slug']}-run-monitor"),
+            "event_id": _canonical_id("event", f"{identity['repo_slug']}-c{cycle_number:06d}-run-snapshot"),
+            "decision_id": _canonical_id("decision", f"{identity['repo_slug']}-c{cycle_number:06d}-run-snapshot"),
+        },
+        "actor": {"type": "service", "id": "op-simple-build"},
+        "decision": {
+            "question": f"What is the current build state after cycle {cycle_number}?",
+            "rationale": (
+                f"Cycle {cycle_number} snapshot recorded for Ground monitoring with "
+                f"pending={task_counts['pending']} in_progress={task_counts['in_progress']} "
+                f"done={task_counts['done']} blocked={task_counts['blocked']}."
+            ),
+            "reason_codes": ["RUN_CYCLE_SNAPSHOT_RECORDED"],
+        },
+        "operation": {
+            "name": "write_run_cycle_snapshot",
+            "intent": "Capture one Ground-friendly progress snapshot for the current build cycle.",
+            "inputs": {"run_cycle_snapshot": run_snapshot},
+        },
+        "outcome": {
+            "status": "partial",
+            "summary": f"Cycle {cycle_number} snapshot recorded for run monitoring.",
+            "metrics": {
+                "cycle_number": int(cycle_number),
+                "pending_tasks": task_counts["pending"],
+                "in_progress_tasks": task_counts["in_progress"],
+                "done_tasks": task_counts["done"],
+                "blocked_tasks": task_counts["blocked"],
+                "dispatch_attempted": dispatch_counts["attempted"],
+                "dispatch_launched": dispatch_counts["launched"],
+                "dispatch_failed": dispatch_counts["launch_failed"],
+                "dispatch_unknown": dispatch_counts["unknown"],
+            },
+        },
+        "risk": {"level": "low"},
+        "evidence": {
+            "artifacts": [
+                {
+                    "artifact_id": _canonical_id("artifact", f"{identity['repo_slug']}-c{cycle_number:06d}-cycle-summary"),
+                    "kind": "cycle_summary",
+                    "uri": str(ARTIFACT_FILES["cycle_summary"]),
+                },
+                {
+                    "artifact_id": _canonical_id("artifact", f"{identity['repo_slug']}-c{cycle_number:06d}-terminal-capsule"),
+                    "kind": "terminal_capsule",
+                    "uri": str(ARTIFACT_FILES["terminal_capsule"]),
+                },
+            ]
+        },
+        "source": source_payload,
+    }
+    event_identity = event.get("identity")
+    if isinstance(event_identity, dict):
+        event["identity"] = {k: v for k, v in event_identity.items() if v is not None}
+    try:
+        _emit_trace_event_envelope(cfg, cycle_number=cycle_number, payload=event)
+    except SimpleBuildError as exc:
+        return [f"run cycle snapshot trace emission failed: {exc.message}"]
+    return []
+
+
+def _emit_run_summary_trace_event(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    cycles_this_run: int,
+    stop_reason: str | None,
+    final_status: str,
+    final_summary: str,
+    init_state: dict[str, Any],
+) -> list[str]:
+    identity = _trace_identity_context(cfg, cycle_number)
+    source_payload = _trace_source_payload(cfg)
+    run_lock = _read_json(cfg.repo_root / RUN_LOCK_FILE, default={})
+    cycle_summary = _read_json(cfg.repo_root / ARTIFACT_FILES["cycle_summary"], default={})
+    run_started_at_utc = (
+        str(run_lock.get("started_at") or "").strip()
+        if isinstance(run_lock, dict)
+        else ""
+    ) or utc_now_iso()
+    finished_at_utc = utc_now_iso()
+    started_dt = _parse_iso_datetime(run_started_at_utc)
+    finished_dt = _parse_iso_datetime(finished_at_utc)
+    wall_clock_duration_seconds = 0.0
+    if started_dt is not None and finished_dt is not None:
+        wall_clock_duration_seconds = max(0.0, round((finished_dt - started_dt).total_seconds(), 3))
+
+    normalized_stop_reason = str(stop_reason or "").strip()
+    if normalized_stop_reason == "project_done":
+        outcome_status = "success"
+        risk_level = "low"
+    elif normalized_stop_reason:
+        outcome_status = "blocked"
+        risk_level = "medium"
+    else:
+        outcome_status = "partial"
+        risk_level = "low"
+
+    run_summary = {
+        "started_at_utc": run_started_at_utc,
+        "finished_at_utc": finished_at_utc,
+        "wall_clock_duration_seconds": wall_clock_duration_seconds,
+        "cycles_this_run": int(cycles_this_run),
+        "stop_reason": normalized_stop_reason,
+        "final_status": str(final_status or "").strip() or "completed",
+        "summary": str(final_summary or "").strip() or "OP Simple build finished.",
+        "max_parallel_workers": int(cfg.max_parallel_workers),
+        "run_base_branch": str((init_state.get("run_context") or {}).get("run_base_branch") or ""),
+        "run_base_from_branch": str((init_state.get("run_context") or {}).get("run_base_from_branch") or ""),
+        "last_cycle_number": int(cycle_number),
+        "last_cycle_mode": str((cycle_summary.get("cycle_mode") or "") if isinstance(cycle_summary, dict) else ""),
+        "task_counts": _summary_task_counts((cycle_summary.get("task_counts") or {}) if isinstance(cycle_summary, dict) else {}),
+        "dispatch_counts": _normalized_dispatch_counts(
+            (cycle_summary.get("dispatch_counts") or {}) if isinstance(cycle_summary, dict) else {}
+        ),
+    }
+    reason_code = _reason_code(normalized_stop_reason or final_status or "run_summary_recorded", fallback="RUN_SUMMARY_RECORDED")
+    event = {
+        "schema_version": TRACE_EVENT_SCHEMA_VERSION,
+        "event_name": "runtime.run.summary",
+        "timestamp_utc": finished_at_utc,
+        "identity": {
+            "project_id": identity["project_id"],
+            "era_id": identity.get("era_id"),
+            "plan_id": identity["plan_id"],
+            "phase_id": identity["phase_id"],
+            "lane_id": identity["lane_id"],
+            "task_id": identity["task_id"],
+            "run_id": identity["run_id"],
+            "thread_id": _canonical_id("thread", f"{identity['repo_slug']}-run-monitor"),
+            "event_id": _canonical_id("event", f"{identity['repo_slug']}-c{cycle_number:06d}-run-summary"),
+            "decision_id": _canonical_id("decision", f"{identity['repo_slug']}-c{cycle_number:06d}-run-summary"),
+        },
+        "actor": {"type": "service", "id": "op-simple-build"},
+        "decision": {
+            "question": "What was the final result of this OP Simple build run?",
+            "rationale": (
+                f"Run summary captured after cycle {cycle_number} with cycles_this_run={cycles_this_run} "
+                f"and stop_reason={normalized_stop_reason or 'none'}."
+            ),
+            "reason_codes": [reason_code],
+        },
+        "operation": {
+            "name": "write_run_summary",
+            "intent": "Persist terminal build summary telemetry for Ground history and monitoring.",
+            "inputs": {"run_summary": run_summary},
+        },
+        "outcome": {
+            "status": outcome_status,
+            "summary": run_summary["summary"],
+            "metrics": {
+                "cycles_this_run": int(cycles_this_run),
+                "wall_clock_duration_seconds": wall_clock_duration_seconds,
+                "max_parallel_workers": int(cfg.max_parallel_workers),
+            },
+        },
+        "risk": {"level": risk_level},
+        "evidence": {
+            "artifacts": [
+                {
+                    "artifact_id": _canonical_id("artifact", f"{identity['repo_slug']}-c{cycle_number:06d}-cycle-summary"),
+                    "kind": "cycle_summary",
+                    "uri": str(ARTIFACT_FILES["cycle_summary"]),
+                },
+                {
+                    "artifact_id": _canonical_id("artifact", f"{identity['repo_slug']}-c{cycle_number:06d}-terminal-capsule"),
+                    "kind": "terminal_capsule",
+                    "uri": str(ARTIFACT_FILES["terminal_capsule"]),
+                },
+            ]
+        },
+        "source": source_payload,
+    }
+    event_identity = event.get("identity")
+    if isinstance(event_identity, dict):
+        event["identity"] = {k: v for k, v in event_identity.items() if v is not None}
+    try:
+        _emit_trace_event_envelope(cfg, cycle_number=cycle_number, payload=event)
+    except SimpleBuildError as exc:
+        return [f"run summary trace emission failed: {exc.message}"]
+    return []
+
+
 def _project_trace_snapshot_path(earth_root: Path, project_id: str) -> Path:
     return earth_root / "reports" / "ground-ingest-inputs" / project_id / GROUND_SYNC_SNAPSHOT_BASENAME
 
@@ -2247,8 +2614,20 @@ def _run_ground_sync(
 
 
 def _create_run_base_branch(cfg: RunConfig) -> dict[str, Any]:
-    active_branch = _git_text(cfg.repo_root, "branch", "--show-current") or "main"
-    source_branch = str(cfg.run_base_source_branch or "").strip() or "main"
+    active_branch = _git_current_branch(cfg.repo_root) or DEFAULT_RUN_BASE_SOURCE_BRANCH
+    source_branch, resolution_note = _resolve_run_base_source_branch(
+        cfg.repo_root,
+        cfg.run_base_source_branch,
+        explicit=bool(cfg.run_base_source_branch_explicit),
+    )
+    if resolution_note:
+        print(
+            "[op-simple-build] "
+            f"[{utc_now_iso()}] "
+            f"run_base_source_branch requested={cfg.run_base_source_branch or DEFAULT_RUN_BASE_SOURCE_BRANCH} "
+            f"resolved={source_branch} reason=bootstrap_branch_fallback",
+            flush=True,
+        )
     if cfg.dry_run:
         return {
             "run_base_branch": active_branch,
@@ -2339,10 +2718,11 @@ def _load_resume_run_base_meta(cfg: RunConfig) -> dict[str, Any]:
 
 
 def _default_initialize_state(repo_root: Path, max_parallel_workers: int, run_meta: dict[str, Any] | None = None) -> dict[str, Any]:
-    monitored_branch = _git_text(repo_root, "branch", "--show-current") or "main"
+    monitored_branch = _git_current_branch(repo_root) or DEFAULT_RUN_BASE_SOURCE_BRANCH
+    default_source_branch, _note = _resolve_run_base_source_branch(repo_root, None, explicit=False)
     run_context = {
         "run_base_branch": monitored_branch,
-        "run_base_from_branch": "main",
+        "run_base_from_branch": default_source_branch,
         "run_base_from_commit": _git_text(repo_root, "rev-parse", "HEAD") or "",
         "run_base_created_at": utc_now_iso(),
         "created_new": False,
@@ -4086,16 +4466,39 @@ def _invoke_manager(
         expected_artifacts=expected_artifacts,
         cycle_number=cycle_number,
     )
-    print(
+    hardening_timestamp = utc_now_iso()
+    hardening_terminal_line = (
         "[op-simple-build] "
-        f"[{utc_now_iso()}] "
+        f"[{hardening_timestamp}] "
         f"cycle={cycle_number} manager={manager_name} llm_hardening="
         f"{'present' if llm_hardening_present else 'missing'} "
         f"source={llm_hardening_source or 'none'} "
         f"checker_result={llm_hardening.get('checker_result')} "
-        f"override_applied={str(bool(llm_hardening.get('override_applied'))).lower()}",
-        flush=True,
+        f"override_applied={str(bool(llm_hardening.get('override_applied'))).lower()}"
     )
+    print(hardening_terminal_line, flush=True)
+    if manager_name == "BOSS":
+        _emit_cycle_progress_trace_event(
+            cfg,
+            cycle_number=cycle_number,
+            step_key="boss_hardening",
+            step_label="BOSS hardening check",
+            terminal_line=hardening_terminal_line,
+            detail_message=(
+                f"BOSS hardening telemetry status={'present' if llm_hardening_present else 'missing'} "
+                f"checker_result={llm_hardening.get('checker_result')}."
+            ),
+            step_state="completed",
+            step_started_at_utc=str(result.finished_at or hardening_timestamp),
+            extra_fields={
+                "manager_name": manager_name,
+                "llm_hardening_present": bool(llm_hardening_present),
+                "llm_hardening_source": str(llm_hardening_source or "none"),
+                "checker_result": llm_hardening.get("checker_result"),
+                "override_applied": bool(llm_hardening.get("override_applied")),
+            },
+            event_timestamp_utc=hardening_timestamp,
+        )
 
     timeout_log_state = _load_timeout_adaptation_state(cfg) if manager_name == "BOSS" else {}
     timeout_log_rotation = (
@@ -5271,12 +5674,29 @@ def _normalize_dead_worker_leases(cfg: RunConfig, cycle_number: int) -> dict[str
     requeued_tasks = 0
 
     if reclaimed_workers or requeued_tasks:
-        print(
+        event_timestamp = utc_now_iso()
+        terminal_line = (
             "[op-simple-build] "
-            f"[{utc_now_iso()}] "
+            f"[{event_timestamp}] "
             f"cycle={cycle_number} reclaimed_dead_workers={reclaimed_workers} "
-            f"requeued_in_progress_tasks={requeued_tasks}",
-            flush=True,
+            f"requeued_in_progress_tasks={requeued_tasks}"
+        )
+        print(terminal_line, flush=True)
+        _emit_cycle_progress_trace_event(
+            cfg,
+            cycle_number=cycle_number,
+            step_key="lease_recovery",
+            step_label="Lease recovery",
+            terminal_line=terminal_line,
+            detail_message=(
+                f"Recovered {reclaimed_workers} dead worker leases and requeued {requeued_tasks} in-progress tasks."
+            ),
+            step_state="completed",
+            extra_fields={
+                "reclaimed_dead_workers": int(reclaimed_workers),
+                "requeued_in_progress_tasks": int(requeued_tasks),
+            },
+            event_timestamp_utc=event_timestamp,
         )
 
     return {
@@ -5469,6 +5889,7 @@ def _await_cycle_release_signal(
     cycle_number: int,
 ) -> dict[str, Any]:
     wait_started_at = time.monotonic()
+    wait_started_at_utc = utc_now_iso()
     mode = _normalize_cycle_release_mode(cfg.cycle_release_mode)
     timeout_seconds = max(1, int(cfg.cycle_release_timeout_seconds))
     poll_seconds = max(1, int(cfg.cycle_release_poll_seconds))
@@ -5481,6 +5902,27 @@ def _await_cycle_release_signal(
         watchset_source = "current_live_in_progress_workers"
 
     if not tracked_pids:
+        event_timestamp = utc_now_iso()
+        terminal_line = (
+            "[op-simple-build] "
+            f"[{event_timestamp}] "
+            f"cycle={cycle_number} cycle-release mode={mode} wait_skipped "
+            f"watchset_source={watchset_source} tracked_pid_count=0"
+        )
+        print(terminal_line, flush=True)
+        _emit_cycle_progress_trace_event(
+            cfg,
+            cycle_number=cycle_number,
+            step_key="cycle_release_complete",
+            step_label="Cycle release complete",
+            terminal_line=terminal_line,
+            detail_message="Cycle release skipped because no tracked worker pids were present.",
+            step_state="skipped",
+            step_started_at_utc=event_timestamp,
+            cycle_mode=mode,
+            extra_fields={"cycle_release_mode": mode, "watchset_source": watchset_source, "tracked_pid_count": 0},
+            event_timestamp_utc=event_timestamp,
+        )
         return {
             "mode": mode,
             "watchset_source": watchset_source,
@@ -5495,14 +5937,35 @@ def _await_cycle_release_signal(
             "dead_pids": [],
         }
 
-    print(
+    wait_start_line = (
         "[op-simple-build] "
-        f"[{utc_now_iso()}] "
+        f"[{wait_started_at_utc}] "
         f"cycle={cycle_number} cycle-release mode={mode} wait_start "
         f"watchset_source={watchset_source} tracked_pid_count={len(tracked_pids)} "
         f"tracked_pids={tracked_pids} timeout_s={timeout_seconds} poll_s={poll_seconds} "
-        f"guard_s={guard_seconds}",
-        flush=True,
+        f"guard_s={guard_seconds}"
+    )
+    print(wait_start_line, flush=True)
+    _emit_cycle_progress_trace_event(
+        cfg,
+        cycle_number=cycle_number,
+        step_key="cycle_release_wait",
+        step_label="Cycle release wait",
+        terminal_line=wait_start_line,
+        detail_message="Cycle release watcher started.",
+        step_state="active",
+        step_started_at_utc=wait_started_at_utc,
+        step_timeout_seconds=WAIT_HEARTBEAT_SECONDS,
+        extra_fields={
+            "cycle_release_mode": mode,
+            "watchset_source": watchset_source,
+            "tracked_pid_count": len(tracked_pids),
+            "tracked_pids": list(tracked_pids),
+            "timeout_seconds": timeout_seconds,
+            "poll_seconds": poll_seconds,
+            "guard_seconds": guard_seconds,
+        },
+        event_timestamp_utc=wait_started_at_utc,
     )
 
     previous_alive: set[int] = set(_cycle_release_alive_pids(tracked_pids))
@@ -5528,35 +5991,76 @@ def _await_cycle_release_signal(
 
     def _guard_wait(alive_before_guard: set[int], *, release_decision: str) -> dict[str, Any] | None:
         if guard_seconds <= 0:
-            print(
+            guard_skipped_ts = utc_now_iso()
+            guard_skipped_line = (
                 "[op-simple-build] "
-                f"[{utc_now_iso()}] "
+                f"[{guard_skipped_ts}] "
                 f"cycle={cycle_number} cycle-release mode={mode} guard_skipped guard_s=0 "
-                f"decision={release_decision}",
-                flush=True,
+                f"decision={release_decision}"
+            )
+            print(guard_skipped_line, flush=True)
+            _emit_cycle_progress_trace_event(
+                cfg,
+                cycle_number=cycle_number,
+                step_key="cycle_release_guard",
+                step_label="Cycle release guard",
+                terminal_line=guard_skipped_line,
+                detail_message="Cycle release guard skipped.",
+                step_state="skipped",
+                step_started_at_utc=guard_skipped_ts,
+                extra_fields={"cycle_release_mode": mode, "decision_candidate": release_decision, "guard_seconds": 0},
+                event_timestamp_utc=guard_skipped_ts,
             )
             return _result(decision=release_decision, timed_out=False, alive_set=alive_before_guard)
 
         guard_started_at = time.monotonic()
-        print(
+        guard_started_at_utc = utc_now_iso()
+        guard_started_line = (
             "[op-simple-build] "
-            f"[{utc_now_iso()}] "
+            f"[{guard_started_at_utc}] "
             f"cycle={cycle_number} cycle-release mode={mode} guard_start "
-            f"guard_s={guard_seconds} decision_candidate={release_decision}",
-            flush=True,
+            f"guard_s={guard_seconds} decision_candidate={release_decision}"
+        )
+        print(guard_started_line, flush=True)
+        _emit_cycle_progress_trace_event(
+            cfg,
+            cycle_number=cycle_number,
+            step_key="cycle_release_guard",
+            step_label="Cycle release guard",
+            terminal_line=guard_started_line,
+            detail_message="Cycle release guard started.",
+            step_state="active",
+            step_started_at_utc=guard_started_at_utc,
+            step_timeout_seconds=guard_seconds,
+            extra_fields={"cycle_release_mode": mode, "decision_candidate": release_decision, "guard_seconds": guard_seconds},
+            event_timestamp_utc=guard_started_at_utc,
         )
         while True:
             now = time.monotonic()
             elapsed_total = now - wait_started_at
             if elapsed_total >= float(timeout_seconds):
                 alive_set = set(_cycle_release_alive_pids(tracked_pids))
-                print(
+                timeout_ts = utc_now_iso()
+                timeout_line = (
                     "[op-simple-build] "
-                    f"[{utc_now_iso()}] "
+                    f"[{timeout_ts}] "
                     f"cycle={cycle_number} cycle-release mode={mode} wait_timeout "
                     f"release_reason=timeout_ceiling_reached_during_guard "
-                    f"alive_pid_count={len(alive_set)} alive_pids={sorted(alive_set)}",
-                    flush=True,
+                    f"alive_pid_count={len(alive_set)} alive_pids={sorted(alive_set)}"
+                )
+                print(timeout_line, flush=True)
+                _emit_cycle_progress_trace_event(
+                    cfg,
+                    cycle_number=cycle_number,
+                    step_key="cycle_release_timeout",
+                    step_label="Cycle release timeout",
+                    terminal_line=timeout_line,
+                    detail_message="Cycle release timed out during guard.",
+                    step_state="timeout",
+                    step_started_at_utc=wait_started_at_utc,
+                    step_timeout_seconds=timeout_seconds,
+                    extra_fields={"cycle_release_mode": mode, "alive_pid_count": len(alive_set), "alive_pids": sorted(alive_set)},
+                    event_timestamp_utc=timeout_ts,
                 )
                 return _result(decision="timeout_release", timed_out=True, alive_set=alive_set)
             guard_elapsed = now - guard_started_at
@@ -5569,13 +6073,32 @@ def _await_cycle_release_signal(
                 time.sleep(sleep_seconds)
 
         alive_after_guard = set(_cycle_release_alive_pids(tracked_pids))
-        print(
+        guard_end_ts = utc_now_iso()
+        guard_end_line = (
             "[op-simple-build] "
-            f"[{utc_now_iso()}] "
+            f"[{guard_end_ts}] "
             f"cycle={cycle_number} cycle-release mode={mode} guard_end "
             f"guard_s={guard_seconds} alive_pid_count={len(alive_after_guard)} "
-            f"alive_pids={sorted(alive_after_guard)}",
-            flush=True,
+            f"alive_pids={sorted(alive_after_guard)}"
+        )
+        print(guard_end_line, flush=True)
+        _emit_cycle_progress_trace_event(
+            cfg,
+            cycle_number=cycle_number,
+            step_key="cycle_release_guard",
+            step_label="Cycle release guard",
+            terminal_line=guard_end_line,
+            detail_message="Cycle release guard completed.",
+            step_state="completed",
+            step_started_at_utc=guard_started_at_utc,
+            step_timeout_seconds=guard_seconds,
+            extra_fields={
+                "cycle_release_mode": mode,
+                "alive_pid_count": len(alive_after_guard),
+                "alive_pids": sorted(alive_after_guard),
+                "guard_seconds": guard_seconds,
+            },
+            event_timestamp_utc=guard_end_ts,
         )
 
         if mode == "token_conservative":
@@ -5601,13 +6124,27 @@ def _await_cycle_release_signal(
         elapsed = now - wait_started_at
         if elapsed >= float(timeout_seconds):
             alive_set = set(_cycle_release_alive_pids(tracked_pids))
-            print(
+            timeout_ts = utc_now_iso()
+            timeout_line = (
                 "[op-simple-build] "
-                f"[{utc_now_iso()}] "
+                f"[{timeout_ts}] "
                 f"cycle={cycle_number} cycle-release mode={mode} wait_timeout "
                 "release_reason=timeout_ceiling_reached "
-                f"alive_pid_count={len(alive_set)} alive_pids={sorted(alive_set)}",
-                flush=True,
+                f"alive_pid_count={len(alive_set)} alive_pids={sorted(alive_set)}"
+            )
+            print(timeout_line, flush=True)
+            _emit_cycle_progress_trace_event(
+                cfg,
+                cycle_number=cycle_number,
+                step_key="cycle_release_timeout",
+                step_label="Cycle release timeout",
+                terminal_line=timeout_line,
+                detail_message="Cycle release timed out.",
+                step_state="timeout",
+                step_started_at_utc=wait_started_at_utc,
+                step_timeout_seconds=timeout_seconds,
+                extra_fields={"cycle_release_mode": mode, "alive_pid_count": len(alive_set), "alive_pids": sorted(alive_set)},
+                event_timestamp_utc=timeout_ts,
             )
             return _result(decision="timeout_release", timed_out=True, alive_set=alive_set)
 
@@ -5615,32 +6152,74 @@ def _await_cycle_release_signal(
         newly_dead = sorted(previous_alive - alive_set)
         newly_alive = sorted(alive_set - previous_alive)
         if newly_dead:
-            print(
+            transition_ts = utc_now_iso()
+            transition_line = (
                 "[op-simple-build] "
-                f"[{utc_now_iso()}] "
+                f"[{transition_ts}] "
                 f"cycle={cycle_number} cycle-release mode={mode} pid_transition "
-                f"event=dead pids={newly_dead} alive_pid_count={len(alive_set)}",
-                flush=True,
+                f"event=dead pids={newly_dead} alive_pid_count={len(alive_set)}"
+            )
+            print(transition_line, flush=True)
+            _emit_cycle_progress_trace_event(
+                cfg,
+                cycle_number=cycle_number,
+                step_key="cycle_release_wait",
+                step_label="Cycle release wait",
+                terminal_line=transition_line,
+                detail_message="Cycle release observed worker exits.",
+                step_state="active",
+                step_started_at_utc=wait_started_at_utc,
+                step_timeout_seconds=WAIT_HEARTBEAT_SECONDS,
+                extra_fields={"cycle_release_mode": mode, "transition_event": "dead", "pids": newly_dead, "alive_pid_count": len(alive_set)},
+                event_timestamp_utc=transition_ts,
             )
         if newly_alive:
-            print(
+            transition_ts = utc_now_iso()
+            transition_line = (
                 "[op-simple-build] "
-                f"[{utc_now_iso()}] "
+                f"[{transition_ts}] "
                 f"cycle={cycle_number} cycle-release mode={mode} pid_transition "
-                f"event=alive pids={newly_alive} alive_pid_count={len(alive_set)}",
-                flush=True,
+                f"event=alive pids={newly_alive} alive_pid_count={len(alive_set)}"
+            )
+            print(transition_line, flush=True)
+            _emit_cycle_progress_trace_event(
+                cfg,
+                cycle_number=cycle_number,
+                step_key="cycle_release_wait",
+                step_label="Cycle release wait",
+                terminal_line=transition_line,
+                detail_message="Cycle release observed worker starts.",
+                step_state="active",
+                step_started_at_utc=wait_started_at_utc,
+                step_timeout_seconds=WAIT_HEARTBEAT_SECONDS,
+                extra_fields={"cycle_release_mode": mode, "transition_event": "alive", "pids": newly_alive, "alive_pid_count": len(alive_set)},
+                event_timestamp_utc=transition_ts,
             )
 
         if mode == "token_conservative":
             if not alive_set:
                 guard_result = _guard_wait(alive_set, release_decision="all_tracked_pids_dead_guarded")
                 if guard_result is not None:
-                    print(
+                    _release_ts = utc_now_iso()
+                    release_line = (
                         "[op-simple-build] "
-                        f"[{utc_now_iso()}] "
+                        f"[{_release_ts}] "
                         f"cycle={cycle_number} cycle-release mode={mode} release_signal={guard_result['decision']} "
-                        f"waited_s={guard_result['waited_seconds']}",
-                        flush=True,
+                        f"waited_s={guard_result['waited_seconds']}"
+                    )
+                    print(release_line, flush=True)
+                    _emit_cycle_progress_trace_event(
+                        cfg,
+                        cycle_number=cycle_number,
+                        step_key="cycle_release_complete",
+                        step_label="Cycle release complete",
+                        terminal_line=release_line,
+                        detail_message="Cycle release finished after all tracked workers exited.",
+                        step_state="released",
+                        step_started_at_utc=wait_started_at_utc,
+                        step_timeout_seconds=timeout_seconds,
+                        extra_fields={"cycle_release_mode": mode, "release_signal": guard_result["decision"], "waited_seconds": guard_result["waited_seconds"]},
+                        event_timestamp_utc=_release_ts,
                     )
                     return guard_result
         else:
@@ -5648,23 +6227,57 @@ def _await_cycle_release_signal(
             if dead_now:
                 guard_result = _guard_wait(alive_set, release_decision="first_tracked_pid_dead_guarded")
                 if guard_result is not None:
-                    print(
+                    _release_ts = utc_now_iso()
+                    release_line = (
                         "[op-simple-build] "
-                        f"[{utc_now_iso()}] "
+                        f"[{_release_ts}] "
                         f"cycle={cycle_number} cycle-release mode={mode} release_signal={guard_result['decision']} "
-                        f"waited_s={guard_result['waited_seconds']}",
-                        flush=True,
+                        f"waited_s={guard_result['waited_seconds']}"
+                    )
+                    print(release_line, flush=True)
+                    _emit_cycle_progress_trace_event(
+                        cfg,
+                        cycle_number=cycle_number,
+                        step_key="cycle_release_complete",
+                        step_label="Cycle release complete",
+                        terminal_line=release_line,
+                        detail_message="Cycle release finished after the guarded exit condition was met.",
+                        step_state="released",
+                        step_started_at_utc=wait_started_at_utc,
+                        step_timeout_seconds=timeout_seconds,
+                        extra_fields={"cycle_release_mode": mode, "release_signal": guard_result["decision"], "waited_seconds": guard_result["waited_seconds"]},
+                        event_timestamp_utc=_release_ts,
                     )
                     return guard_result
 
         if now >= heartbeat_due_at:
-            print(
+            heartbeat_ts = utc_now_iso()
+            heartbeat_line = (
                 "[op-simple-build] "
-                f"[{utc_now_iso()}] "
+                f"[{heartbeat_ts}] "
                 f"cycle={cycle_number} cycle-release mode={mode} heartbeat "
                 f"waited_s={round(float(elapsed), 3)} tracked_pid_count={len(tracked_pids)} "
-                f"alive_pid_count={len(alive_set)} dead_pid_count={len(tracked_pids) - len(alive_set)}",
-                flush=True,
+                f"alive_pid_count={len(alive_set)} dead_pid_count={len(tracked_pids) - len(alive_set)}"
+            )
+            print(heartbeat_line, flush=True)
+            _emit_cycle_progress_trace_event(
+                cfg,
+                cycle_number=cycle_number,
+                step_key="cycle_release_wait",
+                step_label="Cycle release wait",
+                terminal_line=heartbeat_line,
+                detail_message="Cycle release heartbeat.",
+                step_state="active",
+                step_started_at_utc=wait_started_at_utc,
+                step_timeout_seconds=WAIT_HEARTBEAT_SECONDS,
+                extra_fields={
+                    "cycle_release_mode": mode,
+                    "waited_seconds": round(float(elapsed), 3),
+                    "tracked_pid_count": len(tracked_pids),
+                    "alive_pid_count": len(alive_set),
+                    "dead_pid_count": len(tracked_pids) - len(alive_set),
+                },
+                event_timestamp_utc=heartbeat_ts,
             )
             heartbeat_due_at = now + float(WAIT_HEARTBEAT_SECONDS)
 
@@ -6319,7 +6932,7 @@ def _watchdog_tick(cfg: RunConfig, cycle_number: int, *, force_reset_target: boo
         state = {}
 
     stale_after_minutes = WATCHDOG_STALE_COMMIT_MINUTES
-    run_base_hard_limit_minutes = int(stale_after_minutes) * int(WATCHDOG_RUN_BASE_HARD_LIMIT_MULTIPLIER)
+    run_base_hard_limit_minutes = _run_base_hard_limit_minutes(stale_after_minutes)
     run_base_hard_warning_minutes = max(0, int(run_base_hard_limit_minutes) - int(WATCHDOG_TERMINAL_WARNING_LEAD_MINUTES))
     previous_sha = str(state.get("last_commit_sha") or "").strip()
     offset_minutes_raw = state.get("watchdog_age_offset_minutes")
@@ -8132,21 +8745,57 @@ def _render_cycle_summary(
     _atomic_write_json(summary_path, out)
 
     if _is_boss_failed_cycle(manager_statuses):
-        print(
+        event_timestamp = utc_now_iso()
+        terminal_line = (
             "[op-simple-build] "
-            f"[{utc_now_iso()}] "
+            f"[{event_timestamp}] "
             f"cycle={cycle_number} summary=boss_failed "
-            f"message={_boss_failed_note(manager_statuses, out.get('notes') or '')}",
-            flush=True,
+            f"message={_boss_failed_note(manager_statuses, out.get('notes') or '')}"
+        )
+        print(terminal_line, flush=True)
+        _emit_cycle_progress_trace_event(
+            cfg,
+            cycle_number=cycle_number,
+            step_key="cycle_summary",
+            step_label="Cycle summary",
+            terminal_line=terminal_line,
+            detail_message="Cycle summary recorded after BOSS failure.",
+            step_state="completed",
+            cycle_mode=out.get("cycle_mode") if isinstance(out, dict) else None,
+            extra_fields={
+                "task_counts": merged_counts,
+                "dispatch_counts": out.get("dispatch_counts") if isinstance(out, dict) else {},
+                "manager_statuses": manager_statuses,
+                "stop_reason": str(out.get("stop_reason") or "") if isinstance(out, dict) else "",
+            },
+            event_timestamp_utc=event_timestamp,
         )
     else:
-        print(
+        event_timestamp = utc_now_iso()
+        terminal_line = (
             "[op-simple-build] "
-            f"[{utc_now_iso()}] "
+            f"[{event_timestamp}] "
             f"cycle={cycle_number} pending={merged_counts['pending']} in_progress={merged_counts['in_progress']} "
             f"done={merged_counts['done']} blocked={merged_counts['blocked']} "
-            f"dispatch={{attempted:{out['dispatch_counts']['attempted']},launched:{out['dispatch_counts']['launched']},failed:{out['dispatch_counts']['launch_failed']},unknown:{out['dispatch_counts']['unknown']}}}",
-            flush=True,
+            f"dispatch={{attempted:{out['dispatch_counts']['attempted']},launched:{out['dispatch_counts']['launched']},failed:{out['dispatch_counts']['launch_failed']},unknown:{out['dispatch_counts']['unknown']}}}"
+        )
+        print(terminal_line, flush=True)
+        _emit_cycle_progress_trace_event(
+            cfg,
+            cycle_number=cycle_number,
+            step_key="cycle_summary",
+            step_label="Cycle summary",
+            terminal_line=terminal_line,
+            detail_message="Cycle summary recorded with task and dispatch counts.",
+            step_state="completed",
+            cycle_mode=out.get("cycle_mode") if isinstance(out, dict) else None,
+            extra_fields={
+                "task_counts": merged_counts,
+                "dispatch_counts": out.get("dispatch_counts") if isinstance(out, dict) else {},
+                "manager_statuses": manager_statuses,
+                "stop_reason": str(out.get("stop_reason") or "") if isinstance(out, dict) else "",
+            },
+            event_timestamp_utc=event_timestamp,
         )
     return out
 
@@ -8266,7 +8915,9 @@ def _build_config(req: Any) -> RunConfig:
         worktrees_parent = DEFAULT_WORKTREES_PARENT
     command = str(getattr(req, "command", "") or "").strip().lower()
     resume_mode = command == "op-resume"
-    run_base_source_branch = str(getattr(req, "run_base_source_branch", "") or "").strip() or "main"
+    raw_run_base_source_branch = str(getattr(req, "run_base_source_branch", "") or "").strip()
+    run_base_source_branch = raw_run_base_source_branch or DEFAULT_RUN_BASE_SOURCE_BRANCH
+    run_base_source_branch_explicit = bool(raw_run_base_source_branch)
     boss_model = str(getattr(req, "boss_model", "") or "").strip() or "gpt-5.3-codex"
     boss_reasoning_effort = str(getattr(req, "boss_reasoning_effort", "") or "").strip() or "xhigh"
     codex_profile = str(getattr(req, "codex_profile", getattr(req, "profile", "")) or "").strip() or None
@@ -8329,6 +8980,7 @@ def _build_config(req: Any) -> RunConfig:
         worktrees_parent=worktrees_parent,
         resume_mode=resume_mode,
         run_base_source_branch=run_base_source_branch,
+        run_base_source_branch_explicit=run_base_source_branch_explicit,
         boss_model=boss_model,
         boss_reasoning_effort=boss_reasoning_effort,
         codex_profile=codex_profile,
@@ -8545,17 +9197,43 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                         f"queue_items={int(merge_sweep_result.get('queue_item_count') or 0)}"
                     ),
                 }
-                print(
+                event_timestamp = utc_now_iso()
+                terminal_line = (
                     "[op-simple-build] "
-                    f"[{utc_now_iso()}] "
+                    f"[{event_timestamp}] "
                     f"cycle={cycle_number} merge-sweep "
                     f"task_merges={int(merge_sweep_result.get('task_merge_successes') or 0)}/"
                     f"{int(merge_sweep_result.get('task_merge_attempts') or 0)} "
                     f"lane_merges={int(merge_sweep_result.get('lane_merge_successes') or 0)}/"
                     f"{int(merge_sweep_result.get('lane_merge_attempts') or 0)} "
-                    f"queue_items={int(merge_sweep_result.get('queue_item_count') or 0)}",
-                    flush=True,
+                    f"queue_items={int(merge_sweep_result.get('queue_item_count') or 0)}"
                 )
+                print(terminal_line, flush=True)
+                for trace_error in _emit_cycle_progress_trace_event(
+                    cfg,
+                    cycle_number=cycle_number,
+                    step_key="merge_sweep",
+                    step_label="Merge sweep",
+                    terminal_line=terminal_line,
+                    detail_message="Deterministic merge sweep completed before BOSS.",
+                    step_state="completed",
+                    extra_fields={
+                        "task_merge_successes": int(merge_sweep_result.get("task_merge_successes") or 0),
+                        "task_merge_attempts": int(merge_sweep_result.get("task_merge_attempts") or 0),
+                        "lane_merge_successes": int(merge_sweep_result.get("lane_merge_successes") or 0),
+                        "lane_merge_attempts": int(merge_sweep_result.get("lane_merge_attempts") or 0),
+                        "queue_item_count": int(merge_sweep_result.get("queue_item_count") or 0),
+                    },
+                    event_timestamp_utc=event_timestamp,
+                ):
+                    warnings.append(
+                        {
+                            "code": "trace_event_emission_failed",
+                            "message": trace_error,
+                            "stage": "op-simple-build",
+                            "details": {"cycle_number": cycle_number},
+                        }
+                    )
             except Exception as exc:  # noqa: BLE001
                 manager_statuses["merge-sweep"] = {"status": "failed", "note": f"deterministic merge sweep failed: {exc}"}
                 warnings.append(
@@ -8581,16 +9259,41 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                         f"queue_after={int(merge_manager_result.get('queue_count_after') or 0)}"
                     ),
                 }
-                print(
+                event_timestamp = utc_now_iso()
+                terminal_line = (
                     "[op-simple-build] "
-                    f"[{utc_now_iso()}] "
+                    f"[{event_timestamp}] "
                     f"cycle={cycle_number} merge-manager "
                     f"status={str(merge_manager_result.get('status') or 'unknown')} "
                     f"reason={str(merge_manager_result.get('reason') or 'unknown')} "
                     f"queue_before={int(merge_manager_result.get('queue_count_before') or 0)} "
-                    f"queue_after={int(merge_manager_result.get('queue_count_after') or 0)}",
-                    flush=True,
+                    f"queue_after={int(merge_manager_result.get('queue_count_after') or 0)}"
                 )
+                print(terminal_line, flush=True)
+                for trace_error in _emit_cycle_progress_trace_event(
+                    cfg,
+                    cycle_number=cycle_number,
+                    step_key="merge_manager",
+                    step_label="Merge manager",
+                    terminal_line=terminal_line,
+                    detail_message="Periodic merge-manager step completed.",
+                    step_state="completed",
+                    extra_fields={
+                        "manager_status": str(merge_manager_result.get("status") or "unknown"),
+                        "manager_reason": str(merge_manager_result.get("reason") or "unknown"),
+                        "queue_count_before": int(merge_manager_result.get("queue_count_before") or 0),
+                        "queue_count_after": int(merge_manager_result.get("queue_count_after") or 0),
+                    },
+                    event_timestamp_utc=event_timestamp,
+                ):
+                    warnings.append(
+                        {
+                            "code": "trace_event_emission_failed",
+                            "message": trace_error,
+                            "stage": "op-simple-build",
+                            "details": {"cycle_number": cycle_number},
+                        }
+                    )
             except Exception as exc:  # noqa: BLE001
                 manager_statuses["merge-manager"] = {"status": "failed", "note": f"merge-manager stage failed: {exc}"}
                 warnings.append(
@@ -8698,21 +9401,68 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     worker_registry_ready=True,
                     cycle_mode=cycle_mode,
                 )
-                print(
+                watchdog_stop_ts = utc_now_iso()
+                watchdog_stop_line = (
                     "[op-simple-build] "
-                    f"[{utc_now_iso()}] "
+                    f"[{watchdog_stop_ts}] "
                     f"cycle={cycle_number} watchdog terminal stop before BOSS "
-                    f"reason={str(watchdog_signal.get('reason_code') or 'stale_base_branch_commit')}",
-                    flush=True,
+                    f"reason={str(watchdog_signal.get('reason_code') or 'stale_base_branch_commit')}"
                 )
+                print(watchdog_stop_line, flush=True)
+                for trace_error in _emit_cycle_progress_trace_event(
+                    cfg,
+                    cycle_number=cycle_number,
+                    step_key="watchdog_terminal_stop",
+                    step_label="Watchdog terminal stop",
+                    terminal_line=watchdog_stop_line,
+                    detail_message="Watchdog stopped the cycle before BOSS because the runtime went terminal stale.",
+                    step_state="timeout",
+                    cycle_mode=cycle_mode,
+                    extra_fields={
+                        "reason_code": str(watchdog_signal.get("reason_code") or "stale_base_branch_commit"),
+                        "manager_name": "watchdog",
+                    },
+                    event_timestamp_utc=watchdog_stop_ts,
+                ):
+                    warnings.append(
+                        {
+                            "code": "trace_event_emission_failed",
+                            "message": trace_error,
+                            "stage": "op-simple-build",
+                            "details": {"cycle_number": cycle_number},
+                        }
+                    )
             else:
                 boss_expected = list(BOSS_REQUIRED_ARTIFACTS)
-                print(
+                boss_started_at = utc_now_iso()
+                boss_started_line = (
                     "[op-simple-build] "
-                    f"[{utc_now_iso()}] "
-                    f"cycle={cycle_number} BOSS started",
-                    flush=True,
+                    f"[{boss_started_at}] "
+                    f"cycle={cycle_number} BOSS started"
                 )
+                print(boss_started_line, flush=True)
+                for trace_error in _emit_cycle_progress_trace_event(
+                    cfg,
+                    cycle_number=cycle_number,
+                    step_key="boss_running",
+                    step_label="BOSS running",
+                    terminal_line=boss_started_line,
+                    detail_message="BOSS manager started.",
+                    step_state="active",
+                    step_started_at_utc=boss_started_at,
+                    step_timeout_seconds=900,
+                    cycle_mode=cycle_mode,
+                    extra_fields={"manager_name": "BOSS"},
+                    event_timestamp_utc=boss_started_at,
+                ):
+                    warnings.append(
+                        {
+                            "code": "trace_event_emission_failed",
+                            "message": trace_error,
+                            "stage": "op-simple-build",
+                            "details": {"cycle_number": cycle_number},
+                        }
+                    )
                 boss_result = _invoke_manager(
                     cfg,
                     manager_name="BOSS",
@@ -8734,14 +9484,42 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     },
                     expected_artifacts=boss_expected,
                 )
-                print(
+                boss_done_at = utc_now_iso()
+                boss_done_line = (
                     "[op-simple-build] "
-                    f"[{utc_now_iso()}] "
+                    f"[{boss_done_at}] "
                     f"cycle={cycle_number} BOSS done "
                     f"status={boss_result.status} timeout={str(bool(boss_result.timeout)).lower()} "
-                    f"duration_s={boss_result.duration_seconds:.3f}",
-                    flush=True,
+                    f"duration_s={boss_result.duration_seconds:.3f}"
                 )
+                print(boss_done_line, flush=True)
+                for trace_error in _emit_cycle_progress_trace_event(
+                    cfg,
+                    cycle_number=cycle_number,
+                    step_key="boss_finished",
+                    step_label="BOSS finished",
+                    terminal_line=boss_done_line,
+                    detail_message="BOSS manager finished.",
+                    step_state="completed",
+                    step_started_at_utc=str(boss_result.started_at or boss_started_at),
+                    step_timeout_seconds=900,
+                    cycle_mode=cycle_mode,
+                    extra_fields={
+                        "manager_name": "BOSS",
+                        "manager_status": str(boss_result.status),
+                        "manager_timeout": bool(boss_result.timeout),
+                        "duration_seconds": float(boss_result.duration_seconds),
+                    },
+                    event_timestamp_utc=boss_done_at,
+                ):
+                    warnings.append(
+                        {
+                            "code": "trace_event_emission_failed",
+                            "message": trace_error,
+                            "stage": "op-simple-build",
+                            "details": {"cycle_number": cycle_number},
+                        }
+                    )
                 manager_statuses["BOSS"] = {"status": boss_result.status, "note": boss_result.message or ""}
 
             if boss_result is not None and boss_result.timeout:
@@ -8803,7 +9581,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "stop_reason": "",
                     "notes": timeout_forensic_message,
                 }
-                _render_cycle_summary(
+                timeout_summary = _render_cycle_summary(
                     cfg,
                     cycle_number,
                     manager_statuses,
@@ -8811,6 +9589,19 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     cycle_mode=cycle_mode,
                     base_summary=timeout_base_summary,
                 )
+                for trace_error in _emit_run_cycle_snapshot_trace_event(
+                    cfg,
+                    cycle_number=cycle_number,
+                    summary=timeout_summary,
+                ):
+                    warnings.append(
+                        {
+                            "code": "trace_event_emission_failed",
+                            "message": trace_error,
+                            "stage": "op-simple-build",
+                            "details": {"cycle_number": cycle_number},
+                        }
+                    )
                 _atomic_write_json(
                     cfg.repo_root / BOSS_EVIDENCE_FILE,
                     {
@@ -9030,6 +9821,21 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 if stop_reason not in {"project_done", "insurmountable_blocker"} and watchdog_stop:
                     watchdog_reason = str(watchdog_signal.get("reason_code") or "").strip()
                     stop_reason = watchdog_reason or "watchdog_idle_stop"
+            if stop_reason:
+                summary["stop_reason"] = stop_reason
+            for trace_error in _emit_run_cycle_snapshot_trace_event(
+                cfg,
+                cycle_number=cycle_number,
+                summary=summary,
+            ):
+                warnings.append(
+                    {
+                        "code": "trace_event_emission_failed",
+                        "message": trace_error,
+                        "stage": "op-simple-build",
+                        "details": {"cycle_number": cycle_number},
+                    }
+                )
 
             if boss_result is not None and boss_result.status != "ok" and not boss_result.timeout and not stop_reason:
                 _write_terminal_capsule(
@@ -9058,17 +9864,73 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             )
 
             if cfg.ground_sync_enabled and not stop_reason and cycle_number % cfg.ground_sync_every_n_cycles == 0:
+                ground_sync_started_at = utc_now_iso()
+                ground_sync_started_line = (
+                    "[op-simple-build] "
+                    f"[{ground_sync_started_at}] "
+                    f"cycle={cycle_number} manager={GROUND_SYNC_MANAGER_NAME} status=started trigger=cadence"
+                )
+                print(ground_sync_started_line, flush=True)
+                for trace_error in _emit_cycle_progress_trace_event(
+                    cfg,
+                    cycle_number=cycle_number,
+                    step_key="ground_sync_running",
+                    step_label="Ground sync running",
+                    terminal_line=ground_sync_started_line,
+                    detail_message="Ground sync started for cadence ingestion.",
+                    step_state="active",
+                    step_started_at_utc=ground_sync_started_at,
+                    step_timeout_seconds=max(30, int(cfg.ground_sync_timeout_seconds)),
+                    cycle_mode=cycle_mode,
+                    extra_fields={"trigger": "cadence", "manager_name": GROUND_SYNC_MANAGER_NAME},
+                    event_timestamp_utc=ground_sync_started_at,
+                ):
+                    warnings.append(
+                        {
+                            "code": "trace_event_emission_failed",
+                            "message": trace_error,
+                            "stage": "op-simple-build",
+                            "details": {"cycle_number": cycle_number},
+                        }
+                    )
                 sync_status, sync_message = _run_ground_sync(
                     cfg,
                     cycle_number=cycle_number,
                     trigger="cadence",
                 )
-                print(
+                ground_sync_done_at = utc_now_iso()
+                ground_sync_done_line = (
                     "[op-simple-build] "
-                    f"[{utc_now_iso()}] "
+                    f"[{ground_sync_done_at}] "
                     f"cycle={cycle_number} manager={GROUND_SYNC_MANAGER_NAME} status={sync_status} message={sync_message}",
-                    flush=True,
                 )
+                print(ground_sync_done_line, flush=True)
+                for trace_error in _emit_cycle_progress_trace_event(
+                    cfg,
+                    cycle_number=cycle_number,
+                    step_key="ground_sync_finished",
+                    step_label="Ground sync finished",
+                    terminal_line=ground_sync_done_line,
+                    detail_message=f"Ground sync finished with status={sync_status}.",
+                    step_state="completed" if sync_status == "ok" else "timeout",
+                    step_started_at_utc=ground_sync_started_at,
+                    step_timeout_seconds=max(30, int(cfg.ground_sync_timeout_seconds)),
+                    cycle_mode=cycle_mode,
+                    extra_fields={
+                        "trigger": "cadence",
+                        "manager_name": GROUND_SYNC_MANAGER_NAME,
+                        "manager_status": sync_status,
+                    },
+                    event_timestamp_utc=ground_sync_done_at,
+                ):
+                    warnings.append(
+                        {
+                            "code": "trace_event_emission_failed",
+                            "message": trace_error,
+                            "stage": "op-simple-build",
+                            "details": {"cycle_number": cycle_number},
+                        }
+                    )
                 if sync_status == "failed":
                     warnings.append(
                         {
@@ -9125,18 +9987,86 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 warnings=warnings,
             )
 
+        for trace_error in _emit_run_summary_trace_event(
+            cfg,
+            cycle_number=cycle_number,
+            cycles_this_run=cycles_this_run,
+            stop_reason=stop_reason,
+            final_status=final_status,
+            final_summary=final_summary,
+            init_state=init_state,
+        ):
+            warnings.append(
+                {
+                    "code": "trace_event_emission_failed",
+                    "message": trace_error,
+                    "stage": "op-simple-build",
+                    "details": {"cycle_number": cycle_number},
+                }
+            )
+
         if cfg.ground_sync_enabled:
+            ground_sync_started_at = utc_now_iso()
+            ground_sync_started_line = (
+                "[op-simple-build] "
+                f"[{ground_sync_started_at}] "
+                f"cycle={cycle_number} manager={GROUND_SYNC_MANAGER_NAME} status=started trigger=terminal"
+            )
+            print(ground_sync_started_line, flush=True)
+            for trace_error in _emit_cycle_progress_trace_event(
+                cfg,
+                cycle_number=cycle_number,
+                step_key="ground_sync_running",
+                step_label="Ground sync running",
+                terminal_line=ground_sync_started_line,
+                detail_message="Ground sync started for terminal ingestion.",
+                step_state="active",
+                step_started_at_utc=ground_sync_started_at,
+                step_timeout_seconds=max(30, int(cfg.ground_sync_timeout_seconds)),
+                extra_fields={"trigger": "terminal", "manager_name": GROUND_SYNC_MANAGER_NAME},
+                event_timestamp_utc=ground_sync_started_at,
+            ):
+                warnings.append(
+                    {
+                        "code": "trace_event_emission_failed",
+                        "message": trace_error,
+                        "stage": "op-simple-build",
+                        "details": {"cycle_number": cycle_number},
+                    }
+                )
             sync_status, sync_message = _run_ground_sync(
                 cfg,
                 cycle_number=cycle_number,
                 trigger="terminal",
             )
-            print(
+            ground_sync_done_at = utc_now_iso()
+            ground_sync_done_line = (
                 "[op-simple-build] "
-                f"[{utc_now_iso()}] "
+                f"[{ground_sync_done_at}] "
                 f"cycle={cycle_number} manager={GROUND_SYNC_MANAGER_NAME} status={sync_status} message={sync_message}",
-                flush=True,
             )
+            print(ground_sync_done_line, flush=True)
+            for trace_error in _emit_cycle_progress_trace_event(
+                cfg,
+                cycle_number=cycle_number,
+                step_key="ground_sync_finished",
+                step_label="Ground sync finished",
+                terminal_line=ground_sync_done_line,
+                detail_message=f"Ground sync finished with status={sync_status}.",
+                step_state="completed" if sync_status == "ok" else "timeout",
+                step_started_at_utc=ground_sync_started_at,
+                step_timeout_seconds=max(30, int(cfg.ground_sync_timeout_seconds)),
+                extra_fields={"trigger": "terminal", "manager_name": GROUND_SYNC_MANAGER_NAME, "manager_status": sync_status},
+                event_timestamp_utc=ground_sync_done_at,
+            ):
+                warnings.append(
+                    {
+                        "code": "trace_event_emission_failed",
+                        "message": trace_error,
+                        "stage": "op-simple-build",
+                        "details": {"cycle_number": cycle_number},
+                    }
+                )
             if sync_status == "failed":
                 warnings.append(
                     {
