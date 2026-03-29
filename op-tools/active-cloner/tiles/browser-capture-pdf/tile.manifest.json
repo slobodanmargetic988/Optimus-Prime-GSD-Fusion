@@ -1,0 +1,96 @@
+{
+  "tile_id": "browser-capture-pdf",
+  "title": "Browser Capture To PDF",
+  "status": "ready",
+  "category": "frontend/browser-utility",
+  "summary": "Reusable browser-side capture tool that exports clicked elements, dragged regions, or the full page to a PDF.",
+  "source_origin": {
+    "project": "AICOVENANT",
+    "path": "/Users/slobodan/projects/Earth/AICOVENANT/frontend/src/features/captureTool",
+    "captured_on": "2026-03-29"
+  },
+  "parameter_schema": {
+    "fileName": {
+      "type": "string",
+      "required": false,
+      "default": "capture.pdf",
+      "description": "Output PDF file name."
+    },
+    "captureTargetSelectors": {
+      "type": "string[]",
+      "required": false,
+      "default": [
+        "[data-capture]",
+        "section",
+        "article",
+        "main",
+        "aside",
+        "header",
+        "nav"
+      ],
+      "description": "Semantic selectors that should be preferred when the operator clicks a target to capture."
+    },
+    "onStatusChange": {
+      "type": "function",
+      "required": false,
+      "description": "Host callback for human-facing status text. Useful when the host app wants to print or surface timestamped status messages."
+    }
+  },
+  "integration_contract": {
+    "host_requirements": [
+      "Browser environment with DOM access",
+      "Ability to render a floating button and overlay",
+      "Dependencies: html2canvas and jspdf"
+    ],
+    "host_responsibilities": [
+      "Import the variant CSS or restyle the exported components",
+      "Mount the camera button in a reachable part of the app shell",
+      "Render the overlay while capture mode is active"
+    ],
+    "provided_capabilities": [
+      "Element capture",
+      "Region capture",
+      "Full page capture",
+      "Keyboard shortcut support",
+      "Human-facing status updates"
+    ]
+  },
+  "test_contract": {
+    "manual_checks": [
+      "Single click enters capture mode",
+      "Double click exports full page PDF",
+      "Ctrl+Shift+P enters capture mode",
+      "Ctrl+Shift+P while active exports full page PDF",
+      "Drag selection exports only selected rectangle",
+      "Escape cancels capture mode",
+      "HUD helper does not appear inside exported PDF"
+    ],
+    "automation_targets": [
+      "Playwright can trigger the shortcut and assert download output",
+      "Playwright can drag a region and verify capture file creation",
+      "Component tests can verify overlay visibility and status transitions"
+    ]
+  },
+  "compatibility_notes": [
+    "Works best in React, Vue, and Nuxt apps with direct DOM rendering.",
+    "Complex canvases, videos, and cross-origin iframes may not render fully under html2canvas limitations.",
+    "Large pages can create multi-page PDFs depending on rendered image height."
+  ],
+  "upgrade_strategy": {
+    "policy": "Keep variant behavior aligned. Translate the React source forward first, then update Nuxt/Vue immediately after.",
+    "drift_rule": "Do not ship a behavior change in one variant without recording the translation delta in translation-map.md.",
+    "placement_note": "Future Active Cloner placement should prefer the variant matching the host app framework and emit a translation trace in placement metadata."
+  },
+  "variants": [
+    {
+      "variant_id": "react-vite",
+      "status": "ready",
+      "path": "variants/react-vite"
+    },
+    {
+      "variant_id": "nuxt-vue",
+      "status": "ready",
+      "path": "variants/nuxt-vue"
+    }
+  ]
+}

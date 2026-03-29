@@ -1,0 +1,5 @@
+export { default as CaptureCameraButton } from './components/CaptureCameraButton.vue'
+export { default as CaptureOverlay } from './components/CaptureOverlay.vue'
+export { useCaptureTool } from './composables/useCaptureTool'
+export { captureArea, captureElement, resolveCaptureTargetFromPoint } from './utils/captureUtils'
+export type { CapturePoint, CaptureRect, CaptureToolOptions } from './types'
