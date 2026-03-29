@@ -166,6 +166,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--strategy-manifest")
     parser.add_argument("--strategy-manifest-file")
     parser.add_argument("--skip-strategy", action="store_true")
+    parser.add_argument("--publish-private-repo", action="store_true")
+    parser.add_argument("--github-owner")
+    parser.add_argument("--github-repo-name")
     parser.add_argument("--override-old-plan", action="store_true")
     parser.add_argument("--constraint", action="append")
     parser.add_argument("--non-interactive", action="store_true")
@@ -215,6 +218,12 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["strategy_manifest_file"] = args.strategy_manifest_file
     if args.skip_strategy:
         payload["skip_strategy"] = True
+    if args.publish_private_repo:
+        payload["publish_private_repo"] = True
+    if args.github_owner is not None:
+        payload["github_owner"] = args.github_owner
+    if args.github_repo_name is not None:
+        payload["github_repo_name"] = args.github_repo_name
     if args.override_old_plan:
         payload["override_old_plan"] = True
     if args.constraint is not None:

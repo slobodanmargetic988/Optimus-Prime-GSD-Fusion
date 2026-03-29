@@ -100,7 +100,12 @@ PLANNER_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_plan_bundle.p
 PLANNER_EXAMPLE_ROOT_PATH = SCRIPT_DIR / "llm" / "examples" / "op-plan" / "reports" / "optimus-prime" / "planning"
 GIT_BOOTSTRAP_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "git_bootstrap_prompt.md"
 GIT_BOOTSTRAP_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_git_bootstrap.py"
+GIT_BOOTSTRAP_ARTIFACT_REL = PLANNER_REL / "git-bootstrap"
 GIT_BOOTSTRAP_REQUIRED_BRANCH = "RAB-BASE"
+GIT_BOOTSTRAP_PRIMARY_BRANCH = "main"
+GITHUB_REMOTE_NAME = "origin"
+GITHUB_HOST = "github.com"
+GIT_BOOTSTRAP_PUBLISH_ARTIFACT = GIT_BOOTSTRAP_ARTIFACT_REL / "PUBLISH_REPO.json"
 DEFAULT_STRATEGY_MANIFEST_REL = strategy_runner.DEFAULT_STRATEGY_MANIFEST_REL
 DEFAULT_STRATEGY_PACKET_MD_REL = strategy_runner.DEFAULT_STRATEGY_PACKET_REL
 DEFAULT_STRATEGY_SUMMARY_MD_REL = strategy_runner.DEFAULT_STRATEGY_SUMMARY_REL
@@ -327,6 +332,9 @@ class OpRequest:
     strategy_manifest: str | None = None
     strategy_manifest_file: str | None = None
     skip_strategy: bool = False
+    publish_private_repo: bool = False
+    github_owner: str | None = None
+    github_repo_name: str | None = None
     start_policy: str | None = None
     run_base_source_branch: str | None = None
     boss_model: str = DEFAULT_BOSS_MODEL
@@ -6693,6 +6701,235 @@ def _ensure_rab_base_checked_out(repo_root: Path) -> list[dict[str, Any]]:
     return warnings
 
 
+def _git_branch_exists(repo_root: Path, branch_name: str) -> bool:
+    return _run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"], cwd=repo_root)[0] == 0
+
+
+def _ensure_initialize_branch_layout(repo_root: Path) -> dict[str, Any]:
+    if not _is_git_work_tree(repo_root):
+        raise OpError("git_bootstrap_failed", "repository is not initialized as a git work tree", stage="initialize")
+    head = _git_text(repo_root, "rev-parse", "HEAD")
+    if not head:
+        raise OpError("git_bootstrap_failed", "unable to resolve HEAD commit after bootstrap", stage="initialize")
+
+    created_main = False
+    created_rab_base = False
+
+    if not _git_branch_exists(repo_root, GIT_BOOTSTRAP_PRIMARY_BRANCH):
+        code, _, err = _run(["git", "branch", GIT_BOOTSTRAP_PRIMARY_BRANCH, head], cwd=repo_root)
+        if code != 0:
+            raise OpError(
+                "git_bootstrap_failed",
+                f"unable to create {GIT_BOOTSTRAP_PRIMARY_BRANCH} branch: {err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+        created_main = True
+
+    if not _git_branch_exists(repo_root, GIT_BOOTSTRAP_REQUIRED_BRANCH):
+        code, _, err = _run(["git", "branch", GIT_BOOTSTRAP_REQUIRED_BRANCH, head], cwd=repo_root)
+        if code != 0:
+            raise OpError(
+                "git_bootstrap_failed",
+                f"unable to create {GIT_BOOTSTRAP_REQUIRED_BRANCH} branch: {err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+        created_rab_base = True
+
+    current_branch = _git_text(repo_root, "branch", "--show-current") or ""
+    if current_branch != GIT_BOOTSTRAP_REQUIRED_BRANCH:
+        code, _, err = _run(["git", "checkout", GIT_BOOTSTRAP_REQUIRED_BRANCH], cwd=repo_root)
+        if code != 0:
+            raise OpError(
+                "git_bootstrap_failed",
+                f"unable to checkout {GIT_BOOTSTRAP_REQUIRED_BRANCH}: {err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+
+    return {
+        "head": head,
+        "created_primary_branch": created_main,
+        "created_required_branch": created_rab_base,
+        "primary_branch": GIT_BOOTSTRAP_PRIMARY_BRANCH,
+        "required_branch": GIT_BOOTSTRAP_REQUIRED_BRANCH,
+        "current_branch": GIT_BOOTSTRAP_REQUIRED_BRANCH,
+    }
+
+
+def _github_https_remote_url(owner: str, repo_name: str) -> str:
+    return f"https://{GITHUB_HOST}/{owner}/{repo_name}.git"
+
+
+def _parse_github_remote_slug(remote_url: str | None) -> tuple[str, str] | None:
+    text = (remote_url or "").strip()
+    if not text:
+        return None
+    https_match = re.match(r"^https://[^/]+/([^/]+)/([^/]+?)(?:\.git)?/?$", text)
+    if https_match:
+        return https_match.group(1), https_match.group(2)
+    ssh_match = re.match(r"^git@[^:]+:([^/]+)/([^/]+?)(?:\.git)?$", text)
+    if ssh_match:
+        return ssh_match.group(1), ssh_match.group(2)
+    return None
+
+
+def _gh_run(repo_root: Path, *args: str) -> tuple[int, str, str]:
+    return _run(["gh", *args], cwd=repo_root)
+
+
+def _resolve_initialize_publish_target(req: OpRequest) -> tuple[str, str]:
+    owner = _as_str(req.github_owner)
+    repo_name = _as_str(req.github_repo_name) or req.repo_root.name
+    if not owner:
+        code, out, err = _gh_run(req.repo_root, "api", "user", "--jq", ".login")
+        if code != 0 or not out.strip():
+            raise OpError(
+                "github_owner_resolution_failed",
+                f"unable to resolve authenticated GitHub owner: {err.strip() or out.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+        owner = out.strip()
+    return owner, repo_name
+
+
+def _verify_github_auth_for_initialize(repo_root: Path) -> None:
+    code, out, err = _gh_run(repo_root, "auth", "status", "--hostname", GITHUB_HOST)
+    if code != 0:
+        raise OpError(
+            "github_auth_missing",
+            f"GitHub CLI is not authenticated for {GITHUB_HOST}: {err.strip() or out.strip() or 'unknown error'}",
+            stage="initialize",
+        )
+
+
+def _maybe_publish_private_repo_for_initialize(req: OpRequest) -> tuple[list[dict[str, Any]], list[str], dict[str, Any] | None]:
+    if not req.publish_private_repo:
+        return [], [], None
+
+    _verify_github_auth_for_initialize(req.repo_root)
+    owner, repo_name = _resolve_initialize_publish_target(req)
+    repo_slug = f"{owner}/{repo_name}"
+    expected_origin_url = _github_https_remote_url(owner, repo_name)
+    _emit_build_progress(req, f"ensuring private GitHub repo {repo_slug} exists and origin is configured")
+
+    origin_url = _git_text(req.repo_root, "remote", "get-url", GITHUB_REMOTE_NAME)
+    existing_slug = _parse_github_remote_slug(origin_url)
+    if origin_url and existing_slug is None:
+        raise OpError(
+            "github_origin_unrecognized",
+            f"origin remote uses an unsupported URL format: {origin_url}",
+            stage="initialize",
+        )
+    if existing_slug and existing_slug != (owner, repo_name):
+        raise OpError(
+            "github_origin_mismatch",
+            f"origin remote points to {existing_slug[0]}/{existing_slug[1]}, expected {repo_slug}",
+            stage="initialize",
+        )
+
+    code, _, _ = _gh_run(req.repo_root, "repo", "view", repo_slug, "--json", "nameWithOwner")
+    created_repo = False
+    if code != 0:
+        create_code, _, create_err = _gh_run(
+            req.repo_root,
+            "repo",
+            "create",
+            repo_slug,
+            "--private",
+            "--source",
+            str(req.repo_root),
+            "--remote",
+            GITHUB_REMOTE_NAME,
+        )
+        if create_code != 0:
+            raise OpError(
+                "github_repo_create_failed",
+                f"unable to create private GitHub repo {repo_slug}: {create_err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+        created_repo = True
+        origin_url = _git_text(req.repo_root, "remote", "get-url", GITHUB_REMOTE_NAME)
+    elif not origin_url:
+        add_code, _, add_err = _run(["git", "remote", "add", GITHUB_REMOTE_NAME, expected_origin_url], cwd=req.repo_root)
+        if add_code != 0:
+            raise OpError(
+                "github_origin_config_failed",
+                f"unable to add origin remote for {repo_slug}: {add_err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+        origin_url = expected_origin_url
+
+    if not origin_url:
+        raise OpError(
+            "github_origin_missing_after_publish",
+            f"origin remote is still missing after preparing {repo_slug}",
+            stage="initialize",
+        )
+
+    for branch_name in (GIT_BOOTSTRAP_PRIMARY_BRANCH, GIT_BOOTSTRAP_REQUIRED_BRANCH):
+        push_code, _, push_err = _run(["git", "push", "-u", GITHUB_REMOTE_NAME, branch_name], cwd=req.repo_root)
+        if push_code != 0:
+            raise OpError(
+                "github_push_failed",
+                f"unable to push {branch_name} to {repo_slug}: {push_err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+
+    edit_code, _, edit_err = _gh_run(req.repo_root, "repo", "edit", repo_slug, "--default-branch", GIT_BOOTSTRAP_PRIMARY_BRANCH)
+    if edit_code != 0:
+        raise OpError(
+            "github_default_branch_set_failed",
+            f"unable to set default branch to {GIT_BOOTSTRAP_PRIMARY_BRANCH} for {repo_slug}: {edit_err.strip() or 'unknown error'}",
+            stage="initialize",
+        )
+
+    verify_code, verify_out, verify_err = _gh_run(
+        req.repo_root,
+        "api",
+        f"repos/{owner}/{repo_name}",
+        "--jq",
+        "{full_name: .full_name, visibility: .visibility, private: .private, default_branch: .default_branch, html_url: .html_url}",
+    )
+    if verify_code != 0 or not verify_out.strip():
+        raise OpError(
+            "github_repo_verify_failed",
+            f"unable to verify GitHub repo state for {repo_slug}: {verify_err.strip() or verify_out.strip() or 'unknown error'}",
+            stage="initialize",
+        )
+    try:
+        verified = json.loads(verify_out)
+    except json.JSONDecodeError as exc:
+        raise OpError(
+            "github_repo_verify_failed",
+            f"unable to parse GitHub repo verification output for {repo_slug}: {exc}",
+            stage="initialize",
+        ) from exc
+
+    visibility = _as_str(verified.get("visibility")) or ""
+    default_branch = _as_str(verified.get("default_branch")) or ""
+    if visibility != "private" or default_branch != GIT_BOOTSTRAP_PRIMARY_BRANCH:
+        raise OpError(
+            "github_repo_state_mismatch",
+            f"GitHub repo {repo_slug} verification mismatch: visibility={visibility or 'unknown'} default_branch={default_branch or 'unknown'}",
+            stage="initialize",
+        )
+
+    publish_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "published_at": utc_now_iso(),
+        "repo_slug": repo_slug,
+        "origin_url": origin_url,
+        "visibility": visibility,
+        "default_branch": default_branch,
+        "created_repo": created_repo,
+        "pushed_branches": [GIT_BOOTSTRAP_PRIMARY_BRANCH, GIT_BOOTSTRAP_REQUIRED_BRANCH],
+        "html_url": _as_str(verified.get("html_url")),
+    }
+    publish_artifact = _repo_path(req.repo_root, GIT_BOOTSTRAP_PUBLISH_ARTIFACT)
+    _atomic_write_json(publish_artifact, publish_payload)
+    _emit_build_progress(req, f"private GitHub repo ready at {repo_slug}; pushed main and RAB-BASE")
+    return [], [str(publish_artifact)], publish_payload
+
+
 def _git_bootstrap_prompt_text(
     *,
     req: OpRequest,
@@ -6725,39 +6962,55 @@ def _git_bootstrap_prompt_text(
 
 
 def _ensure_git_initialized_for_initialize(req: OpRequest) -> tuple[list[dict[str, Any]], list[str]]:
-    if _is_git_work_tree(req.repo_root):
-        return [], []
+    warnings: list[dict[str, Any]] = []
+    artifacts: list[str] = []
+    exit_code = 0
+    llm_root = _repo_path(req.repo_root, GIT_BOOTSTRAP_ARTIFACT_REL)
 
+    if not _is_git_work_tree(req.repo_root):
+        _emit_build_progress(
+            req,
+            "git workspace not detected; running LLM bootstrap to initialize repository and create main + RAB-BASE",
+        )
+        llm_root.mkdir(parents=True, exist_ok=True)
+        prompt_path = llm_root / "prompt.txt"
+        stdout_path = llm_root / "llm_stdout.log"
+        stderr_path = llm_root / "llm_stderr.log"
+        last_message_path = llm_root / "last_message.txt"
+
+        prompt = _git_bootstrap_prompt_text(req=req, prior_errors=[])
+        prompt_path.write_text(prompt, encoding="utf-8")
+        artifacts.extend([str(prompt_path), str(stdout_path), str(stderr_path), str(last_message_path)])
+
+        try:
+            exit_code = run_codex_exec(
+                repo_root=req.repo_root,
+                prompt_text=prompt,
+                output_last_message=last_message_path,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+        except OSError as exc:
+            _emit_build_progress(req, f"git bootstrap failed before verification: {exc}")
+            raise OpError("git_bootstrap_execution_failed", f"unable to invoke codex exec for git bootstrap: {exc}", stage="initialize") from exc
+
+    branch_layout = _ensure_initialize_branch_layout(req.repo_root)
     _emit_build_progress(
         req,
-        "git workspace not detected; running LLM bootstrap to initialize repository and create RAB-BASE",
+        "git bootstrap branch layout ready: "
+        f"{branch_layout['primary_branch']} and {branch_layout['required_branch']} at {branch_layout['head'][:12]} "
+        f"(current={branch_layout['current_branch']})",
     )
-    llm_root = _repo_path(req.repo_root, PLANNER_REL) / "git-bootstrap"
-    llm_root.mkdir(parents=True, exist_ok=True)
-    prompt_path = llm_root / "prompt.txt"
-    stdout_path = llm_root / "llm_stdout.log"
-    stderr_path = llm_root / "llm_stderr.log"
-    last_message_path = llm_root / "last_message.txt"
 
-    prompt = _git_bootstrap_prompt_text(req=req, prior_errors=[])
-    prompt_path.write_text(prompt, encoding="utf-8")
-
-    try:
-        exit_code = run_codex_exec(
-            repo_root=req.repo_root,
-            prompt_text=prompt,
-            output_last_message=last_message_path,
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
-        )
-    except OSError as exc:
-        _emit_build_progress(req, f"git bootstrap failed before verification: {exc}")
-        raise OpError("git_bootstrap_execution_failed", f"unable to invoke codex exec for git bootstrap: {exc}", stage="initialize") from exc
+    publish_warnings, publish_artifacts, _publish_payload = _maybe_publish_private_repo_for_initialize(req)
+    warnings.extend(publish_warnings)
+    artifacts.extend(publish_artifacts)
 
     result = validate_git_bootstrap(
         repo_root=req.repo_root,
         required_branch=GIT_BOOTSTRAP_REQUIRED_BRANCH,
         require_readme=True,
+        required_primary_branch=GIT_BOOTSTRAP_PRIMARY_BRANCH,
     )
     errors = result.get("errors")
     if not isinstance(errors, list):
@@ -6768,7 +7021,6 @@ def _ensure_git_initialized_for_initialize(req: OpRequest) -> tuple[list[dict[st
         _emit_build_progress(req, f"git bootstrap verification failed: {message}")
         raise OpError("git_bootstrap_failed", message, stage="initialize")
 
-    warnings: list[dict[str, Any]] = []
     if exit_code != 0:
         warnings.append(
             {
@@ -6788,7 +7040,7 @@ def _ensure_git_initialized_for_initialize(req: OpRequest) -> tuple[list[dict[st
                 warning[key] = row.get(key)
         warnings.append(warning)
     _emit_build_progress(req, "git bootstrap verification passed")
-    return warnings, [str(prompt_path), str(stdout_path), str(stderr_path), str(last_message_path)]
+    return warnings, artifacts
 
 
 def _list_repo_files(repo_root: Path) -> list[str]:
@@ -11138,7 +11390,12 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             not _repo_path(req.repo_root, rel).exists()
             for rel in MANDATORY_BUILD_BASELINE
         )
-        should_initialize = mission_scope_supplied or bool(req.override_old_plan) or baseline_missing
+        should_initialize = (
+            mission_scope_supplied
+            or bool(req.override_old_plan)
+            or baseline_missing
+            or bool(req.publish_private_repo)
+        )
         if should_initialize:
             _emit_build_progress(req, "running /op-initialize before /op-simple-build")
             init_req = replace(req, command="op-initialize")
@@ -12057,6 +12314,9 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
     )
     selected_aliases = _as_alias_list(payload.get("selected_aliases"))
     start_policy = _as_str(payload.get("start_policy"))
+    publish_private_repo = _as_bool(payload.get("publish_private_repo"), default=False)
+    github_owner = _as_str(payload.get("github_owner"))
+    github_repo_name = _as_str(payload.get("github_repo_name"))
     if start_policy is not None:
         start_policy = start_policy.lower()
     if start_policy is not None and start_policy not in {"auto", "new", "resume"}:
@@ -12079,6 +12339,12 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         fresh_run_conflicts.append("--override-old-plan")
     if run_base_source_branch:
         fresh_run_conflicts.append("--run-base-source-branch")
+    if publish_private_repo:
+        fresh_run_conflicts.append("--publish-private-repo")
+    if github_owner:
+        fresh_run_conflicts.append("--github-owner")
+    if github_repo_name:
+        fresh_run_conflicts.append("--github-repo-name")
     if start_policy == "resume" and fresh_run_conflicts:
         conflict_list = ", ".join(fresh_run_conflicts)
         raise OpError(
@@ -12087,6 +12353,22 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             f"{conflict_list}. Remove those flags and retry resume, or use --start-policy new.",
             stage="input",
         )
+    if (github_owner or github_repo_name) and not publish_private_repo:
+        raise OpError(
+            "input_error",
+            "github_owner/github_repo_name require publish_private_repo=true",
+            stage="input",
+        )
+    if publish_private_repo and command not in {"op-initialize", "op-build"}:
+        raise OpError(
+            "input_error",
+            "publish_private_repo is only supported for /op-initialize and /op-build",
+            stage="input",
+        )
+    if github_owner and "/" in github_owner:
+        raise OpError("input_error", "github_owner must not contain '/'", stage="input")
+    if github_repo_name and "/" in github_repo_name:
+        raise OpError("input_error", "github_repo_name must not contain '/'", stage="input")
 
     boss_model = sanitize_boss_model(payload.get("boss_model")) or DEFAULT_BOSS_MODEL
     boss_reasoning_effort = (
@@ -12162,6 +12444,9 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         strategy_manifest=strategy_manifest,
         strategy_manifest_file=strategy_manifest_file,
         skip_strategy=_as_bool(payload.get("skip_strategy"), default=False),
+        publish_private_repo=publish_private_repo,
+        github_owner=github_owner,
+        github_repo_name=github_repo_name,
         start_policy=start_policy if command == "op-build" else None,
         run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,

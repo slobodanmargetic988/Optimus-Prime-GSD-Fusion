@@ -1382,6 +1382,42 @@ def test_parse_request_accepts_inline_strategy_manifest():
         assert req.strategy_manifest_file is None
 
 
+def test_parse_request_accepts_private_publish_flags_for_initialize():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+                "publish_private_repo": True,
+                "github_owner": "slobodanmargetic988",
+                "github_repo_name": "myboard-private",
+            }
+        )
+        assert req.publish_private_repo is True
+        assert req.github_owner == "slobodanmargetic988"
+        assert req.github_repo_name == "myboard-private"
+
+
+def test_parse_request_rejects_github_publish_details_without_publish_flag():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        with pytest.raises(MODULE.OpError, match="require publish_private_repo=true"):
+            MODULE.parse_request(
+                {
+                    "command": "/op-initialize",
+                    "repo_root": str(root),
+                    "mission": "Build MyBoard",
+                    "scope": "Board workflow",
+                    "github_owner": "slobodanmargetic988",
+                }
+            )
+
+
 def test_parse_request_rejects_inline_and_file_strategy_manifest_together():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -4663,7 +4699,7 @@ def test_git_bootstrap_skips_llm_when_repo_already_initialized(monkeypatch: pyte
             }
         )
         warnings, artifacts = MODULE._ensure_git_initialized_for_initialize(req)
-        assert warnings == []
+        assert any(item.get("code") == "git_origin_missing" for item in warnings)
         assert artifacts == []
         assert called["value"] is False
 
@@ -4694,9 +4730,126 @@ def test_git_bootstrap_initializes_non_git_repo_with_llm_then_validates(monkeypa
         warnings, artifacts = MODULE._ensure_git_initialized_for_initialize(req)
         assert MODULE._is_git_work_tree(root) is True
         assert MODULE._git_text(root, "rev-parse", "HEAD")
+        assert MODULE._git_text(root, "show-ref", "--verify", "refs/heads/main")
         assert MODULE._git_text(root, "show-ref", "--verify", "refs/heads/RAB-BASE")
+        assert MODULE._git_text(root, "branch", "--show-current") == "RAB-BASE"
         assert isinstance(warnings, list)
         assert artifacts
+
+
+def test_git_bootstrap_existing_rab_base_repo_gets_main_branch_created_and_checks_out_rab_base():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        git(root, "init", "-b", "RAB-BASE")
+        git(root, "config", "user.email", "test@example.com")
+        git(root, "config", "user.name", "Test User")
+        (root / "README.md").write_text("seed\n", encoding="utf-8")
+        git(root, "add", "README.md")
+        git(root, "commit", "-m", "seed")
+
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        warnings, artifacts = MODULE._ensure_git_initialized_for_initialize(req)
+        assert any(item.get("code") == "git_origin_missing" for item in warnings)
+        assert artifacts == []
+        assert MODULE._git_text(root, "show-ref", "--verify", "refs/heads/main")
+        assert MODULE._git_text(root, "show-ref", "--verify", "refs/heads/RAB-BASE")
+        assert MODULE._git_text(root, "branch", "--show-current") == "RAB-BASE"
+
+
+def test_validate_git_bootstrap_can_require_primary_branch():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        git(root, "init", "-b", "RAB-BASE")
+        git(root, "config", "user.email", "test@example.com")
+        git(root, "config", "user.name", "Test User")
+        (root / "README.md").write_text("seed\n", encoding="utf-8")
+        git(root, "add", "README.md")
+        git(root, "commit", "-m", "seed")
+
+        result = MODULE.validate_git_bootstrap(
+            repo_root=root,
+            required_branch="RAB-BASE",
+            require_readme=True,
+            required_primary_branch="main",
+        )
+        assert result["ok"] is False
+        assert any(item.get("code") == "git_primary_branch_missing" for item in result["errors"])
+
+
+def test_private_publish_create_or_reuse_pushes_main_and_rab_base(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        remote_root = root / "remote.git"
+        build_repo(root)
+        git(root, "branch", "RAB-BASE")
+        git(root, "checkout", "RAB-BASE")
+        git(root, "init", "--bare", str(remote_root))
+
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+                "publish_private_repo": True,
+                "github_owner": "slobodanmargetic988",
+                "github_repo_name": "b2b-dog-cat",
+            }
+        )
+
+        original_run = MODULE._run
+        commands: list[list[str]] = []
+        origin_state = {"url": None}
+
+        def fake_run(cmd: list[str], *, cwd: Path, stdin_text: str | None = None):
+            commands.append(list(cmd))
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                if origin_state["url"] is None:
+                    return 2, "", "no such remote"
+                return 0, origin_state["url"] + "\n", ""
+            if cmd[:4] == ["gh", "repo", "view", "slobodanmargetic988/b2b-dog-cat"] and "--json" in cmd:
+                return 1, "", "not found"
+            if cmd[:4] == ["gh", "repo", "create", "slobodanmargetic988/b2b-dog-cat"]:
+                origin_state["url"] = str(remote_root.resolve())
+                original_run(["git", "remote", "add", "origin", origin_state["url"]], cwd=cwd)
+                return 0, "", ""
+            if cmd[:3] == ["gh", "auth", "status"]:
+                return 0, "ok\n", ""
+            if cmd[:3] == ["gh", "api", "repos/slobodanmargetic988/b2b-dog-cat"] and "--jq" in cmd:
+                payload = {
+                    "full_name": "slobodanmargetic988/b2b-dog-cat",
+                    "visibility": "private",
+                    "private": True,
+                    "default_branch": "main",
+                    "html_url": "https://github.com/slobodanmargetic988/b2b-dog-cat",
+                }
+                return 0, json.dumps(payload) + "\n", ""
+            if cmd[:4] == ["gh", "repo", "edit", "slobodanmargetic988/b2b-dog-cat"] and "--default-branch" in cmd:
+                return 0, "", ""
+            return original_run(cmd, cwd=cwd, stdin_text=stdin_text)
+
+        monkeypatch.setattr(MODULE, "_run", fake_run)
+
+        warnings, artifacts = MODULE._ensure_git_initialized_for_initialize(req)
+
+        assert warnings == []
+        publish_artifact = root / "reports" / "optimus-prime" / "planning" / "llm" / "git-bootstrap" / "PUBLISH_REPO.json"
+        assert str(publish_artifact.resolve()) in artifacts
+        payload = json.loads(publish_artifact.read_text(encoding="utf-8"))
+        assert payload["repo_slug"] == "slobodanmargetic988/b2b-dog-cat"
+        assert payload["visibility"] == "private"
+        assert payload["default_branch"] == "main"
+        assert payload["pushed_branches"] == ["main", "RAB-BASE"]
+        assert ["git", "push", "-u", "origin", "main"] in commands
+        assert ["git", "push", "-u", "origin", "RAB-BASE"] in commands
 
 
 def test_git_bootstrap_raises_when_llm_output_fails_deterministic_validator(monkeypatch: pytest.MonkeyPatch):

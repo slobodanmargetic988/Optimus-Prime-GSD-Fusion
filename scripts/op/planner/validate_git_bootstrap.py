@@ -31,6 +31,7 @@ def validate_git_bootstrap(
     repo_root: Path,
     required_branch: str,
     require_readme: bool,
+    required_primary_branch: str | None = None,
 ) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
@@ -66,6 +67,17 @@ def validate_git_bootstrap(
                 "branch": required_branch,
             }
         )
+
+    if required_primary_branch:
+        primary_code, _, _ = _run(repo_root, "show-ref", "--verify", f"refs/heads/{required_primary_branch}")
+        if primary_code != 0:
+            errors.append(
+                {
+                    "code": "git_primary_branch_missing",
+                    "message": f"required primary branch missing: {required_primary_branch}",
+                    "branch": required_primary_branch,
+                }
+            )
 
     if require_readme:
         readme = repo_root / "README.md"
@@ -128,6 +140,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate OP git bootstrap state")
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--required-branch", default="RAB-BASE")
+    parser.add_argument("--required-primary-branch")
     parser.add_argument("--require-readme", action="store_true")
     args = parser.parse_args()
 
@@ -136,6 +149,7 @@ def main() -> int:
         repo_root=repo_root,
         required_branch=args.required_branch,
         require_readme=bool(args.require_readme),
+        required_primary_branch=args.required_primary_branch,
     )
     print(json.dumps(result, indent=2, sort_keys=False))
     return 0 if result.get("ok") else 1

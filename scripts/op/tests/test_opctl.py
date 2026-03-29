@@ -199,6 +199,35 @@ def test_merge_payload_applies_configured_worktrees_parent_for_initialize(monkey
     assert payload.get("worktrees_parent") == "/Users/slobodan/Forest"
 
 
+def test_merge_payload_includes_private_publish_initialize_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-initialize",
+            "--repo-root",
+            "/tmp/repo",
+            "--publish-private-repo",
+            "--github-owner",
+            "slobodanmargetic988",
+            "--github-repo-name",
+            "demo-repo",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("publish_private_repo") is True
+    assert payload.get("github_owner") == "slobodanmargetic988"
+    assert payload.get("github_repo_name") == "demo-repo"
+
+
 def test_merge_payload_preserves_explicit_boss_model_and_reasoning_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         MODULE,
