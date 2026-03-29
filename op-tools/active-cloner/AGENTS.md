@@ -40,3 +40,7 @@ Every new tile should leave behind:
 ## Improvement suggestions
 - When Cloner is blocked or materially slowed by missing infrastructure, append a suggestion to `reports/earth-improvement-suggestions.md`.
 - Suggestions should be specific enough to become future Earth work packets.
+## Agent Escalation and Envelopes (Mandatory)
+- While working in this repo, agents should think carefully about the work they are doing and actively surface any problems they encounter.
+- If an agent hits a blocker, ambiguity, or environment issue, report it to `/Users/slobodan/projects/Earth/ground-control-hub/` as Ground.
+- Ground should also be able to ingest lightweight agent envelopes with suggestions for tools, workflows, or repo changes that would make future work easier.

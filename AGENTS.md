@@ -110,3 +110,7 @@ Before completing any code modification task, verify:
 - `tester`: prove resume safety, bounded-cycle behavior, executor selection, and evidence clarity with runnable checks.
 - `reviewer`: treat regressions in orchestration correctness, packet generation, merge behavior, or downstream repo assumptions as high severity.
 - `documenter`: update this file and supporting OP docs whenever runtime contracts, flags, or worker expectations change.
+## Agent Escalation and Envelopes (Mandatory)
+- While working in this repo, agents should think carefully about the work they are doing and actively surface any problems they encounter.
+- If an agent hits a blocker, ambiguity, or environment issue, report it to `/Users/slobodan/projects/Earth/ground-control-hub/` as Ground.
+- Ground should also be able to ingest lightweight agent envelopes with suggestions for tools, workflows, or repo changes that would make future work easier.
