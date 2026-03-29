@@ -213,6 +213,26 @@ At the moment, this is the most promising Active Cloner direction under discussi
 - not pure tile synthesis in the abstract
 - but task-aware retrieval and code adaptation at ecosystem scale
 
+## Tile catalog direction added on 2026-03-29
+The current Active Cloner direction now includes a concrete manual-first tile catalog.
+
+This sharpens one of the open questions above:
+- the first reusable unit should be both:
+  - an adaptation packet for task-to-code retrieval
+  - a code tile for repeatable implementation reuse
+
+The practical split is:
+- adaptation packets help a worker start from the best existing implementation
+- tiles preserve the reusable implementation itself in a framework-aware, translation-ready form
+
+That means Active Cloner should increasingly own:
+- tile manifests and provenance
+- stack variants of the same capability
+- translation maps between variants
+- future host-stack-aware placement logic
+
+This moves Active Cloner from abstract reuse analysis toward a reusable implementation library with adaptation intelligence layered on top.
+
 If it proves out, it can become one of the main foundations for reducing repeated implementation effort across Earth.
 
 ## Canonical provenance split
