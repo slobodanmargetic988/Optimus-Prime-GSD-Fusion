@@ -8298,6 +8298,30 @@ def _planner_source_display(source: dict[str, Any], *, label: str) -> str:
     return f"{label}=none"
 
 
+def _planner_prompt_template_candidates(repo_root: Path) -> list[Path]:
+    candidates = [
+        repo_root / "scripts" / "op" / "planner" / "prompts" / "llm_plan_prompt.md",
+        PLANNER_PROMPT_TEMPLATE_PATH,
+    ]
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
+def _planner_prompt_template_path(repo_root: Path) -> Path:
+    candidates = _planner_prompt_template_candidates(repo_root)
+    for path in candidates:
+        if path.exists():
+            return path.resolve()
+    return candidates[0].resolve()
+
+
 def _planner_prompt_text(
     *,
     req: OpRequest,
@@ -8306,7 +8330,7 @@ def _planner_prompt_text(
     scope_source: dict[str, Any],
     prior_errors: list[dict[str, Any]],
 ) -> str:
-    template_path = PLANNER_PROMPT_TEMPLATE_PATH.resolve()
+    template_path = _planner_prompt_template_path(req.repo_root)
     if not template_path.exists():
         raise OpError("planner_execution_failed", f"planner prompt template not found: {template_path}", stage="plan")
     template_text = template_path.read_text(encoding="utf-8")

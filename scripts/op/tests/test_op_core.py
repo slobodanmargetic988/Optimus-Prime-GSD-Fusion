@@ -4599,6 +4599,52 @@ def test_planner_prompt_includes_bundled_example_path():
         assert "STATE.md" in prompt
 
 
+def test_planner_prompt_prefers_repo_local_template_override():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        repo_template = root / "scripts" / "op" / "planner" / "prompts" / "llm_plan_prompt.md"
+        repo_template.parent.mkdir(parents=True, exist_ok=True)
+        repo_template.write_text(
+            "\n".join(
+                [
+                    "REPO LOCAL PLANNER TEMPLATE",
+                    "bundle={{BUNDLE_PATH}}",
+                    "validator={{VALIDATOR_COMMAND}}",
+                    "repo={{REPO_ROOT}}",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        req = MODULE.parse_request(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        mission_source, scope_source = MODULE._resolve_mission_scope_sources(req, stage="plan", required=False)
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        prompt = MODULE._planner_prompt_text(
+            req=req,
+            bundle_path=bundle_path,
+            mission_source=mission_source,
+            scope_source=scope_source,
+            prior_errors=[],
+        )
+        assert "REPO LOCAL PLANNER TEMPLATE" in prompt
+
+
+def test_planner_prompt_template_path_falls_back_to_engine_when_repo_override_missing():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        resolved = MODULE._planner_prompt_template_path(root)
+        assert resolved == MODULE.PLANNER_PROMPT_TEMPLATE_PATH.resolve()
+
+
 def test_planner_prompt_omits_strategy_note_when_skip_strategy_requested():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
