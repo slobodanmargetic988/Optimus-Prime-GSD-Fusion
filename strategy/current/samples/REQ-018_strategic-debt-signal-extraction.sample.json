@@ -1,0 +1,192 @@
+{
+  "ok": true,
+  "requirement_id": "REQ-018",
+  "schema_version": "req-018.strategic-debt-signal-extraction.v1",
+  "analysis_type": "strategic_debt_signal_extraction",
+  "evaluated_at": "2026-03-15T03:20:00Z",
+  "analysis_anchors": [
+    "future_velocity_degradation",
+    "recurrence",
+    "likely_blast_radius"
+  ],
+  "active_project_id": "optimus-prime-gsd-fusion",
+  "thresholds": {
+    "min_recurrence_count": 3,
+    "min_likely_blast_radius": 2
+  },
+  "max_signals": 3,
+  "strategic_debt_signals": [
+    {
+      "signal_id": "DEBT-SIGNAL-0001",
+      "debt_id": "DEBT-001",
+      "summary": "Integration test retries hide flakes until release windows.",
+      "category": "quality",
+      "recurrence_count": 7,
+      "likely_blast_radius": 3,
+      "blast_radius_tier": "cross-project",
+      "priority_score": 21.0,
+      "evidence_refs": [
+        "EVD-0001",
+        "EVD-0002"
+      ],
+      "reason_code": "eligible_strategic_debt_signal"
+    },
+    {
+      "signal_id": "DEBT-SIGNAL-0002",
+      "debt_id": "DEBT-002",
+      "summary": "Deployment script variants diverge across workstations.",
+      "category": "delivery",
+      "recurrence_count": 5,
+      "likely_blast_radius": 4,
+      "blast_radius_tier": "cross-project",
+      "priority_score": 20.0,
+      "evidence_refs": [
+        "EVD-0003"
+      ],
+      "reason_code": "eligible_strategic_debt_signal"
+    },
+    {
+      "signal_id": "DEBT-SIGNAL-0003",
+      "debt_id": "DEBT-005",
+      "summary": "Retry policy defaults differ between orchestrator runners.",
+      "category": "runtime",
+      "recurrence_count": 4,
+      "likely_blast_radius": 2,
+      "blast_radius_tier": "project-scoped",
+      "priority_score": 8.0,
+      "evidence_refs": [
+        "EVD-0004"
+      ],
+      "reason_code": "eligible_strategic_debt_signal"
+    }
+  ],
+  "excluded_debt_observations": [
+    {
+      "debt_id": "DEBT-003",
+      "summary": "Manual release checklist misses late-stage changes.",
+      "category": "process",
+      "recurrence_count": 2,
+      "likely_blast_radius": 5,
+      "failed_criteria": [
+        "recurrence_below_threshold"
+      ],
+      "reason_code": "recurrence_below_threshold"
+    },
+    {
+      "debt_id": "DEBT-004",
+      "summary": "Schema version drifts between strategy packet emitters.",
+      "category": "contracts",
+      "recurrence_count": 6,
+      "likely_blast_radius": 1,
+      "failed_criteria": [
+        "blast_radius_below_threshold"
+      ],
+      "reason_code": "blast_radius_below_threshold"
+    },
+    {
+      "debt_id": "DEBT-006",
+      "summary": "Legacy feature flags require manual cleanup in every cycle.",
+      "category": "maintenance",
+      "recurrence_count": 3,
+      "likely_blast_radius": 2,
+      "failed_criteria": [
+        "max_signals_cap_reached"
+      ],
+      "reason_code": "max_signals_cap_reached"
+    }
+  ],
+  "evidence_references": [
+    {
+      "citation_id": "EVD-0001",
+      "signal_id": "DEBT-SIGNAL-0001",
+      "debt_id": "DEBT-001",
+      "upstream_evidence_ref": "reports/ops/release-window-incidents-2026-03-14.md",
+      "reason_code": "strategic_debt_supporting_evidence"
+    },
+    {
+      "citation_id": "EVD-0002",
+      "signal_id": "DEBT-SIGNAL-0001",
+      "debt_id": "DEBT-001",
+      "upstream_evidence_ref": "reports/qa/flakes-2026-03-14.json",
+      "reason_code": "strategic_debt_supporting_evidence"
+    },
+    {
+      "citation_id": "EVD-0003",
+      "signal_id": "DEBT-SIGNAL-0002",
+      "debt_id": "DEBT-002",
+      "upstream_evidence_ref": "reports/ops/deploy-drift-2026-03-13.md",
+      "reason_code": "strategic_debt_supporting_evidence"
+    },
+    {
+      "citation_id": "EVD-0004",
+      "signal_id": "DEBT-SIGNAL-0003",
+      "debt_id": "DEBT-005",
+      "upstream_evidence_ref": "reports/runtime/retry-policy-diff-2026-03-14.json",
+      "reason_code": "strategic_debt_supporting_evidence"
+    }
+  ],
+  "recommendation": {
+    "decision": "mitigate_strategic_debt_signals",
+    "rationale": "Strategic debt extraction evaluated 6 observation(s), selected 3 signal(s), and excluded 3 observation(s).",
+    "top_signal_id": "DEBT-SIGNAL-0001",
+    "evidence_refs": [
+      "EVD-0001",
+      "EVD-0002",
+      "EVD-0003",
+      "EVD-0004",
+      "reports/earth/sweeps/2026-03-15/optimus-prime-gsd-fusion.json",
+      "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+      "reports/earth/sweeps/2026-03-15/test-train-manager.json"
+    ],
+    "cross_project_context": {
+      "cross_project": true,
+      "projects_considered": [
+        "optimus-prime-gsd-fusion",
+        "runtime-orchestrator",
+        "test-train-manager"
+      ],
+      "projects_with_evidence_refs": [
+        "optimus-prime-gsd-fusion",
+        "runtime-orchestrator",
+        "test-train-manager"
+      ],
+      "projects_without_evidence_refs": [],
+      "evidence_refs_by_project": {
+        "optimus-prime-gsd-fusion": [
+          "reports/earth/sweeps/2026-03-15/optimus-prime-gsd-fusion.json"
+        ],
+        "runtime-orchestrator": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "test-train-manager": [
+          "reports/earth/sweeps/2026-03-15/test-train-manager.json"
+        ]
+      },
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/optimus-prime-gsd-fusion.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/earth/sweeps/2026-03-15/test-train-manager.json"
+      ],
+      "unresolved_ideas": []
+    },
+    "obligations": [
+      {
+        "obligation_id": "OBL-DEBT-0001",
+        "summary": "Use Earth-sweep evidence to scope cross-project mitigation for prioritized strategic debt signals.",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/optimus-prime-gsd-fusion.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "reports/earth/sweeps/2026-03-15/test-train-manager.json"
+        ]
+      }
+    ],
+    "open_risks": []
+  },
+  "totals": {
+    "debt_observations": 6,
+    "eligible": 4,
+    "signals": 3,
+    "excluded": 3,
+    "evidence_references": 4
+  }
+}

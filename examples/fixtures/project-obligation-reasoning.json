@@ -1,0 +1,129 @@
+{
+  "target_project_root": "/workspace/projects/optimus-prime-gsd-fusion",
+  "earth_root": "/workspace/projects/Earth",
+  "output_root": "/workspace/projects/optimus-prime-gsd-fusion/strategy/out",
+  "revision_identity": "rev-req043-contract-r1",
+  "strategy_goal": "Reason about what the target project should expose to and consume from peer applications.",
+  "target_project_profile": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "owner_team": "fusion-strategy"
+  },
+  "call_id": "call-project-obligations",
+  "checked_at_utc": "2026-03-16T15:00:00Z",
+  "target_project_evidence_refs": [
+    "reports/optimus-prime/contracts/analytics-feedback-ingestion.md",
+    "reports/optimus-prime/planning/evidence/TASK-151/TASK_EVIDENCE.json"
+  ],
+  "earth_sweep_evidence_refs": [
+    "reports/earth/sweeps/2026-03-16/analytics-hub.json",
+    "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+  ],
+  "cross_project_context": [
+    {
+      "project_id": "analytics-hub",
+      "project_root": "/workspace/projects/Earth/analytics-hub",
+      "owner_team": "analytics-platform",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+      ],
+      "context_note": "Analytics Hub publishes feedback batches for downstream strategy consumers."
+    },
+    {
+      "project_id": "runtime-orchestrator",
+      "project_root": "/workspace/projects/Earth/runtime-orchestrator",
+      "owner_team": "runtime-core",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+      ],
+      "context_note": "Runtime orchestrator ingests replay manifests before scheduling shared recovery work."
+    }
+  ],
+  "project_obligation_candidates": [
+    {
+      "obligation_id": "obl.replay-manifest-expose",
+      "direction": "expose",
+      "summary": "Expose replay manifest packets to runtime orchestrator.",
+      "counterparty_project_id": "runtime-orchestrator",
+      "interface_id": "replay-manifest.v1",
+      "contract_expectations": {
+        "summary": "Publish a deterministic replay manifest with commit and artifact references.",
+        "version": "v1",
+        "transport": "json",
+        "required_fields": [
+          "artifact_refs",
+          "head_commit",
+          "task_identifier"
+        ]
+      },
+      "ownership_boundary": {
+        "current_project_role": "producer",
+        "counterparty_role": "consumer",
+        "boundary_rule": "Current project owns manifest generation and schema stability; runtime orchestrator owns downstream scheduling."
+      },
+      "rationale": "Runtime orchestration depends on a stable manifest contract to pick up replay evidence from this project.",
+      "requires_earth_evidence": true,
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-151/TASK_EVIDENCE.json"
+      ],
+      "next_step": "Attach the replay manifest contract to the runtime handoff packet."
+    },
+    {
+      "obligation_id": "obl.analytics-feedback-consume",
+      "direction": "consume",
+      "summary": "Consume analytics feedback packets from Analytics Hub.",
+      "counterparty_project_id": "analytics-hub",
+      "interface_id": "analytics-feedback.v2",
+      "contract_expectations": {
+        "summary": "Ingest analytics feedback batches keyed by task identifier and contract version.",
+        "version": "v2",
+        "transport": "queue",
+        "required_fields": [
+          "feedback_batch_id",
+          "observation_items",
+          "task_identifier"
+        ]
+      },
+      "ownership_boundary": {
+        "current_project_role": "consumer",
+        "counterparty_role": "producer",
+        "boundary_rule": "Analytics Hub owns batch production and freshness; current project owns ingestion validation and routing."
+      },
+      "rationale": "Feedback packets from Analytics Hub define what external observations this project should consume before promoting strategy changes.",
+      "requires_earth_evidence": true,
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-16/analytics-hub.json",
+        "reports/optimus-prime/contracts/analytics-feedback-ingestion.md"
+      ],
+      "next_step": "Pin the analytics feedback queue consumer to the documented v2 contract."
+    },
+    {
+      "obligation_id": "obl.deploy-summary-expose",
+      "direction": "expose",
+      "summary": "Expose deployment drift summaries to deployment controller.",
+      "counterparty_project_id": "deployment-controller",
+      "interface_id": "deployment-drift-summary.v1",
+      "contract_expectations": {
+        "summary": "Emit a deployment drift summary for rollout gating decisions.",
+        "version": "v1",
+        "transport": "file",
+        "required_fields": [
+          "drift_items",
+          "generated_at",
+          "task_identifier"
+        ]
+      },
+      "ownership_boundary": {
+        "current_project_role": "producer",
+        "counterparty_role": "consumer",
+        "boundary_rule": "Current project owns drift summary emission; deployment controller owns rollout gating."
+      },
+      "rationale": "Deployment-controller integration stays unresolved until the peer project context is confirmed.",
+      "requires_earth_evidence": true,
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-151/TASK_EVIDENCE.json"
+      ],
+      "next_step": "Collect deployment-controller context before publishing the drift summary contract."
+    }
+  ]
+}

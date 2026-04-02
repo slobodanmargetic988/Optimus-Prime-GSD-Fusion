@@ -1,0 +1,24 @@
+{
+  "requirement_id": "REQ-066",
+  "analysis_type": "validator_runner_and_aggregate_verdict",
+  "checked_at_utc": "2026-03-16T11:00:00Z",
+  "ok": true,
+  "verdict": "pass",
+  "blocking_reason_codes": [],
+  "validator_count": 1,
+  "passed_validator_count": 1,
+  "failed_validator_count": 0,
+  "summary": "All validators passed; aggregate verdict is pass.",
+  "validators": [
+    {
+      "validator_id": "strategy_packet_v1_schema_validator",
+      "requirement_id": "REQ-060",
+      "analysis_type": "strategy_packet_v1_schema_validator",
+      "ok": true,
+      "verdict": "pass",
+      "blocking_reason_codes": [],
+      "diagnostic_count": 0,
+      "summary": "Strategy packet is planner-consumable."
+    }
+  ]
+}

@@ -93,6 +93,26 @@ def test_plan_prints_start_banner_on_tty(monkeypatch: pytest.MonkeyPatch, capsys
     assert payload["command"] == "/op-plan"
 
 
+def test_strategy_prints_start_banner_on_tty(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "run_from_payload",
+        lambda payload: _ok_result(str(payload.get("command") or "")),
+    )
+    monkeypatch.setattr(sys, "argv", ["opctl.py", "--command", "/op-strategy", "--repo-root", "/tmp/repo", "--json-pretty"])
+    monkeypatch.setattr(MODULE.sys.stdout, "isatty", lambda: True)
+
+    rc = MODULE.main()
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "[opctl] /op-strategy started for /tmp/repo." in out
+    assert "Generating strategy packet and summary from the manifest." in out
+    assert "strategy/current/strategy_packet.md" in out
+    payload = json.loads(out[out.find("{") :].strip())
+    assert payload["command"] == "/op-strategy"
+
+
 def test_simple_build_prints_start_banner_on_tty(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(
         MODULE,
@@ -122,7 +142,7 @@ def test_no_banners_on_non_tty(
         lambda payload: _ok_result(str(payload.get("command") or "")),
     )
     monkeypatch.setattr(MODULE.sys.stdout, "isatty", lambda: False)
-    for command in ("/op-initialize", "/op-plan", "/op-simple-build"):
+    for command in ("/op-initialize", "/op-plan", "/op-simple-build", "/op-strategy"):
         monkeypatch.setattr(sys, "argv", ["opctl.py", "--command", command, "--repo-root", "/tmp/repo", "--json-pretty"])
         rc = MODULE.main()
         out = capsys.readouterr().out
@@ -130,6 +150,7 @@ def test_no_banners_on_non_tty(
         assert "[opctl] /op-initialize started" not in out
         assert "[opctl] /op-plan started" not in out
         assert "[opctl] /op-simple-build started" not in out
+        assert "[opctl] /op-strategy started" not in out
         payload = json.loads(out.strip())
         assert payload["command"] == command
 
@@ -178,6 +199,35 @@ def test_merge_payload_applies_configured_worktrees_parent_for_initialize(monkey
     assert payload.get("worktrees_parent") == "/Users/slobodan/Forest"
 
 
+def test_merge_payload_includes_private_publish_initialize_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-initialize",
+            "--repo-root",
+            "/tmp/repo",
+            "--publish-private-repo",
+            "--github-owner",
+            "slobodanmargetic988",
+            "--github-repo-name",
+            "demo-repo",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("publish_private_repo") is True
+    assert payload.get("github_owner") == "slobodanmargetic988"
+    assert payload.get("github_repo_name") == "demo-repo"
+
+
 def test_merge_payload_preserves_explicit_boss_model_and_reasoning_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         MODULE,
@@ -208,6 +258,36 @@ def test_merge_payload_preserves_explicit_boss_model_and_reasoning_override(monk
     payload = MODULE.merge_payload(parsed)
     assert payload.get("boss_model") == "gpt-5.4-codex-exp"
     assert payload.get("boss_reasoning_effort") == "medium"
+
+
+def test_merge_payload_ignores_invalid_explicit_boss_model_and_reasoning_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {
+            "boss_model": "gpt-5.4",
+            "boss_reasoning_effort": "xhigh",
+        },
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-simple-build",
+            "--repo-root",
+            "/tmp/repo",
+            "--boss-model",
+            "not-a-real-model",
+            "--boss-reasoning-effort",
+            "ultra",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("boss_model") == "gpt-5.4"
+    assert payload.get("boss_reasoning_effort") == "xhigh"
 
 
 def test_merge_payload_applies_configured_boss_overrides_for_build(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -252,6 +332,56 @@ def test_merge_payload_includes_run_base_source_branch_for_simple_build(monkeypa
     parsed = MODULE.parse_args()
     payload = MODULE.merge_payload(parsed)
     assert payload.get("run_base_source_branch") == "op-simple-canary-prev"
+
+
+def test_merge_payload_includes_strategy_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-initialize",
+            "--repo-root",
+            "/tmp/repo",
+            "--strategy-manifest-file",
+            "/tmp/repo/strategy/CUSTOM.md",
+            "--skip-strategy",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("strategy_manifest_file") == "/tmp/repo/strategy/CUSTOM.md"
+    assert payload.get("skip_strategy") is True
+
+
+def test_merge_payload_includes_inline_strategy_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_resolve_configured_workflow",
+        lambda _repo_root: {},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "opctl.py",
+            "--command",
+            "/op-strategy",
+            "--repo-root",
+            "/tmp/repo",
+            "--strategy-manifest",
+            "# Inline Manifest\n\nRead README first.\n",
+        ],
+    )
+    parsed = MODULE.parse_args()
+    payload = MODULE.merge_payload(parsed)
+    assert payload.get("strategy_manifest") == "# Inline Manifest\n\nRead README first.\n"
 
 
 def test_merge_payload_includes_start_policy_for_build(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,0 +1,217 @@
+{
+  "input": {
+    "analysis_type": "recommendation_id_uniqueness_validator",
+    "now_utc": "2026-03-16T10:30:00Z",
+    "previous_revision": {
+      "revision_id": "strategy-rev-041",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness"
+        },
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "reuse-contract-review",
+          "recommendation_id": "rec.review-reuse-contracts"
+        }
+      ]
+    },
+    "current_revision": {
+      "revision_id": "strategy-rev-042",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness-v2"
+        },
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "integration-latency-watch",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "cross-project-obligation-map",
+          "recommendation_id": "rec.map-cross-project-obligations"
+        }
+      ]
+    }
+  },
+  "stable_unique_input": {
+    "analysis_type": "recommendation_id_uniqueness_validator",
+    "now_utc": "2026-03-16T10:30:00Z",
+    "previous_revision": {
+      "revision_id": "strategy-rev-041",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness"
+        },
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "reuse-contract-review",
+          "recommendation_id": "rec.review-reuse-contracts"
+        }
+      ]
+    },
+    "current_revision": {
+      "revision_id": "strategy-rev-043",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness"
+        },
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "reuse-contract-review",
+          "recommendation_id": "rec.review-reuse-contracts"
+        },
+        {
+          "recommendation_key": "kpi-target-tracking",
+          "recommendation_id": "rec.track-kpi-targets"
+        }
+      ]
+    }
+  },
+  "integration_input": {
+    "analysis_type": "recommendation_id_uniqueness_validator",
+    "now_utc": "2026-03-16T10:30:00Z",
+    "previous_revision": {
+      "revision_id": "strategy-rev-041",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness"
+        },
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "reuse-contract-review",
+          "recommendation_id": "rec.review-reuse-contracts"
+        }
+      ]
+    },
+    "current_revision": {
+      "revision_id": "strategy-rev-042",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness-v2"
+        },
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "integration-latency-watch",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "cross-project-obligation-map",
+          "recommendation_id": "rec.map-cross-project-obligations"
+        }
+      ]
+    },
+    "broad_sweep_context": {
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ],
+      "projects_considered": [
+        "earth-core-runtime",
+        "earth-shared-observability"
+      ],
+      "cross_project_obligations": [
+        {
+          "target_project_id": "earth-core-runtime",
+          "recommendation_ids": [
+            "rec.align-earth-runtime-canary"
+          ],
+          "earth_sweep_evidence_refs": [
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+          ]
+        }
+      ],
+      "unresolved_ideas": [
+        {
+          "idea_id": "idea.req-062-follow-up-observability",
+          "summary": "Confirm cross-project ownership before applying ID remaps in shared observability backlog.",
+          "target_project_id": "earth-shared-observability",
+          "recommendation_ids": [
+            "rec.align-earth-runtime-canary"
+          ],
+          "earth_sweep_evidence_refs": [
+            "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          ]
+        }
+      ]
+    }
+  },
+  "integration_missing_earth_input": {
+    "analysis_type": "recommendation_id_uniqueness_validator",
+    "now_utc": "2026-03-16T10:30:00Z",
+    "previous_revision": {
+      "revision_id": "strategy-rev-041",
+      "recommendations": [
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        }
+      ]
+    },
+    "current_revision": {
+      "revision_id": "strategy-rev-042",
+      "recommendations": [
+        {
+          "recommendation_key": "runtime-canary-alignment",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        },
+        {
+          "recommendation_key": "integration-latency-watch",
+          "recommendation_id": "rec.align-earth-runtime-canary"
+        }
+      ]
+    },
+    "broad_sweep_context": {
+      "earth_sweep_evidence_refs": [],
+      "projects_considered": [
+        "earth-core-runtime"
+      ],
+      "cross_project_obligations": [
+        {
+          "target_project_id": "earth-core-runtime",
+          "recommendation_ids": [
+            "rec.align-earth-runtime-canary"
+          ],
+          "earth_sweep_evidence_refs": []
+        }
+      ],
+      "unresolved_ideas": []
+    }
+  },
+  "invalid_missing_previous_revision_input": {
+    "analysis_type": "recommendation_id_uniqueness_validator",
+    "now_utc": "2026-03-16T10:30:00Z",
+    "current_revision": {
+      "revision_id": "strategy-rev-042",
+      "recommendations": [
+        {
+          "recommendation_key": "telemetry-freshness",
+          "recommendation_id": "rec.harden-telemetry-freshness-v2"
+        }
+      ]
+    }
+  }
+}

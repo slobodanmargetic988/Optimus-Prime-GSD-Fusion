@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-1",
+  "task_id": "TASK-104",
+  "requirement_ids": [
+    "REQ-031"
+  ],
+  "updated_at": "2026-03-16T04:03:00Z",
+  "dev": {
+    "status": "pass",
+    "checks": [
+      "python3 -m pytest tests/integration/test_call-6-kpi-impact-estimation-reasoning.py -q",
+      "python3 -m pytest tests/contracts/test_call-6-kpi-impact-estimation-reasoning.py -q"
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "passed": true
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "contracts/req/REQ-031_call-6-kpi-impact-estimation-reasoning.md",
+      "strategy/current/samples/REQ-031_call-6-kpi-impact-estimation-reasoning.sample.json",
+      "tests/integration/test_call-6-kpi-impact-estimation-reasoning.py",
+      "tests/contracts/test_call-6-kpi-impact-estimation-reasoning.py"
+    ]
+  },
+  "test": {
+    "status": "pending",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_031_kpi_estimation_cross_project_usage_explicit",
+      "req_031_integration_evidence_refs_verified",
+      "task_evidence_path_resolved"
+    ]
+  }
+}

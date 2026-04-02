@@ -1,0 +1,376 @@
+{
+  "ok": true,
+  "tool": "strategy-context-sweep",
+  "tool_version": "1.1.0",
+  "checked_at_utc": "2026-03-14T21:00:00Z",
+  "decision_policy": {
+    "stale": "downgrade",
+    "missing": "exclude"
+  },
+  "stale_after_seconds": {
+    "plan_packets": 600,
+    "state": 300,
+    "roadmap": 86400,
+    "requirements": 604800
+  },
+  "earth_sweep_evidence_refs": [
+    "/workspace/earth-north/docs/plans/REQUIREMENTS.md",
+    "/workspace/earth-north/docs/plans/ROADMAP.md",
+    "/workspace/earth-north/strategy/current/PLAN_PACKETS.json",
+    "/workspace/earth-north/strategy/current/STATE.json",
+    "/workspace/earth-south/docs/plans/REQUIREMENTS.md",
+    "/workspace/earth-south/docs/plans/ROADMAP.md",
+    "/workspace/earth-south/strategy/current/PLAN_PACKETS.json",
+    "/workspace/earth-south/strategy/current/STATE.json"
+  ],
+  "cross_project_context": {
+    "project_ids_considered": [
+      "earth-north",
+      "earth-south"
+    ],
+    "project_count": 2,
+    "context_projects_used": [
+      "earth-north",
+      "earth-south"
+    ],
+    "projects_with_stale_context": [],
+    "projects_with_missing_context": []
+  },
+  "recommendation": {
+    "decision": "proceed",
+    "rationale": "projects=2 artifacts=8 fresh=8 stale=0 missing=0",
+    "context_project_ids": [
+      "earth-north",
+      "earth-south"
+    ],
+    "evidence_refs": [
+      "/workspace/earth-north/docs/plans/REQUIREMENTS.md",
+      "/workspace/earth-north/docs/plans/ROADMAP.md",
+      "/workspace/earth-north/strategy/current/PLAN_PACKETS.json",
+      "/workspace/earth-north/strategy/current/STATE.json",
+      "/workspace/earth-south/docs/plans/REQUIREMENTS.md",
+      "/workspace/earth-south/docs/plans/ROADMAP.md",
+      "/workspace/earth-south/strategy/current/PLAN_PACKETS.json",
+      "/workspace/earth-south/strategy/current/STATE.json"
+    ],
+    "approved_cross_project_obligations": [],
+    "open_risks": []
+  },
+  "capability_catalog": {
+    "required_capability_ids": [
+      "capability-catalog-extraction",
+      "cross-project-obligation-validation",
+      "planning-artifact-sweep",
+      "source-version-guard"
+    ],
+    "projects": [
+      {
+        "project_id": "earth-north",
+        "provided_capabilities": [
+          {
+            "capability_id": "capability-catalog-extraction",
+            "source_version": "1.0.0",
+            "source_ref": "contracts/req/REQ-013_capability-catalog-extraction.md"
+          },
+          {
+            "capability_id": "planning-artifact-sweep",
+            "source_version": "1.1.0",
+            "source_ref": "scripts/strategy_context_sweep.py"
+          }
+        ],
+        "provided_capability_ids": [
+          "capability-catalog-extraction",
+          "planning-artifact-sweep"
+        ],
+        "missing_capability_ids": [
+          "cross-project-obligation-validation",
+          "source-version-guard"
+        ]
+      },
+      {
+        "project_id": "earth-south",
+        "provided_capabilities": [
+          {
+            "capability_id": "cross-project-obligation-validation",
+            "source_version": "1.1.0",
+            "source_ref": "scripts/strategy_context_sweep.py"
+          },
+          {
+            "capability_id": "planning-artifact-sweep",
+            "source_version": "1.1.0",
+            "source_ref": "scripts/strategy_context_sweep.py"
+          }
+        ],
+        "provided_capability_ids": [
+          "cross-project-obligation-validation",
+          "planning-artifact-sweep"
+        ],
+        "missing_capability_ids": [
+          "capability-catalog-extraction",
+          "source-version-guard"
+        ]
+      }
+    ],
+    "catalog_entries": [
+      {
+        "capability_id": "capability-catalog-extraction",
+        "availability": "provided",
+        "providers": [
+          {
+            "project_id": "earth-north",
+            "source_version": "1.0.0",
+            "source_ref": "contracts/req/REQ-013_capability-catalog-extraction.md"
+          }
+        ],
+        "source_versions": [
+          "1.0.0"
+        ],
+        "project_ids_missing": [
+          "earth-south"
+        ],
+        "provider_count": 1,
+        "projects_missing_count": 1
+      },
+      {
+        "capability_id": "cross-project-obligation-validation",
+        "availability": "provided",
+        "providers": [
+          {
+            "project_id": "earth-south",
+            "source_version": "1.1.0",
+            "source_ref": "scripts/strategy_context_sweep.py"
+          }
+        ],
+        "source_versions": [
+          "1.1.0"
+        ],
+        "project_ids_missing": [
+          "earth-north"
+        ],
+        "provider_count": 1,
+        "projects_missing_count": 1
+      },
+      {
+        "capability_id": "planning-artifact-sweep",
+        "availability": "provided",
+        "providers": [
+          {
+            "project_id": "earth-north",
+            "source_version": "1.1.0",
+            "source_ref": "scripts/strategy_context_sweep.py"
+          },
+          {
+            "project_id": "earth-south",
+            "source_version": "1.1.0",
+            "source_ref": "scripts/strategy_context_sweep.py"
+          }
+        ],
+        "source_versions": [
+          "1.1.0"
+        ],
+        "project_ids_missing": [],
+        "provider_count": 2,
+        "projects_missing_count": 0
+      },
+      {
+        "capability_id": "source-version-guard",
+        "availability": "missing",
+        "providers": [],
+        "source_versions": [],
+        "project_ids_missing": [
+          "earth-north",
+          "earth-south"
+        ],
+        "provider_count": 0,
+        "projects_missing_count": 2
+      }
+    ],
+    "already_completed_capability_ids": [
+      "capability-catalog-extraction",
+      "cross-project-obligation-validation",
+      "planning-artifact-sweep"
+    ],
+    "missing_capability_ids": [
+      "source-version-guard"
+    ],
+    "recommended_capability_ids": [
+      "source-version-guard"
+    ],
+    "summary": {
+      "projects": 2,
+      "required_capabilities": 4,
+      "already_completed_capabilities": 3,
+      "missing_capabilities": 1
+    }
+  },
+  "projects": [
+    {
+      "project_id": "earth-north",
+      "root_path": "/workspace/earth-north",
+      "artifacts": {
+        "plan_packets": {
+          "path": "/workspace/earth-north/strategy/current/PLAN_PACKETS.json",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:59:50Z",
+          "age_seconds": 10,
+          "stale_after_seconds": 600,
+          "freshness": "fresh",
+          "decision": "include"
+        },
+        "state": {
+          "path": "/workspace/earth-north/strategy/current/STATE.json",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:59:50Z",
+          "age_seconds": 10,
+          "stale_after_seconds": 300,
+          "freshness": "fresh",
+          "decision": "include"
+        },
+        "roadmap": {
+          "path": "/workspace/earth-north/docs/plans/ROADMAP.md",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:59:50Z",
+          "age_seconds": 10,
+          "stale_after_seconds": 86400,
+          "freshness": "fresh",
+          "decision": "include"
+        },
+        "requirements": {
+          "path": "/workspace/earth-north/docs/plans/REQUIREMENTS.md",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:59:50Z",
+          "age_seconds": 10,
+          "stale_after_seconds": 604800,
+          "freshness": "fresh",
+          "decision": "include"
+        }
+      },
+      "counts": {
+        "fresh": 4,
+        "stale": 0,
+        "missing": 0,
+        "include": 4,
+        "downgrade": 0,
+        "exclude": 0
+      },
+      "context_used": true,
+      "evidence_refs": [
+        "/workspace/earth-north/docs/plans/REQUIREMENTS.md",
+        "/workspace/earth-north/docs/plans/ROADMAP.md",
+        "/workspace/earth-north/strategy/current/PLAN_PACKETS.json",
+        "/workspace/earth-north/strategy/current/STATE.json"
+      ],
+      "capability_catalog": {
+        "provided_capabilities": [
+          {
+            "capability_id": "capability-catalog-extraction",
+            "source_version": "1.0.0",
+            "source_ref": "contracts/req/REQ-013_capability-catalog-extraction.md"
+          },
+          {
+            "capability_id": "planning-artifact-sweep",
+            "source_version": "1.1.0",
+            "source_ref": "scripts/strategy_context_sweep.py"
+          }
+        ],
+        "provided_capability_ids": [
+          "capability-catalog-extraction",
+          "planning-artifact-sweep"
+        ],
+        "missing_capability_ids": [
+          "cross-project-obligation-validation",
+          "source-version-guard"
+        ]
+      }
+    },
+    {
+      "project_id": "earth-south",
+      "root_path": "/workspace/earth-south",
+      "artifacts": {
+        "plan_packets": {
+          "path": "/workspace/earth-south/strategy/current/PLAN_PACKETS.json",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:59:50Z",
+          "age_seconds": 10,
+          "stale_after_seconds": 600,
+          "freshness": "fresh",
+          "decision": "include"
+        },
+        "state": {
+          "path": "/workspace/earth-south/strategy/current/STATE.json",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:59:50Z",
+          "age_seconds": 10,
+          "stale_after_seconds": 300,
+          "freshness": "fresh",
+          "decision": "include"
+        },
+        "roadmap": {
+          "path": "/workspace/earth-south/docs/plans/ROADMAP.md",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:59:50Z",
+          "age_seconds": 10,
+          "stale_after_seconds": 86400,
+          "freshness": "fresh",
+          "decision": "include"
+        },
+        "requirements": {
+          "path": "/workspace/earth-south/docs/plans/REQUIREMENTS.md",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:59:50Z",
+          "age_seconds": 10,
+          "stale_after_seconds": 604800,
+          "freshness": "fresh",
+          "decision": "include"
+        }
+      },
+      "counts": {
+        "fresh": 4,
+        "stale": 0,
+        "missing": 0,
+        "include": 4,
+        "downgrade": 0,
+        "exclude": 0
+      },
+      "context_used": true,
+      "evidence_refs": [
+        "/workspace/earth-south/docs/plans/REQUIREMENTS.md",
+        "/workspace/earth-south/docs/plans/ROADMAP.md",
+        "/workspace/earth-south/strategy/current/PLAN_PACKETS.json",
+        "/workspace/earth-south/strategy/current/STATE.json"
+      ],
+      "capability_catalog": {
+        "provided_capabilities": [
+          {
+            "capability_id": "cross-project-obligation-validation",
+            "source_version": "1.1.0",
+            "source_ref": "scripts/strategy_context_sweep.py"
+          },
+          {
+            "capability_id": "planning-artifact-sweep",
+            "source_version": "1.1.0",
+            "source_ref": "scripts/strategy_context_sweep.py"
+          }
+        ],
+        "provided_capability_ids": [
+          "cross-project-obligation-validation",
+          "planning-artifact-sweep"
+        ],
+        "missing_capability_ids": [
+          "capability-catalog-extraction",
+          "source-version-guard"
+        ]
+      }
+    }
+  ],
+  "totals": {
+    "projects": 2,
+    "artifacts": 8,
+    "fresh": 8,
+    "stale": 0,
+    "missing": 0,
+    "include": 8,
+    "downgrade": 0,
+    "exclude": 0
+  }
+}

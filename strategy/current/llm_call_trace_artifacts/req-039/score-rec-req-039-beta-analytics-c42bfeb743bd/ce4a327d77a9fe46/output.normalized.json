@@ -1,0 +1,74 @@
+{
+  "analysis_type": "recommendation_rationale_quality_scoring",
+  "call_id": "score-rec-req-039-beta-analytics-c42bfeb743bd",
+  "checked_at_utc": "2026-03-16T15:20:00Z",
+  "requirement_id": "REQ-039",
+  "result": {
+    "cross_project_obligations": [
+      {
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/analytics-hub.json",
+          "reports/earth/sweeps/2026-03-16/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-138/TASK_EVIDENCE.json",
+          "strategy/current/samples/REQ-030_call-5-sequencing-and-lane-design-reasoning.sample.json"
+        ],
+        "obligation_id": "obl.87a6785f916f",
+        "project_id": "analytics-hub",
+        "recommendation_id": "rec.req-039.beta-analytics",
+        "summary": "Coordinate rejected-recommendation ledger expectations with analytics-hub."
+      }
+    ],
+    "open_risks": [],
+    "recommended_actions": [
+      {
+        "action_id": "action.87a6785f916f",
+        "coordination_projects": [
+          "analytics-hub"
+        ],
+        "coordination_required": true,
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/analytics-hub.json",
+          "reports/earth/sweeps/2026-03-16/portfolio.json",
+          "reports/optimus-prime/planning/evidence/TASK-138/TASK_EVIDENCE.json",
+          "strategy/current/samples/REQ-030_call-5-sequencing-and-lane-design-reasoning.sample.json"
+        ],
+        "quality_score": 4,
+        "rationale": "Analytics consumers should align with rationale quality rejection semantics.",
+        "recommendation_id": "rec.req-039.beta-analytics",
+        "summary": "Coordinate rejected-recommendation ledger expectations with analytics-hub.",
+        "tradeoffs": [
+          "Coordination improves downstream interpretation but slows immediate emission."
+        ]
+      }
+    ],
+    "scored_recommendation": {
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-138/TASK_EVIDENCE.json",
+        "strategy/current/samples/REQ-030_call-5-sequencing-and-lane-design-reasoning.sample.json"
+      ],
+      "quality_score": 4,
+      "quality_status": "accepted",
+      "rationale": "Analytics consumers should align with rationale quality rejection semantics.",
+      "recommendation_id": "rec.req-039.beta-analytics",
+      "rejection_reason_codes": [],
+      "score_breakdown": {
+        "evidence_ref_count": 2,
+        "evidence_requirement_met": true,
+        "tradeoff_count": 1,
+        "tradeoff_requirement_met": true
+      },
+      "summary": "Coordinate rejected-recommendation ledger expectations with analytics-hub.",
+      "tradeoffs": [
+        "Coordination improves downstream interpretation but slows immediate emission."
+      ]
+    },
+    "totals": {
+      "accepted_recommendations": 3,
+      "recommendations": 3,
+      "recommendations_meeting_evidence_minimum": 3,
+      "recommendations_meeting_tradeoff_minimum": 3,
+      "rejected_recommendations": 0
+    }
+  },
+  "schema_version": "optimus-prime.req-039.recommendation-call-output-snapshot.v1"
+}

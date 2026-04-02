@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "checked_at_utc": "2026-03-16T10:30:00Z",
+  "verdict": "pass",
+  "planner_consumability": "planner_ready",
+  "reason_codes": [],
+  "diagnostic_count": 0,
+  "summary": "Strategy packet is planner-consumable.",
+  "diagnostics": []
+}

@@ -1,0 +1,133 @@
+{
+  "requirement_id": "REQ-041",
+  "surface": "recommendation_dependency_effect_modeling",
+  "target_project_root": "/workspace/projects/optimus-prime",
+  "earth_root": "/workspace/projects/Earth",
+  "output_root": "/workspace/projects/optimus-prime/strategy/out",
+  "revision_identity": "rev-req041-fixture-r1",
+  "recommendations": [
+    {
+      "recommendation_id": "rec.runtime-contract-alignment",
+      "summary": "Align runtime contract snapshot expectations before cross-project rollout.",
+      "rationale": "Recommendation packets currently cross project boundaries with contract assumptions that drift during rollout handoff.",
+      "evidence_refs": [
+        "contracts/req/REQ-024_strategy-context-bundle-serialization.md",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+      ],
+      "affected_project_effects": [
+        {
+          "project_id": "runtime-orchestrator",
+          "effect_type": "rollout_timing",
+          "dependency_effect_summary": "Runtime orchestrator rollout timing must shift to match the aligned contract handoff window.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "likely_blockers": [
+            {
+              "blocker_id": "blocker.runtime-window-drift",
+              "summary": "Rollout checkpoints still assume the older contract handoff timing.",
+              "severity": "medium",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+              ]
+            }
+          ],
+          "mitigation_hooks": [
+            {
+              "hook_id": "hook.runtime-window-checkpoint",
+              "summary": "Review the rollout checkpoint sequence against the updated handoff timeline before enabling rollout.",
+              "hook_type": "timeline_checkpoint",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+              ]
+            }
+          ]
+        },
+        {
+          "project_id": "ground-control-hub",
+          "effect_type": "schema_alignment",
+          "dependency_effect_summary": "Ground control hub must accept the normalized contract schema before shared recommendation packets fan out.",
+          "evidence_refs": [
+            "contracts/req/REQ-024_strategy-context-bundle-serialization.md"
+          ],
+          "likely_blockers": [
+            {
+              "blocker_id": "blocker.runtime-schema-drift",
+              "summary": "Serialized context bundle fields still differ from the shared runtime bridge expectations.",
+              "severity": "high",
+              "evidence_refs": [
+                "contracts/req/REQ-024_strategy-context-bundle-serialization.md"
+              ]
+            }
+          ],
+          "mitigation_hooks": [
+            {
+              "hook_id": "hook.bundle-contract-diff",
+              "summary": "Diff the outgoing bundle against the shared runtime contract sample before rollout.",
+              "hook_type": "contract_check",
+              "evidence_refs": [
+                "contracts/req/REQ-024_strategy-context-bundle-serialization.md"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "recommendation_id": "rec.recommendation-evidence-fanout",
+      "summary": "Fan out recommendation evidence lineage into shared observability.",
+      "rationale": "Cross-project recommendation audits stay weak until lineage survives fanout into shared telemetry views.",
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/shared-observability.json",
+        "strategy/current/llm_call_trace.jsonl"
+      ],
+      "affected_project_effects": [
+        {
+          "project_id": "shared-observability",
+          "effect_type": "evidence_fanout",
+          "dependency_effect_summary": "Shared observability must ingest recommendation lineage so downstream teams can trace cross-project side effects.",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/shared-observability.json",
+            "strategy/current/llm_call_trace.jsonl"
+          ],
+          "likely_blockers": [
+            {
+              "blocker_id": "blocker.telemetry-tag-gap",
+              "summary": "Telemetry rows do not yet carry stable recommendation identifiers for fanout joins.",
+              "severity": "high",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/shared-observability.json"
+              ]
+            },
+            {
+              "blocker_id": "blocker.missing-evidence-lineage",
+              "summary": "Evidence lineage links drop during export, preventing downstream dependency audits.",
+              "severity": "critical",
+              "evidence_refs": [
+                "strategy/current/llm_call_trace.jsonl"
+              ]
+            }
+          ],
+          "mitigation_hooks": [
+            {
+              "hook_id": "hook.telemetry-tag-schema-check",
+              "summary": "Verify recommendation identifiers are present in exported telemetry rows before promotion.",
+              "hook_type": "schema_check",
+              "evidence_refs": [
+                "reports/earth/sweeps/2026-03-15/shared-observability.json"
+              ]
+            },
+            {
+              "hook_id": "hook.lineage-export-replay",
+              "summary": "Replay one evidence export and confirm lineage survives from call trace to observability sink.",
+              "hook_type": "replay_probe",
+              "evidence_refs": [
+                "strategy/current/llm_call_trace.jsonl"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "previous_revision": {
+    "revision_id": "strat.20260305-r0",
+    "recommendations": [
+      {
+        "recommendation_key": "dispatch-quality-first",
+        "recommendation_id": "rec.dispatch-quality-first",
+        "basis": {
+          "priority": "high",
+          "summary": "Implement watcher-driven cycle release and redispatch-quality controls before broader runtime features.",
+          "rationale": "This directly reduces non-actionable cycles and improves output per token budget.",
+          "expected_impact": "Lower idle loops and better per-cycle productivity under constrained hardware/rate limits.",
+          "risk_level": "medium"
+        }
+      },
+      {
+        "recommendation_key": "runtime-canary-coverage",
+        "recommendation_id": "rec.runtime-canary-rollout-window",
+        "basis": {
+          "priority": "medium",
+          "summary": "Expand canary task coverage for runtime coordination path regressions.",
+          "rationale": "Gate failures earlier by linking KPI drift to concrete lane-level recommendations.",
+          "expected_impact": "Faster issue isolation and lower failure amplification across planner/runtime handoffs.",
+          "risk_level": "medium"
+        }
+      }
+    ]
+  },
+  "current_revision": {
+    "revision_id": "strat.20260312-r1",
+    "recommendations": [
+      {
+        "recommendation_key": "dispatch-quality-first",
+        "recommendation_id": "rec.dispatch-quality-first",
+        "basis": {
+          "priority": "high",
+          "summary": "Implement watcher-driven cycle release and redispatch-quality controls before broader runtime features.",
+          "rationale": "This directly reduces non-actionable cycles and improves output per token budget.",
+          "expected_impact": "Lower idle loops and better per-cycle productivity under constrained hardware/rate limits.",
+          "risk_level": "medium"
+        }
+      },
+      {
+        "recommendation_key": "runtime-canary-coverage",
+        "recommendation_id": "rec.runtime-canary-coverage",
+        "basis": {
+          "priority": "medium",
+          "summary": "Expand canary task coverage for runtime coordination path regressions.",
+          "rationale": "Gate failures earlier by linking KPI drift to concrete lane-level recommendations.",
+          "expected_impact": "Faster issue isolation and lower failure amplification across planner/runtime handoffs.",
+          "risk_level": "medium"
+        }
+      }
+    ]
+  }
+}

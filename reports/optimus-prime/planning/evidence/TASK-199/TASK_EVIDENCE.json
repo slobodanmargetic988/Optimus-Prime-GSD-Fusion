@@ -1,0 +1,209 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-3",
+  "task_id": "TASK-199",
+  "requirement_ids": [
+    "REQ-055"
+  ],
+  "updated_at": "2026-03-16T21:20:02Z",
+  "task_kind": "implementation",
+  "unresolved_blockers": [],
+  "dev": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-contract-constraint-classification-artifact-run1",
+        "command": "python3 -m pytest tests/contracts/test_constraint-classification-artifact.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/contract_constraint-classification-artifact.run1.output.txt"
+      },
+      {
+        "name": "pytest-contract-constraint-classification-artifact-run2",
+        "command": "python3 -m pytest tests/contracts/test_constraint-classification-artifact.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/contract_constraint-classification-artifact.run2.output.txt"
+      },
+      {
+        "name": "pytest-integration-constraint-classification-artifact-run1",
+        "command": "python3 -m pytest tests/integration/test_constraint-classification-artifact.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/integration_constraint-classification-artifact.run1.output.txt"
+      },
+      {
+        "name": "pytest-integration-constraint-classification-artifact-run2",
+        "command": "python3 -m pytest tests/integration/test_constraint-classification-artifact.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/integration_constraint-classification-artifact.run2.output.txt"
+      },
+      {
+        "name": "pytest-hardening-constraint-classification-artifact-run1",
+        "command": "python3 -m pytest tests/hardening/test_constraint-classification-artifact_hardening.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/hardening_constraint-classification-artifact.run1.output.txt"
+      },
+      {
+        "name": "pytest-hardening-constraint-classification-artifact-run2",
+        "command": "python3 -m pytest tests/hardening/test_constraint-classification-artifact_hardening.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/hardening_constraint-classification-artifact.run2.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "req055-no-change-rerun-replay-stability",
+        "status": "passed",
+        "details": "REQ-055 hardening coverage proves artifact regeneration is replay-stable on semantically identical reruns even when constraint and context ordering changes."
+      },
+      {
+        "name": "req055-complete-planner-recommendation-mapping",
+        "status": "passed",
+        "details": "Planner-facing context usage now carries a deterministic recommendation_mapping set that covers every classified constraint and stays aligned with planner_policy and recommended_actions."
+      },
+      {
+        "name": "req055-acceptance-packet-open-risk-evidence",
+        "status": "passed",
+        "details": "Acceptance coverage confirms evidence refs stay attached to recommendation and open-risk rows, and missing Earth-sweep evidence emits deterministic failure-path reason codes."
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "artifact_regeneration_with_no_semantic_drift_on_no_change_rerun",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "planner_hook_receives_complete_recommendation_mapping_set",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "acceptance_packet_includes_required_evidence_refs_and_open_risk_handling",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_artifacts_handoff.py",
+      "tests/integration/test_constraint-classification-artifact.py",
+      "tests/hardening/test_constraint-classification-artifact_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-199/contract_constraint-classification-artifact.run1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-199/contract_constraint-classification-artifact.run2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-199/integration_constraint-classification-artifact.run1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-199/integration_constraint-classification-artifact.run2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-199/hardening_constraint-classification-artifact.run1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-199/hardening_constraint-classification-artifact.run2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-199/dev_check_bundle.json",
+      "reports/optimus-prime/planning/evidence/TASK-199/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-contract-constraint-classification-artifact-run1",
+        "command": "python3 -m pytest tests/contracts/test_constraint-classification-artifact.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/contract_constraint-classification-artifact.run1.output.txt"
+      },
+      {
+        "name": "pytest-contract-constraint-classification-artifact-run2",
+        "command": "python3 -m pytest tests/contracts/test_constraint-classification-artifact.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/contract_constraint-classification-artifact.run2.output.txt"
+      },
+      {
+        "name": "pytest-integration-constraint-classification-artifact-run1",
+        "command": "python3 -m pytest tests/integration/test_constraint-classification-artifact.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/integration_constraint-classification-artifact.run1.output.txt"
+      },
+      {
+        "name": "pytest-integration-constraint-classification-artifact-run2",
+        "command": "python3 -m pytest tests/integration/test_constraint-classification-artifact.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/integration_constraint-classification-artifact.run2.output.txt"
+      },
+      {
+        "name": "pytest-hardening-constraint-classification-artifact-run1",
+        "command": "python3 -m pytest tests/hardening/test_constraint-classification-artifact_hardening.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/hardening_constraint-classification-artifact.run1.output.txt"
+      },
+      {
+        "name": "pytest-hardening-constraint-classification-artifact-run2",
+        "command": "python3 -m pytest tests/hardening/test_constraint-classification-artifact_hardening.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-199/hardening_constraint-classification-artifact.run2.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "req055-deterministic-reason-code-behavior",
+        "status": "passed",
+        "details": "Contract, integration, and hardening checks all exited 0 in consecutive runs, and REQ-055 failure-path reason codes and evidence refs stayed stable across reruns."
+      }
+    ],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": [
+      {
+        "label": "contract-run1-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-199/contract_constraint-classification-artifact.run1.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "contract-run2-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-199/contract_constraint-classification-artifact.run2.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "integration-run1-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-199/integration_constraint-classification-artifact.run1.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "integration-run2-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-199/integration_constraint-classification-artifact.run2.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "hardening-run1-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-199/hardening_constraint-classification-artifact.run1.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "hardening-run2-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-199/hardening_constraint-classification-artifact.run2.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "check-bundle-json",
+        "path": "reports/optimus-prime/planning/evidence/TASK-199/dev_check_bundle.json",
+        "kind": "json"
+      }
+    ]
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "passed",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "acceptance_checks_passed",
+      "req055_hardening_edge_cases_covered",
+      "req055_reason_codes_stable_across_reruns"
+    ],
+    "unresolved_blockers": []
+  }
+}

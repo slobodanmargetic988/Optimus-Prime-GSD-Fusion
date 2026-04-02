@@ -1,0 +1,9 @@
+{
+  "req_id": "REQ-025",
+  "summary": "REQ-025 multi-call strategy pipeline planner now includes deterministic broad-sweep context inputs, context usage telemetry, and recommendation outputs with cross-project obligations gated by Earth-sweep evidence.",
+  "evidence_refs": [
+    "reports/optimus-prime/planning/evidence/TASK-080/integration_multi-call-strategy-pipeline-planner.output.txt"
+  ],
+  "consumability_verdict": "pass",
+  "open_risks": []
+}

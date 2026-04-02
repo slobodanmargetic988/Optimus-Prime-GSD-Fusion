@@ -1,0 +1,211 @@
+{
+  "analysis_type": "ecosystem_link_map_json_generator",
+  "now_utc": "2026-03-16T09:30:00Z",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "final_strategy_synthesis": {
+    "final_recommendations": [
+      {
+        "recommendation_id": "rec.harden-telemetry-freshness",
+        "summary": "Harden telemetry freshness checks before the next autonomous canary pass.",
+        "rationale": "Call-5 sequencing ranked telemetry freshness first because it unblocks downstream verification work.",
+        "packet_kind": "target-project",
+        "peer_project_id": "",
+        "lane": "execution",
+        "sequence_hint": 1,
+        "priority": "high",
+        "evidence_refs": [
+          "reports/quality/req-039-rationale-quality-score.json",
+          "reports/runtime/telemetry/freshness-gap-2026-03-15.json"
+        ],
+        "call_trace_lineage": [
+          {
+            "call_id": "call-5",
+            "requirement_id": "REQ-030",
+            "trace_id": "trace-call-5-001",
+            "trace_ref": "strategy/current/llm_call_trace.jsonl#call-5-001",
+            "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-030/call-5/trace-call-5-001.json",
+            "checked_at_utc": "2026-03-16T08:20:00Z"
+          },
+          {
+            "call_id": "rationale-quality-scoring",
+            "requirement_id": "REQ-039",
+            "trace_id": "trace-rationale-quality-001",
+            "trace_ref": "strategy/current/llm_call_trace.jsonl#rationale-quality-001",
+            "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-039/rationale-quality-001.json",
+            "checked_at_utc": "2026-03-16T08:30:00Z"
+          }
+        ],
+        "contributing_call_ids": [
+          "call-5",
+          "rationale-quality-scoring"
+        ],
+        "contributing_requirement_ids": [
+          "REQ-030",
+          "REQ-039"
+        ],
+        "supporting_call_count": 2,
+        "strategy_packet_input_id": "pkt.9e0c566d663e"
+      },
+      {
+        "recommendation_id": "rec.align-earth-runtime-canary",
+        "summary": "Align the Earth runtime canary stabilization window before widening rollout.",
+        "rationale": "Call-2 linkage reasoning confirmed the rollout depends on shared runtime stabilization evidence.",
+        "packet_kind": "cross-project",
+        "peer_project_id": "earth-core-runtime",
+        "lane": "coordination",
+        "sequence_hint": 2,
+        "priority": "high",
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/quality/req-039-rationale-quality-score.json",
+          "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json"
+        ],
+        "call_trace_lineage": [
+          {
+            "call_id": "call-2",
+            "requirement_id": "REQ-027",
+            "trace_id": "trace-call-2-001",
+            "trace_ref": "strategy/current/llm_call_trace.jsonl#call-2-001",
+            "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json",
+            "checked_at_utc": "2026-03-16T08:10:00Z"
+          },
+          {
+            "call_id": "rationale-quality-scoring",
+            "requirement_id": "REQ-039",
+            "trace_id": "trace-rationale-quality-001",
+            "trace_ref": "strategy/current/llm_call_trace.jsonl#rationale-quality-001",
+            "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-039/rationale-quality-001.json",
+            "checked_at_utc": "2026-03-16T08:30:00Z"
+          }
+        ],
+        "contributing_call_ids": [
+          "call-2",
+          "rationale-quality-scoring"
+        ],
+        "contributing_requirement_ids": [
+          "REQ-027",
+          "REQ-039"
+        ],
+        "supporting_call_count": 2,
+        "strategy_packet_input_id": "pkt.c3c7c38214ae"
+      }
+    ],
+    "deferred_recommendations": [
+      {
+        "recommendation_id": "rec.review-reuse-contracts",
+        "summary": "Review reuse-contract drift before promoting more shared interfaces.",
+        "deferred_reason_code": "conflicting_packet_routing",
+        "packet_kind_candidates": [
+          "cross-project",
+          "target-project"
+        ],
+        "peer_project_candidates": [
+          "earth-shared-observability"
+        ],
+        "evidence_refs": [
+          "contracts/req/REQ-016_reuse-opportunity-detection.md",
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "call_trace_lineage": [
+          {
+            "call_id": "call-2",
+            "requirement_id": "REQ-027",
+            "trace_id": "trace-call-2-001",
+            "trace_ref": "strategy/current/llm_call_trace.jsonl#call-2-001",
+            "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json",
+            "checked_at_utc": "2026-03-16T08:10:00Z"
+          },
+          {
+            "call_id": "call-5",
+            "requirement_id": "REQ-030",
+            "trace_id": "trace-call-5-001",
+            "trace_ref": "strategy/current/llm_call_trace.jsonl#call-5-001",
+            "artifact_ref": "strategy/current/llm_call_trace_artifacts/req-030/call-5/trace-call-5-001.json",
+            "checked_at_utc": "2026-03-16T08:20:00Z"
+          }
+        ],
+        "contributing_call_ids": [
+          "call-2",
+          "call-5"
+        ]
+      }
+    ],
+    "open_risks": [
+      {
+        "open_risk_id": "open-risk.c6d73dbb8f81",
+        "recommendation_id": "idea.review-reuse-contracts-follow-up",
+        "summary": "Validate earth-shared-observability ownership handoff before scheduling additional integration obligations.",
+        "reason_code": "unresolved_idea_open_risk",
+        "project_id": "earth-shared-observability",
+        "required_evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "linked_recommendation_ids": [
+          "rec.review-reuse-contracts"
+        ],
+        "call_trace_lineage": [],
+        "contributing_call_ids": []
+      }
+    ],
+    "strategy_packet_inputs": [
+      {
+        "packet_input_id": "pkt.c3c7c38214ae",
+        "packet_kind": "cross-project",
+        "target_project_id": "optimus-prime-gsd-fusion",
+        "peer_project_id": "earth-core-runtime",
+        "lane": "coordination",
+        "recommendation_ids": [
+          "rec.align-earth-runtime-canary"
+        ],
+        "recommendation_count": 1,
+        "earliest_sequence_hint": 2,
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/quality/req-039-rationale-quality-score.json",
+          "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json"
+        ]
+      },
+      {
+        "packet_input_id": "pkt.9e0c566d663e",
+        "packet_kind": "target-project",
+        "target_project_id": "optimus-prime-gsd-fusion",
+        "peer_project_id": "",
+        "lane": "execution",
+        "recommendation_ids": [
+          "rec.harden-telemetry-freshness"
+        ],
+        "recommendation_count": 1,
+        "earliest_sequence_hint": 1,
+        "evidence_refs": [
+          "reports/quality/req-039-rationale-quality-score.json",
+          "reports/runtime/telemetry/freshness-gap-2026-03-15.json"
+        ]
+      }
+    ],
+    "cross_project_context_usage": {
+      "cross_project_context_provided": true,
+      "cross_project_context_used": true,
+      "projects_considered": [
+        "earth-core-runtime",
+        "earth-shared-observability"
+      ],
+      "earth_sweep_evidence_refs_considered": [
+        "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ],
+      "cross_project_obligation_count": 2,
+      "unresolved_idea_count": 1,
+      "recommendation_ids_with_context": [
+        "rec.align-earth-runtime-canary",
+        "rec.review-reuse-contracts"
+      ]
+    }
+  }
+}

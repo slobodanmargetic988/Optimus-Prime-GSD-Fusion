@@ -1,0 +1,49 @@
+{
+  "target_project_root": "/workspace/projects/optimus-prime",
+  "earth_root": "/workspace/projects/Earth",
+  "output_root": "/workspace/projects/optimus-prime/strategy/out",
+  "revision_identity": "rev-req038-fixture-r1",
+  "priority_weights": {
+    "ecosystem_impact": 0.5,
+    "feasibility": 0.3,
+    "urgency": 0.2
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.runtime-bridge-alignment",
+      "summary": "Align runtime bridge assumptions across ecosystem workers.",
+      "rationale": "Shared runtime contracts currently diverge across planning packets and slow cross-project delivery.",
+      "ecosystem_impact_score": 9,
+      "feasibility_score": 6,
+      "urgency_score": 8,
+      "evidence_refs": [
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-127/TASK_EVIDENCE.json"
+      ]
+    },
+    {
+      "recommendation_id": "rec.contract-drift-guardrails",
+      "summary": "Add contract drift guardrails for recommendation packets.",
+      "rationale": "Contract drift causes avoidable regressions during recommendation packet replay.",
+      "ecosystem_impact_score": 8,
+      "feasibility_score": 8,
+      "urgency_score": 7,
+      "evidence_refs": [
+        "contracts/req/REQ-024_strategy-context-bundle-serialization.md",
+        "reports/optimus-prime/planning/evidence/TASK-130/TASK_EVIDENCE.json"
+      ]
+    },
+    {
+      "recommendation_id": "rec.llm-trace-retention",
+      "summary": "Retain LLM call traces for reproducible recommendation audits.",
+      "rationale": "Trace retention improves post-incident debugging and replay confidence.",
+      "ecosystem_impact_score": 7,
+      "feasibility_score": 9,
+      "urgency_score": 5,
+      "evidence_refs": [
+        "strategy/current/llm_call_trace.jsonl",
+        "contracts/req/REQ-001_llm-first-strategy-runtime-entrypoint.md"
+      ]
+    }
+  ]
+}

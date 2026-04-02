@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-canary-001",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-020",
+  "requirement_ids": [
+    "REQ-007"
+  ],
+  "updated_at": "2026-03-14T23:10:50Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "integration_ground_graph_snapshot_ingestion",
+        "command": "python3 -m pytest tests/integration/test_ground-graph-snapshot-ingestion.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-007",
+        "status": "pass",
+        "details": "Ground graph snapshot ingestion processing uses canonical lineage context, explicit evidence ref handling, and deterministic recommendation fields."
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/integration/test_ground-graph-snapshot-ingestion.py"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_007_processing_green",
+      "evidence_metadata_reconciled"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

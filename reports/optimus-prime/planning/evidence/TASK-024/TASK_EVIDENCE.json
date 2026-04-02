@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-6",
+  "task_id": "TASK-024",
+  "requirement_ids": [
+    "REQ-008"
+  ],
+  "updated_at": "2026-03-14T23:03:35Z",
+  "dev": {
+    "status": "done",
+    "checks": [
+      "Implement REQ-008 broad-sweep ingestion and normalization behavior in strategy_context_sweep.py",
+      "Ensure recommendation rationale provenance includes complete recommendation fields and research evidence references"
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_research-packet-ingestion-and-normalization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed"
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/integration/test_research-packet-ingestion-and-normalization.py"
+    ]
+  },
+  "test": {
+    "status": "done",
+    "checks": [
+      "REQ-008 integration contract verification"
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_research-packet-ingestion-and-normalization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed"
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-008",
+        "passed": true,
+        "notes": "Research packet ingestion and normalization keeps evidence provenance linked to recommendation rationale fields."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "examples/fixtures/research-packet-ingestion-and-normalization.json"
+    ]
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "acceptance_criteria_met"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

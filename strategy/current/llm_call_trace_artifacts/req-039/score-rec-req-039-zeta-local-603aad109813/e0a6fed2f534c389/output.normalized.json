@@ -1,0 +1,57 @@
+{
+  "analysis_type": "recommendation_rationale_quality_scoring",
+  "call_id": "score-rec-req-039-zeta-local-603aad109813",
+  "checked_at_utc": "2026-03-16T15:20:00Z",
+  "requirement_id": "REQ-039",
+  "result": {
+    "cross_project_obligations": [],
+    "open_risks": [],
+    "recommended_actions": [
+      {
+        "action_id": "action.d7ad739b7929",
+        "coordination_projects": [],
+        "coordination_required": false,
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-138/TASK_EVIDENCE.json",
+          "strategy/current/samples/REQ-039_recommendation-rationale-quality-scoring.sample.json"
+        ],
+        "quality_score": 4,
+        "rationale": "Local recommendation remains fully cited with explicit tradeoffs.",
+        "recommendation_id": "rec.req-039.zeta-local",
+        "summary": "Keep local recommendation quality thresholds strict.",
+        "tradeoffs": [
+          "Higher rationale quality thresholds may defer low-substance ideas."
+        ]
+      }
+    ],
+    "scored_recommendation": {
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-138/TASK_EVIDENCE.json",
+        "strategy/current/samples/REQ-039_recommendation-rationale-quality-scoring.sample.json"
+      ],
+      "quality_score": 4,
+      "quality_status": "accepted",
+      "rationale": "Local recommendation remains fully cited with explicit tradeoffs.",
+      "recommendation_id": "rec.req-039.zeta-local",
+      "rejection_reason_codes": [],
+      "score_breakdown": {
+        "evidence_ref_count": 2,
+        "evidence_requirement_met": true,
+        "tradeoff_count": 1,
+        "tradeoff_requirement_met": true
+      },
+      "summary": "Keep local recommendation quality thresholds strict.",
+      "tradeoffs": [
+        "Higher rationale quality thresholds may defer low-substance ideas."
+      ]
+    },
+    "totals": {
+      "accepted_recommendations": 3,
+      "recommendations": 3,
+      "recommendations_meeting_evidence_minimum": 3,
+      "recommendations_meeting_tradeoff_minimum": 3,
+      "rejected_recommendations": 0
+    }
+  },
+  "schema_version": "optimus-prime.req-039.recommendation-call-output-snapshot.v1"
+}

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "tiles": [
+    {
+      "tile_id": "browser-capture-pdf",
+      "title": "Browser Capture To PDF",
+      "category": "frontend/browser-utility",
+      "status": "ready",
+      "path": "tiles/browser-capture-pdf",
+      "variants": [
+        "react-vite",
+        "nuxt-vue"
+      ],
+      "source_origin": {
+        "project": "AICOVENANT",
+        "path": "/Users/slobodan/projects/Earth/AICOVENANT/frontend/src/features/captureTool"
+      }
+    }
+  ]
+}

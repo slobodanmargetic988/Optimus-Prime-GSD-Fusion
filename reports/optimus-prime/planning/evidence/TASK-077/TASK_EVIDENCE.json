@@ -1,0 +1,145 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-canary-001",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-077",
+  "requirement_ids": [
+    "REQ-024"
+  ],
+  "updated_at": "2026-03-15T21:15:00Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req024_hardening_edge_cases",
+        "passed": true,
+        "details": "Added REQ-024 hardening coverage for stale Earth-sweep source artifacts, explicit missing mission/scope or peer-project document reason codes, and replay-stable strategy context bundle serialization."
+      },
+      {
+        "name": "req024_reason_code_determinism",
+        "passed": true,
+        "details": "REQ-024 unhappy-path outputs remain deterministic across repeated runs with explicit reason_code values and evidence refs for replay diagnostics; no unresolved blocker rows remain for required edge cases."
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "contract_strategy_context_bundle_serialization_run_1",
+        "command": "python3 -m pytest tests/contracts/test_strategy-context-bundle-serialization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "...... [100%] 6 passed in 0.03s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-077/contract_strategy-context-bundle-serialization_run_1.output.txt"
+      },
+      {
+        "name": "integration_strategy_context_bundle_serialization_run_1",
+        "command": "python3 -m pytest tests/integration/test_strategy-context-bundle-serialization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.02s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-077/integration_strategy-context-bundle-serialization_run_1.output.txt"
+      },
+      {
+        "name": "hardening_strategy_context_bundle_serialization_run_1",
+        "command": "python3 -m pytest tests/hardening/test_strategy-context-bundle-serialization_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.02s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-077/hardening_strategy-context-bundle-serialization_run_1.output.txt"
+      },
+      {
+        "name": "contract_strategy_context_bundle_serialization_run_2",
+        "command": "python3 -m pytest tests/contracts/test_strategy-context-bundle-serialization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "...... [100%] 6 passed in 0.02s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-077/contract_strategy-context-bundle-serialization_run_2.output.txt"
+      },
+      {
+        "name": "integration_strategy_context_bundle_serialization_run_2",
+        "command": "python3 -m pytest tests/integration/test_strategy-context-bundle-serialization.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.02s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-077/integration_strategy-context-bundle-serialization_run_2.output.txt"
+      },
+      {
+        "name": "hardening_strategy_context_bundle_serialization_run_2",
+        "command": "python3 -m pytest tests/hardening/test_strategy-context-bundle-serialization_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.02s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-077/hardening_strategy-context-bundle-serialization_run_2.output.txt"
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "tests/hardening/test_strategy-context-bundle-serialization_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-077/contract_strategy-context-bundle-serialization_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-077/integration_strategy-context-bundle-serialization_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-077/hardening_strategy-context-bundle-serialization_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-077/contract_strategy-context-bundle-serialization_run_2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-077/integration_strategy-context-bundle-serialization_run_2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-077/hardening_strategy-context-bundle-serialization_run_2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-077/TASK_EVIDENCE.json"
+    ]
+  },
+  "edge_case_hardening": [
+    {
+      "edge_case": "stale_source_artifact_detected_during_earth_sweep",
+      "status": "pass",
+      "reason_codes": [
+        "stale_earth_sweep_source_artifact"
+      ],
+      "blocker": null
+    },
+    {
+      "edge_case": "missing_mission_scope_or_peer_project_doc",
+      "status": "pass",
+      "reason_codes": [
+        "missing_mission_doc",
+        "missing_scope_doc",
+        "missing_peer_project_doc"
+      ],
+      "blocker": null
+    },
+    {
+      "edge_case": "replay_stable_context_bundle_serialization",
+      "status": "pass",
+      "reason_codes": [],
+      "blocker": null
+    }
+  ],
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_024_contract_green_twice",
+      "req_024_integration_green_twice",
+      "req_024_hardening_green_twice",
+      "reason_codes_deterministic",
+      "context_bundle_serialization_replay_stable"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "task_identifier": "TASK-260",
+  "requirement_id": "REQ-070",
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "acceptance_artifact_created",
+      "acceptance_schema_check_passed"
+    ],
+    "checked_at": "2026-03-17T01:07:18Z",
+    "notes": "REQ-070 acceptance evidence documents the end-to-end autonomous strategy packet as planner-consumable, preserves the explicit open-risk narrative, and references deterministic contract, integration, and hardening test outputs."
+  },
+  "verification_runs": [
+    {
+      "run_id": "run-1-direct-pytest",
+      "checks": [
+        {
+          "command": "python3 -m pytest tests/contracts/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py -q",
+          "exit_code": 0,
+          "output": ".. [100%] 2 passed in 0.01s"
+        },
+        {
+          "command": "python3 -m pytest tests/integration/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py -q",
+          "exit_code": 0,
+          "output": ".. [100%] 2 passed in 0.01s"
+        },
+        {
+          "command": "python3 -m pytest tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py -q",
+          "exit_code": 0,
+          "output": "... [100%] 3 passed in 0.01s"
+        }
+      ]
+    },
+    {
+      "run_id": "run-2-direct-pytest",
+      "checks": [
+        {
+          "command": "python3 -m pytest tests/contracts/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py -q",
+          "exit_code": 0,
+          "output": ".. [100%] 2 passed in 0.01s"
+        },
+        {
+          "command": "python3 -m pytest tests/integration/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py -q",
+          "exit_code": 0,
+          "output": ".. [100%] 2 passed in 0.01s"
+        },
+        {
+          "command": "python3 -m pytest tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py -q",
+          "exit_code": 0,
+          "output": "... [100%] 3 passed in 0.01s"
+        }
+      ]
+    },
+    {
+      "run_id": "run-1-acceptance-schema",
+      "checks": [
+        {
+          "command": "python3 -c \"import json; p='reports/optimus-prime/planning/evidence/TASK-260/ACCEPTANCE_REQ-070.json'; d=json.load(open(p,'r',encoding='utf-8')); req=['req_id','summary','evidence_refs','consumability_verdict','open_risks']; assert d.get('req_id')=='REQ-070'; assert all((k in d) and (d[k] not in ('', None, [])) for k in req)\"",
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "run_id": "run-2-acceptance-schema",
+      "checks": [
+        {
+          "command": "python3 -c \"import json; p='reports/optimus-prime/planning/evidence/TASK-260/ACCEPTANCE_REQ-070.json'; d=json.load(open(p,'r',encoding='utf-8')); req=['req_id','summary','evidence_refs','consumability_verdict','open_risks']; assert d.get('req_id')=='REQ-070'; assert all((k in d) and (d[k] not in ('', None, [])) for k in req)\"",
+          "exit_code": 0
+        }
+      ]
+    }
+  ],
+  "acceptance_artifacts": [
+    "reports/optimus-prime/planning/evidence/TASK-260/ACCEPTANCE_REQ-070.json"
+  ],
+  "evidence_refs": [
+    "tests/contracts/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py::test_req_070_acceptance_packet_contract_exposes_planner_hook_and_open_risk_diagnostics",
+    "tests/contracts/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py::test_req_070_acceptance_packet_artifact_refs_exist_in_repo",
+    "tests/integration/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py::test_acceptance_packet_is_planner_consumable_and_uses_broad_sweep_context",
+    "tests/integration/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py::test_acceptance_packet_fails_when_recommendations_or_cross_project_context_are_incomplete",
+    "tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py::test_req_070_hardening_artifact_regeneration_has_no_semantic_drift_on_no_change_rerun",
+    "tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py::test_req_070_hardening_planner_hook_receives_complete_recommendation_mapping_set",
+    "tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py::test_req_070_hardening_acceptance_packet_includes_required_evidence_refs_and_open_risk_handling",
+    "reports/optimus-prime/planning/evidence/TASK-260/ACCEPTANCE_REQ-070.json"
+  ],
+  "edge_case_rows": [
+    {
+      "edge_case": "acceptance_packet_remains_planner_consumable_with_complete_artifact_groups",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "planner_consumable",
+        "artifacts_complete"
+      ],
+      "evidence_refs": [
+        "tests/integration/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py::test_acceptance_packet_is_planner_consumable_and_uses_broad_sweep_context",
+        "tests/contracts/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py::test_req_070_acceptance_packet_artifact_refs_exist_in_repo"
+      ]
+    },
+    {
+      "edge_case": "open_risk_narrative_is_preserved_without_blocking_acceptance",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "missing_earth_sweep_evidence_refs",
+        "open_risks_present"
+      ],
+      "evidence_refs": [
+        "tests/contracts/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py::test_req_070_acceptance_packet_contract_exposes_planner_hook_and_open_risk_diagnostics",
+        "tests/hardening/test_end-to-end-autonomous-strategy-run-and-acceptance-packet_hardening.py::test_req_070_hardening_acceptance_packet_includes_required_evidence_refs_and_open_risk_handling",
+        "reports/optimus-prime/planning/evidence/TASK-260/ACCEPTANCE_REQ-070.json"
+      ]
+    },
+    {
+      "edge_case": "acceptance_schema_is_non_empty_and_requirement_specific",
+      "status": "resolved",
+      "unresolved_blocker": false,
+      "reason_codes": [
+        "acceptance_schema_check_passed"
+      ],
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-260/ACCEPTANCE_REQ-070.json"
+      ]
+    }
+  ],
+  "unresolved_blocker_rows": []
+}

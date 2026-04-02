@@ -1,0 +1,32 @@
+{
+  "req_id": "REQ-010",
+  "summary": "Strategy change detection since the previous revision is accepted as operationally consumable because mission-scope, runtime-data, and ecosystem-signal deltas are emitted machine-readably and recommendation deltas remain directly evidence-linked to the detected changes.",
+  "evidence_refs": [
+    {
+      "type": "test_output",
+      "test_path": "tests/contracts/test_change-detection-since-previous-strategy-revision.py",
+      "command": "python3 -m pytest tests/contracts/test_change-detection-since-previous-strategy-revision.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-032/contract_change-detection-since-previous-strategy-revision.output.txt",
+      "observed_output": "4 passed in 0.02s"
+    },
+    {
+      "type": "test_output",
+      "test_path": "tests/integration/test_change-detection-since-previous-strategy-revision.py",
+      "command": "python3 -m pytest tests/integration/test_change-detection-since-previous-strategy-revision.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-032/integration_change-detection-since-previous-strategy-revision.output.txt",
+      "observed_output": "1 passed in 0.01s"
+    },
+    {
+      "type": "test_output",
+      "test_path": "tests/hardening/test_change-detection-since-previous-strategy-revision_hardening.py",
+      "command": "python3 -m pytest tests/hardening/test_change-detection-since-previous-strategy-revision_hardening.py -q",
+      "output_ref": "reports/optimus-prime/planning/evidence/TASK-032/hardening_change-detection-since-previous-strategy-revision.output.txt",
+      "observed_output": "3 passed in 0.02s"
+    }
+  ],
+  "consumability_verdict": "accepted_with_open_risks",
+  "open_risks": [
+    "Evidence is fixture-backed and does not yet prove behavior against production-scale Earth sweep artifact volumes or live runtime latency variance.",
+    "Recommendation-delta linkage is validated in deterministic test scenarios only; downstream planners should continue surfacing unresolved cross-project evidence gaps as explicit open risks when source anchors are incomplete."
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "now_utc": "2026-03-14T21:00:00Z",
+  "stale_after_seconds": {
+    "plan_packets": 600,
+    "state": 300,
+    "roadmap": 86400,
+    "requirements": 604800
+  },
+  "decision_policy": {
+    "stale": "downgrade",
+    "missing": "exclude"
+  },
+  "required_capability_ids": [
+    "planning-artifact-sweep",
+    "capability-catalog-extraction",
+    "cross-project-obligation-validation",
+    "source-version-guard"
+  ],
+  "projects": [
+    {
+      "project_id": "earth-north",
+      "root_path": "__TMP__/earth-north",
+      "artifacts": {
+        "plan_packets": "strategy/current/PLAN_PACKETS.json",
+        "state": "strategy/current/STATE.json",
+        "roadmap": "docs/plans/ROADMAP.md",
+        "requirements": "docs/plans/REQUIREMENTS.md"
+      },
+      "provided_capabilities": [
+        {
+          "capability_id": "planning-artifact-sweep",
+          "source_version": "1.1.0",
+          "source_ref": "scripts/strategy_context_sweep.py"
+        },
+        {
+          "capability_id": "capability-catalog-extraction",
+          "source_version": "1.0.0",
+          "source_ref": "contracts/req/REQ-013_capability-catalog-extraction.md"
+        }
+      ]
+    },
+    {
+      "project_id": "earth-south",
+      "root_path": "__TMP__/earth-south",
+      "artifacts": {
+        "plan_packets": "strategy/current/PLAN_PACKETS.json",
+        "state": "strategy/current/STATE.json",
+        "roadmap": "docs/plans/ROADMAP.md",
+        "requirements": "docs/plans/REQUIREMENTS.md"
+      },
+      "provided_capabilities": [
+        {
+          "capability_id": "planning-artifact-sweep",
+          "source_version": "1.1.0",
+          "source_ref": "scripts/strategy_context_sweep.py"
+        },
+        {
+          "capability_id": "cross-project-obligation-validation",
+          "source_version": "1.1.0",
+          "source_ref": "scripts/strategy_context_sweep.py"
+        }
+      ]
+    }
+  ]
+}

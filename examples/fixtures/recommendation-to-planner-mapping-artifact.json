@@ -1,0 +1,77 @@
+{
+  "analysis_type": "recommendation_to_planner_mapping_artifact",
+  "now_utc": "2026-03-16T09:05:00Z",
+  "recommendation_mappings": [
+    {
+      "recommendation_id": "rec.harden-telemetry-freshness",
+      "planner_task_intent_handle": "intent.telemetry-freshness-hardening",
+      "planner_task_intent_summary": "Harden telemetry freshness checks before the next autonomous canary pass.",
+      "planner_lane": "execution",
+      "sequence_hint": 1,
+      "call_trace_refs": [
+        "strategy/current/llm_call_trace.jsonl#call-5-001",
+        "strategy/current/llm_call_trace.jsonl#rationale-quality-001"
+      ],
+      "evidence_refs": [
+        "reports/runtime/telemetry/freshness-gap-2026-03-15.json",
+        "reports/quality/req-039-rationale-quality-score.json"
+      ],
+      "planner_packet_refs": [
+        "reports/optimus-prime/planning/PLAN_PACKETS.json#execution.telemetry-freshness"
+      ]
+    },
+    {
+      "recommendation_id": "rec.align-earth-runtime-canary",
+      "planner_task_intent_handle": "intent.cross-project-runtime-canary-alignment",
+      "planner_task_intent_summary": "Align Earth runtime canary stabilization windows before widening rollout.",
+      "planner_lane": "coordination",
+      "sequence_hint": 2,
+      "call_trace_refs": [
+        "strategy/current/llm_call_trace.jsonl#call-2-001",
+        "strategy/current/llm_call_trace.jsonl#rationale-quality-001"
+      ],
+      "evidence_refs": [
+        "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+        "reports/quality/req-039-rationale-quality-score.json"
+      ],
+      "planner_packet_refs": [
+        "reports/optimus-prime/planning/PLAN_PACKETS.json#coordination.runtime-canary"
+      ]
+    },
+    {
+      "recommendation_id": "rec.review-reuse-contracts",
+      "planner_task_intent_handle": "intent.reuse-contract-review",
+      "planner_task_intent_summary": "Review reuse-contract drift before promoting more shared interfaces.",
+      "planner_lane": "analysis",
+      "sequence_hint": 3,
+      "call_trace_refs": [
+        "strategy/current/llm_call_trace.jsonl#call-2-001",
+        "strategy/current/llm_call_trace.jsonl#call-5-001"
+      ],
+      "evidence_refs": [
+        "contracts/req/REQ-016_reuse-opportunity-detection.md",
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ],
+      "planner_packet_refs": [
+        "reports/optimus-prime/planning/PLAN_PACKETS.json#analysis.reuse-contract-review"
+      ]
+    },
+    {
+      "recommendation_id": "rec.review-reuse-contracts",
+      "planner_task_intent_handle": "intent.cross-project-reuse-ownership-clarification",
+      "planner_task_intent_summary": "Clarify cross-project ownership for shared reuse contracts.",
+      "planner_lane": "coordination",
+      "sequence_hint": 4,
+      "call_trace_refs": [
+        "strategy/current/llm_call_trace.jsonl#call-2-001",
+        "strategy/current/llm_call_trace.jsonl#call-5-001"
+      ],
+      "evidence_refs": [
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ],
+      "planner_packet_refs": [
+        "reports/optimus-prime/planning/PLAN_PACKETS.json#coordination.reuse-ownership"
+      ]
+    }
+  ]
+}

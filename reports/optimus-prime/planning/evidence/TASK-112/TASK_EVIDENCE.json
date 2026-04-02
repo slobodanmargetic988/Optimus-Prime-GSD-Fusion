@@ -1,0 +1,134 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-112",
+  "requirement_ids": [
+    "REQ-033"
+  ],
+  "updated_at": "2026-03-16T08:18:55Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_033_contract_call_8_constraint_classification_reasoning",
+        "command": "python3 -m pytest tests/contracts/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "4 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-112/contract_call-8-constraint-classification-reasoning.output.txt"
+      },
+      {
+        "name": "req_033_integration_call_8_constraint_classification_reasoning",
+        "command": "python3 -m pytest tests/integration/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.02s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-112/integration_call-8-constraint-classification-reasoning.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-033",
+        "status": "pass",
+        "details": "Call-8 now has integration coverage proving explicit classification buckets, complete recommendation fields, evidence refs, and cross-project context usage for planner-safe consumption.",
+        "evidence_refs": [
+          "scripts/strategy_llm_pipeline.py",
+          "tests/contracts/test_call-8-constraint-classification-reasoning.py",
+          "tests/integration/test_call-8-constraint-classification-reasoning.py",
+          "reports/optimus-prime/planning/evidence/TASK-112/contract_call-8-constraint-classification-reasoning.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-112/integration_call-8-constraint-classification-reasoning.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-112/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "requirement_id": "REQ-033",
+        "status": "pass",
+        "details": "The mixed-classification collision path is explicitly verified so unresolved classification conflicts surface as open risks instead of planner-ready output.",
+        "evidence_refs": [
+          "tests/integration/test_call-8-constraint-classification-reasoning.py",
+          "reports/optimus-prime/planning/evidence/TASK-112/integration_call-8-constraint-classification-reasoning.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-112/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "req_033_mixed_classification_source_ref",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/contracts/test_call-8-constraint-classification-reasoning.py",
+      "tests/integration/test_call-8-constraint-classification-reasoning.py",
+      "reports/optimus-prime/planning/evidence/TASK-112/contract_call-8-constraint-classification-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-112/integration_call-8-constraint-classification-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-112/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req_033_integration_call_8_constraint_classification_reasoning",
+        "command": "python3 -m pytest tests/integration/test_call-8-constraint-classification-reasoning.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.02s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-112/integration_call-8-constraint-classification-reasoning.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-033",
+        "status": "pass",
+        "details": "The acceptance-targeted Call-8 integration command exits 0 and exercises evidence refs, recommendation completeness, and cross-project context usage.",
+        "evidence_refs": [
+          "tests/integration/test_call-8-constraint-classification-reasoning.py",
+          "reports/optimus-prime/planning/evidence/TASK-112/integration_call-8-constraint-classification-reasoning.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-112/TASK_EVIDENCE.json"
+        ]
+      }
+    ],
+    "uat_results": [
+      {
+        "requirement_id": "REQ-033",
+        "passed": true,
+        "notes": "The required Call-8 integration command exits 0 and leaves no unresolved blocker entries in TASK-112 evidence."
+      }
+    ],
+    "blockers": [],
+    "artifacts": [
+      "tests/integration/test_call-8-constraint-classification-reasoning.py",
+      "reports/optimus-prime/planning/evidence/TASK-112/integration_call-8-constraint-classification-reasoning.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-112/TASK_EVIDENCE.json"
+    ]
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/integration/test_call-8-constraint-classification-reasoning.py",
+      "reports/optimus-prime/planning/evidence/TASK-112/TASK_EVIDENCE.json"
+    ]
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_review",
+    "reason_codes": [
+      "req_033_contract_checks_green",
+      "req_033_acceptance_targeted_integration_green",
+      "req_033_classification_collision_open_risk_covered",
+      "task_112_evidence_has_no_unresolved_blockers"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "analysis_type": "recommendation_rationale_quality_scoring",
+  "now_utc": "2026-03-16T12:00:00Z",
+  "quality_policy": {
+    "minimum_evidence_ref_count": 2,
+    "minimum_tradeoff_count": 1,
+    "passing_score": 4
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.req-039.contract-surface-evidence",
+      "summary": "Keep recommendation rationale scoring behind concrete planning evidence.",
+      "rationale": "Two grounded evidence refs and explicit tradeoffs make this recommendation emission-ready.",
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-135/TASK_EVIDENCE.json",
+        "strategy/current/samples/REQ-035_evidence-citation-discipline-in-reasoning-calls.sample.json"
+      ],
+      "tradeoffs": [
+        "Adds a stricter pre-emission bar, which can defer thin recommendations until more evidence is collected.",
+        "Keeps packet quality high at the cost of rejecting superficially plausible ideas."
+      ]
+    },
+    {
+      "recommendation_id": "rec.req-039.quick-win-claim",
+      "summary": "Ship a recommendation after citing only one supporting artifact.",
+      "rationale": "The idea is directionally useful, but it only cites one source artifact today.",
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-135/TASK_EVIDENCE.json"
+      ],
+      "tradeoffs": [
+        "Moves faster now but risks over-indexing on a single source."
+      ]
+    },
+    {
+      "recommendation_id": "rec.req-039.packet-emission-tradeoffs",
+      "summary": "Emit a recommendation without naming what it delays or constrains.",
+      "rationale": "The evidence base is sufficient, but the operator-facing tradeoffs are not articulated yet.",
+      "evidence_refs": [
+        "reports/optimus-prime/planning/evidence/TASK-135/TASK_EVIDENCE.json",
+        "strategy/current/samples/REQ-030_call-5-sequencing-and-lane-design-reasoning.sample.json"
+      ],
+      "tradeoffs": []
+    }
+  ]
+}

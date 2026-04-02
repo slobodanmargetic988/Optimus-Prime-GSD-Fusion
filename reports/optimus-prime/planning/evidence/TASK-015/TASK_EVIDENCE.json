@@ -1,0 +1,112 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-1",
+  "task_id": "TASK-015",
+  "requirement_ids": [
+    "REQ-005"
+  ],
+  "updated_at": "2026-03-14T23:33:41Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contracts_req005_run1",
+        "command": "python3 -m pytest tests/contracts/test_planning-artifact-sweep-across-earth.py -q",
+        "exit_code": 0
+      },
+      {
+        "name": "integration_req005_run1",
+        "command": "python3 -m pytest tests/integration/test_planning-artifact-sweep-across-earth.py -q",
+        "exit_code": 0
+      },
+      {
+        "name": "hardening_req005_run1",
+        "command": "python3 -m pytest tests/hardening/test_planning-artifact-sweep-across-earth_hardening.py -q",
+        "exit_code": 0
+      },
+      {
+        "name": "contracts_req005_run2",
+        "command": "python3 -m pytest tests/contracts/test_planning-artifact-sweep-across-earth.py -q",
+        "exit_code": 0
+      },
+      {
+        "name": "integration_req005_run2",
+        "command": "python3 -m pytest tests/integration/test_planning-artifact-sweep-across-earth.py -q",
+        "exit_code": 0
+      },
+      {
+        "name": "hardening_req005_run2",
+        "command": "python3 -m pytest tests/hardening/test_planning-artifact-sweep-across-earth_hardening.py -q",
+        "exit_code": 0
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_planning-artifact-sweep-across-earth.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_planning-artifact-sweep-across-earth.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_planning-artifact-sweep-across-earth_hardening.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_planning-artifact-sweep-across-earth.py -q",
+        "run": 2,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_planning-artifact-sweep-across-earth.py -q",
+        "run": 2,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_planning-artifact-sweep-across-earth_hardening.py -q",
+        "run": 2,
+        "passed": true
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/hardening/test_planning-artifact-sweep-across-earth_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-015/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "ready_for_test"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-canary-001",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-050",
+  "requirement_ids": [
+    "REQ-016"
+  ],
+  "updated_at": "2026-03-15T01:30:00Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "integration_reuse_opportunity_detection_run_1",
+        "command": "python3 -m pytest tests/integration/test_reuse-opportunity-detection.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.01s"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-016",
+        "status": "pass",
+        "details": "Reuse opportunity detection emits deterministic evidence refs, rejects active project sources, and includes adoption path plus compatibility constraints for recommended reuse candidates."
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/integration/test_reuse-opportunity-detection.py"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_016_integration_green",
+      "evidence_refs_deterministic",
+      "recommendation_fields_complete"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

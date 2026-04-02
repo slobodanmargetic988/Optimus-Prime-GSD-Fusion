@@ -1,0 +1,100 @@
+{
+  "ok": true,
+  "schema_version": "req-027.call-2-ecosystem-linkage-reasoning.v1",
+  "requirement_id": "REQ-027",
+  "analysis_type": "call_2_ecosystem_linkage_reasoning",
+  "call_id": "call-2",
+  "checked_at_utc": "2026-03-16T12:00:00Z",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "peer_projects": [
+    {
+      "project_id": "earth-runtime",
+      "project_root": "/Users/slobodan/projects/Earth/Earth-Runtime"
+    },
+    {
+      "project_id": "tetris",
+      "project_root": "/Users/slobodan/projects/Earth/Tetris"
+    }
+  ],
+  "linkage_reasoning": {
+    "existing_links": [
+      {
+        "link_id": "lnk.e5a092428a53",
+        "peer_project_id": "tetris",
+        "link_kind": "contract-consumer",
+        "direction": "target_to_peer",
+        "summary": "Target consumes peer contract fixtures and samples as cross-project evidence anchors.",
+        "evidence_refs": [
+          "contracts/req/REQ-002_earth-wide-repository-discovery-manifest.md",
+          "examples/fixtures/earth-wide-repository-discovery-manifest.json"
+        ],
+        "confidence_tag": "high",
+        "interaction_obligations": [
+          {
+            "obligation_id": "obl.5eff548852a8",
+            "obligated_party": "target",
+            "obligation_kind": "keep-fixtures-compatible",
+            "summary": "When target updates cross-project sweep behavior, keep fixture references stable or update peer expectations with evidence.",
+            "evidence_refs": [
+              "tests/contracts/test_change-detection-since-previous-strategy-revision.py"
+            ]
+          }
+        ]
+      }
+    ],
+    "missing_links": [
+      {
+        "link_id": "lnk.a58366b30805",
+        "peer_project_id": "earth-runtime",
+        "link_kind": "shared-observability-contract",
+        "direction": "bidirectional",
+        "summary": "Cross-project observability contract is expected but not yet linked with stable evidence refs.",
+        "evidence_refs": [],
+        "confidence_tag": "medium",
+        "interaction_obligations": [
+          {
+            "obligation_id": "obl.abb86b40dfc2",
+            "obligated_party": "both",
+            "obligation_kind": "attach-evidence-and-contract",
+            "summary": "Attach a minimal evidence-backed contract reference for runtime telemetry freshness obligations across both projects.",
+            "evidence_refs": []
+          }
+        ]
+      }
+    ],
+    "proposed_links": [
+      {
+        "link_id": "lnk.bb8b07b396a7",
+        "peer_project_id": "tetris",
+        "link_kind": "integration-latency-slo",
+        "direction": "peer_to_target",
+        "summary": "Propose a latency SLO interface so peer can assert target responsiveness obligations during integration cycles.",
+        "evidence_refs": [
+          "contracts/req/REQ-010_change-detection-since-previous-strategy-revision.md"
+        ],
+        "confidence_tag": "low",
+        "interaction_obligations": [
+          {
+            "obligation_id": "obl.b7ff11332772",
+            "obligated_party": "peer",
+            "obligation_kind": "define-slo-metrics",
+            "summary": "Define the minimal SLO metrics that peer needs to evaluate integration latency without introducing new orchestration gates.",
+            "evidence_refs": [
+              "strategy/current/samples/REQ-010_change-detection-since-previous-strategy-revision.sample.json"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "totals": {
+    "peer_projects": 2,
+    "existing_links": 1,
+    "missing_links": 1,
+    "proposed_links": 1,
+    "interaction_obligations": 3
+  }
+}

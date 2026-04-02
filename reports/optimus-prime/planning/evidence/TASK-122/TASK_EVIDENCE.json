@@ -1,0 +1,187 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-2",
+  "task_id": "TASK-122",
+  "requirement_ids": [
+    "REQ-035"
+  ],
+  "updated_at": "2026-03-16T09:17:14Z",
+  "task_kind": "implementation",
+  "dev": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-contracts-evidence-citation-discipline-in-reasoning-calls",
+        "command": "python3 -m pytest tests/contracts/test_evidence-citation-discipline-in-reasoning-calls.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/contracts_run_2.output.txt"
+      },
+      {
+        "name": "pytest-integration-evidence-citation-discipline-in-reasoning-calls",
+        "command": "python3 -m pytest tests/integration/test_evidence-citation-discipline-in-reasoning-calls.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/integration_run_2.output.txt"
+      },
+      {
+        "name": "pytest-hardening-evidence-citation-discipline-in-reasoning-calls",
+        "command": "python3 -m pytest tests/hardening/test_evidence-citation-discipline-in-reasoning-calls_hardening.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/hardening_run_2.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/contracts/test_evidence-citation-discipline-in-reasoning-calls.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/contracts_run_1.output.txt"
+      },
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/integration/test_evidence-citation-discipline-in-reasoning-calls.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/integration_run_1.output.txt"
+      },
+      {
+        "run": 1,
+        "command": "python3 -m pytest tests/hardening/test_evidence-citation-discipline-in-reasoning-calls_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/hardening_run_1.output.txt"
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/contracts/test_evidence-citation-discipline-in-reasoning-calls.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/contracts_run_2.output.txt"
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/integration/test_evidence-citation-discipline-in-reasoning-calls.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/integration_run_2.output.txt"
+      },
+      {
+        "run": 2,
+        "command": "python3 -m pytest tests/hardening/test_evidence-citation-discipline-in-reasoning-calls_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/hardening_run_2.output.txt"
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "cross_call_contradiction_between_analysis_and_synthesis_outputs",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "uncited_strategic_claim_blocked_by_citation_discipline",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "call_chain_replay_stable_recommendation_ids_and_ordering",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/hardening/test_evidence-citation-discipline-in-reasoning-calls_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-122/contracts_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-122/integration_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-122/hardening_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-122/contracts_run_2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-122/integration_run_2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-122/hardening_run_2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-122/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-contracts-evidence-citation-discipline-in-reasoning-calls",
+        "command": "python3 -m pytest tests/contracts/test_evidence-citation-discipline-in-reasoning-calls.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/contracts_run_2.output.txt"
+      },
+      {
+        "name": "pytest-integration-evidence-citation-discipline-in-reasoning-calls",
+        "command": "python3 -m pytest tests/integration/test_evidence-citation-discipline-in-reasoning-calls.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/integration_run_2.output.txt"
+      },
+      {
+        "name": "pytest-hardening-evidence-citation-discipline-in-reasoning-calls",
+        "command": "python3 -m pytest tests/hardening/test_evidence-citation-discipline-in-reasoning-calls_hardening.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-122/hardening_run_2.output.txt"
+      }
+    ],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": [
+      {
+        "label": "contracts-run-1",
+        "path": "reports/optimus-prime/planning/evidence/TASK-122/contracts_run_1.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "integration-run-1",
+        "path": "reports/optimus-prime/planning/evidence/TASK-122/integration_run_1.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "hardening-run-1",
+        "path": "reports/optimus-prime/planning/evidence/TASK-122/hardening_run_1.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "contracts-run-2",
+        "path": "reports/optimus-prime/planning/evidence/TASK-122/contracts_run_2.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "integration-run-2",
+        "path": "reports/optimus-prime/planning/evidence/TASK-122/integration_run_2.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "hardening-run-2",
+        "path": "reports/optimus-prime/planning/evidence/TASK-122/hardening_run_2.output.txt",
+        "kind": "text"
+      }
+    ]
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "passed",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "req_035_cross_call_contradiction_reason_code_covered",
+      "req_035_uncited_claim_blocking_covered",
+      "req_035_call_chain_replay_stable",
+      "req_035_consecutive_check_runs_passed",
+      "task_evidence_path_resolved"
+    ]
+  }
+}

@@ -1,0 +1,368 @@
+{
+  "ok": true,
+  "tool": "strategy-context-sweep",
+  "tool_version": "1.1.0",
+  "checked_at_utc": "2026-03-14T21:00:00Z",
+  "decision_policy": {
+    "stale": "downgrade",
+    "missing": "exclude"
+  },
+  "stale_after_seconds": {
+    "runtime_traces": 600,
+    "cycle_summaries": 300
+  },
+  "projects": [
+    {
+      "project_id": "earth-north",
+      "root_path": "/workspace/earth-north",
+      "artifacts": {
+        "runtime_traces": [
+          {
+            "source_id": "trace-main",
+            "path": "/workspace/earth-north/reports/optimus-prime/runtime/trace.jsonl",
+            "exists": true,
+            "last_modified_utc": "2026-03-14T20:58:00Z",
+            "age_seconds": 120,
+            "stale_after_seconds": 600,
+            "freshness": "fresh",
+            "decision": "include",
+            "source_reference": {
+              "citation_id": "SRC-0001",
+              "project_id": "earth-north",
+              "artifact_type": "runtime_traces",
+              "source_id": "trace-main",
+              "path": "/workspace/earth-north/reports/optimus-prime/runtime/trace.jsonl",
+              "analysis_anchors": [
+                "throughput",
+                "blockers",
+                "failure_patterns"
+              ]
+            }
+          },
+          {
+            "source_id": "trace-errors",
+            "path": "/workspace/earth-north/reports/optimus-prime/runtime/errors.jsonl",
+            "exists": true,
+            "last_modified_utc": "2026-03-14T20:49:59Z",
+            "age_seconds": 601,
+            "stale_after_seconds": 600,
+            "freshness": "stale",
+            "decision": "downgrade",
+            "source_reference": {
+              "citation_id": "SRC-0002",
+              "project_id": "earth-north",
+              "artifact_type": "runtime_traces",
+              "source_id": "trace-errors",
+              "path": "/workspace/earth-north/reports/optimus-prime/runtime/errors.jsonl",
+              "analysis_anchors": [
+                "throughput",
+                "blockers",
+                "failure_patterns"
+              ]
+            }
+          }
+        ],
+        "cycle_summaries": [
+          {
+            "source_id": "summary-current",
+            "path": "/workspace/earth-north/reports/optimus-prime/CYCLE_SUMMARY.json",
+            "exists": true,
+            "last_modified_utc": "2026-03-14T20:56:40Z",
+            "age_seconds": 200,
+            "stale_after_seconds": 300,
+            "freshness": "fresh",
+            "decision": "include",
+            "source_reference": {
+              "citation_id": "SRC-0003",
+              "project_id": "earth-north",
+              "artifact_type": "cycle_summaries",
+              "source_id": "summary-current",
+              "path": "/workspace/earth-north/reports/optimus-prime/CYCLE_SUMMARY.json",
+              "analysis_anchors": [
+                "throughput",
+                "blockers",
+                "failure_patterns"
+              ]
+            }
+          }
+        ]
+      },
+      "counts": {
+        "sources": 3,
+        "fresh": 2,
+        "stale": 1,
+        "missing": 0,
+        "include": 2,
+        "downgrade": 1,
+        "exclude": 0
+      }
+    },
+    {
+      "project_id": "earth-south",
+      "root_path": "/workspace/earth-south",
+      "artifacts": {
+        "runtime_traces": [
+          {
+            "source_id": "trace-main",
+            "path": "/workspace/earth-south/reports/optimus-prime/runtime/trace.jsonl",
+            "exists": false,
+            "last_modified_utc": null,
+            "age_seconds": null,
+            "stale_after_seconds": 600,
+            "freshness": "missing",
+            "decision": "exclude",
+            "source_reference": {
+              "citation_id": "SRC-0004",
+              "project_id": "earth-south",
+              "artifact_type": "runtime_traces",
+              "source_id": "trace-main",
+              "path": "/workspace/earth-south/reports/optimus-prime/runtime/trace.jsonl",
+              "analysis_anchors": [
+                "throughput",
+                "blockers",
+                "failure_patterns"
+              ]
+            }
+          }
+        ],
+        "cycle_summaries": [
+          {
+            "source_id": "summary-current",
+            "path": "/workspace/earth-south/reports/optimus-prime/CYCLE_SUMMARY.json",
+            "exists": true,
+            "last_modified_utc": "2026-03-14T20:54:59Z",
+            "age_seconds": 301,
+            "stale_after_seconds": 300,
+            "freshness": "stale",
+            "decision": "downgrade",
+            "source_reference": {
+              "citation_id": "SRC-0005",
+              "project_id": "earth-south",
+              "artifact_type": "cycle_summaries",
+              "source_id": "summary-current",
+              "path": "/workspace/earth-south/reports/optimus-prime/CYCLE_SUMMARY.json",
+              "analysis_anchors": [
+                "throughput",
+                "blockers",
+                "failure_patterns"
+              ]
+            }
+          },
+          {
+            "source_id": "summary-history",
+            "path": "/workspace/earth-south/reports/optimus-prime/runtime/cycle-history.json",
+            "exists": true,
+            "last_modified_utc": "2026-03-14T20:40:00Z",
+            "age_seconds": 1200,
+            "stale_after_seconds": 300,
+            "freshness": "stale",
+            "decision": "downgrade",
+            "source_reference": {
+              "citation_id": "SRC-0006",
+              "project_id": "earth-south",
+              "artifact_type": "cycle_summaries",
+              "source_id": "summary-history",
+              "path": "/workspace/earth-south/reports/optimus-prime/runtime/cycle-history.json",
+              "analysis_anchors": [
+                "throughput",
+                "blockers",
+                "failure_patterns"
+              ]
+            }
+          }
+        ]
+      },
+      "counts": {
+        "sources": 3,
+        "fresh": 0,
+        "stale": 2,
+        "missing": 1,
+        "include": 0,
+        "downgrade": 2,
+        "exclude": 1
+      }
+    }
+  ],
+  "source_references": [
+    {
+      "citation_id": "SRC-0001",
+      "project_id": "earth-north",
+      "artifact_type": "runtime_traces",
+      "source_id": "trace-main",
+      "path": "/workspace/earth-north/reports/optimus-prime/runtime/trace.jsonl",
+      "exists": true,
+      "freshness": "fresh",
+      "decision": "include"
+    },
+    {
+      "citation_id": "SRC-0002",
+      "project_id": "earth-north",
+      "artifact_type": "runtime_traces",
+      "source_id": "trace-errors",
+      "path": "/workspace/earth-north/reports/optimus-prime/runtime/errors.jsonl",
+      "exists": true,
+      "freshness": "stale",
+      "decision": "downgrade"
+    },
+    {
+      "citation_id": "SRC-0003",
+      "project_id": "earth-north",
+      "artifact_type": "cycle_summaries",
+      "source_id": "summary-current",
+      "path": "/workspace/earth-north/reports/optimus-prime/CYCLE_SUMMARY.json",
+      "exists": true,
+      "freshness": "fresh",
+      "decision": "include"
+    },
+    {
+      "citation_id": "SRC-0004",
+      "project_id": "earth-south",
+      "artifact_type": "runtime_traces",
+      "source_id": "trace-main",
+      "path": "/workspace/earth-south/reports/optimus-prime/runtime/trace.jsonl",
+      "exists": false,
+      "freshness": "missing",
+      "decision": "exclude"
+    },
+    {
+      "citation_id": "SRC-0005",
+      "project_id": "earth-south",
+      "artifact_type": "cycle_summaries",
+      "source_id": "summary-current",
+      "path": "/workspace/earth-south/reports/optimus-prime/CYCLE_SUMMARY.json",
+      "exists": true,
+      "freshness": "stale",
+      "decision": "downgrade"
+    },
+    {
+      "citation_id": "SRC-0006",
+      "project_id": "earth-south",
+      "artifact_type": "cycle_summaries",
+      "source_id": "summary-history",
+      "path": "/workspace/earth-south/reports/optimus-prime/runtime/cycle-history.json",
+      "exists": true,
+      "freshness": "stale",
+      "decision": "downgrade"
+    }
+  ],
+  "broad_sweep_context": {
+    "cross_project": true,
+    "projects_considered": [
+      "earth-north",
+      "earth-south"
+    ],
+    "projects_with_includable_sources": [
+      "earth-north",
+      "earth-south"
+    ],
+    "projects_with_missing_sources": [
+      "earth-south"
+    ],
+    "projects_with_stale_sources": [
+      "earth-north",
+      "earth-south"
+    ],
+    "artifact_coverage_by_project": {
+      "earth-north": {
+        "runtime_traces": 2,
+        "cycle_summaries": 1
+      },
+      "earth-south": {
+        "runtime_traces": 1,
+        "cycle_summaries": 2
+      }
+    },
+    "evidence_refs_by_project": {
+      "earth-north": [
+        "SRC-0001",
+        "SRC-0002",
+        "SRC-0003"
+      ],
+      "earth-south": [
+        "SRC-0004",
+        "SRC-0005",
+        "SRC-0006"
+      ]
+    }
+  },
+  "recommendation": {
+    "decision": "proceed_with_caution",
+    "rationale": "Telemetry sweep across 2 project(s) produced 2 include, 3 downgrade, and 1 exclude decisions.",
+    "evidence_refs": [
+      "SRC-0001",
+      "SRC-0002",
+      "SRC-0003",
+      "SRC-0005",
+      "SRC-0006"
+    ],
+    "cross_project_context": {
+      "cross_project": true,
+      "projects_considered": [
+        "earth-north",
+        "earth-south"
+      ],
+      "projects_with_includable_sources": [
+        "earth-north",
+        "earth-south"
+      ],
+      "projects_with_missing_sources": [
+        "earth-south"
+      ],
+      "projects_with_stale_sources": [
+        "earth-north",
+        "earth-south"
+      ],
+      "artifact_coverage_by_project": {
+        "earth-north": {
+          "runtime_traces": 2,
+          "cycle_summaries": 1
+        },
+        "earth-south": {
+          "runtime_traces": 1,
+          "cycle_summaries": 2
+        }
+      },
+      "evidence_refs_by_project": {
+        "earth-north": [
+          "SRC-0001",
+          "SRC-0002",
+          "SRC-0003"
+        ],
+        "earth-south": [
+          "SRC-0004",
+          "SRC-0005",
+          "SRC-0006"
+        ]
+      }
+    },
+    "obligations": [
+      {
+        "obligation_id": "OBL-0001",
+        "summary": "Refresh stale runtime telemetry sources before throughput/blocker trend calls.",
+        "evidence_refs": [
+          "SRC-0002",
+          "SRC-0005",
+          "SRC-0006"
+        ]
+      },
+      {
+        "obligation_id": "OBL-0002",
+        "summary": "Restore missing runtime telemetry sources to reduce failure-pattern blind spots.",
+        "evidence_refs": [
+          "SRC-0004"
+        ]
+      }
+    ],
+    "open_risks": []
+  },
+  "totals": {
+    "projects": 2,
+    "sources": 6,
+    "fresh": 2,
+    "stale": 3,
+    "missing": 1,
+    "include": 2,
+    "downgrade": 3,
+    "exclude": 1
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "determinism_probe": {
+    "append_dependency": {
+      "blocker_count": 0,
+      "dependency_id": "dep.release-checklist",
+      "evidence_refs": [
+        "reports/dependencies/release-checklist.json"
+      ],
+      "readiness_status": "ready"
+    }
+  },
+  "expected_contract_anchors": {
+    "feasibility_labels": {
+      "rec.enable-read-path": "high",
+      "rec.expand-write-path": "low",
+      "rec.hardening-lane": "medium"
+    },
+    "global_risk_policy": "defer-high-risk-work",
+    "ordered_recommendation_ids": [
+      "rec.enable-read-path",
+      "rec.hardening-lane",
+      "rec.expand-write-path"
+    ],
+    "overall_feasibility_score": 0.589,
+    "requirement_id": "REQ-040",
+    "risk_policies": {
+      "rec.enable-read-path": "standard",
+      "rec.expand-write-path": "defer-until-controls",
+      "rec.hardening-lane": "guarded-rollout"
+    },
+    "schema_version": "req-040.recommendation-feasibility-scoring.v1",
+    "score_breakdown": {
+      "dependency_readiness_score": 0.5,
+      "repo_maturity_score": 0.752,
+      "resource_constraints_score": 0.627
+    },
+    "sequencing_reason_codes": [
+      "dependency_readiness_gap",
+      "resource_constraint_exceeded"
+    ],
+    "strategy": "resource-dependency-maturity-feasibility-scoring"
+  },
+  "input": {
+    "candidate_recommendations": [
+      {
+        "evidence_refs": [
+          "reports/recommendations/read-path.json"
+        ],
+        "recommendation_id": "rec.enable-read-path",
+        "required_cost_tier": "low",
+        "required_dependency_ids": [
+          "dep.api-contracts"
+        ],
+        "summary": "Enable read path rollout behind canary guardrails."
+      },
+      {
+        "evidence_refs": [
+          "reports/recommendations/write-path.json"
+        ],
+        "recommendation_id": "rec.expand-write-path",
+        "required_cost_tier": "high",
+        "required_dependency_ids": [
+          "dep.data-backfill",
+          "dep.queue-migration"
+        ],
+        "summary": "Expand write path once backfill sequencing is stable."
+      },
+      {
+        "evidence_refs": [
+          "reports/recommendations/hardening-lane.json"
+        ],
+        "recommendation_id": "rec.hardening-lane",
+        "required_cost_tier": "medium",
+        "required_dependency_ids": [
+          "dep.data-backfill"
+        ],
+        "summary": "Run hardening lane with readiness checkpoints."
+      }
+    ],
+    "dependency_readiness": [
+      {
+        "blocker_count": 0,
+        "dependency_id": "dep.api-contracts",
+        "evidence_refs": [
+          "reports/dependencies/api-contracts.json"
+        ],
+        "readiness_status": "ready"
+      },
+      {
+        "blocker_count": 1,
+        "dependency_id": "dep.data-backfill",
+        "evidence_refs": [
+          "reports/dependencies/data-backfill.json"
+        ],
+        "readiness_status": "partial"
+      },
+      {
+        "blocker_count": 2,
+        "dependency_id": "dep.queue-migration",
+        "evidence_refs": [
+          "reports/dependencies/queue-migration.json"
+        ],
+        "readiness_status": "blocked"
+      }
+    ],
+    "earth_root": "/workspace/projects/Earth",
+    "output_root": "/workspace/projects/optimus-prime/strategy/out",
+    "repo_maturity": {
+      "evidence_refs": [
+        "reports/quality/repo-maturity.json"
+      ],
+      "maturity_level": "developing",
+      "open_defect_count": 9,
+      "test_pass_rate": 0.84
+    },
+    "resource_constraints": {
+      "available_daily_tokens": 180000,
+      "available_parallel_slots": 2,
+      "constrained_resources": [
+        "token_budget",
+        "integration_capacity"
+      ],
+      "evidence_refs": [
+        "reports/runtime/budgets/strategy-runtime.json"
+      ],
+      "max_recommendation_cost_tier": "medium"
+    },
+    "revision_identity": "rev-req040-fixture-r1",
+    "target_project_root": "/workspace/projects/optimus-prime"
+  }
+}

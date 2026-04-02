@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-20260310T232916Z-strategy-tool-v1",
+  "phase_id": "phase-2",
+  "task_id": "TASK-085",
+  "requirement_ids": [
+    "REQ-026"
+  ],
+  "updated_at": "2026-03-16T00:30:33Z",
+  "dev": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-e2e-strategy-llm-pipeline-smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-085/e2e_strategy_llm_pipeline_smoke.output.txt"
+      },
+      {
+        "name": "pytest-integration-call-1-situational-analysis-reasoning",
+        "command": "python3 -m pytest tests/integration/test_call-1-situational-analysis-reasoning.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-085/integration_call-1-situational-analysis-reasoning.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "req026-call-trace",
+        "status": "passed",
+        "details": "Call-1 trace row serialized to strategy/current/llm_call_trace.jsonl and copied into TASK-085 evidence."
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      {
+        "label": "strategy-llm-pipeline-source",
+        "path": "scripts/strategy_llm_pipeline.py",
+        "kind": "source"
+      },
+      {
+        "label": "req026-call-trace-runtime",
+        "path": "strategy/current/llm_call_trace.jsonl",
+        "kind": "jsonl"
+      },
+      {
+        "label": "req026-call-trace-evidence",
+        "path": "reports/optimus-prime/planning/evidence/TASK-085/call-1-situational-analysis-trace.jsonl",
+        "kind": "jsonl"
+      },
+      {
+        "label": "req026-call-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-085/call-1-situational-analysis-reasoning.output.json",
+        "kind": "json"
+      }
+    ]
+  },
+  "test": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "pytest-e2e-strategy-llm-pipeline-smoke",
+        "command": "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-085/e2e_strategy_llm_pipeline_smoke.output.txt"
+      },
+      {
+        "name": "pytest-integration-call-1-situational-analysis-reasoning",
+        "command": "python3 -m pytest tests/integration/test_call-1-situational-analysis-reasoning.py -q",
+        "exit_code": 0,
+        "output_ref": "reports/optimus-prime/planning/evidence/TASK-085/integration_call-1-situational-analysis-reasoning.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "name": "call-trace-artifacts-recorded",
+        "status": "passed",
+        "details": "TASK_EVIDENCE references both strategy/current/llm_call_trace.jsonl and the copied TASK-085 trace artifact."
+      }
+    ],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": [
+      {
+        "label": "pytest-e2e-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-085/e2e_strategy_llm_pipeline_smoke.output.txt",
+        "kind": "text"
+      },
+      {
+        "label": "pytest-integration-output",
+        "path": "reports/optimus-prime/planning/evidence/TASK-085/integration_call-1-situational-analysis-reasoning.output.txt",
+        "kind": "text"
+      }
+    ]
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "passed",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "acceptance_checks_passed",
+      "call_trace_artifacts_recorded"
+    ]
+  },
+  "task_kind": "implementation"
+}

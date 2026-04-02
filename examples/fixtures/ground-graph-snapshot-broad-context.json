@@ -1,0 +1,28 @@
+{
+  "active_project_id": "optimus-prime-gsd-fusion",
+  "earth_sweep_evidence_refs": [
+    "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+    "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+  ],
+  "cross_project_action_candidates": [
+    {
+      "linked_project_id": "earth-core-runtime",
+      "action": "Align canary rollout checkpoint with run-131 stabilization outputs.",
+      "evidence_refs": [
+        "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+      ]
+    },
+    {
+      "linked_project_id": "shared-observability",
+      "action": "Define expanded telemetry obligation for phase-verification.",
+      "evidence_refs": []
+    },
+    {
+      "linked_project_id": "non-graph-project",
+      "action": "Schedule external dependency handshake.",
+      "evidence_refs": [
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ]
+    }
+  ]
+}

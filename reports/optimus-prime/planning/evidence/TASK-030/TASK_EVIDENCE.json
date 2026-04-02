@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-2",
+  "task_id": "TASK-030",
+  "requirement_ids": [
+    "REQ-010"
+  ],
+  "updated_at": "2026-03-15T01:51:52Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "req010_change_detection_uses_broad_sweep_context",
+        "status": "passed",
+        "details": "REQ-010 change detection now normalizes broad-sweep context inputs, emits deterministic context outputs, and gates cross-project obligations by Earth-sweep evidence refs."
+      },
+      {
+        "name": "req010_recommendation_delta_field_completeness",
+        "status": "passed",
+        "details": "Recommendation deltas now include deterministic evidence_refs and linked_context_project_ids while preserving full change_id coverage."
+      },
+      {
+        "name": "req010_unresolved_cross_project_ideas_recorded_as_open_risks",
+        "status": "passed",
+        "details": "Cross-project obligations lacking Earth-sweep evidence refs are captured as open risks with explicit reason_code and evidence refs."
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/integration/test_change-detection-since-previous-strategy-revision.py -q",
+        "status": "passed",
+        "exit_code": 0
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_change-detection-since-previous-strategy-revision.py -q",
+        "status": "passed",
+        "exit_code": 0
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/integration/test_change-detection-since-previous-strategy-revision.py",
+      "tests/contracts/test_change-detection-since-previous-strategy-revision.py",
+      "examples/fixtures/change-detection-since-previous-strategy-revision.json",
+      "strategy/current/samples/REQ-010_change-detection-since-previous-strategy-revision.sample.json",
+      "reports/optimus-prime/planning/evidence/TASK-030/TASK_EVIDENCE.json"
+    ]
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": true,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

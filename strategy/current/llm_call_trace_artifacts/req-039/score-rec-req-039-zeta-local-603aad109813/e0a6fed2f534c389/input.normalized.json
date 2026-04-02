@@ -1,0 +1,57 @@
+{
+  "analysis_type": "recommendation_rationale_quality_scoring",
+  "broad_sweep_context": {
+    "cross_project_context": [
+      {
+        "context_note": "Analytics-hub consumes rejected recommendation ledgers.",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/analytics-hub.json"
+        ],
+        "project_id": "analytics-hub",
+        "project_root": "/workspace/projects/Earth/analytics-hub"
+      },
+      {
+        "context_note": "Earth-ops governs recommendation evidence conventions.",
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-16/earth-ops.json"
+        ],
+        "project_id": "earth-ops",
+        "project_root": "/workspace/projects/Earth/earth-ops"
+      }
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-16/portfolio.json"
+    ],
+    "earth_sweep_projects": []
+  },
+  "call_id": "score-rec-req-039-zeta-local-603aad109813",
+  "checked_at_utc": "2026-03-16T15:20:00Z",
+  "quality_policy": {
+    "minimum_evidence_ref_count": 2,
+    "minimum_tradeoff_count": 1,
+    "passing_score": 4
+  },
+  "recommendation": {
+    "evidence_refs": [
+      "reports/optimus-prime/planning/evidence/TASK-138/TASK_EVIDENCE.json",
+      "strategy/current/samples/REQ-039_recommendation-rationale-quality-scoring.sample.json"
+    ],
+    "quality_score": 4,
+    "quality_status": "accepted",
+    "rationale": "Local recommendation remains fully cited with explicit tradeoffs.",
+    "recommendation_id": "rec.req-039.zeta-local",
+    "rejection_reason_codes": [],
+    "score_breakdown": {
+      "evidence_ref_count": 2,
+      "evidence_requirement_met": true,
+      "tradeoff_count": 1,
+      "tradeoff_requirement_met": true
+    },
+    "summary": "Keep local recommendation quality thresholds strict.",
+    "tradeoffs": [
+      "Higher rationale quality thresholds may defer low-substance ideas."
+    ]
+  },
+  "requirement_id": "REQ-039",
+  "schema_version": "optimus-prime.req-039.recommendation-call-input-snapshot.v1"
+}

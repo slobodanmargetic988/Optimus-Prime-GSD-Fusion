@@ -1,0 +1,254 @@
+{
+  "ok": true,
+  "schema_version": "req-051.strategy-changelog-md-generator.v1",
+  "requirement_id": "REQ-051",
+  "analysis_type": "strategy_changelog_md_generator",
+  "call_id": "strategy-changelog-md-generator",
+  "checked_at_utc": "2026-03-16T09:45:00Z",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "revision_pair": {
+    "previous_revision_id": "strategy-2026-03-14T08:00:00Z",
+    "current_revision_id": "strategy-2026-03-15T08:00:00Z"
+  },
+  "change_summary": {
+    "total_change_count": 4,
+    "changed_sections": [
+      "ecosystem_signals",
+      "mission_scope",
+      "runtime_data"
+    ],
+    "change_ids": [
+      "chg.ecosystem_signals.4af52189b4afee10",
+      "chg.mission_scope.6e30c7c703dc9b8a",
+      "chg.runtime_data.0fd733f30a1ec8ef",
+      "chg.runtime_data.6c6d7e8caa0b4d12"
+    ]
+  },
+  "strategy_changelog_md": {
+    "artifact_path": "STRATEGY_CHANGELOG.md",
+    "markdown": "# STRATEGY_CHANGELOG\n\nGenerated at `2026-03-16T09:45:00Z` for project `optimus-prime-gsd-fusion` from `strategy-2026-03-14T08:00:00Z` to `strategy-2026-03-15T08:00:00Z`.\nThis changelog summarizes revision deltas and links each changed recommendation to supporting evidence.\n\n## Revision Summary (`revision_pair`, `change_summary`)\n- Previous revision: `strategy-2026-03-14T08:00:00Z`\n- Current revision: `strategy-2026-03-15T08:00:00Z`\n- Total change count: `4`\n- Changed sections: `ecosystem_signals`, `mission_scope`, `runtime_data`\n- Changed recommendation ids: `rec.align-earth-runtime-canary`, `rec.harden-telemetry-freshness`, `rec.review-reuse-contracts`\n\n## Strategic Direction Changes (`change_detection`)\n\n### direction.ecosystem_signals\n- Title: Ecosystem Direction Change\n- Section key: `ecosystem_signals`\n- Change count: `1`\n- Change ids: `chg.ecosystem_signals.4af52189b4afee10`\n- Changed recommendation ids: `rec.align-earth-runtime-canary`\n- Recommendation refs:\n  - `final_strategy_synthesis.final_recommendations#rec.align-earth-runtime-canary`\n- Evidence refs:\n  - `reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json`\n  - `strategy/current/STRATEGY.json`\n  - `strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json`\n\n### direction.mission_scope\n- Title: Mission Scope Direction Change\n- Section key: `mission_scope`\n- Change count: `1`\n- Change ids: `chg.mission_scope.6e30c7c703dc9b8a`\n- Changed recommendation ids: `rec.review-reuse-contracts`\n- Recommendation refs:\n  - `final_strategy_synthesis.deferred_recommendations#rec.review-reuse-contracts`\n- Evidence refs:\n  - `contracts/req/REQ-016_reuse-opportunity-detection.md`\n  - `reports/earth/sweeps/shared-observability/signals-2026-03-14.json`\n  - `strategy/current/STRATEGY.json`\n  - `strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json`\n\n### direction.runtime_data\n- Title: Runtime Direction Change\n- Section key: `runtime_data`\n- Change count: `2`\n- Change ids: `chg.runtime_data.0fd733f30a1ec8ef`, `chg.runtime_data.6c6d7e8caa0b4d12`\n- Changed recommendation ids: `rec.harden-telemetry-freshness`\n- Recommendation refs:\n  - `final_strategy_synthesis.final_recommendations#rec.harden-telemetry-freshness`\n- Evidence refs:\n  - `reports/quality/req-039-rationale-quality-score.json`\n  - `reports/runtime/telemetry/freshness-gap-2026-03-15.json`\n  - `strategy/current/STRATEGY.json`\n  - `strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json`\n\n## Changed Recommendations (`recommendation_deltas`)\n\n### changelog.rec.align-earth-runtime-canary\n- Recommendation id: `rec.align-earth-runtime-canary`\n- Recommendation ref: `final_strategy_synthesis.final_recommendations#rec.align-earth-runtime-canary`\n- Delta type: `updated`\n- Summary: Escalate Earth runtime coordination because upstream runtime signal degraded between revisions.\n- Direction anchors: `ecosystem_signals`\n- Change ids:\n  - `chg.ecosystem_signals.4af52189b4afee10`\n- Evidence refs:\n  - `reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json`\n  - `strategy/current/STRATEGY.json`\n  - `strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json`\n\n### changelog.rec.harden-telemetry-freshness\n- Recommendation id: `rec.harden-telemetry-freshness`\n- Recommendation ref: `final_strategy_synthesis.final_recommendations#rec.harden-telemetry-freshness`\n- Delta type: `updated`\n- Summary: Increase telemetry freshness hardening priority after backlog and freshness lag worsened.\n- Direction anchors: `runtime_data`\n- Change ids:\n  - `chg.runtime_data.0fd733f30a1ec8ef`\n  - `chg.runtime_data.6c6d7e8caa0b4d12`\n- Evidence refs:\n  - `reports/quality/req-039-rationale-quality-score.json`\n  - `reports/runtime/telemetry/freshness-gap-2026-03-15.json`\n  - `strategy/current/STRATEGY.json`\n  - `strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json`\n\n### changelog.rec.review-reuse-contracts\n- Recommendation id: `rec.review-reuse-contracts`\n- Recommendation ref: `final_strategy_synthesis.deferred_recommendations#rec.review-reuse-contracts`\n- Delta type: `retained`\n- Summary: Keep reuse-contract review visible because mission scope now explicitly includes shared interface drift.\n- Direction anchors: `mission_scope`\n- Change ids:\n  - `chg.mission_scope.6e30c7c703dc9b8a`\n- Evidence refs:\n  - `contracts/req/REQ-016_reuse-opportunity-detection.md`\n  - `reports/earth/sweeps/shared-observability/signals-2026-03-14.json`\n  - `strategy/current/STRATEGY.json`\n  - `strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json`\n\n## Evidence Index (`evidence_refs`)\n- `contracts/req/REQ-016_reuse-opportunity-detection.md`\n- `reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json`\n- `reports/earth/sweeps/shared-observability/signals-2026-03-14.json`\n- `reports/quality/req-039-rationale-quality-score.json`\n- `reports/runtime/telemetry/freshness-gap-2026-03-15.json`\n- `strategy/current/STRATEGY.json`\n- `strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json`\n\n## Machine Alignment\n- `direction_changes`: `direction.ecosystem_signals`, `direction.mission_scope`, `direction.runtime_data`\n- `entries`: `changelog.rec.align-earth-runtime-canary`, `changelog.rec.harden-telemetry-freshness`, `changelog.rec.review-reuse-contracts`\n- `recommendation_ids`: `rec.align-earth-runtime-canary`, `rec.harden-telemetry-freshness`, `rec.review-reuse-contracts`\n- `recommendation_refs`: `final_strategy_synthesis.deferred_recommendations#rec.review-reuse-contracts`, `final_strategy_synthesis.final_recommendations#rec.align-earth-runtime-canary`, `final_strategy_synthesis.final_recommendations#rec.harden-telemetry-freshness`\n- `change_ids`: `chg.ecosystem_signals.4af52189b4afee10`, `chg.mission_scope.6e30c7c703dc9b8a`, `chg.runtime_data.0fd733f30a1ec8ef`, `chg.runtime_data.6c6d7e8caa0b4d12`\n- `evidence_refs`: `contracts/req/REQ-016_reuse-opportunity-detection.md`, `reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json`, `reports/earth/sweeps/shared-observability/signals-2026-03-14.json`, `reports/quality/req-039-rationale-quality-score.json`, `reports/runtime/telemetry/freshness-gap-2026-03-15.json`, `strategy/current/STRATEGY.json`, `strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json`\n",
+    "content_sha256": "e361219ff11c0e0d9fb5d3e2966a4d2bbcdecccdbd59f27cc154fe3295a6fa3c",
+    "line_count": 115,
+    "sections": [
+      {
+        "section_id": "revision-summary",
+        "title": "Revision Summary",
+        "machine_field": "revision_pair",
+        "entry_count": 2,
+        "anchor_ids": [
+          "strategy-2026-03-14T08:00:00Z",
+          "strategy-2026-03-15T08:00:00Z"
+        ]
+      },
+      {
+        "section_id": "strategic-direction-changes",
+        "title": "Strategic Direction Changes",
+        "machine_field": "change_detection",
+        "entry_count": 3,
+        "anchor_ids": [
+          "direction.ecosystem_signals",
+          "direction.mission_scope",
+          "direction.runtime_data"
+        ]
+      },
+      {
+        "section_id": "changed-recommendations",
+        "title": "Changed Recommendations",
+        "machine_field": "recommendation_deltas",
+        "entry_count": 3,
+        "anchor_ids": [
+          "changelog.rec.align-earth-runtime-canary",
+          "changelog.rec.harden-telemetry-freshness",
+          "changelog.rec.review-reuse-contracts"
+        ]
+      },
+      {
+        "section_id": "evidence-index",
+        "title": "Evidence Index",
+        "machine_field": "evidence_refs",
+        "entry_count": 7,
+        "anchor_ids": [
+          "contracts/req/REQ-016_reuse-opportunity-detection.md",
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json",
+          "reports/quality/req-039-rationale-quality-score.json",
+          "reports/runtime/telemetry/freshness-gap-2026-03-15.json",
+          "strategy/current/STRATEGY.json",
+          "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+        ]
+      }
+    ],
+    "direction_changes": [
+      {
+        "direction_id": "direction.ecosystem_signals",
+        "section_key": "ecosystem_signals",
+        "title": "Ecosystem Direction Change",
+        "change_ids": [
+          "chg.ecosystem_signals.4af52189b4afee10"
+        ],
+        "change_count": 1,
+        "recommendation_ids": [
+          "rec.align-earth-runtime-canary"
+        ],
+        "recommendation_refs": [
+          "final_strategy_synthesis.final_recommendations#rec.align-earth-runtime-canary"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "strategy/current/STRATEGY.json",
+          "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+        ]
+      },
+      {
+        "direction_id": "direction.mission_scope",
+        "section_key": "mission_scope",
+        "title": "Mission Scope Direction Change",
+        "change_ids": [
+          "chg.mission_scope.6e30c7c703dc9b8a"
+        ],
+        "change_count": 1,
+        "recommendation_ids": [
+          "rec.review-reuse-contracts"
+        ],
+        "recommendation_refs": [
+          "final_strategy_synthesis.deferred_recommendations#rec.review-reuse-contracts"
+        ],
+        "evidence_refs": [
+          "contracts/req/REQ-016_reuse-opportunity-detection.md",
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json",
+          "strategy/current/STRATEGY.json",
+          "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+        ]
+      },
+      {
+        "direction_id": "direction.runtime_data",
+        "section_key": "runtime_data",
+        "title": "Runtime Direction Change",
+        "change_ids": [
+          "chg.runtime_data.0fd733f30a1ec8ef",
+          "chg.runtime_data.6c6d7e8caa0b4d12"
+        ],
+        "change_count": 2,
+        "recommendation_ids": [
+          "rec.harden-telemetry-freshness"
+        ],
+        "recommendation_refs": [
+          "final_strategy_synthesis.final_recommendations#rec.harden-telemetry-freshness"
+        ],
+        "evidence_refs": [
+          "reports/quality/req-039-rationale-quality-score.json",
+          "reports/runtime/telemetry/freshness-gap-2026-03-15.json",
+          "strategy/current/STRATEGY.json",
+          "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+        ]
+      }
+    ],
+    "entries": [
+      {
+        "entry_id": "changelog.rec.align-earth-runtime-canary",
+        "recommendation_id": "rec.align-earth-runtime-canary",
+        "recommendation_ref": "final_strategy_synthesis.final_recommendations#rec.align-earth-runtime-canary",
+        "summary": "Escalate Earth runtime coordination because upstream runtime signal degraded between revisions.",
+        "delta_type": "updated",
+        "anchors": [
+          "ecosystem_signals"
+        ],
+        "change_ids": [
+          "chg.ecosystem_signals.4af52189b4afee10"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "strategy/current/STRATEGY.json",
+          "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+        ]
+      },
+      {
+        "entry_id": "changelog.rec.harden-telemetry-freshness",
+        "recommendation_id": "rec.harden-telemetry-freshness",
+        "recommendation_ref": "final_strategy_synthesis.final_recommendations#rec.harden-telemetry-freshness",
+        "summary": "Increase telemetry freshness hardening priority after backlog and freshness lag worsened.",
+        "delta_type": "updated",
+        "anchors": [
+          "runtime_data"
+        ],
+        "change_ids": [
+          "chg.runtime_data.0fd733f30a1ec8ef",
+          "chg.runtime_data.6c6d7e8caa0b4d12"
+        ],
+        "evidence_refs": [
+          "reports/quality/req-039-rationale-quality-score.json",
+          "reports/runtime/telemetry/freshness-gap-2026-03-15.json",
+          "strategy/current/STRATEGY.json",
+          "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+        ]
+      },
+      {
+        "entry_id": "changelog.rec.review-reuse-contracts",
+        "recommendation_id": "rec.review-reuse-contracts",
+        "recommendation_ref": "final_strategy_synthesis.deferred_recommendations#rec.review-reuse-contracts",
+        "summary": "Keep reuse-contract review visible because mission scope now explicitly includes shared interface drift.",
+        "delta_type": "retained",
+        "anchors": [
+          "mission_scope"
+        ],
+        "change_ids": [
+          "chg.mission_scope.6e30c7c703dc9b8a"
+        ],
+        "evidence_refs": [
+          "contracts/req/REQ-016_reuse-opportunity-detection.md",
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json",
+          "strategy/current/STRATEGY.json",
+          "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+        ]
+      }
+    ],
+    "alignment": {
+      "direction_ids": [
+        "direction.ecosystem_signals",
+        "direction.mission_scope",
+        "direction.runtime_data"
+      ],
+      "entry_ids": [
+        "changelog.rec.align-earth-runtime-canary",
+        "changelog.rec.harden-telemetry-freshness",
+        "changelog.rec.review-reuse-contracts"
+      ],
+      "recommendation_ids": [
+        "rec.align-earth-runtime-canary",
+        "rec.harden-telemetry-freshness",
+        "rec.review-reuse-contracts"
+      ],
+      "recommendation_refs": [
+        "final_strategy_synthesis.deferred_recommendations#rec.review-reuse-contracts",
+        "final_strategy_synthesis.final_recommendations#rec.align-earth-runtime-canary",
+        "final_strategy_synthesis.final_recommendations#rec.harden-telemetry-freshness"
+      ],
+      "change_ids": [
+        "chg.ecosystem_signals.4af52189b4afee10",
+        "chg.mission_scope.6e30c7c703dc9b8a",
+        "chg.runtime_data.0fd733f30a1ec8ef",
+        "chg.runtime_data.6c6d7e8caa0b4d12"
+      ],
+      "evidence_refs": [
+        "contracts/req/REQ-016_reuse-opportunity-detection.md",
+        "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json",
+        "reports/quality/req-039-rationale-quality-score.json",
+        "reports/runtime/telemetry/freshness-gap-2026-03-15.json",
+        "strategy/current/STRATEGY.json",
+        "strategy/history/strategy-2026-03-14T08:00:00Z/STRATEGY.json"
+      ]
+    }
+  },
+  "totals": {
+    "direction_changes": 3,
+    "changed_recommendations": 3,
+    "change_count": 4,
+    "evidence_refs": 7,
+    "markdown_sections": 4,
+    "markdown_lines": 115
+  }
+}

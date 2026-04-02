@@ -1,0 +1,120 @@
+{
+  "analysis_type": "ecosystem_link_map_integrity_validator",
+  "call_id": "ecosystem-link-map-integrity-validator",
+  "checked_at_utc": "2026-03-16T12:30:00Z",
+  "ecosystem_link_map_integrity_validator": {
+    "diagnostics": [
+      {
+        "category": "referential_integrity",
+        "code": "missing_target_project",
+        "diagnostic_id": "diag.link.analytics-export.emits-to.missing_target_project",
+        "field_path": "strategy/current/ECOSYSTEM_LINK_MAP.json#links[1].target_project_id",
+        "link_id": "link.analytics-export.emits-to",
+        "message": "Link target_project_id does not reference a discovered project.",
+        "project_ids": [
+          "prj.analytics-lab"
+        ],
+        "severity": "error",
+        "source_ref": "strategy/current/ECOSYSTEM_LINK_MAP.json#links[1]"
+      },
+      {
+        "category": "schema_integrity",
+        "code": "self_referential_link",
+        "diagnostic_id": "diag.link.runtime-core.self-loop.self_referential_link",
+        "field_path": "strategy/current/ECOSYSTEM_LINK_MAP.json#links[2].target_project_id",
+        "link_id": "link.runtime-core.self-loop",
+        "message": "Link source_project_id and target_project_id must not be identical.",
+        "project_ids": [
+          "prj.runtime-core"
+        ],
+        "severity": "error",
+        "source_ref": "strategy/current/ECOSYSTEM_LINK_MAP.json#links[2]"
+      }
+    ],
+    "discovered_projects": [
+      {
+        "project_id": "prj.analytics-hub",
+        "project_root": "/Users/slobodan/projects/Earth/Analytics-Hub"
+      },
+      {
+        "project_id": "prj.optimus-prime-gsd-fusion",
+        "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+      },
+      {
+        "project_id": "prj.runtime-core",
+        "project_root": "/Users/slobodan/projects/Earth/Runtime-Core"
+      }
+    ],
+    "link_map_ref": "strategy/current/ECOSYSTEM_LINK_MAP.json",
+    "links": [
+      {
+        "declared_in": "strategy/current/ECOSYSTEM_LINK_MAP.json#links[1]",
+        "integrity_status": "orphaned",
+        "link_id": "link.analytics-export.emits-to",
+        "link_type": "emits_to",
+        "source_project_id": "prj.optimus-prime-gsd-fusion",
+        "source_refs": [
+          "strategy/current/strategy_packet.v1.json#strategy.link_map_ref"
+        ],
+        "target_project_id": "prj.analytics-lab"
+      },
+      {
+        "declared_in": "strategy/current/ECOSYSTEM_LINK_MAP.json#links[0]",
+        "integrity_status": "valid",
+        "link_id": "link.runtime-core.depends-on",
+        "link_type": "depends_on",
+        "source_project_id": "prj.optimus-prime-gsd-fusion",
+        "source_refs": [
+          "contracts/req/REQ-002_earth-wide-repository-discovery-manifest.md",
+          "strategy/current/strategy_packet.v1.json#strategy.link_map_ref"
+        ],
+        "target_project_id": "prj.runtime-core"
+      },
+      {
+        "declared_in": "strategy/current/ECOSYSTEM_LINK_MAP.json#links[2]",
+        "integrity_status": "broken",
+        "link_id": "link.runtime-core.self-loop",
+        "link_type": "depends_on",
+        "source_project_id": "prj.runtime-core",
+        "source_refs": [
+          "strategy/current/ECOSYSTEM_LINK_MAP.json#links[2]"
+        ],
+        "target_project_id": "prj.runtime-core"
+      }
+    ],
+    "summary": {
+      "broken_link_ids": [
+        "link.runtime-core.self-loop"
+      ],
+      "diagnostic_codes": [
+        "missing_target_project",
+        "self_referential_link"
+      ],
+      "integrity_status": "failed",
+      "missing_project_ids": [
+        "prj.analytics-lab"
+      ],
+      "orphaned_link_ids": [
+        "link.analytics-export.emits-to"
+      ],
+      "valid_link_ids": [
+        "link.runtime-core.depends-on"
+      ]
+    }
+  },
+  "ok": true,
+  "requirement_id": "REQ-063",
+  "schema_version": "1.0",
+  "target_project": {
+    "project_id": "prj.optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "totals": {
+    "broken_links": 1,
+    "diagnostics": 2,
+    "discovered_projects": 3,
+    "links": 3,
+    "orphaned_links": 1,
+    "valid_links": 1
+  }
+}

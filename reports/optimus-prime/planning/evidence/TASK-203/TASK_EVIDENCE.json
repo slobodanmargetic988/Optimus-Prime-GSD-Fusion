@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-20260313T213203Z-research-tool-wave2-llm-first",
+  "phase_id": "phase-3",
+  "task_id": "TASK-203",
+  "requirement_ids": [
+    "REQ-056"
+  ],
+  "updated_at": "2026-03-16T21:54:51Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contract_kpi_target_artifact_run_1",
+        "command": "python3 -m pytest tests/contracts/test_kpi-target-artifact.py -q",
+        "exit_code": 0,
+        "summary": "6 passed in 0.04s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-203/contract_kpi-target-artifact_run_1.output.txt"
+      },
+      {
+        "name": "contract_kpi_target_artifact_run_2",
+        "command": "python3 -m pytest tests/contracts/test_kpi-target-artifact.py -q",
+        "exit_code": 0,
+        "summary": "6 passed in 0.04s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-203/contract_kpi-target-artifact_run_2.output.txt"
+      },
+      {
+        "name": "integration_kpi_target_artifact_run_1",
+        "command": "python3 -m pytest tests/integration/test_kpi-target-artifact.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-203/integration_kpi-target-artifact_run_1.output.txt"
+      },
+      {
+        "name": "integration_kpi_target_artifact_run_2",
+        "command": "python3 -m pytest tests/integration/test_kpi-target-artifact.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-203/integration_kpi-target-artifact_run_2.output.txt"
+      },
+      {
+        "name": "hardening_kpi_target_artifact_run_1",
+        "command": "python3 -m pytest tests/hardening/test_kpi-target-artifact_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-203/hardening_kpi-target-artifact_run_1.output.txt"
+      },
+      {
+        "name": "hardening_kpi_target_artifact_run_2",
+        "command": "python3 -m pytest tests/hardening/test_kpi-target-artifact_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-203/hardening_kpi-target-artifact_run_2.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-056",
+        "status": "pass",
+        "details": "REQ-056 hardening covers no-change artifact replay without semantic drift, complete planner-hook recommendation mapping coverage, and acceptance packet evidence refs with explicit open-risk reason-code handling.",
+        "evidence_refs": [
+          "tests/hardening/test_kpi-target-artifact_hardening.py",
+          "reports/optimus-prime/planning/evidence/TASK-203/contract_kpi-target-artifact_run_1.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-203/contract_kpi-target-artifact_run_2.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-203/integration_kpi-target-artifact_run_1.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-203/integration_kpi-target-artifact_run_2.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-203/hardening_kpi-target-artifact_run_1.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-203/hardening_kpi-target-artifact_run_2.output.txt"
+        ]
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "tests/hardening/test_kpi-target-artifact_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-203/contract_kpi-target-artifact_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-203/contract_kpi-target-artifact_run_2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-203/integration_kpi-target-artifact_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-203/integration_kpi-target-artifact_run_2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-203/hardening_kpi-target-artifact_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-203/hardening_kpi-target-artifact_run_2.output.txt"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_056_contract_green_twice",
+      "req_056_integration_green_twice",
+      "req_056_hardening_green_twice",
+      "req_056_artifact_rerun_no_semantic_drift",
+      "req_056_planner_hook_mapping_complete",
+      "req_056_acceptance_packet_open_risk_evidence_complete"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  },
+  "task_kind": "implementation"
+}

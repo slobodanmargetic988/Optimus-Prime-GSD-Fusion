@@ -1,0 +1,148 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-3",
+  "task_id": "TASK-251",
+  "requirement_ids": [
+    "REQ-068"
+  ],
+  "updated_at": "2026-03-17T00:29:06Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contracts_req068_run1",
+        "command": "python3 -m pytest tests/contracts/test_op-plan-strategy-ingestion-hook.py -q",
+        "exit_code": 0,
+        "summary": "5 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-251/TASK_EVIDENCE.json"
+      },
+      {
+        "name": "integration_req068_run1",
+        "command": "python3 -m pytest tests/integration/test_op-plan-strategy-ingestion-hook.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-251/TASK_EVIDENCE.json"
+      },
+      {
+        "name": "hardening_req068_run1",
+        "command": "python3 -m pytest tests/hardening/test_op-plan-strategy-ingestion-hook_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-251/TASK_EVIDENCE.json"
+      },
+      {
+        "name": "contracts_req068_run2",
+        "command": "python3 -m pytest tests/contracts/test_op-plan-strategy-ingestion-hook.py -q",
+        "exit_code": 0,
+        "summary": "5 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-251/TASK_EVIDENCE.json"
+      },
+      {
+        "name": "integration_req068_run2",
+        "command": "python3 -m pytest tests/integration/test_op-plan-strategy-ingestion-hook.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-251/TASK_EVIDENCE.json"
+      },
+      {
+        "name": "hardening_req068_run2",
+        "command": "python3 -m pytest tests/hardening/test_op-plan-strategy-ingestion-hook_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-251/TASK_EVIDENCE.json"
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_op-plan-strategy-ingestion-hook.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_op-plan-strategy-ingestion-hook.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_op-plan-strategy-ingestion-hook_hardening.py -q",
+        "run": 1,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_op-plan-strategy-ingestion-hook.py -q",
+        "run": 2,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_op-plan-strategy-ingestion-hook.py -q",
+        "run": 2,
+        "passed": true
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_op-plan-strategy-ingestion-hook_hardening.py -q",
+        "run": 2,
+        "passed": true
+      }
+    ],
+    "edge_case_blockers": [
+      {
+        "edge_case": "artifact_regeneration_no_semantic_drift_on_no_change_rerun",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "planner_hook_receives_complete_recommendation_mapping_set",
+        "unresolved_blockers": []
+      },
+      {
+        "edge_case": "acceptance_packet_includes_required_evidence_refs_and_open_risk_handling",
+        "unresolved_blockers": []
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "contracts/req/REQ-068_op-plan-strategy-ingestion-hook.md",
+      "examples/fixtures/op-plan-strategy-ingestion-hook.json",
+      "reports/optimus-prime/planning/evidence/TASK-251/TASK_EVIDENCE.json",
+      "scripts/strategy_artifacts_handoff.py",
+      "strategy/current/samples/REQ-056_kpi-target-artifact.sample.json",
+      "strategy/current/samples/REQ-062_recommendation-id-uniqueness-validator.sample.json",
+      "strategy/current/samples/REQ-068_op-plan-strategy-ingestion-hook.sample.json",
+      "tests/contracts/test_op-plan-strategy-ingestion-hook.py",
+      "tests/integration/test_op-plan-strategy-ingestion-hook.py",
+      "tests/hardening/test_op-plan-strategy-ingestion-hook_hardening.py"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "reason_codes": [
+      "req_068_replay_no_semantic_drift_hardening_green",
+      "req_068_complete_mapping_set_guard_hardening_green",
+      "req_068_acceptance_evidence_refs_open_risk_guard_hardening_green",
+      "req_068_contract_integration_hardening_green_twice"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

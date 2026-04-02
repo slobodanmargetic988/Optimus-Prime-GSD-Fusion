@@ -260,6 +260,37 @@ def run_payload(payload: dict) -> dict:
     return MODULE.execute_request(req)
 
 
+def write_strategy_manifest(root: Path) -> Path:
+    manifest_path = root / "strategy" / "STRATEGY_MANIFEST.md"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "# Project Context",
+                "Build strategy for this repo.",
+                "",
+                "# Scan Files",
+                "- README.md",
+                "",
+                "# Scan Directories",
+                "- docs",
+                "",
+                "# Related Projects",
+                "- ../shared-lib",
+                "",
+                "# Questions And Priorities",
+                "- What should planner optimize first?",
+                "",
+                "# Ignore",
+                "- strategy/current",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
 def test_emit_build_progress_prints_only_on_tty(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
@@ -568,6 +599,278 @@ def test_initialize_chains_map_new_plan():
         assert (planning / "MAP_CODEBASE.json").exists()
         assert (planning / "PROJECT.md").exists()
         assert (planning / "PLAN_CHECK.json").exists()
+
+
+def test_command_strategy_fails_when_manifest_missing():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+
+        out = run_payload(
+            {
+                "command": "/op-strategy",
+                "repo_root": str(root),
+            }
+        )
+
+        assert out["ok"] is False
+        assert out["status"] == "blocked_preflight"
+        assert any(item.get("code") == "strategy_manifest_missing" for item in out.get("errors", []))
+
+
+def test_command_strategy_generates_manifest_driven_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        write_strategy_manifest(root)
+
+        def fake_run_strategy(
+            *,
+            repo_root: Path,
+            manifest: str | None = None,
+            manifest_file: str | None = None,
+            emit=None,
+            codex_home=None,
+        ):
+            del codex_home
+            assert manifest is None
+            if emit:
+                emit("fake strategy generation complete")
+            packet_path = repo_root / "strategy" / "current" / "strategy_packet.md"
+            summary_path = repo_root / "strategy" / "current" / "STRATEGY_SUMMARY.md"
+            packet_path.parent.mkdir(parents=True, exist_ok=True)
+            packet_path.write_text("# Strategic Summary\n\nGenerated.\n", encoding="utf-8")
+            summary_path.write_text("# Summary\n\nGenerated.\n", encoding="utf-8")
+            manifest_path = MODULE.strategy_runner.resolve_strategy_manifest_path(repo_root, manifest_file)
+            return MODULE.strategy_runner.StrategyRunResult(
+                manifest_ref=str(manifest_path),
+                packet_path=packet_path.resolve(),
+                summary_path=summary_path.resolve(),
+                artifacts=[str(manifest_path), str(packet_path.resolve()), str(summary_path.resolve())],
+            )
+
+        monkeypatch.setattr(MODULE.strategy_runner, "run_strategy", fake_run_strategy)
+
+        out = run_payload(
+            {
+                "command": "/op-strategy",
+                "repo_root": str(root),
+            }
+        )
+
+        assert out["ok"] is True
+        assert out["status"] == "completed"
+        assert out["data"]["strategy"]["status"] == "completed"
+        assert (root / "strategy" / "current" / "strategy_packet.md").exists()
+        assert (root / "strategy" / "current" / "STRATEGY_SUMMARY.md").exists()
+
+
+def test_initialize_skips_strategy_when_manifest_missing(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        monkeypatch.setattr(
+            MODULE.strategy_runner,
+            "run_strategy",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("strategy runner should not be called")),
+        )
+
+        out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is True
+        assert out["data"]["strategy"]["status"] == "skipped"
+        assert out["data"]["strategy"]["reason"] == "manifest_missing"
+
+
+def test_initialize_warns_when_existing_strategy_artifacts_will_be_reused(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        strategy_current = root / "strategy" / "current"
+        strategy_current.mkdir(parents=True, exist_ok=True)
+        (strategy_current / "strategy_packet.md").write_text("# Packet\n", encoding="utf-8")
+        (strategy_current / "STRATEGY_SUMMARY.md").write_text("# Summary\n", encoding="utf-8")
+        messages: list[str] = []
+
+        monkeypatch.setattr(
+            MODULE.strategy_runner,
+            "run_strategy",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("strategy runner should not be called")),
+        )
+        monkeypatch.setattr(MODULE, "_emit_build_progress", lambda _req, message: messages.append(message))
+
+        out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is True
+        assert any(item.get("code") == "strategy_artifacts_present_without_regeneration" for item in out.get("warnings", []))
+        assert any("existing strategy artifacts will still be considered by planner" in message for message in messages)
+
+
+def test_initialize_auto_runs_strategy_when_manifest_exists(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        write_strategy_manifest(root)
+        seen: dict[str, object] = {}
+
+        def fake_run_strategy(
+            *,
+            repo_root: Path,
+            manifest: str | None = None,
+            manifest_file: str | None = None,
+            emit=None,
+            codex_home=None,
+        ):
+            del codex_home
+            seen["called"] = True
+            seen["manifest"] = manifest
+            seen["manifest_file"] = manifest_file
+            if emit:
+                emit("strategy generated for initialize")
+            packet_path = repo_root / "strategy" / "current" / "strategy_packet.md"
+            summary_path = repo_root / "strategy" / "current" / "STRATEGY_SUMMARY.md"
+            packet_path.parent.mkdir(parents=True, exist_ok=True)
+            packet_path.write_text("# Strategic Summary\n\nInit packet.\n", encoding="utf-8")
+            summary_path.write_text("# Summary\n\nInit summary.\n", encoding="utf-8")
+            manifest_path = MODULE.strategy_runner.resolve_strategy_manifest_path(repo_root, manifest_file)
+            return MODULE.strategy_runner.StrategyRunResult(
+                manifest_ref=str(manifest_path),
+                packet_path=packet_path.resolve(),
+                summary_path=summary_path.resolve(),
+                artifacts=[str(manifest_path), str(packet_path.resolve()), str(summary_path.resolve())],
+            )
+
+        monkeypatch.setattr(MODULE.strategy_runner, "run_strategy", fake_run_strategy)
+
+        out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        assert out["ok"] is True
+        assert seen["called"] is True
+        assert seen["manifest"] is None
+        assert seen["manifest_file"] is None
+        assert out["data"]["strategy"]["status"] == "completed"
+        assert (root / "strategy" / "current" / "strategy_packet.md").exists()
+        assert (root / "strategy" / "current" / "STRATEGY_SUMMARY.md").exists()
+
+
+def test_initialize_auto_runs_strategy_when_inline_manifest_is_provided(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        seen: dict[str, object] = {}
+
+        def fake_run_strategy(
+            *,
+            repo_root: Path,
+            manifest: str | None = None,
+            manifest_file: str | None = None,
+            emit=None,
+            codex_home=None,
+        ):
+            del codex_home
+            seen["called"] = True
+            seen["manifest"] = manifest
+            seen["manifest_file"] = manifest_file
+            if emit:
+                emit("strategy generated from inline manifest")
+            packet_path = repo_root / "strategy" / "current" / "strategy_packet.md"
+            summary_path = repo_root / "strategy" / "current" / "STRATEGY_SUMMARY.md"
+            packet_path.parent.mkdir(parents=True, exist_ok=True)
+            packet_path.write_text("# Strategic Summary\n\nInline packet.\n", encoding="utf-8")
+            summary_path.write_text("# Summary\n\nInline summary.\n", encoding="utf-8")
+            return MODULE.strategy_runner.StrategyRunResult(
+                manifest_ref=MODULE.strategy_runner.INLINE_STRATEGY_MANIFEST_LABEL,
+                packet_path=packet_path.resolve(),
+                summary_path=summary_path.resolve(),
+                artifacts=[str(packet_path.resolve()), str(summary_path.resolve())],
+            )
+
+        monkeypatch.setattr(MODULE.strategy_runner, "run_strategy", fake_run_strategy)
+
+        out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+                "strategy_manifest": "# Inline Manifest\n\nRead README first.\n",
+            }
+        )
+
+        assert out["ok"] is True
+        assert seen["called"] is True
+        assert seen["manifest"] == "# Inline Manifest\n\nRead README first."
+        assert seen["manifest_file"] is None
+        assert out["data"]["strategy"]["manifest_path"] == MODULE.strategy_runner.INLINE_STRATEGY_MANIFEST_LABEL
+
+
+def test_initialize_fails_when_explicit_strategy_manifest_is_missing():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+
+        out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+                "strategy_manifest_file": "strategy/MISSING.md",
+            }
+        )
+
+        assert out["ok"] is False
+        assert out["status"] == "blocked_preflight"
+        assert any(item.get("code") == "strategy_manifest_missing" for item in out.get("errors", []))
+
+
+def test_initialize_skip_strategy_bypasses_strategy_runner(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        write_strategy_manifest(root)
+        monkeypatch.setattr(
+            MODULE.strategy_runner,
+            "run_strategy",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("strategy runner should not be called")),
+        )
+
+        out = run_payload(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+                "skip_strategy": True,
+            }
+        )
+
+        assert out["ok"] is True
+        assert out["data"]["strategy"]["status"] == "skipped"
+        assert out["data"]["strategy"]["reason"] == "skip_strategy_requested"
 
 
 def test_profile_detection_accepts_valid_codex_dirs_only():
@@ -1117,6 +1420,95 @@ def test_op_build_request_accepts_enable_artifact_fan_in_override():
         assert req.enable_artifact_fan_in is True
 
 
+def test_parse_request_accepts_strategy_manifest_and_skip_strategy():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+                "strategy_manifest_file": "strategy/custom.md",
+                "skip_strategy": True,
+            }
+        )
+        assert req.strategy_manifest is None
+        assert req.strategy_manifest_file == "strategy/custom.md"
+        assert req.skip_strategy is True
+
+
+def test_parse_request_accepts_inline_strategy_manifest():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+                "strategy_manifest": "# Inline Manifest\n\nRead README first.\n",
+            }
+        )
+        assert req.strategy_manifest == "# Inline Manifest\n\nRead README first."
+        assert req.strategy_manifest_file is None
+
+
+def test_parse_request_accepts_private_publish_flags_for_initialize():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+                "publish_private_repo": True,
+                "github_owner": "slobodanmargetic988",
+                "github_repo_name": "myboard-private",
+            }
+        )
+        assert req.publish_private_repo is True
+        assert req.github_owner == "slobodanmargetic988"
+        assert req.github_repo_name == "myboard-private"
+
+
+def test_parse_request_rejects_github_publish_details_without_publish_flag():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        with pytest.raises(MODULE.OpError, match="require publish_private_repo=true"):
+            MODULE.parse_request(
+                {
+                    "command": "/op-initialize",
+                    "repo_root": str(root),
+                    "mission": "Build MyBoard",
+                    "scope": "Board workflow",
+                    "github_owner": "slobodanmargetic988",
+                }
+            )
+
+
+def test_parse_request_rejects_inline_and_file_strategy_manifest_together():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        with pytest.raises(MODULE.OpError, match="provide strategy_manifest or strategy_manifest_file, not both"):
+            MODULE.parse_request(
+                {
+                    "command": "/op-initialize",
+                    "repo_root": str(root),
+                    "mission": "Build MyBoard",
+                    "scope": "Board workflow",
+                    "strategy_manifest": "# Inline Manifest\n",
+                    "strategy_manifest_file": "strategy/custom.md",
+                }
+            )
+
+
 def test_op_simple_build_defaults_parallel_workers_and_boss_settings():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -1142,6 +1534,22 @@ def test_op_simple_build_accepts_boss_model_and_reasoning_override():
         )
         assert req.boss_model == "gpt-5.4-codex-experimental"
         assert req.boss_reasoning_effort == "medium"
+
+
+def test_op_simple_build_invalid_boss_model_and_reasoning_fall_back_to_defaults():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-simple-build",
+                "repo_root": str(root),
+                "boss_model": "not-a-real-model",
+                "boss_reasoning_effort": "ultra",
+            }
+        )
+        assert req.boss_model == "gpt-5.3-codex"
+        assert req.boss_reasoning_effort == "xhigh"
 
 
 def test_op_simple_build_accepts_run_base_source_branch_override():
@@ -1335,6 +1743,66 @@ def test_command_build_passes_selected_aliases_to_op_simple_build(monkeypatch: p
         assert out["ok"] is True
         assert captured["command"] == "op-simple-build"
         assert captured["selected_aliases"] == ["six", "seven", "eight"]
+
+
+def test_command_build_passes_strategy_flags_to_initialize(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-build",
+                "repo_root": str(root),
+                "mission": "Fresh mission",
+                "scope": "Board workflow",
+                "strategy_manifest_file": "strategy/custom.md",
+                "skip_strategy": True,
+            }
+        )
+        captured: dict[str, object] = {}
+
+        fake_module = types.ModuleType("op_simple_build")
+        fake_module.SimpleBuildError = RuntimeError
+        fake_module.inspect_resume_run_base_meta = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not inspect resume state"))
+        fake_module.run_op_simple_build = lambda simple_req: {
+            "ok": True,
+            "status": "completed",
+            "summary": "ok",
+            "warnings": [],
+            "errors": [],
+            "artifacts": [],
+            "next_action": None,
+            "state_ref": None,
+            "data": {"simple_command": simple_req.command},
+        }
+        monkeypatch.setitem(sys.modules, "op_simple_build", fake_module)
+
+        def fake_initialize(init_req):
+            captured["command"] = init_req.command
+            captured["strategy_manifest"] = init_req.strategy_manifest
+            captured["strategy_manifest_file"] = init_req.strategy_manifest_file
+            captured["skip_strategy"] = init_req.skip_strategy
+            return {
+                "ok": True,
+                "status": "completed",
+                "summary": "init ok",
+                "warnings": [],
+                "errors": [],
+                "artifacts": [],
+                "next_action": None,
+                "state_ref": None,
+                "data": {},
+            }
+
+        monkeypatch.setattr(MODULE, "command_initialize", fake_initialize)
+
+        out = MODULE.command_build(req)
+
+        assert out["ok"] is True
+        assert captured["command"] == "op-initialize"
+        assert captured["strategy_manifest"] is None
+        assert captured["strategy_manifest_file"] == "strategy/custom.md"
+        assert captured["skip_strategy"] is True
 
 
 def test_command_build_enforces_managed_gitignore_before_runtime(monkeypatch: pytest.MonkeyPatch):
@@ -3803,6 +4271,8 @@ def test_dispatch_task_packet_includes_phase_id_in_worker_payload(monkeypatch: p
 
         MODULE._dispatch_task_packet(req, task, plan_task, "dev", "plan-1", "codex")
         assert captured.get("phase_id") == "phase-2"
+        assert captured.get("mcp_mode") == "enable-only"
+        assert captured.get("mcp_allowlist") == ["figma"]
 
 
 @pytest.mark.parametrize(
@@ -4198,6 +4668,81 @@ def test_planner_prompt_includes_bundled_example_path():
         )
         expected = str((MODULE.SCRIPT_DIR / "llm" / "examples" / "op-plan" / "reports" / "optimus-prime" / "planning").resolve())
         assert expected in prompt
+        assert "strategy/current/strategy_packet.md" in prompt
+        assert "strategy/current/STRATEGY_SUMMARY.md" in prompt
+        assert "STATE.md" in prompt
+
+
+def test_planner_prompt_prefers_repo_local_template_override():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        repo_template = root / "scripts" / "op" / "planner" / "prompts" / "llm_plan_prompt.md"
+        repo_template.parent.mkdir(parents=True, exist_ok=True)
+        repo_template.write_text(
+            "\n".join(
+                [
+                    "REPO LOCAL PLANNER TEMPLATE",
+                    "bundle={{BUNDLE_PATH}}",
+                    "validator={{VALIDATOR_COMMAND}}",
+                    "repo={{REPO_ROOT}}",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        req = MODULE.parse_request(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+        mission_source, scope_source = MODULE._resolve_mission_scope_sources(req, stage="plan", required=False)
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        prompt = MODULE._planner_prompt_text(
+            req=req,
+            bundle_path=bundle_path,
+            mission_source=mission_source,
+            scope_source=scope_source,
+            prior_errors=[],
+        )
+        assert "REPO LOCAL PLANNER TEMPLATE" in prompt
+
+
+def test_planner_prompt_template_path_falls_back_to_engine_when_repo_override_missing():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        resolved = MODULE._planner_prompt_template_path(root)
+        assert resolved == MODULE.PLANNER_PROMPT_TEMPLATE_PATH.resolve()
+
+
+def test_planner_prompt_omits_strategy_note_when_skip_strategy_requested():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        build_repo(root)
+        req = MODULE.parse_request(
+            {
+                "command": "/op-plan",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+                "skip_strategy": True,
+            }
+        )
+        mission_source, scope_source = MODULE._resolve_mission_scope_sources(req, stage="plan", required=False)
+        bundle_path = root / "reports" / "optimus-prime" / "planning" / "llm" / "attempt-1" / "PLAN_BUNDLE.jsonl"
+        prompt = MODULE._planner_prompt_text(
+            req=req,
+            bundle_path=bundle_path,
+            mission_source=mission_source,
+            scope_source=scope_source,
+            prior_errors=[],
+        )
+        assert "strategy/current/strategy_packet.md" not in prompt
+        assert "strategy/current/STRATEGY_SUMMARY.md" not in prompt
 
 
 def test_planner_bundled_example_contract_is_schema_current():
@@ -4274,7 +4819,7 @@ def test_git_bootstrap_skips_llm_when_repo_already_initialized(monkeypatch: pyte
             }
         )
         warnings, artifacts = MODULE._ensure_git_initialized_for_initialize(req)
-        assert warnings == []
+        assert any(item.get("code") == "git_origin_missing" for item in warnings)
         assert artifacts == []
         assert called["value"] is False
 
@@ -4305,9 +4850,126 @@ def test_git_bootstrap_initializes_non_git_repo_with_llm_then_validates(monkeypa
         warnings, artifacts = MODULE._ensure_git_initialized_for_initialize(req)
         assert MODULE._is_git_work_tree(root) is True
         assert MODULE._git_text(root, "rev-parse", "HEAD")
+        assert MODULE._git_text(root, "show-ref", "--verify", "refs/heads/main")
         assert MODULE._git_text(root, "show-ref", "--verify", "refs/heads/RAB-BASE")
+        assert MODULE._git_text(root, "branch", "--show-current") == "RAB-BASE"
         assert isinstance(warnings, list)
         assert artifacts
+
+
+def test_git_bootstrap_existing_rab_base_repo_gets_main_branch_created_and_checks_out_rab_base():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        git(root, "init", "-b", "RAB-BASE")
+        git(root, "config", "user.email", "test@example.com")
+        git(root, "config", "user.name", "Test User")
+        (root / "README.md").write_text("seed\n", encoding="utf-8")
+        git(root, "add", "README.md")
+        git(root, "commit", "-m", "seed")
+
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+            }
+        )
+
+        warnings, artifacts = MODULE._ensure_git_initialized_for_initialize(req)
+        assert any(item.get("code") == "git_origin_missing" for item in warnings)
+        assert artifacts == []
+        assert MODULE._git_text(root, "show-ref", "--verify", "refs/heads/main")
+        assert MODULE._git_text(root, "show-ref", "--verify", "refs/heads/RAB-BASE")
+        assert MODULE._git_text(root, "branch", "--show-current") == "RAB-BASE"
+
+
+def test_validate_git_bootstrap_can_require_primary_branch():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        git(root, "init", "-b", "RAB-BASE")
+        git(root, "config", "user.email", "test@example.com")
+        git(root, "config", "user.name", "Test User")
+        (root / "README.md").write_text("seed\n", encoding="utf-8")
+        git(root, "add", "README.md")
+        git(root, "commit", "-m", "seed")
+
+        result = MODULE.validate_git_bootstrap(
+            repo_root=root,
+            required_branch="RAB-BASE",
+            require_readme=True,
+            required_primary_branch="main",
+        )
+        assert result["ok"] is False
+        assert any(item.get("code") == "git_primary_branch_missing" for item in result["errors"])
+
+
+def test_private_publish_create_or_reuse_pushes_main_and_rab_base(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        remote_root = root / "remote.git"
+        build_repo(root)
+        git(root, "branch", "RAB-BASE")
+        git(root, "checkout", "RAB-BASE")
+        git(root, "init", "--bare", str(remote_root))
+
+        req = MODULE.parse_request(
+            {
+                "command": "/op-initialize",
+                "repo_root": str(root),
+                "mission": "Build MyBoard",
+                "scope": "Board workflow",
+                "publish_private_repo": True,
+                "github_owner": "slobodanmargetic988",
+                "github_repo_name": "b2b-dog-cat",
+            }
+        )
+
+        original_run = MODULE._run
+        commands: list[list[str]] = []
+        origin_state = {"url": None}
+
+        def fake_run(cmd: list[str], *, cwd: Path, stdin_text: str | None = None):
+            commands.append(list(cmd))
+            if cmd[:3] == ["git", "remote", "get-url"]:
+                if origin_state["url"] is None:
+                    return 2, "", "no such remote"
+                return 0, origin_state["url"] + "\n", ""
+            if cmd[:4] == ["gh", "repo", "view", "slobodanmargetic988/b2b-dog-cat"] and "--json" in cmd:
+                return 1, "", "not found"
+            if cmd[:4] == ["gh", "repo", "create", "slobodanmargetic988/b2b-dog-cat"]:
+                origin_state["url"] = str(remote_root.resolve())
+                original_run(["git", "remote", "add", "origin", origin_state["url"]], cwd=cwd)
+                return 0, "", ""
+            if cmd[:3] == ["gh", "auth", "status"]:
+                return 0, "ok\n", ""
+            if cmd[:3] == ["gh", "api", "repos/slobodanmargetic988/b2b-dog-cat"] and "--jq" in cmd:
+                payload = {
+                    "full_name": "slobodanmargetic988/b2b-dog-cat",
+                    "visibility": "private",
+                    "private": True,
+                    "default_branch": "main",
+                    "html_url": "https://github.com/slobodanmargetic988/b2b-dog-cat",
+                }
+                return 0, json.dumps(payload) + "\n", ""
+            if cmd[:4] == ["gh", "repo", "edit", "slobodanmargetic988/b2b-dog-cat"] and "--default-branch" in cmd:
+                return 0, "", ""
+            return original_run(cmd, cwd=cwd, stdin_text=stdin_text)
+
+        monkeypatch.setattr(MODULE, "_run", fake_run)
+
+        warnings, artifacts = MODULE._ensure_git_initialized_for_initialize(req)
+
+        assert warnings == []
+        publish_artifact = root / "reports" / "optimus-prime" / "planning" / "llm" / "git-bootstrap" / "PUBLISH_REPO.json"
+        assert str(publish_artifact.resolve()) in artifacts
+        payload = json.loads(publish_artifact.read_text(encoding="utf-8"))
+        assert payload["repo_slug"] == "slobodanmargetic988/b2b-dog-cat"
+        assert payload["visibility"] == "private"
+        assert payload["default_branch"] == "main"
+        assert payload["pushed_branches"] == ["main", "RAB-BASE"]
+        assert ["git", "push", "-u", "origin", "main"] in commands
+        assert ["git", "push", "-u", "origin", "RAB-BASE"] in commands
 
 
 def test_git_bootstrap_raises_when_llm_output_fails_deterministic_validator(monkeypatch: pytest.MonkeyPatch):

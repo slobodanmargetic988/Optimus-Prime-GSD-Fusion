@@ -1,0 +1,128 @@
+{
+  "ok": true,
+  "tool": "strategy-context-sweep",
+  "tool_version": "1.0.0",
+  "checked_at_utc": "2026-03-14T21:00:00Z",
+  "decision_policy": {
+    "stale": "downgrade",
+    "missing": "exclude"
+  },
+  "stale_after_seconds": {
+    "plan_packets": 600,
+    "state": 300,
+    "roadmap": 86400,
+    "requirements": 604800
+  },
+  "projects": [
+    {
+      "project_id": "earth-north",
+      "root_path": "/workspace/earth-north",
+      "artifacts": {
+        "plan_packets": {
+          "path": "/workspace/earth-north/strategy/current/PLAN_PACKETS.json",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:58:00Z",
+          "age_seconds": 120,
+          "stale_after_seconds": 600,
+          "freshness": "fresh",
+          "decision": "include"
+        },
+        "state": {
+          "path": "/workspace/earth-north/strategy/current/STATE.json",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:54:59Z",
+          "age_seconds": 301,
+          "stale_after_seconds": 300,
+          "freshness": "stale",
+          "decision": "downgrade"
+        },
+        "roadmap": {
+          "path": "/workspace/earth-north/docs/plans/ROADMAP.md",
+          "exists": true,
+          "last_modified_utc": "2026-03-13T20:58:20Z",
+          "age_seconds": 86500,
+          "stale_after_seconds": 86400,
+          "freshness": "stale",
+          "decision": "downgrade"
+        },
+        "requirements": {
+          "path": "/workspace/earth-north/docs/plans/REQUIREMENTS.md",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:58:20Z",
+          "age_seconds": 100,
+          "stale_after_seconds": 604800,
+          "freshness": "fresh",
+          "decision": "include"
+        }
+      },
+      "counts": {
+        "fresh": 2,
+        "stale": 2,
+        "missing": 0,
+        "include": 2,
+        "downgrade": 2,
+        "exclude": 0
+      }
+    },
+    {
+      "project_id": "earth-south",
+      "root_path": "/workspace/earth-south",
+      "artifacts": {
+        "plan_packets": {
+          "path": "/workspace/earth-south/strategy/current/PLAN_PACKETS.json",
+          "exists": false,
+          "last_modified_utc": null,
+          "age_seconds": null,
+          "stale_after_seconds": 600,
+          "freshness": "missing",
+          "decision": "exclude"
+        },
+        "state": {
+          "path": "/workspace/earth-south/strategy/current/STATE.json",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:59:50Z",
+          "age_seconds": 10,
+          "stale_after_seconds": 300,
+          "freshness": "fresh",
+          "decision": "include"
+        },
+        "roadmap": {
+          "path": "/workspace/earth-south/docs/plans/ROADMAP.md",
+          "exists": true,
+          "last_modified_utc": "2026-03-14T20:58:20Z",
+          "age_seconds": 100,
+          "stale_after_seconds": 86400,
+          "freshness": "fresh",
+          "decision": "include"
+        },
+        "requirements": {
+          "path": "/workspace/earth-south/docs/plans/REQUIREMENTS.md",
+          "exists": true,
+          "last_modified_utc": "2026-03-06T18:33:20Z",
+          "age_seconds": 700000,
+          "stale_after_seconds": 604800,
+          "freshness": "stale",
+          "decision": "downgrade"
+        }
+      },
+      "counts": {
+        "fresh": 2,
+        "stale": 1,
+        "missing": 1,
+        "include": 2,
+        "downgrade": 1,
+        "exclude": 1
+      }
+    }
+  ],
+  "totals": {
+    "projects": 2,
+    "artifacts": 8,
+    "fresh": 4,
+    "stale": 3,
+    "missing": 1,
+    "include": 4,
+    "downgrade": 3,
+    "exclude": 1
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "analysis_type": "blocker_handling_policy_artifact",
+  "blocker_handling_policy_artifact": {
+    "policies": [
+      {
+        "blocker_code": "all_rate_gates_blocking",
+        "escalation_trigger": {
+          "threshold": 3,
+          "trigger_type": "attempts_exhausted",
+          "window": "cycles"
+        },
+        "evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+          "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
+        ],
+        "fallback_paths": [
+          "pause-and-retry-window",
+          "reroute-to-lower-rate-profile"
+        ],
+        "owner_hints": [
+          "boss-manager",
+          "runtime-coordinator"
+        ],
+        "policy_id": "policy.cross-project-rate-limit",
+        "project_id": "runtime-orchestrator"
+      },
+      {
+        "blocker_code": "verification_contract_missing",
+        "escalation_trigger": {
+          "threshold": 1,
+          "trigger_type": "guardrail_violation",
+          "window": "attempts"
+        },
+        "evidence_refs": [
+          "contracts/req/REQ-057_blocker-handling-policy-artifact.md",
+          "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
+        ],
+        "fallback_paths": [
+          "open-blocker-ticket",
+          "request-contract-refresh"
+        ],
+        "owner_hints": [
+          "developer-worker",
+          "planner-worker"
+        ],
+        "policy_id": "policy.validation-contract-mismatch",
+        "project_id": ""
+      }
+    ]
+  },
+  "call_id": "blocker-handling-policy-artifact",
+  "checked_at_utc": "2026-03-16T11:10:00Z",
+  "ok": true,
+  "processing_behavior": {
+    "context_inputs": {
+      "broad_sweep_context": {
+        "earth_sweep_evidence_refs": [
+          "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+          "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+        ],
+        "projects_considered": [
+          "ground-control-hub",
+          "runtime-orchestrator"
+        ]
+      }
+    },
+    "cross_project_context_usage": {
+      "cross_project_context_provided": true,
+      "cross_project_context_used": true,
+      "cross_project_obligation_count": 1,
+      "earth_sweep_evidence_refs_considered": [
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+      ],
+      "evidence_refs_used": [
+        "contracts/req/REQ-057_blocker-handling-policy-artifact.md",
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
+      ],
+      "open_risk_count": 0,
+      "policy_ids_with_cross_project_context": [
+        "policy.cross-project-rate-limit"
+      ],
+      "projects_considered": [
+        "ground-control-hub",
+        "runtime-orchestrator"
+      ]
+    },
+    "recommendation": {
+      "confidence": "high",
+      "cross_project_obligations": [
+        {
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json"
+          ],
+          "obligation_id": "obligation-policy.cross-project-rate-limit",
+          "policy_id": "policy.cross-project-rate-limit",
+          "project_id": "runtime-orchestrator",
+          "summary": "Apply policy 'policy.cross-project-rate-limit' for project 'runtime-orchestrator'."
+        }
+      ],
+      "decision": "proceed",
+      "evidence_refs": [
+        "contracts/req/REQ-057_blocker-handling-policy-artifact.md",
+        "reports/earth/sweeps/2026-03-15/ground-control-hub.json",
+        "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+        "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
+      ],
+      "open_risks": [],
+      "rationale": "Blocker policy rows remain deterministic while cross-project obligations are only emitted when Earth-sweep evidence refs are available.",
+      "recommended_actions": [
+        {
+          "action_id": "action-policy.cross-project-rate-limit",
+          "action_scope": "cross-project",
+          "evidence_refs": [
+            "reports/earth/sweeps/2026-03-15/runtime-orchestrator.json",
+            "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
+          ],
+          "next_step": "Route escalation when 'attempts_exhausted' reaches 3 cycles.",
+          "policy_id": "policy.cross-project-rate-limit",
+          "rationale": "Escalation trigger, owner hints, and fallback paths are emitted in a machine-consumable row for deterministic planner/runtime routing.",
+          "summary": "Apply blocker policy 'policy.cross-project-rate-limit' for blocker 'all_rate_gates_blocking'."
+        },
+        {
+          "action_id": "action-policy.validation-contract-mismatch",
+          "action_scope": "local",
+          "evidence_refs": [
+            "contracts/req/REQ-057_blocker-handling-policy-artifact.md",
+            "reports/optimus-prime/planning/evidence/TASK-205/TASK_EVIDENCE.json"
+          ],
+          "next_step": "Route escalation when 'guardrail_violation' reaches 1 attempts.",
+          "policy_id": "policy.validation-contract-mismatch",
+          "rationale": "Escalation trigger, owner hints, and fallback paths are emitted in a machine-consumable row for deterministic planner/runtime routing.",
+          "summary": "Apply blocker policy 'policy.validation-contract-mismatch' for blocker 'verification_contract_missing'."
+        }
+      ]
+    },
+    "strategy": "blocker-policy-escalation-routing"
+  },
+  "requirement_id": "REQ-057",
+  "schema_version": "1.0",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "totals": {
+    "policies": 2,
+    "unique_blocker_codes": 2,
+    "unique_evidence_refs": 4,
+    "unique_fallback_paths": 4,
+    "unique_owner_hints": 4
+  }
+}

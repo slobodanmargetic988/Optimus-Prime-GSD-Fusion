@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-unknown",
+  "phase_id": "phase-1",
+  "task_id": "TASK-038",
+  "requirement_ids": [
+    "REQ-012"
+  ],
+  "updated_at": "2026-03-15T01:44:14Z",
+  "dev": {
+    "status": "done",
+    "checks": [
+      {
+        "name": "req012_hardening_edge_cases",
+        "passed": true,
+        "details": "Added REQ-012 hardening coverage for stale Earth-sweep source artifact detection, explicit missing mission/scope or peer-project document reason codes, and replay-stable context_bundle serialization."
+      },
+      {
+        "name": "req012_reason_code_determinism",
+        "passed": true,
+        "details": "Unhappy-path rows emit deterministic reason_code values and evidence_refs suitable for replay diagnostics; no unresolved blocker rows remain for required edge cases."
+      }
+    ],
+    "verify_results": [
+      {
+        "command": "python3 -m pytest tests/contracts/test_interface-contract-extraction.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_interface-contract-extraction.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_interface-contract-extraction_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      },
+      {
+        "command": "python3 -m pytest tests/contracts/test_interface-contract-extraction.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      },
+      {
+        "command": "python3 -m pytest tests/integration/test_interface-contract-extraction.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      },
+      {
+        "command": "python3 -m pytest tests/hardening/test_interface-contract-extraction_hardening.py -q",
+        "passed": true,
+        "exit_code": 0,
+        "output": "... [100%] 3 passed in 0.01s"
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/hardening/test_interface-contract-extraction_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-038/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": []
+  }
+}

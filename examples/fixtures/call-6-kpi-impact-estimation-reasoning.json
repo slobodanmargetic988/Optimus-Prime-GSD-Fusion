@@ -1,0 +1,185 @@
+{
+  "input": {
+    "analysis_type": "call_6_kpi_impact_estimation_reasoning",
+    "call_id": "call-6",
+    "checked_at_utc": "2026-03-16T14:30:00Z",
+    "target_project": {
+      "project_id": "optimus-prime-gsd-fusion"
+    },
+    "call_chain": [
+      {
+        "sequence": 1,
+        "call_id": "call-1",
+        "phase": "analysis",
+        "output_ref": "REQ-026::call::call-1::output::situational_analysis"
+      },
+      {
+        "sequence": 2,
+        "call_id": "call-2",
+        "phase": "planning",
+        "output_ref": "REQ-027::call::call-2::output::constraint_refinement"
+      },
+      {
+        "sequence": 3,
+        "call_id": "call-3",
+        "phase": "alignment",
+        "output_ref": "REQ-028::call::call-3::output::execution_alignment"
+      },
+      {
+        "sequence": 4,
+        "call_id": "call-4",
+        "phase": "synthesis",
+        "output_ref": "REQ-029::call::call-4::output::recommendation_synthesis"
+      },
+      {
+        "sequence": 5,
+        "call_id": "call-5",
+        "phase": "selection",
+        "output_ref": "REQ-030::call::call-5::output::adoption_decision"
+      },
+      {
+        "sequence": 6,
+        "call_id": "call-6",
+        "phase": "estimation",
+        "output_ref": "REQ-031::call::call-6::output::kpi_impact_estimation"
+      }
+    ],
+    "target_project_evidence_refs": [
+      "reports/optimus-prime/planning/evidence/TASK-103/TASK_EVIDENCE.json",
+      "reports/optimus-prime/planning/VERIFICATION.md",
+      "reports/optimus-prime/planning/STATE.json"
+    ],
+    "earth_sweep_evidence_refs": [
+      "reports/earth/sweeps/2026-03-16/portfolio.json",
+      "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+    ],
+    "recommendation_adoptions": [
+      {
+        "recommendation_id": "rec.local-replay-hardening",
+        "summary": "Keep the local replay diagnostics deterministic.",
+        "adoption_status": "planned",
+        "adoption_window": "next-14-days",
+        "project_id": "",
+        "requires_earth_evidence": false,
+        "evidence_refs": [
+          "REQ-029::call::call-4::output::recommendation_synthesis",
+          "reports/optimus-prime/planning/evidence/TASK-103/TASK_EVIDENCE.json"
+        ]
+      },
+      {
+        "recommendation_id": "rec.runtime-sync",
+        "summary": "Coordinate replay hardening with runtime-orchestrator.",
+        "adoption_status": "conditional",
+        "adoption_window": "next-30-days",
+        "project_id": "runtime-orchestrator",
+        "requires_earth_evidence": true,
+        "evidence_refs": [
+          "REQ-029::call::call-4::output::recommendation_synthesis",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json"
+        ]
+      }
+    ],
+    "kpi_definitions": [
+      {
+        "kpi_id": "kpi.replay-failure-rate",
+        "name": "Replay failure rate",
+        "unit": "percent",
+        "baseline_value": 18.0,
+        "desired_direction": "decrease",
+        "source_ref": "reports/optimus-prime/planning/VERIFICATION.md"
+      },
+      {
+        "kpi_id": "kpi.mean-time-to-diagnose",
+        "name": "Mean time to diagnose replay regressions",
+        "unit": "hours",
+        "baseline_value": 6.5,
+        "desired_direction": "decrease",
+        "source_ref": "reports/optimus-prime/planning/STATE.json"
+      }
+    ],
+    "impact_assumptions": [
+      {
+        "assumption_id": "assump.local-diagnosis",
+        "recommendation_id": "rec.local-replay-hardening",
+        "kpi_id": "kpi.mean-time-to-diagnose",
+        "statement": "Deterministic replay diagnostics should shorten time-to-diagnose on repeated failures once branch-head artifacts stop drifting.",
+        "expected_movement_lower": -2.0,
+        "expected_movement_upper": -1.0,
+        "confidence": "high",
+        "caveats": [
+          "Estimate assumes the branch keeps emitting comparable failure artifacts."
+        ],
+        "evidence_refs": [
+          "REQ-030::call::call-5::output::adoption_decision",
+          "reports/optimus-prime/planning/STATE.json"
+        ]
+      },
+      {
+        "assumption_id": "assump.local-failure-rate",
+        "recommendation_id": "rec.local-replay-hardening",
+        "kpi_id": "kpi.replay-failure-rate",
+        "statement": "Deterministic replay diagnostics should shrink repeated failure incidence before promotion.",
+        "expected_movement_lower": -6.0,
+        "expected_movement_upper": -3.0,
+        "confidence": "medium",
+        "caveats": [
+          "Estimate assumes replay instrumentation changes land without expanding the failure envelope.",
+          "Estimate should be revisited if the recommendation slips beyond the next planned wave."
+        ],
+        "evidence_refs": [
+          "REQ-029::call::call-4::output::recommendation_synthesis",
+          "reports/optimus-prime/planning/VERIFICATION.md"
+        ]
+      },
+      {
+        "assumption_id": "assump.runtime-failure-rate",
+        "recommendation_id": "rec.runtime-sync",
+        "kpi_id": "kpi.replay-failure-rate",
+        "statement": "Cross-project runtime coordination should reduce replay failure recurrence once shared runtime recovery assumptions stop diverging.",
+        "expected_movement_lower": -4.0,
+        "expected_movement_upper": -1.0,
+        "confidence": "low",
+        "caveats": [
+          "Estimate depends on runtime-orchestrator adopting the same recovery interpretation in the same window.",
+          "Estimate can overstate benefit if shared runtime evidence goes stale before rollout."
+        ],
+        "evidence_refs": [
+          "REQ-029::call::call-4::output::recommendation_synthesis",
+          "reports/earth/sweeps/2026-03-16/runtime-orchestrator.json",
+          "reports/earth/sweeps/2026-03-16/portfolio.json"
+        ]
+      }
+    ]
+  },
+  "expected_contract_anchors": {
+    "schema_version": "req-031.call-6-kpi-impact-estimation-reasoning.v1",
+    "requirement_id": "REQ-031",
+    "checked_at_utc": "2026-03-16T14:30:00Z",
+    "project_id": "optimus-prime-gsd-fusion",
+    "processing_strategy": "call-6-kpi-impact-estimation",
+    "reasoning_mode": "deterministic-evidence-bounded-estimation",
+    "recommendation_ids": [
+      "rec.local-replay-hardening",
+      "rec.runtime-sync"
+    ],
+    "kpi_ids": [
+      "kpi.mean-time-to-diagnose",
+      "kpi.replay-failure-rate"
+    ],
+    "estimate_ids": [
+      "estimate::rec.local-replay-hardening::kpi.mean-time-to-diagnose",
+      "estimate::rec.local-replay-hardening::kpi.replay-failure-rate",
+      "estimate::rec.runtime-sync::kpi.replay-failure-rate"
+    ],
+    "low_confidence_estimate_ids": [
+      "estimate::rec.runtime-sync::kpi.replay-failure-rate"
+    ],
+    "summary": {
+      "recommendation_count": 2,
+      "kpi_count": 2,
+      "estimate_count": 3,
+      "low_confidence_estimate_count": 1,
+      "caveat_count": 5
+    }
+  }
+}

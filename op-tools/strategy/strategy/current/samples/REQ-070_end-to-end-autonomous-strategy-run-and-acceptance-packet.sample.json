@@ -1,0 +1,117 @@
+{
+  "analysis_type": "end_to_end_autonomous_strategy_run_acceptance_packet",
+  "call_id": "end-to-end-autonomous-strategy-run-and-acceptance-packet",
+  "checked_at_utc": "2026-03-17T10:45:00Z",
+  "end_to_end_strategy_run_acceptance_packet": {
+    "current_artifacts": [
+      {
+        "artifact_id": "current.strategy-notes",
+        "evidence_refs": [
+          "strategy/current/strategy.md#L1"
+        ],
+        "path": "strategy/current/strategy.md",
+        "status": "present"
+      },
+      {
+        "artifact_id": "current.strategy-packet",
+        "evidence_refs": [
+          "strategy/current/strategy_packet.json#L1"
+        ],
+        "path": "strategy/current/strategy_packet.json",
+        "status": "present"
+      }
+    ],
+    "ecosystem_awareness": {
+      "context_project_ids": [
+        "earth-analytics-hub",
+        "earth-core-runtime",
+        "optimus-prime-gsd-fusion"
+      ],
+      "earth_sweep_evidence_refs": [
+        "reports/earth/sweeps/earth-analytics-hub/summary-2026-03-17.json",
+        "reports/earth/sweeps/earth-core-runtime/summary-2026-03-17.json"
+      ],
+      "ecosystem_aware": true,
+      "peer_project_ids": [
+        "earth-analytics-hub",
+        "earth-core-runtime"
+      ]
+    },
+    "history_artifacts": [
+      {
+        "artifact_id": "history.strategy-run",
+        "evidence_refs": [
+          "strategy/history/2026-03-17/strategy_run.json#L1"
+        ],
+        "path": "strategy/history/2026-03-17/strategy_run.json",
+        "status": "present"
+      }
+    ],
+    "open_risks": [
+      {
+        "reason_code": "peer_acceptance_pending",
+        "required_evidence_refs": [
+          "reports/earth/sweeps/earth-analytics-hub/request-2026-03-17.json"
+        ],
+        "risk_id": "risk.peer-acceptance-pending",
+        "summary": "Peer-side acceptance proof is not yet emitted for one downstream consumer."
+      }
+    ],
+    "planner_consumability": {
+      "consumability_verdict": "planner-consumable",
+      "evidence_refs": [
+        "strategy/current/strategy_packet.json#recommendations"
+      ],
+      "ready_for_planner": true,
+      "recommendation_ids": [
+        "rec.req070.current-history-validator",
+        "rec.req070.peer-awareness"
+      ],
+      "recommendation_mapping_complete": true,
+      "recommendation_mapping_refs": [
+        "strategy/current/strategy_packet.json#recommendations"
+      ]
+    },
+    "validator_artifacts": [
+      {
+        "artifact_id": "validator.contract-report",
+        "evidence_refs": [
+          "strategy/current/validators/contract-report.json#L1"
+        ],
+        "path": "strategy/current/validators/contract-report.json",
+        "status": "pass"
+      },
+      {
+        "artifact_id": "validator.packet-ready",
+        "evidence_refs": [
+          "strategy/current/validators/planner-ready.json#L1"
+        ],
+        "path": "strategy/current/validators/planner-ready.json",
+        "status": "pass"
+      }
+    ]
+  },
+  "ok": true,
+  "requirement_id": "REQ-070",
+  "run_identity": {
+    "event_id": "evt.req070.acceptance",
+    "plan_id": "plan.req070.phase1",
+    "project_id": "optimus-prime-gsd-fusion",
+    "run_id": "run.2026-03-17T10-45-00Z.req070",
+    "strategy_revision_id": "strategy-rev-2026-03-17"
+  },
+  "schema_version": "1.0",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "totals": {
+    "current_artifacts": 2,
+    "evidence_refs": 9,
+    "history_artifacts": 1,
+    "open_risks": 1,
+    "peer_projects_considered": 2,
+    "planner_recommendations": 2,
+    "validator_artifacts": 2
+  }
+}

@@ -1,0 +1,166 @@
+{
+  "ok": true,
+  "schema_version": "req-050.ecosystem-link-map-json-generator.v1",
+  "requirement_id": "REQ-050",
+  "analysis_type": "ecosystem_link_map_json_generator",
+  "call_id": "ecosystem-link-map-json-generator",
+  "checked_at_utc": "2026-03-16T09:30:00Z",
+  "target_project": {
+    "project_id": "optimus-prime-gsd-fusion",
+    "project_root": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion"
+  },
+  "ecosystem_link_map": {
+    "artifact_path": "ECOSYSTEM_LINK_MAP.json",
+    "planning_context": {
+      "cross_project_context_provided": true,
+      "cross_project_context_used": true,
+      "projects_considered": [
+        "earth-core-runtime",
+        "earth-shared-observability"
+      ],
+      "earth_sweep_evidence_refs_considered": [
+        "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+        "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+      ],
+      "cross_project_obligation_count": 2,
+      "unresolved_idea_count": 1,
+      "recommendation_ids_with_context": [
+        "rec.align-earth-runtime-canary",
+        "rec.review-reuse-contracts"
+      ]
+    },
+    "current_links": [
+      {
+        "link_id": "link.current.optimus-prime-gsd-fusion.earth-core-runtime.coordination",
+        "status": "current",
+        "source_project_id": "optimus-prime-gsd-fusion",
+        "peer_project_id": "earth-core-runtime",
+        "lane": "coordination",
+        "confidence": "high",
+        "recommendation_ids": [
+          "rec.align-earth-runtime-canary"
+        ],
+        "packet_input_ids": [
+          "pkt.c3c7c38214ae"
+        ],
+        "open_risk_ids": [],
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/quality/req-039-rationale-quality-score.json",
+          "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json"
+        ],
+        "required_evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/quality/req-039-rationale-quality-score.json",
+          "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json"
+        ],
+        "obligation_metadata": {
+          "status": "active",
+          "source_field": "final_strategy_synthesis.strategy_packet_inputs",
+          "reason_codes": [],
+          "evidence_refs": [
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+            "reports/quality/req-039-rationale-quality-score.json",
+            "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json"
+          ],
+          "required_evidence_refs": [
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+            "reports/quality/req-039-rationale-quality-score.json",
+            "strategy/current/llm_call_trace_artifacts/req-027/call-2/trace-call-2-001.json"
+          ]
+        }
+      }
+    ],
+    "missing_links": [
+      {
+        "link_id": "link.missing.optimus-prime-gsd-fusion.earth-shared-observability.unassigned",
+        "status": "missing",
+        "source_project_id": "optimus-prime-gsd-fusion",
+        "peer_project_id": "earth-shared-observability",
+        "lane": "unassigned",
+        "confidence": "low",
+        "recommendation_ids": [
+          "rec.review-reuse-contracts"
+        ],
+        "packet_input_ids": [],
+        "open_risk_ids": [
+          "open-risk.c6d73dbb8f81"
+        ],
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "required_evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "obligation_metadata": {
+          "status": "blocked",
+          "source_field": "final_strategy_synthesis.open_risks",
+          "reason_codes": [
+            "unresolved_idea_open_risk"
+          ],
+          "evidence_refs": [
+            "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          ],
+          "required_evidence_refs": [
+            "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+            "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          ]
+        }
+      }
+    ],
+    "proposed_links": [
+      {
+        "link_id": "link.proposed.optimus-prime-gsd-fusion.earth-shared-observability.unassigned",
+        "status": "proposed",
+        "source_project_id": "optimus-prime-gsd-fusion",
+        "peer_project_id": "earth-shared-observability",
+        "lane": "unassigned",
+        "confidence": "medium",
+        "recommendation_ids": [
+          "rec.review-reuse-contracts"
+        ],
+        "packet_input_ids": [],
+        "open_risk_ids": [],
+        "evidence_refs": [
+          "contracts/req/REQ-016_reuse-opportunity-detection.md",
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ],
+        "required_evidence_refs": [],
+        "obligation_metadata": {
+          "status": "proposed",
+          "source_field": "final_strategy_synthesis.deferred_recommendations",
+          "reason_codes": [
+            "conflicting_packet_routing"
+          ],
+          "evidence_refs": [
+            "contracts/req/REQ-016_reuse-opportunity-detection.md",
+            "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+          ],
+          "required_evidence_refs": []
+        }
+      }
+    ],
+    "summary": {
+      "linked_project_ids": [
+        "earth-core-runtime",
+        "earth-shared-observability"
+      ],
+      "current_link_count": 1,
+      "missing_link_count": 1,
+      "proposed_link_count": 1,
+      "total_link_count": 3,
+      "active_obligation_count": 1,
+      "blocked_obligation_count": 1,
+      "proposed_obligation_count": 1
+    }
+  },
+  "totals": {
+    "current_links": 1,
+    "missing_links": 1,
+    "proposed_links": 1,
+    "linked_projects": 2,
+    "obligation_rows": 3,
+    "context_project_count": 2
+  }
+}

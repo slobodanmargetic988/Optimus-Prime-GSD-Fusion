@@ -1,0 +1,18 @@
+{
+  "artifact_type": "ecosystem-link-map.v2",
+  "project_id": "prj.myownmint",
+  "discovered_projects": [
+    {
+      "project_id": "prj.myownmint",
+      "note": "unexpected"
+    }
+  ],
+  "links": [
+    {
+      "source_project_id": "prj.myownmint",
+      "target_project_id": "prj.myownmint",
+      "relationship": "self-check",
+      "summary": "Missing required status field."
+    }
+  ]
+}

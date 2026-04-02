@@ -1,0 +1,37 @@
+{
+  "schema_version": "strategy-packet.v1",
+  "identity": {
+    "project_id": "prj.optimus-prime-gsd-fusion",
+    "run_id": "run.20260316t100500z-task185",
+    "event_id": "event.20260316t100500z-strategy-packet"
+  },
+  "strategy": {
+    "revision_id": "strategy-2026-03-15T08:00:00Z",
+    "summary": "Stabilize canary execution first."
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "rec.harden-telemetry-freshness",
+      "priority": "high",
+      "summary": "Harden telemetry freshness checks before the next autonomous canary pass.",
+      "rationale": "Telemetry freshness remains the first unblocker.",
+      "expected_impact": "Reduce stale telemetry windows.",
+      "risk_level": "medium"
+    }
+  ],
+  "constraints": {
+    "hard": [
+      "Keep the packet surface minimal."
+    ],
+    "soft": []
+  },
+  "kpi_targets": [
+    {
+      "metric": "telemetry_freshness_lag_minutes",
+      "direction": "decrease"
+    }
+  ],
+  "runtime_context": {
+    "unexpected": true
+  }
+}

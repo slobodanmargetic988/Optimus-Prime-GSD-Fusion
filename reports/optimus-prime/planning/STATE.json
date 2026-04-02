@@ -1,0 +1,926 @@
+{
+  "baseline_ready": true,
+  "build_ready": true,
+  "constraints": [],
+  "initialized_at": "2026-03-10T23:40:43Z",
+  "map_fingerprint": "ceba3128c1feba08c2897bcbd22e87d3ea955750a0e326996ded36f4d516262f",
+  "mission": "@file:/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/strategy/mission.md",
+  "mission_source": {
+    "display": "@file:/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/strategy/mission.md",
+    "mode": "file",
+    "path": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/strategy/mission.md",
+    "value": null
+  },
+  "phase_count": 3,
+  "plan_id": "plan-20260310T232916Z-strategy-tool-v1",
+  "plan_ready": true,
+  "profile_aliases": [
+    "codex",
+    "codex-fifth",
+    "codex-first",
+    "codex-fourth",
+    "codex-frank",
+    "codex-saul",
+    "codex-slobodan",
+    "codex-third"
+  ],
+  "profile_selection_ref": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/strategy/reports/optimus-prime/planning/PROFILE_SELECTION.json",
+  "repo_fingerprint": "951805db27225b4ac70de3eb48b3a590b610e91bb9519abba84098cee565f149",
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "title": "LLM-first strategy runtime entrypoint",
+      "acceptance_criteria": [
+        "Strategy runtime is explicitly LLM-first and supports long-thinking execution mode rather than deterministic-only heuristic summarization.",
+        "Invocation contract includes target project root, Earth root, output root, and revision identity with reproducible call metadata."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_llm-first-strategy-runtime-entrypoint.py -q",
+        "python3 -m pytest tests/integration/test_llm-first-strategy-runtime-entrypoint.py -q"
+      ]
+    },
+    {
+      "id": "REQ-002",
+      "title": "Earth-wide repository discovery manifest",
+      "acceptance_criteria": [
+        "Strategy discovers and records all Earth subprojects with canonical project IDs and mission/scope source refs.",
+        "Discovery manifest is stable across reruns and excludes archived/non-owner paths by explicit policy rules."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_earth-wide-repository-discovery-manifest.py -q",
+        "python3 -m pytest tests/integration/test_earth-wide-repository-discovery-manifest.py -q"
+      ]
+    },
+    {
+      "id": "REQ-003",
+      "title": "Target project mission and scope ingestion",
+      "acceptance_criteria": [
+        "Strategy ingests target project mission/scope as authoritative base constraints for recommendation generation.",
+        "Ingestion rejects incomplete mission/scope inputs with explicit reason codes instead of silent fallbacks."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_target-project-mission-and-scope-ingestion.py -q",
+        "python3 -m pytest tests/integration/test_target-project-mission-and-scope-ingestion.py -q"
+      ]
+    },
+    {
+      "id": "REQ-004",
+      "title": "Peer project mission and scope ingestion",
+      "acceptance_criteria": [
+        "Strategy ingests peer project mission/scope documents to model interaction obligations and reuse opportunities.",
+        "Peer ingestion preserves source provenance for every inferred cross-project recommendation."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_peer-project-mission-and-scope-ingestion.py -q",
+        "python3 -m pytest tests/integration/test_peer-project-mission-and-scope-ingestion.py -q"
+      ]
+    },
+    {
+      "id": "REQ-005",
+      "title": "Planning artifact sweep across Earth",
+      "acceptance_criteria": [
+        "Strategy sweeps existing planning artifacts (plan packets, state, roadmap, requirements) across relevant projects.",
+        "Sweep results preserve artifact freshness metadata so stale inputs can be downgraded or excluded deterministically."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_planning-artifact-sweep-across-earth.py -q",
+        "python3 -m pytest tests/integration/test_planning-artifact-sweep-across-earth.py -q"
+      ]
+    },
+    {
+      "id": "REQ-006",
+      "title": "Runtime telemetry artifact sweep across Earth",
+      "acceptance_criteria": [
+        "Strategy ingests runtime traces and cycle summaries needed to reason about throughput, blockers, and failure patterns.",
+        "Telemetry sweep stores source references and supports later evidence citation in recommendations."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_runtime-telemetry-artifact-sweep-across-earth.py -q",
+        "python3 -m pytest tests/integration/test_runtime-telemetry-artifact-sweep-across-earth.py -q"
+      ]
+    },
+    {
+      "id": "REQ-007",
+      "title": "Ground graph snapshot ingestion",
+      "acceptance_criteria": [
+        "Strategy ingests Ground graph artifacts as canonical cross-project linkage context.",
+        "Graph ingestion preserves project-era-plan-phase-run lineage needed for ecosystem-aware planning decisions."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_ground-graph-snapshot-ingestion.py -q",
+        "python3 -m pytest tests/integration/test_ground-graph-snapshot-ingestion.py -q"
+      ]
+    },
+    {
+      "id": "REQ-008",
+      "title": "Research packet ingestion and normalization",
+      "acceptance_criteria": [
+        "Strategy ingests research packets and normalizes assumptions, unknowns, and risk evidence into strategy context.",
+        "Normalization keeps research provenance linked to recommendation rationale fields."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_research-packet-ingestion-and-normalization.py -q",
+        "python3 -m pytest tests/integration/test_research-packet-ingestion-and-normalization.py -q"
+      ]
+    },
+    {
+      "id": "REQ-009",
+      "title": "Prior strategy revision ingestion",
+      "acceptance_criteria": [
+        "Strategy ingests prior strategy revisions and changelog history before composing new recommendations.",
+        "Prior revision ingestion enables explicit drift and continuity analysis instead of stateless generation."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_prior-strategy-revision-ingestion.py -q",
+        "python3 -m pytest tests/integration/test_prior-strategy-revision-ingestion.py -q"
+      ]
+    },
+    {
+      "id": "REQ-010",
+      "title": "Change detection since previous strategy revision",
+      "acceptance_criteria": [
+        "Strategy computes what changed since last revision across mission scope, runtime data, and ecosystem signals.",
+        "Change detection output is machine-readable and directly referenced by recommendation deltas."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_change-detection-since-previous-strategy-revision.py -q",
+        "python3 -m pytest tests/integration/test_change-detection-since-previous-strategy-revision.py -q"
+      ]
+    },
+    {
+      "id": "REQ-011",
+      "title": "Cross-project dependency extraction",
+      "acceptance_criteria": [
+        "Strategy extracts dependency edges across projects from contracts, traces, and declared integration points.",
+        "Extracted dependencies include confidence and evidence refs so weak links are not treated as hard facts."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_cross-project-dependency-extraction.py -q",
+        "python3 -m pytest tests/integration/test_cross-project-dependency-extraction.py -q"
+      ]
+    },
+    {
+      "id": "REQ-012",
+      "title": "Interface contract extraction",
+      "acceptance_criteria": [
+        "Strategy extracts shared interface contracts relevant to the target project from Earth contract sources.",
+        "Contract extraction marks required versus optional obligations to prevent over-constraining plans."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_interface-contract-extraction.py -q",
+        "python3 -m pytest tests/integration/test_interface-contract-extraction.py -q"
+      ]
+    },
+    {
+      "id": "REQ-013",
+      "title": "Capability catalog extraction",
+      "acceptance_criteria": [
+        "Strategy builds a capability catalog showing what each project already provides and what is missing.",
+        "Catalog entries include source version metadata to avoid recommending already-completed work."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_capability-catalog-extraction.py -q",
+        "python3 -m pytest tests/integration/test_capability-catalog-extraction.py -q"
+      ]
+    },
+    {
+      "id": "REQ-014",
+      "title": "Deficit and need signal extraction",
+      "acceptance_criteria": [
+        "Strategy extracts unmet ecosystem needs that the target project can satisfy with high leverage.",
+        "Need signals are scored by impact and urgency with linked evidence references."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_deficit-and-need-signal-extraction.py -q",
+        "python3 -m pytest tests/integration/test_deficit-and-need-signal-extraction.py -q"
+      ]
+    },
+    {
+      "id": "REQ-015",
+      "title": "Integration opportunity detection",
+      "acceptance_criteria": [
+        "Strategy identifies concrete integration opportunities between target project and other Earth projects.",
+        "Opportunities include expected interaction contract and dependency side-effect notes."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_integration-opportunity-detection.py -q",
+        "python3 -m pytest tests/integration/test_integration-opportunity-detection.py -q"
+      ]
+    },
+    {
+      "id": "REQ-016",
+      "title": "Reuse opportunity detection",
+      "acceptance_criteria": [
+        "Strategy detects existing functionality in other apps that the target project should reuse before reimplementing.",
+        "Reuse recommendations include adoption path and compatibility constraints."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_reuse-opportunity-detection.py -q",
+        "python3 -m pytest tests/integration/test_reuse-opportunity-detection.py -q"
+      ]
+    },
+    {
+      "id": "REQ-017",
+      "title": "Overlap and conflict detection",
+      "acceptance_criteria": [
+        "Strategy detects overlapping initiatives and conflicting roadmap directions across related projects.",
+        "Conflict output includes recommended resolution options with risk tradeoffs."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_overlap-and-conflict-detection.py -q",
+        "python3 -m pytest tests/integration/test_overlap-and-conflict-detection.py -q"
+      ]
+    },
+    {
+      "id": "REQ-018",
+      "title": "Strategic debt signal extraction",
+      "acceptance_criteria": [
+        "Strategy extracts strategic debt signals that can degrade future velocity if unresolved.",
+        "Debt signals include recurrence and likely blast-radius estimates."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_strategic-debt-signal-extraction.py -q",
+        "python3 -m pytest tests/integration/test_strategic-debt-signal-extraction.py -q"
+      ]
+    },
+    {
+      "id": "REQ-019",
+      "title": "Execution-resource context ingestion",
+      "acceptance_criteria": [
+        "Strategy ingests hardware/rate-limit/resource context so recommendations are executable under real constraints.",
+        "Resource context influences sequencing and model-routing policy suggestions in output artifacts."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_execution-resource-context-ingestion.py -q",
+        "python3 -m pytest tests/integration/test_execution-resource-context-ingestion.py -q"
+      ]
+    },
+    {
+      "id": "REQ-020",
+      "title": "Risk signal normalization",
+      "acceptance_criteria": [
+        "Strategy normalizes risk signals from blockers, retries, watchdog exits, and regression patterns.",
+        "Normalized risk output preserves reason-code taxonomy compatibility for gate review consumption."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_risk-signal-normalization.py -q",
+        "python3 -m pytest tests/integration/test_risk-signal-normalization.py -q"
+      ]
+    },
+    {
+      "id": "REQ-021",
+      "title": "Evidence provenance ledger for context",
+      "acceptance_criteria": [
+        "Strategy keeps a provenance ledger mapping every key context claim to concrete source artifacts.",
+        "Ledger enables deterministic audit and reduces hallucinated supporting evidence."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_evidence-provenance-ledger-for-context.py -q",
+        "python3 -m pytest tests/integration/test_evidence-provenance-ledger-for-context.py -q"
+      ]
+    },
+    {
+      "id": "REQ-022",
+      "title": "Context confidence scoring",
+      "acceptance_criteria": [
+        "Strategy assigns confidence scores to context elements based on source quality and recency.",
+        "Low-confidence context is explicitly marked so downstream planning does not overfit weak inputs."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_context-confidence-scoring.py -q",
+        "python3 -m pytest tests/integration/test_context-confidence-scoring.py -q"
+      ]
+    },
+    {
+      "id": "REQ-023",
+      "title": "Context compaction for LLM call budget",
+      "acceptance_criteria": [
+        "Strategy compacts broad-sweep context into high-signal packets suitable for multi-call reasoning.",
+        "Compaction preserves mandatory traceability pointers and avoids lossy removal of hard constraints."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_context-compaction-for-llm-call-budget.py -q",
+        "python3 -m pytest tests/integration/test_context-compaction-for-llm-call-budget.py -q"
+      ]
+    },
+    {
+      "id": "REQ-024",
+      "title": "Strategy context bundle serialization",
+      "acceptance_criteria": [
+        "Strategy serializes context into versioned machine-readable bundle consumed by downstream LLM call chain.",
+        "Serialized bundle remains deterministic enough for rerun diffing and validator ingestion."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_strategy-context-bundle-serialization.py -q",
+        "python3 -m pytest tests/integration/test_strategy-context-bundle-serialization.py -q"
+      ]
+    },
+    {
+      "id": "REQ-025",
+      "title": "Multi-call strategy pipeline planner",
+      "acceptance_criteria": [
+        "Strategy plans a multi-call reasoning chain with explicit call purposes, dependencies, and expected outputs.",
+        "Pipeline planner supports adjustable call depth for heavy-thinking runs under strict evidence discipline."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_multi-call-strategy-pipeline-planner.py -q",
+        "python3 -m pytest tests/integration/test_multi-call-strategy-pipeline-planner.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-026",
+      "title": "Call-1 situational analysis reasoning",
+      "acceptance_criteria": [
+        "Call-1 produces situational assessment of target project state using mission/scope plus runtime/planning evidence.",
+        "Output includes explicit unknowns that must be handled by later calls."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_call-1-situational-analysis-reasoning.py -q",
+        "python3 -m pytest tests/integration/test_call-1-situational-analysis-reasoning.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-027",
+      "title": "Call-2 ecosystem linkage reasoning",
+      "acceptance_criteria": [
+        "Call-2 reasons about ecosystem links and interaction obligations between target and peer projects.",
+        "Linkage reasoning distinguishes existing links, missing links, and proposed links with confidence tags."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_call-2-ecosystem-linkage-reasoning.py -q",
+        "python3 -m pytest tests/integration/test_call-2-ecosystem-linkage-reasoning.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-028",
+      "title": "Call-3 gap and opportunity reasoning",
+      "acceptance_criteria": [
+        "Call-3 reasons about strategic gaps and opportunities not visible from local mission alone.",
+        "Gap reasoning ties each opportunity to ecosystem-level benefit and dependency effects."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_call-3-gap-and-opportunity-reasoning.py -q",
+        "python3 -m pytest tests/integration/test_call-3-gap-and-opportunity-reasoning.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-029",
+      "title": "Call-4 recommendation synthesis",
+      "acceptance_criteria": [
+        "Call-4 synthesizes candidate recommendations from earlier call outputs into structured recommendation drafts.",
+        "Synthesis enforces recommendation ID schema and required rationale/impact/risk fields."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_call-4-recommendation-synthesis.py -q",
+        "python3 -m pytest tests/integration/test_call-4-recommendation-synthesis.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-030",
+      "title": "Call-5 sequencing and lane design reasoning",
+      "acceptance_criteria": [
+        "Call-5 designs execution lanes and sequencing order for recommendations under current constraints.",
+        "Sequencing output includes why-now rationale and expected coordination dependencies."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_call-5-sequencing-and-lane-design-reasoning.py -q",
+        "python3 -m pytest tests/integration/test_call-5-sequencing-and-lane-design-reasoning.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-031",
+      "title": "Call-6 KPI impact estimation reasoning",
+      "acceptance_criteria": [
+        "Call-6 estimates KPI movement expected from recommendation adoption using evidence-backed assumptions.",
+        "KPI estimates include confidence and caveat fields to avoid false precision."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "python3 -m pytest tests/integration/test_call-6-kpi-impact-estimation-reasoning.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-032",
+      "title": "Call-7 blocker and risk policy reasoning",
+      "acceptance_criteria": [
+        "Call-7 reasons about blocker handling policy and risk containment for strategy execution.",
+        "Policy output includes escalation triggers and fallback sequencing paths."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_call-7-blocker-and-risk-policy-reasoning.py -q",
+        "python3 -m pytest tests/integration/test_call-7-blocker-and-risk-policy-reasoning.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-033",
+      "title": "Call-8 constraint classification reasoning",
+      "acceptance_criteria": [
+        "Call-8 classifies outputs into hard constraints, soft preferences, and speculative ideas.",
+        "Classification is explicit so planner can consume strategy without conflating obligation and suggestion."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_call-8-constraint-classification-reasoning.py -q",
+        "python3 -m pytest tests/integration/test_call-8-constraint-classification-reasoning.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-034",
+      "title": "Cross-call memory handoff contract",
+      "acceptance_criteria": [
+        "Each call receives structured memory handoff from prior calls with bounded context and citation refs.",
+        "Handoff contract prevents contradiction drift and context leakage across long reasoning chains."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_cross-call-memory-handoff-contract.py -q",
+        "python3 -m pytest tests/integration/test_cross-call-memory-handoff-contract.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-035",
+      "title": "Evidence citation discipline in reasoning calls",
+      "acceptance_criteria": [
+        "Every strategic claim in call outputs references evidence IDs from the context provenance ledger.",
+        "Uncited claims are flagged and excluded from final recommendation set."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_evidence-citation-discipline-in-reasoning-calls.py -q",
+        "python3 -m pytest tests/integration/test_evidence-citation-discipline-in-reasoning-calls.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-036",
+      "title": "Cross-call contradiction detection",
+      "acceptance_criteria": [
+        "Strategy detects contradictions across call outputs before final synthesis.",
+        "Contradiction handling policy requires explicit resolution or unresolved-risk marking."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_cross-call-contradiction-detection.py -q",
+        "python3 -m pytest tests/integration/test_cross-call-contradiction-detection.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-037",
+      "title": "Recommendation deduplication and merge",
+      "acceptance_criteria": [
+        "Strategy merges duplicate recommendation drafts while preserving source rationale and evidence links.",
+        "Dedup process preserves stable recommendation IDs and avoids semantic duplication."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_recommendation-deduplication-and-merge.py -q",
+        "python3 -m pytest tests/integration/test_recommendation-deduplication-and-merge.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-038",
+      "title": "Recommendation priority calibration",
+      "acceptance_criteria": [
+        "Strategy calibrates recommendation priority using ecosystem impact, feasibility, and urgency signals.",
+        "Calibration output includes transparent scoring contributors for auditability."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_recommendation-priority-calibration.py -q",
+        "python3 -m pytest tests/integration/test_recommendation-priority-calibration.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-039",
+      "title": "Recommendation rationale quality scoring",
+      "acceptance_criteria": [
+        "Strategy scores rationale quality and rejects low-substance recommendations before packet emission.",
+        "Quality scoring enforces minimum evidence count and explicit tradeoff articulation."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_recommendation-rationale-quality-scoring.py -q",
+        "python3 -m pytest tests/integration/test_recommendation-rationale-quality-scoring.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-040",
+      "title": "Recommendation feasibility scoring",
+      "acceptance_criteria": [
+        "Strategy scores feasibility using resource constraints, dependency readiness, and current repo maturity.",
+        "Feasibility output influences sequencing recommendations and risk policy."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_recommendation-feasibility-scoring.py -q",
+        "python3 -m pytest tests/integration/test_recommendation-feasibility-scoring.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-041",
+      "title": "Recommendation dependency-effect modeling",
+      "acceptance_criteria": [
+        "Strategy models dependency side effects for each recommendation across affected projects.",
+        "Dependency-effect model includes likely blockers and mitigation hooks."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_recommendation-dependency-effect-modeling.py -q",
+        "python3 -m pytest tests/integration/test_recommendation-dependency-effect-modeling.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-042",
+      "title": "Existing-functionality interaction reasoning",
+      "acceptance_criteria": [
+        "Strategy reasons about when to consume already-built functionality versus build new capability.",
+        "Interaction reasoning includes compatibility checks and integration burden estimates."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_existing-functionality-interaction-reasoning.py -q",
+        "python3 -m pytest tests/integration/test_existing-functionality-interaction-reasoning.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-043",
+      "title": "Project obligation reasoning",
+      "acceptance_criteria": [
+        "Strategy reasons about what the current project should expose to or consume from other apps.",
+        "Obligation output includes concrete interface/contract expectations and ownership boundaries."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_project-obligation-reasoning.py -q",
+        "python3 -m pytest tests/integration/test_project-obligation-reasoning.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-044",
+      "title": "Recommendation omission detector",
+      "acceptance_criteria": [
+        "Strategy detects missing recommendation classes that are required by mission plus ecosystem needs.",
+        "Omission detector prevents local-only plans that ignore critical cross-project obligations."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_recommendation-omission-detector.py -q",
+        "python3 -m pytest tests/integration/test_recommendation-omission-detector.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-045",
+      "title": "Alternative strategic scenario generator",
+      "acceptance_criteria": [
+        "Strategy generates alternative strategic scenarios when uncertainty or conflict is high.",
+        "Scenario output includes comparative tradeoffs and trigger conditions for choosing each branch."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_alternative-strategic-scenario-generator.py -q",
+        "python3 -m pytest tests/integration/test_alternative-strategic-scenario-generator.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-046",
+      "title": "Final strategy synthesis composer",
+      "acceptance_criteria": [
+        "Strategy composes final recommendation set from validated multi-call outputs into coherent strategy packet inputs.",
+        "Composer preserves call-trace lineage for each finalized recommendation."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_final-strategy-synthesis-composer.py -q",
+        "python3 -m pytest tests/integration/test_final-strategy-synthesis-composer.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-047",
+      "title": "LLM call trace and decision ledger",
+      "acceptance_criteria": [
+        "Strategy records call-level trace metadata and decision ledger for auditability and replay analysis.",
+        "Trace ledger is machine-readable and linked to final output artifact references."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_llm-call-trace-and-decision-ledger.py -q",
+        "python3 -m pytest tests/integration/test_llm-call-trace-and-decision-ledger.py -q",
+        "python3 -m pytest tests/e2e/test_strategy_llm_pipeline_smoke.py -q"
+      ]
+    },
+    {
+      "id": "REQ-048",
+      "title": "STRATEGY.md generator",
+      "acceptance_criteria": [
+        "Strategy emits a human-readable STRATEGY.md narrative grounded in validated recommendation outputs.",
+        "Narrative artifact is diff-friendly and aligned with machine-readable fields."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_strategy-md-generator.py -q",
+        "python3 -m pytest tests/integration/test_strategy-md-generator.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-049",
+      "title": "STRATEGY.json generator",
+      "acceptance_criteria": [
+        "Strategy emits STRATEGY.json machine artifact with stable field schema for downstream tooling.",
+        "JSON artifact includes recommendation IDs, rationale, impacts, risks, and evidence refs."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_strategy-json-generator.py -q",
+        "python3 -m pytest tests/integration/test_strategy-json-generator.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-050",
+      "title": "ECOSYSTEM_LINK_MAP.json generator",
+      "acceptance_criteria": [
+        "Strategy emits ecosystem link map artifact showing current, missing, and proposed links.",
+        "Link map artifact includes confidence and obligation metadata for integration planning."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_ecosystem-link-map-json-generator.py -q",
+        "python3 -m pytest tests/integration/test_ecosystem-link-map-json-generator.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-051",
+      "title": "STRATEGY_CHANGELOG.md generator",
+      "acceptance_criteria": [
+        "Strategy emits changelog artifact summarizing revision deltas and strategic direction changes.",
+        "Changelog entries link directly to changed recommendations and supporting evidence."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_strategy-changelog-md-generator.py -q",
+        "python3 -m pytest tests/integration/test_strategy-changelog-md-generator.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-052",
+      "title": "strategy_packet.v1 generator",
+      "acceptance_criteria": [
+        "Strategy generates strategy_packet.v1 JSON output for planner/runtime consumption.",
+        "Generated packet includes canonical IDs and contract-required top-level sections."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_strategy-packet-v1-generator.py -q",
+        "python3 -m pytest tests/integration/test_strategy-packet-v1-generator.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-053",
+      "title": "Recommendation ID stability contract",
+      "acceptance_criteria": [
+        "Recommendation IDs remain stable across no-change reruns and evolve predictably on substantive change.",
+        "ID stability behavior is testable and documented for downstream traceability."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_recommendation-id-stability-contract.py -q",
+        "python3 -m pytest tests/integration/test_recommendation-id-stability-contract.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-054",
+      "title": "Recommendation-to-planner mapping artifact",
+      "acceptance_criteria": [
+        "Strategy emits mapping artifact from recommendation IDs to planner task intent handles.",
+        "Mapping artifact supports planner traceability and downstream audit trails."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_recommendation-to-planner-mapping-artifact.py -q",
+        "python3 -m pytest tests/integration/test_recommendation-to-planner-mapping-artifact.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-055",
+      "title": "Constraint classification artifact",
+      "acceptance_criteria": [
+        "Strategy emits explicit hard/soft/speculative constraint artifacts consumed by planner policy logic.",
+        "Constraint artifact disambiguates mandatory guardrails from optional guidance."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_constraint-classification-artifact.py -q",
+        "python3 -m pytest tests/integration/test_constraint-classification-artifact.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-056",
+      "title": "KPI target artifact",
+      "acceptance_criteria": [
+        "Strategy emits KPI target artifact with expected direction, baseline reference, and confidence level.",
+        "KPI artifact links each target back to originating recommendations and assumptions."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_kpi-target-artifact.py -q",
+        "python3 -m pytest tests/integration/test_kpi-target-artifact.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-057",
+      "title": "Blocker handling policy artifact",
+      "acceptance_criteria": [
+        "Strategy emits blocker handling artifact with escalation triggers, owner hints, and fallback paths.",
+        "Policy artifact is consumable by planner/runtime without narrative parsing."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_blocker-handling-policy-artifact.py -q",
+        "python3 -m pytest tests/integration/test_blocker-handling-policy-artifact.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-058",
+      "title": "Ecosystem obligation artifact",
+      "acceptance_criteria": [
+        "Strategy emits artifact describing project interaction obligations across other Earth apps.",
+        "Obligation artifact distinguishes produce/consume responsibilities and dependency prerequisites."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_ecosystem-obligation-artifact.py -q",
+        "python3 -m pytest tests/integration/test_ecosystem-obligation-artifact.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-059",
+      "title": "Strategy quality report artifact",
+      "acceptance_criteria": [
+        "Strategy emits quality report summarizing citation coverage, contradiction status, and confidence distribution.",
+        "Quality report includes machine-readable gate verdict fields for build automation."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_strategy-quality-report-artifact.py -q",
+        "python3 -m pytest tests/integration/test_strategy-quality-report-artifact.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-060",
+      "title": "strategy_packet.v1 schema validator",
+      "acceptance_criteria": [
+        "Validator enforces strategy_packet.v1 schema and canonical ID contracts before handoff.",
+        "Validation failures return deterministic reason codes and actionable diagnostics."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_strategy-packet-v1-schema-validator.py -q",
+        "python3 -m pytest tests/integration/test_strategy-packet-v1-schema-validator.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-061",
+      "title": "Recommendation quality validator",
+      "acceptance_criteria": [
+        "Validator enforces recommendation completeness, rationale quality, and minimum evidence citation counts.",
+        "Quality validator blocks low-substance recommendations from final planner-facing packet."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_recommendation-quality-validator.py -q",
+        "python3 -m pytest tests/integration/test_recommendation-quality-validator.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-062",
+      "title": "Recommendation ID uniqueness validator",
+      "acceptance_criteria": [
+        "Validator enforces recommendation ID uniqueness and stability constraints across revisions.",
+        "Validator emits diff-oriented diagnostics for ID drift and collision cases."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_recommendation-id-uniqueness-validator.py -q",
+        "python3 -m pytest tests/integration/test_recommendation-id-uniqueness-validator.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-063",
+      "title": "Ecosystem link-map integrity validator",
+      "acceptance_criteria": [
+        "Validator enforces link-map schema integrity and referential consistency with discovered projects.",
+        "Integrity validator flags broken or orphaned links with source-level diagnostics."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_ecosystem-link-map-integrity-validator.py -q",
+        "python3 -m pytest tests/integration/test_ecosystem-link-map-integrity-validator.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-064",
+      "title": "Source traceability validator",
+      "acceptance_criteria": [
+        "Validator enforces that recommendations and claims map to concrete source evidence refs.",
+        "Traceability validator fails on uncited claims and broken evidence references."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_source-traceability-validator.py -q",
+        "python3 -m pytest tests/integration/test_source-traceability-validator.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-065",
+      "title": "Planner-consumability validator",
+      "acceptance_criteria": [
+        "Validator enforces that strategy outputs are directly consumable by op-plan/op-initialize without manual transforms.",
+        "Consumability validator checks required files, required keys, and recommendation mapping completeness."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_planner-consumability-validator.py -q",
+        "python3 -m pytest tests/integration/test_planner-consumability-validator.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-066",
+      "title": "Validator runner and aggregate verdict",
+      "acceptance_criteria": [
+        "Strategy provides validator runner that executes all validators and emits one aggregate verdict artifact.",
+        "Aggregate verdict includes per-validator pass/fail and blocking reason codes."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_validator-runner-and-aggregate-verdict.py -q",
+        "python3 -m pytest tests/integration/test_validator-runner-and-aggregate-verdict.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-067",
+      "title": "op-initialize pre-plan strategy hook",
+      "acceptance_criteria": [
+        "Strategy integrates as pre-plan hook in op-initialize flow so planning starts with current strategic context.",
+        "Hook behavior supports configurable strictness and deterministic failure handling."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_op-initialize-pre-plan-strategy-hook.py -q",
+        "python3 -m pytest tests/integration/test_op-initialize-pre-plan-strategy-hook.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-068",
+      "title": "op-plan strategy ingestion hook",
+      "acceptance_criteria": [
+        "Strategy artifacts are ingested by op-plan as first-class input with recommendation traceability retained.",
+        "Ingestion hook avoids semantic fork by consuming canonical strategy artifacts directly."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_op-plan-strategy-ingestion-hook.py -q",
+        "python3 -m pytest tests/integration/test_op-plan-strategy-ingestion-hook.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-069",
+      "title": "Strategy revision history and diff workflow",
+      "acceptance_criteria": [
+        "Strategy persists revision history snapshots and deterministic diff artifacts over time.",
+        "Diff workflow supports governance review and prevents random directional shifts."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_strategy-revision-history-and-diff-workflow.py -q",
+        "python3 -m pytest tests/integration/test_strategy-revision-history-and-diff-workflow.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    },
+    {
+      "id": "REQ-070",
+      "title": "End-to-end autonomous strategy run and acceptance packet",
+      "acceptance_criteria": [
+        "Strategy supports end-to-end autonomous run producing all required current/history/validator artifacts.",
+        "Acceptance packet proves outputs are planner-consumable and ecosystem-aware under real Earth sweep context."
+      ],
+      "verify_commands": [
+        "python3 -m pytest tests/contracts/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py -q",
+        "python3 -m pytest tests/integration/test_end-to-end-autonomous-strategy-run-and-acceptance-packet.py -q",
+        "python3 scripts/strategy_packet_validate.py --input strategy/current/strategy_packet.v1.json --schema contracts/strategy_packet.v1.schema.json"
+      ]
+    }
+  ],
+  "schema_version": "1.0",
+  "scope": "@file:/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/strategy/scope.md",
+  "scope_source": {
+    "display": "@file:/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/strategy/scope.md",
+    "mode": "file",
+    "path": "/Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion/op-tools/strategy/scope.md",
+    "value": null
+  },
+  "updated_at": "2026-03-13T20:51:02Z"
+}

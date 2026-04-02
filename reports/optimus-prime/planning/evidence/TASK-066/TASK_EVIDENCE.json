@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-op-simple-canary-20260314T214654Z",
+  "phase_id": "phase-1",
+  "task_id": "TASK-066",
+  "requirement_ids": [
+    "REQ-021"
+  ],
+  "updated_at": "2026-03-15T12:00:00Z",
+  "dev": {
+    "status": "pass",
+    "checks": [
+      {
+        "name": "acceptance_pytest",
+        "status": "pass",
+        "details": "python3 -m pytest tests/integration/test_evidence-provenance-ledger-for-context.py -q exited 0 with 2 passed in 0.02s."
+      }
+    ],
+    "verify_results": [],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/integration/test_evidence-provenance-ledger-for-context.py",
+      "examples/fixtures/evidence-provenance-ledger-for-context.json",
+      "strategy/current/samples/REQ-021_evidence-provenance-ledger-for-context.sample.json"
+    ]
+  },
+  "test": {
+    "status": "pending",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "pending",
+    "decision": "pending",
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "pass",
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none",
+    "reason_codes": [
+      "ready_for_test"
+    ]
+  }
+}

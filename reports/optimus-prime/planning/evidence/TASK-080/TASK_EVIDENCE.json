@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "op-simple-canary-20260314T214654Z-ac48393d",
+  "phase_id": "phase-1",
+  "task_id": "TASK-080",
+  "requirement_ids": [
+    "REQ-025"
+  ],
+  "updated_at": "2026-03-15T23:35:56Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "integration_multi_call_strategy_pipeline_planner",
+        "command": "python3 -m pytest tests/integration/test_multi-call-strategy-pipeline-planner.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-080/integration_multi-call-strategy-pipeline-planner.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-025",
+        "status": "pass",
+        "details": "Multi-call reasoning planning now emits deterministic broad-sweep context inputs, context usage telemetry, and recommendation outputs with explicit open-risk handling when Earth-sweep evidence is unavailable.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-080/ACCEPTANCE_REQ-025.json",
+          "reports/optimus-prime/planning/evidence/TASK-080/integration_multi-call-strategy-pipeline-planner.output.txt"
+        ]
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_llm_pipeline.py",
+      "tests/integration/test_multi-call-strategy-pipeline-planner.py",
+      "reports/optimus-prime/planning/evidence/TASK-080/ACCEPTANCE_REQ-025.json",
+      "reports/optimus-prime/planning/evidence/TASK-080/integration_multi-call-strategy-pipeline-planner.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-080/TASK_EVIDENCE.json"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_025_broad_sweep_context_inputs_added",
+      "req_025_recommendation_fields_complete",
+      "req_025_cross_project_scope_lock_enforced",
+      "req_025_integration_acceptance_passed"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

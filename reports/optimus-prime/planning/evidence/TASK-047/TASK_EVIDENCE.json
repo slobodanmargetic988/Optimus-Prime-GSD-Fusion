@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-canary-001",
+  "phase_id": "phase-implementation",
+  "task_id": "TASK-047",
+  "requirement_ids": [
+    "REQ-015"
+  ],
+  "updated_at": "2026-03-15T03:00:25Z",
+  "dev": {
+    "status": "completed",
+    "checks": [
+      {
+        "name": "contract_integration_opportunity_detection_run_1",
+        "command": "python3 -m pytest tests/contracts/test_integration-opportunity-detection.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-047/contract_integration-opportunity-detection_run_1.output.txt"
+      },
+      {
+        "name": "contract_integration_opportunity_detection_run_2",
+        "command": "python3 -m pytest tests/contracts/test_integration-opportunity-detection.py -q",
+        "exit_code": 0,
+        "summary": "2 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-047/contract_integration-opportunity-detection_run_2.output.txt"
+      },
+      {
+        "name": "integration_integration_opportunity_detection_run_1",
+        "command": "python3 -m pytest tests/integration/test_integration-opportunity-detection.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.00s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-047/integration_integration-opportunity-detection_run_1.output.txt"
+      },
+      {
+        "name": "integration_integration_opportunity_detection_run_2",
+        "command": "python3 -m pytest tests/integration/test_integration-opportunity-detection.py -q",
+        "exit_code": 0,
+        "summary": "1 passed in 0.00s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-047/integration_integration-opportunity-detection_run_2.output.txt"
+      },
+      {
+        "name": "hardening_integration_opportunity_detection_run_1",
+        "command": "python3 -m pytest tests/hardening/test_integration-opportunity-detection_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-047/hardening_integration-opportunity-detection_run_1.output.txt"
+      },
+      {
+        "name": "hardening_integration_opportunity_detection_run_2",
+        "command": "python3 -m pytest tests/hardening/test_integration-opportunity-detection_hardening.py -q",
+        "exit_code": 0,
+        "summary": "3 passed in 0.01s",
+        "evidence_ref": "reports/optimus-prime/planning/evidence/TASK-047/hardening_integration-opportunity-detection_run_2.output.txt"
+      }
+    ],
+    "verify_results": [
+      {
+        "requirement_id": "REQ-015",
+        "status": "pass",
+        "details": "Integration opportunity detection emits deterministic reason codes and evidence refs for stale Earth-sweep artifacts, missing mission/scope or peer-project docs, and replay-stable context bundle serialization; supported opportunities include interaction contract refs and dependency side-effect notes.",
+        "evidence_refs": [
+          "reports/optimus-prime/planning/evidence/TASK-047/contract_integration-opportunity-detection_run_1.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-047/contract_integration-opportunity-detection_run_2.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-047/integration_integration-opportunity-detection_run_1.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-047/integration_integration-opportunity-detection_run_2.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-047/hardening_integration-opportunity-detection_run_1.output.txt",
+          "reports/optimus-prime/planning/evidence/TASK-047/hardening_integration-opportunity-detection_run_2.output.txt"
+        ]
+      }
+    ],
+    "dev_ready": true,
+    "blockers": [],
+    "artifacts": [
+      "scripts/strategy_context_sweep.py",
+      "tests/contracts/test_integration-opportunity-detection.py",
+      "tests/integration/test_integration-opportunity-detection.py",
+      "tests/hardening/test_integration-opportunity-detection_hardening.py",
+      "reports/optimus-prime/planning/evidence/TASK-047/contract_integration-opportunity-detection_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-047/contract_integration-opportunity-detection_run_2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-047/integration_integration-opportunity-detection_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-047/integration_integration-opportunity-detection_run_2.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-047/hardening_integration-opportunity-detection_run_1.output.txt",
+      "reports/optimus-prime/planning/evidence/TASK-047/hardening_integration-opportunity-detection_run_2.output.txt"
+    ]
+  },
+  "test": {
+    "status": "queued",
+    "checks": [],
+    "verify_results": [],
+    "uat_results": [],
+    "blockers": [],
+    "artifacts": []
+  },
+  "review": {
+    "status": "queued",
+    "decision": null,
+    "blockers": [],
+    "artifacts": []
+  },
+  "gate": {
+    "ready_for_test": true,
+    "ready_for_review": false,
+    "ready_for_phase_exit": false
+  },
+  "summary": {
+    "result": "ready_for_test",
+    "reason_codes": [
+      "req_015_contract_green_twice",
+      "req_015_integration_green_twice",
+      "req_015_hardening_green_twice",
+      "reason_codes_deterministic",
+      "context_bundle_serialization_replay_stable"
+    ],
+    "expectation": "expect_pass",
+    "expectation_met": true,
+    "failure_class": "none"
+  }
+}

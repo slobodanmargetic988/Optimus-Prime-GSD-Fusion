@@ -24,6 +24,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from boss_config import (
+    DEFAULT_BOSS_MODEL,
+    DEFAULT_BOSS_REASONING_EFFORT,
+    sanitize_boss_model,
+    sanitize_boss_reasoning_effort,
+)
+
 ENGINE_ROOT = SCRIPT_DIR.parents[1]
 SKILLS_ROOT = ENGINE_ROOT / "skills"
 
@@ -35,6 +42,7 @@ from planner.llm_planner import (
 )
 from planner.validate_git_bootstrap import validate_git_bootstrap
 from planner.validate_plan_bundle import validate_bundle_contract
+import strategy_runner
 
 SCHEMA_VERSION = "1.0"
 TOOL = "opctl"
@@ -92,7 +100,15 @@ PLANNER_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_plan_bundle.p
 PLANNER_EXAMPLE_ROOT_PATH = SCRIPT_DIR / "llm" / "examples" / "op-plan" / "reports" / "optimus-prime" / "planning"
 GIT_BOOTSTRAP_PROMPT_TEMPLATE_PATH = SCRIPT_DIR / "planner" / "prompts" / "git_bootstrap_prompt.md"
 GIT_BOOTSTRAP_VALIDATOR_SCRIPT_PATH = SCRIPT_DIR / "planner" / "validate_git_bootstrap.py"
+GIT_BOOTSTRAP_ARTIFACT_REL = PLANNER_REL / "git-bootstrap"
 GIT_BOOTSTRAP_REQUIRED_BRANCH = "RAB-BASE"
+GIT_BOOTSTRAP_PRIMARY_BRANCH = "main"
+GITHUB_REMOTE_NAME = "origin"
+GITHUB_HOST = "github.com"
+GIT_BOOTSTRAP_PUBLISH_ARTIFACT = GIT_BOOTSTRAP_ARTIFACT_REL / "PUBLISH_REPO.json"
+DEFAULT_STRATEGY_MANIFEST_REL = strategy_runner.DEFAULT_STRATEGY_MANIFEST_REL
+DEFAULT_STRATEGY_PACKET_MD_REL = strategy_runner.DEFAULT_STRATEGY_PACKET_REL
+DEFAULT_STRATEGY_SUMMARY_MD_REL = strategy_runner.DEFAULT_STRATEGY_SUMMARY_REL
 
 MANDATORY_BUILD_BASELINE = [
     PROJECT_MD,
@@ -313,10 +329,16 @@ class OpRequest:
     selected_aliases: list[str] | None
     dry_run: bool
     reset_exhausted_retries: bool
+    strategy_manifest: str | None = None
+    strategy_manifest_file: str | None = None
+    skip_strategy: bool = False
+    publish_private_repo: bool = False
+    github_owner: str | None = None
+    github_repo_name: str | None = None
     start_policy: str | None = None
     run_base_source_branch: str | None = None
-    boss_model: str = "gpt-5.3-codex"
-    boss_reasoning_effort: str = "xhigh"
+    boss_model: str = DEFAULT_BOSS_MODEL
+    boss_reasoning_effort: str = DEFAULT_BOSS_REASONING_EFFORT
     profile: str | None = None
     codex_profile: str | None = None
     executor_provider: str = "codex"
@@ -6679,6 +6701,235 @@ def _ensure_rab_base_checked_out(repo_root: Path) -> list[dict[str, Any]]:
     return warnings
 
 
+def _git_branch_exists(repo_root: Path, branch_name: str) -> bool:
+    return _run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"], cwd=repo_root)[0] == 0
+
+
+def _ensure_initialize_branch_layout(repo_root: Path) -> dict[str, Any]:
+    if not _is_git_work_tree(repo_root):
+        raise OpError("git_bootstrap_failed", "repository is not initialized as a git work tree", stage="initialize")
+    head = _git_text(repo_root, "rev-parse", "HEAD")
+    if not head:
+        raise OpError("git_bootstrap_failed", "unable to resolve HEAD commit after bootstrap", stage="initialize")
+
+    created_main = False
+    created_rab_base = False
+
+    if not _git_branch_exists(repo_root, GIT_BOOTSTRAP_PRIMARY_BRANCH):
+        code, _, err = _run(["git", "branch", GIT_BOOTSTRAP_PRIMARY_BRANCH, head], cwd=repo_root)
+        if code != 0:
+            raise OpError(
+                "git_bootstrap_failed",
+                f"unable to create {GIT_BOOTSTRAP_PRIMARY_BRANCH} branch: {err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+        created_main = True
+
+    if not _git_branch_exists(repo_root, GIT_BOOTSTRAP_REQUIRED_BRANCH):
+        code, _, err = _run(["git", "branch", GIT_BOOTSTRAP_REQUIRED_BRANCH, head], cwd=repo_root)
+        if code != 0:
+            raise OpError(
+                "git_bootstrap_failed",
+                f"unable to create {GIT_BOOTSTRAP_REQUIRED_BRANCH} branch: {err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+        created_rab_base = True
+
+    current_branch = _git_text(repo_root, "branch", "--show-current") or ""
+    if current_branch != GIT_BOOTSTRAP_REQUIRED_BRANCH:
+        code, _, err = _run(["git", "checkout", GIT_BOOTSTRAP_REQUIRED_BRANCH], cwd=repo_root)
+        if code != 0:
+            raise OpError(
+                "git_bootstrap_failed",
+                f"unable to checkout {GIT_BOOTSTRAP_REQUIRED_BRANCH}: {err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+
+    return {
+        "head": head,
+        "created_primary_branch": created_main,
+        "created_required_branch": created_rab_base,
+        "primary_branch": GIT_BOOTSTRAP_PRIMARY_BRANCH,
+        "required_branch": GIT_BOOTSTRAP_REQUIRED_BRANCH,
+        "current_branch": GIT_BOOTSTRAP_REQUIRED_BRANCH,
+    }
+
+
+def _github_https_remote_url(owner: str, repo_name: str) -> str:
+    return f"https://{GITHUB_HOST}/{owner}/{repo_name}.git"
+
+
+def _parse_github_remote_slug(remote_url: str | None) -> tuple[str, str] | None:
+    text = (remote_url or "").strip()
+    if not text:
+        return None
+    https_match = re.match(r"^https://[^/]+/([^/]+)/([^/]+?)(?:\.git)?/?$", text)
+    if https_match:
+        return https_match.group(1), https_match.group(2)
+    ssh_match = re.match(r"^git@[^:]+:([^/]+)/([^/]+?)(?:\.git)?$", text)
+    if ssh_match:
+        return ssh_match.group(1), ssh_match.group(2)
+    return None
+
+
+def _gh_run(repo_root: Path, *args: str) -> tuple[int, str, str]:
+    return _run(["gh", *args], cwd=repo_root)
+
+
+def _resolve_initialize_publish_target(req: OpRequest) -> tuple[str, str]:
+    owner = _as_str(req.github_owner)
+    repo_name = _as_str(req.github_repo_name) or req.repo_root.name
+    if not owner:
+        code, out, err = _gh_run(req.repo_root, "api", "user", "--jq", ".login")
+        if code != 0 or not out.strip():
+            raise OpError(
+                "github_owner_resolution_failed",
+                f"unable to resolve authenticated GitHub owner: {err.strip() or out.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+        owner = out.strip()
+    return owner, repo_name
+
+
+def _verify_github_auth_for_initialize(repo_root: Path) -> None:
+    code, out, err = _gh_run(repo_root, "auth", "status", "--hostname", GITHUB_HOST)
+    if code != 0:
+        raise OpError(
+            "github_auth_missing",
+            f"GitHub CLI is not authenticated for {GITHUB_HOST}: {err.strip() or out.strip() or 'unknown error'}",
+            stage="initialize",
+        )
+
+
+def _maybe_publish_private_repo_for_initialize(req: OpRequest) -> tuple[list[dict[str, Any]], list[str], dict[str, Any] | None]:
+    if not req.publish_private_repo:
+        return [], [], None
+
+    _verify_github_auth_for_initialize(req.repo_root)
+    owner, repo_name = _resolve_initialize_publish_target(req)
+    repo_slug = f"{owner}/{repo_name}"
+    expected_origin_url = _github_https_remote_url(owner, repo_name)
+    _emit_build_progress(req, f"ensuring private GitHub repo {repo_slug} exists and origin is configured")
+
+    origin_url = _git_text(req.repo_root, "remote", "get-url", GITHUB_REMOTE_NAME)
+    existing_slug = _parse_github_remote_slug(origin_url)
+    if origin_url and existing_slug is None:
+        raise OpError(
+            "github_origin_unrecognized",
+            f"origin remote uses an unsupported URL format: {origin_url}",
+            stage="initialize",
+        )
+    if existing_slug and existing_slug != (owner, repo_name):
+        raise OpError(
+            "github_origin_mismatch",
+            f"origin remote points to {existing_slug[0]}/{existing_slug[1]}, expected {repo_slug}",
+            stage="initialize",
+        )
+
+    code, _, _ = _gh_run(req.repo_root, "repo", "view", repo_slug, "--json", "nameWithOwner")
+    created_repo = False
+    if code != 0:
+        create_code, _, create_err = _gh_run(
+            req.repo_root,
+            "repo",
+            "create",
+            repo_slug,
+            "--private",
+            "--source",
+            str(req.repo_root),
+            "--remote",
+            GITHUB_REMOTE_NAME,
+        )
+        if create_code != 0:
+            raise OpError(
+                "github_repo_create_failed",
+                f"unable to create private GitHub repo {repo_slug}: {create_err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+        created_repo = True
+        origin_url = _git_text(req.repo_root, "remote", "get-url", GITHUB_REMOTE_NAME)
+    elif not origin_url:
+        add_code, _, add_err = _run(["git", "remote", "add", GITHUB_REMOTE_NAME, expected_origin_url], cwd=req.repo_root)
+        if add_code != 0:
+            raise OpError(
+                "github_origin_config_failed",
+                f"unable to add origin remote for {repo_slug}: {add_err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+        origin_url = expected_origin_url
+
+    if not origin_url:
+        raise OpError(
+            "github_origin_missing_after_publish",
+            f"origin remote is still missing after preparing {repo_slug}",
+            stage="initialize",
+        )
+
+    for branch_name in (GIT_BOOTSTRAP_PRIMARY_BRANCH, GIT_BOOTSTRAP_REQUIRED_BRANCH):
+        push_code, _, push_err = _run(["git", "push", "-u", GITHUB_REMOTE_NAME, branch_name], cwd=req.repo_root)
+        if push_code != 0:
+            raise OpError(
+                "github_push_failed",
+                f"unable to push {branch_name} to {repo_slug}: {push_err.strip() or 'unknown error'}",
+                stage="initialize",
+            )
+
+    edit_code, _, edit_err = _gh_run(req.repo_root, "repo", "edit", repo_slug, "--default-branch", GIT_BOOTSTRAP_PRIMARY_BRANCH)
+    if edit_code != 0:
+        raise OpError(
+            "github_default_branch_set_failed",
+            f"unable to set default branch to {GIT_BOOTSTRAP_PRIMARY_BRANCH} for {repo_slug}: {edit_err.strip() or 'unknown error'}",
+            stage="initialize",
+        )
+
+    verify_code, verify_out, verify_err = _gh_run(
+        req.repo_root,
+        "api",
+        f"repos/{owner}/{repo_name}",
+        "--jq",
+        "{full_name: .full_name, visibility: .visibility, private: .private, default_branch: .default_branch, html_url: .html_url}",
+    )
+    if verify_code != 0 or not verify_out.strip():
+        raise OpError(
+            "github_repo_verify_failed",
+            f"unable to verify GitHub repo state for {repo_slug}: {verify_err.strip() or verify_out.strip() or 'unknown error'}",
+            stage="initialize",
+        )
+    try:
+        verified = json.loads(verify_out)
+    except json.JSONDecodeError as exc:
+        raise OpError(
+            "github_repo_verify_failed",
+            f"unable to parse GitHub repo verification output for {repo_slug}: {exc}",
+            stage="initialize",
+        ) from exc
+
+    visibility = _as_str(verified.get("visibility")) or ""
+    default_branch = _as_str(verified.get("default_branch")) or ""
+    if visibility != "private" or default_branch != GIT_BOOTSTRAP_PRIMARY_BRANCH:
+        raise OpError(
+            "github_repo_state_mismatch",
+            f"GitHub repo {repo_slug} verification mismatch: visibility={visibility or 'unknown'} default_branch={default_branch or 'unknown'}",
+            stage="initialize",
+        )
+
+    publish_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "published_at": utc_now_iso(),
+        "repo_slug": repo_slug,
+        "origin_url": origin_url,
+        "visibility": visibility,
+        "default_branch": default_branch,
+        "created_repo": created_repo,
+        "pushed_branches": [GIT_BOOTSTRAP_PRIMARY_BRANCH, GIT_BOOTSTRAP_REQUIRED_BRANCH],
+        "html_url": _as_str(verified.get("html_url")),
+    }
+    publish_artifact = _repo_path(req.repo_root, GIT_BOOTSTRAP_PUBLISH_ARTIFACT)
+    _atomic_write_json(publish_artifact, publish_payload)
+    _emit_build_progress(req, f"private GitHub repo ready at {repo_slug}; pushed main and RAB-BASE")
+    return [], [str(publish_artifact)], publish_payload
+
+
 def _git_bootstrap_prompt_text(
     *,
     req: OpRequest,
@@ -6711,39 +6962,55 @@ def _git_bootstrap_prompt_text(
 
 
 def _ensure_git_initialized_for_initialize(req: OpRequest) -> tuple[list[dict[str, Any]], list[str]]:
-    if _is_git_work_tree(req.repo_root):
-        return [], []
+    warnings: list[dict[str, Any]] = []
+    artifacts: list[str] = []
+    exit_code = 0
+    llm_root = _repo_path(req.repo_root, GIT_BOOTSTRAP_ARTIFACT_REL)
 
+    if not _is_git_work_tree(req.repo_root):
+        _emit_build_progress(
+            req,
+            "git workspace not detected; running LLM bootstrap to initialize repository and create main + RAB-BASE",
+        )
+        llm_root.mkdir(parents=True, exist_ok=True)
+        prompt_path = llm_root / "prompt.txt"
+        stdout_path = llm_root / "llm_stdout.log"
+        stderr_path = llm_root / "llm_stderr.log"
+        last_message_path = llm_root / "last_message.txt"
+
+        prompt = _git_bootstrap_prompt_text(req=req, prior_errors=[])
+        prompt_path.write_text(prompt, encoding="utf-8")
+        artifacts.extend([str(prompt_path), str(stdout_path), str(stderr_path), str(last_message_path)])
+
+        try:
+            exit_code = run_codex_exec(
+                repo_root=req.repo_root,
+                prompt_text=prompt,
+                output_last_message=last_message_path,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+        except OSError as exc:
+            _emit_build_progress(req, f"git bootstrap failed before verification: {exc}")
+            raise OpError("git_bootstrap_execution_failed", f"unable to invoke codex exec for git bootstrap: {exc}", stage="initialize") from exc
+
+    branch_layout = _ensure_initialize_branch_layout(req.repo_root)
     _emit_build_progress(
         req,
-        "git workspace not detected; running LLM bootstrap to initialize repository and create RAB-BASE",
+        "git bootstrap branch layout ready: "
+        f"{branch_layout['primary_branch']} and {branch_layout['required_branch']} at {branch_layout['head'][:12]} "
+        f"(current={branch_layout['current_branch']})",
     )
-    llm_root = _repo_path(req.repo_root, PLANNER_REL) / "git-bootstrap"
-    llm_root.mkdir(parents=True, exist_ok=True)
-    prompt_path = llm_root / "prompt.txt"
-    stdout_path = llm_root / "llm_stdout.log"
-    stderr_path = llm_root / "llm_stderr.log"
-    last_message_path = llm_root / "last_message.txt"
 
-    prompt = _git_bootstrap_prompt_text(req=req, prior_errors=[])
-    prompt_path.write_text(prompt, encoding="utf-8")
-
-    try:
-        exit_code = run_codex_exec(
-            repo_root=req.repo_root,
-            prompt_text=prompt,
-            output_last_message=last_message_path,
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
-        )
-    except OSError as exc:
-        _emit_build_progress(req, f"git bootstrap failed before verification: {exc}")
-        raise OpError("git_bootstrap_execution_failed", f"unable to invoke codex exec for git bootstrap: {exc}", stage="initialize") from exc
+    publish_warnings, publish_artifacts, _publish_payload = _maybe_publish_private_repo_for_initialize(req)
+    warnings.extend(publish_warnings)
+    artifacts.extend(publish_artifacts)
 
     result = validate_git_bootstrap(
         repo_root=req.repo_root,
         required_branch=GIT_BOOTSTRAP_REQUIRED_BRANCH,
         require_readme=True,
+        required_primary_branch=GIT_BOOTSTRAP_PRIMARY_BRANCH,
     )
     errors = result.get("errors")
     if not isinstance(errors, list):
@@ -6754,7 +7021,6 @@ def _ensure_git_initialized_for_initialize(req: OpRequest) -> tuple[list[dict[st
         _emit_build_progress(req, f"git bootstrap verification failed: {message}")
         raise OpError("git_bootstrap_failed", message, stage="initialize")
 
-    warnings: list[dict[str, Any]] = []
     if exit_code != 0:
         warnings.append(
             {
@@ -6774,7 +7040,7 @@ def _ensure_git_initialized_for_initialize(req: OpRequest) -> tuple[list[dict[st
                 warning[key] = row.get(key)
         warnings.append(warning)
     _emit_build_progress(req, "git bootstrap verification passed")
-    return warnings, [str(prompt_path), str(stdout_path), str(stderr_path), str(last_message_path)]
+    return warnings, artifacts
 
 
 def _list_repo_files(repo_root: Path) -> list[str]:
@@ -7027,6 +7293,190 @@ def _resolved_source_text(source: dict[str, Any]) -> str:
             except OSError:
                 return _as_str(source.get("display")) or ""
     return _as_str(source.get("display")) or ""
+
+
+def _resolve_strategy_manifest_path_for_request(req: OpRequest) -> Path:
+    return strategy_runner.resolve_strategy_manifest_path(req.repo_root, req.strategy_manifest_file)
+
+
+def _strategy_request_state(req: OpRequest, *, auto_optional: bool) -> dict[str, Any]:
+    inline_manifest = _as_str(req.strategy_manifest)
+    manifest_path = _resolve_strategy_manifest_path_for_request(req)
+    explicit = bool(_as_str(req.strategy_manifest_file) or inline_manifest)
+    exists = bool(inline_manifest) or manifest_path.exists()
+    manifest_ref = strategy_runner.INLINE_STRATEGY_MANIFEST_LABEL if inline_manifest else str(manifest_path)
+    manifest_mode = "inline" if inline_manifest else "file"
+    if req.skip_strategy:
+        return {
+            "mode": "skipped",
+            "reason": "skip_strategy_requested",
+            "manifest_path": manifest_path if not inline_manifest else None,
+            "manifest_ref": manifest_ref,
+            "manifest_mode": manifest_mode,
+            "explicit": explicit,
+            "exists": exists,
+            "should_run": False,
+        }
+    if inline_manifest:
+        return {
+            "mode": "ready",
+            "reason": "manifest_inline",
+            "manifest_path": None,
+            "manifest_ref": manifest_ref,
+            "manifest_mode": manifest_mode,
+            "explicit": True,
+            "exists": True,
+            "should_run": True,
+        }
+    if exists:
+        return {
+            "mode": "ready",
+            "reason": "manifest_present",
+            "manifest_path": manifest_path,
+            "manifest_ref": manifest_ref,
+            "manifest_mode": manifest_mode,
+            "explicit": explicit,
+            "exists": True,
+            "should_run": True,
+        }
+    if explicit or not auto_optional:
+        return {
+            "mode": "missing",
+            "reason": "manifest_missing",
+            "manifest_path": manifest_path,
+            "manifest_ref": manifest_ref,
+            "manifest_mode": manifest_mode,
+            "explicit": explicit,
+            "exists": False,
+            "should_run": False,
+        }
+    return {
+        "mode": "skipped",
+        "reason": "manifest_missing",
+        "manifest_path": manifest_path,
+        "manifest_ref": manifest_ref,
+        "manifest_mode": manifest_mode,
+        "explicit": explicit,
+        "exists": False,
+        "should_run": False,
+    }
+
+
+def _run_strategy_command(req: OpRequest, *, auto_optional: bool) -> dict[str, Any]:
+    strategy_state = _strategy_request_state(req, auto_optional=auto_optional)
+    manifest_path = strategy_state["manifest_path"]
+    manifest_ref = _as_str(strategy_state.get("manifest_ref")) or ""
+    packet_path = req.repo_root / DEFAULT_STRATEGY_PACKET_MD_REL
+    summary_path = req.repo_root / DEFAULT_STRATEGY_SUMMARY_MD_REL
+
+    if strategy_state["mode"] == "skipped":
+        reason = _as_str(strategy_state.get("reason")) or "skipped"
+        summary = (
+            "Strategy generation skipped because --skip-strategy was requested."
+            if reason == "skip_strategy_requested"
+            else "Strategy manifest not found; continuing without strategy."
+        )
+        return {
+            "ok": True,
+            "status": "skipped",
+            "summary": summary,
+            "warnings": [],
+            "errors": [],
+            "artifacts": [str(manifest_path)] if isinstance(manifest_path, Path) and manifest_path.exists() else [],
+            "data": {
+                "strategy": {
+                    "status": "skipped",
+                    "reason": reason,
+                    "manifest_path": manifest_ref,
+                    "packet_path": str(packet_path.resolve()),
+                    "summary_path": str(summary_path.resolve()),
+                }
+            },
+        }
+
+    if strategy_state["mode"] == "missing":
+        return {
+            "ok": False,
+            "status": "blocked_preflight",
+            "summary": "Strategy generation blocked: manifest file is missing.",
+            "warnings": [],
+            "errors": [
+                {
+                    "code": "strategy_manifest_missing",
+                    "message": f"strategy manifest does not exist: {manifest_ref}",
+                    "stage": "strategy",
+                }
+            ],
+            "artifacts": [],
+            "data": {
+                "strategy": {
+                    "status": "missing",
+                    "reason": "manifest_missing",
+                    "manifest_path": manifest_ref,
+                    "packet_path": str(packet_path.resolve()),
+                    "summary_path": str(summary_path.resolve()),
+                }
+            },
+        }
+
+    try:
+        result = strategy_runner.run_strategy(
+            repo_root=req.repo_root,
+            manifest=req.strategy_manifest,
+            manifest_file=req.strategy_manifest_file,
+            emit=lambda message: _emit_build_progress(replace(req, command="op-strategy"), message),
+        )
+    except strategy_runner.StrategyRunnerError as exc:
+        return {
+            "ok": False,
+            "status": "failed",
+            "summary": "Strategy generation failed.",
+            "warnings": [],
+            "errors": [
+                {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "stage": "strategy",
+                }
+            ],
+            "artifacts": [],
+            "data": {
+                "strategy": {
+                    "status": "failed",
+                    "reason": exc.code,
+                    "manifest_path": manifest_ref,
+                    "packet_path": str(packet_path.resolve()),
+                    "summary_path": str(summary_path.resolve()),
+                }
+            },
+        }
+
+    return {
+        "ok": True,
+        "status": "completed",
+        "summary": "Strategy artifacts generated.",
+        "warnings": [],
+        "errors": [],
+        "artifacts": result.artifacts,
+        "data": {
+            "strategy": {
+                "status": "completed",
+                "reason": "manifest_present",
+                "manifest_path": result.manifest_ref,
+                "packet_path": str(result.packet_path),
+                "summary_path": str(result.summary_path),
+            }
+        },
+    }
+
+
+def _existing_strategy_markdown_artifacts(repo_root: Path) -> list[str]:
+    found: list[str] = []
+    for rel in (DEFAULT_STRATEGY_PACKET_MD_REL, DEFAULT_STRATEGY_SUMMARY_MD_REL):
+        path = _repo_path(repo_root, rel)
+        if path.exists() and path.is_file():
+            found.append(str(rel))
+    return found
 
 
 def _load_app_lifecycle_payload(repo_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -7848,6 +8298,30 @@ def _planner_source_display(source: dict[str, Any], *, label: str) -> str:
     return f"{label}=none"
 
 
+def _planner_prompt_template_candidates(repo_root: Path) -> list[Path]:
+    candidates = [
+        repo_root / "scripts" / "op" / "planner" / "prompts" / "llm_plan_prompt.md",
+        PLANNER_PROMPT_TEMPLATE_PATH,
+    ]
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
+def _planner_prompt_template_path(repo_root: Path) -> Path:
+    candidates = _planner_prompt_template_candidates(repo_root)
+    for path in candidates:
+        if path.exists():
+            return path.resolve()
+    return candidates[0].resolve()
+
+
 def _planner_prompt_text(
     *,
     req: OpRequest,
@@ -7856,7 +8330,7 @@ def _planner_prompt_text(
     scope_source: dict[str, Any],
     prior_errors: list[dict[str, Any]],
 ) -> str:
-    template_path = PLANNER_PROMPT_TEMPLATE_PATH.resolve()
+    template_path = _planner_prompt_template_path(req.repo_root)
     if not template_path.exists():
         raise OpError("planner_execution_failed", f"planner prompt template not found: {template_path}", stage="plan")
     template_text = template_path.read_text(encoding="utf-8")
@@ -7881,6 +8355,9 @@ def _planner_prompt_text(
             code = _as_str(row.get("code")) or "unknown"
             message = _as_str(row.get("message")) or "validation failed"
             prompt += f"{idx}. [{code}] {message}\n"
+    strategy_note = strategy_runner.build_planner_strategy_note(skip_strategy=req.skip_strategy)
+    if strategy_note:
+        prompt += "\n\n" + strategy_note
     return prompt
 
 
@@ -8444,11 +8921,68 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
     )
 
 
+def command_strategy(req: OpRequest) -> dict[str, Any]:
+    result = _run_strategy_command(req, auto_optional=False)
+    return _response(
+        req,
+        ok=bool(result.get("ok")),
+        status=_as_str(result.get("status")) or ("completed" if result.get("ok") else "failed"),
+        summary=_as_str(result.get("summary")) or "Strategy command finished.",
+        warnings=result.get("warnings") if isinstance(result.get("warnings"), list) else [],
+        errors=result.get("errors") if isinstance(result.get("errors"), list) else [],
+        artifacts=result.get("artifacts") if isinstance(result.get("artifacts"), list) else [],
+        next_action=_as_str(result.get("next_action")),
+        state_ref=_as_str(result.get("state_ref")),
+        data=result.get("data") if isinstance(result.get("data"), dict) else None,
+    )
+
 def command_initialize(req: OpRequest) -> dict[str, Any]:
     _require_override_if_existing_plan(req, stage="initialize")
     mission_source, scope_source = _resolve_mission_scope_sources(req, stage="initialize", required=True)
     git_bootstrap_warnings, git_bootstrap_artifacts = _ensure_git_initialized_for_initialize(req)
     _ensure_managed_gitignore_block(req.repo_root)
+    strategy_result = _run_strategy_command(req, auto_optional=True)
+    strategy_warnings = strategy_result.get("warnings") if isinstance(strategy_result.get("warnings"), list) else []
+    strategy_errors = strategy_result.get("errors") if isinstance(strategy_result.get("errors"), list) else []
+    strategy_artifacts = strategy_result.get("artifacts") if isinstance(strategy_result.get("artifacts"), list) else []
+    strategy_data = strategy_result.get("data") if isinstance(strategy_result.get("data"), dict) else None
+    if not bool(strategy_result.get("ok")):
+        return _response(
+            req,
+            ok=False,
+            status=_as_str(strategy_result.get("status")) or "failed",
+            summary=_as_str(strategy_result.get("summary")) or "Initialization blocked by strategy preflight.",
+            warnings=strategy_warnings,
+            errors=strategy_errors,
+            artifacts=strategy_artifacts,
+            next_action="Add the requested strategy manifest file or rerun with --skip-strategy.",
+            data=strategy_data,
+        )
+    strategy_state = strategy_data.get("strategy") if isinstance(strategy_data, dict) else {}
+    if (
+        isinstance(strategy_state, dict)
+        and _as_str(strategy_state.get("status")) == "skipped"
+        and _as_str(strategy_state.get("reason")) == "manifest_missing"
+        and not req.skip_strategy
+    ):
+        existing_strategy_artifacts = _existing_strategy_markdown_artifacts(req.repo_root)
+        if existing_strategy_artifacts:
+            warning = {
+                "code": "strategy_artifacts_present_without_regeneration",
+                "message": (
+                    "Strategy manifest was not found, so strategy was not regenerated. "
+                    "Existing strategy artifacts are still present and will be available to planner."
+                ),
+                "stage": "initialize",
+                "artifacts": existing_strategy_artifacts,
+            }
+            strategy_warnings.append(warning)
+            _emit_build_progress(
+                replace(req, command="op-plan"),
+                "strategy manifest not found; existing strategy artifacts will still be considered by planner: "
+                + ", ".join(existing_strategy_artifacts),
+            )
+
     map_result = command_map_codebase(req)
     new_result = command_new_project(req)
     lifecycle_era_id, lifecycle_path, lifecycle_warnings = _append_app_lifecycle_era(
@@ -8493,6 +9027,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
 
     artifacts = []
     artifacts.extend(git_bootstrap_artifacts)
+    artifacts.extend(strategy_artifacts)
     artifacts.extend(map_result.get("artifacts", []))
     artifacts.extend(new_result.get("artifacts", []))
     artifacts.extend(plan_result.get("artifacts", []))
@@ -8502,6 +9037,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
 
     warnings = []
     warnings.extend(git_bootstrap_warnings)
+    warnings.extend(strategy_warnings)
     warnings.extend(map_result.get("warnings", []))
     warnings.extend(rate_seed_warnings)
     warnings.extend(new_result.get("warnings", []))
@@ -8523,10 +9059,13 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
         artifacts=artifacts,
         next_action="Use /op-build when ready to execute autonomously.",
         state_ref=str(_repo_path(req.repo_root, STATE_JSON)),
-        data={
-            "plan_ready": plan_ready,
-            "profile_aliases": profile_selection.get("selected_aliases", []),
-        },
+        data=_merge_response_data(
+            {
+                "plan_ready": plan_ready,
+                "profile_aliases": profile_selection.get("selected_aliases", []),
+            },
+            strategy_data,
+        ),
     )
 
 
@@ -9363,8 +9902,8 @@ def _dispatch_task_packet(
         "executor_provider": executor_provider,
         "executor_model": executor_model,
         "blackbox_lane": blackbox_lane,
-        "mcp_mode": "disable-all",
-        "mcp_allowlist": [],
+        "mcp_mode": "enable-only",
+        "mcp_allowlist": ["figma"],
         "sandbox_mode": "danger-full-access",
         "sandbox_add_dirs": [],
         "test_train_mode": "off",
@@ -10930,7 +11469,12 @@ def command_build(req: OpRequest) -> dict[str, Any]:
             not _repo_path(req.repo_root, rel).exists()
             for rel in MANDATORY_BUILD_BASELINE
         )
-        should_initialize = mission_scope_supplied or bool(req.override_old_plan) or baseline_missing
+        should_initialize = (
+            mission_scope_supplied
+            or bool(req.override_old_plan)
+            or baseline_missing
+            or bool(req.publish_private_repo)
+        )
         if should_initialize:
             _emit_build_progress(req, "running /op-initialize before /op-simple-build")
             init_req = replace(req, command="op-initialize")
@@ -11852,6 +12396,9 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
     )
     selected_aliases = _as_alias_list(payload.get("selected_aliases"))
     start_policy = _as_str(payload.get("start_policy"))
+    publish_private_repo = _as_bool(payload.get("publish_private_repo"), default=False)
+    github_owner = _as_str(payload.get("github_owner"))
+    github_repo_name = _as_str(payload.get("github_repo_name"))
     if start_policy is not None:
         start_policy = start_policy.lower()
     if start_policy is not None and start_policy not in {"auto", "new", "resume"}:
@@ -11874,6 +12421,12 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         fresh_run_conflicts.append("--override-old-plan")
     if run_base_source_branch:
         fresh_run_conflicts.append("--run-base-source-branch")
+    if publish_private_repo:
+        fresh_run_conflicts.append("--publish-private-repo")
+    if github_owner:
+        fresh_run_conflicts.append("--github-owner")
+    if github_repo_name:
+        fresh_run_conflicts.append("--github-repo-name")
     if start_policy == "resume" and fresh_run_conflicts:
         conflict_list = ", ".join(fresh_run_conflicts)
         raise OpError(
@@ -11882,9 +12435,27 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             f"{conflict_list}. Remove those flags and retry resume, or use --start-policy new.",
             stage="input",
         )
+    if (github_owner or github_repo_name) and not publish_private_repo:
+        raise OpError(
+            "input_error",
+            "github_owner/github_repo_name require publish_private_repo=true",
+            stage="input",
+        )
+    if publish_private_repo and command not in {"op-initialize", "op-build"}:
+        raise OpError(
+            "input_error",
+            "publish_private_repo is only supported for /op-initialize and /op-build",
+            stage="input",
+        )
+    if github_owner and "/" in github_owner:
+        raise OpError("input_error", "github_owner must not contain '/'", stage="input")
+    if github_repo_name and "/" in github_repo_name:
+        raise OpError("input_error", "github_repo_name must not contain '/'", stage="input")
 
-    boss_model = _as_str(payload.get("boss_model")) or "gpt-5.3-codex"
-    boss_reasoning_effort = _as_str(payload.get("boss_reasoning_effort")) or "xhigh"
+    boss_model = sanitize_boss_model(payload.get("boss_model")) or DEFAULT_BOSS_MODEL
+    boss_reasoning_effort = (
+        sanitize_boss_reasoning_effort(payload.get("boss_reasoning_effort")) or DEFAULT_BOSS_REASONING_EFFORT
+    )
     profile = _as_str(payload.get("profile"))
     codex_profile = _as_str(payload.get("codex_profile")) or profile
     executor_provider = (_as_str(payload.get("executor_provider")) or "codex").lower()
@@ -11924,6 +12495,14 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         raise OpError("input_error", "cycle_release_poll_seconds must be integer", stage="input") from exc
     if cycle_release_poll_seconds <= 0:
         cycle_release_poll_seconds = 5
+    strategy_manifest = _as_str(payload.get("strategy_manifest"))
+    strategy_manifest_file = _as_str(payload.get("strategy_manifest_file"))
+    if strategy_manifest and strategy_manifest_file:
+        raise OpError(
+            "input_error",
+            "provide strategy_manifest or strategy_manifest_file, not both",
+            stage="input",
+        )
 
     return OpRequest(
         command=command,
@@ -11944,6 +12523,12 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         selected_aliases=selected_aliases,
         dry_run=_as_bool(payload.get("dry_run"), default=False),
         reset_exhausted_retries=_as_bool(payload.get("reset_exhausted_retries"), default=False),
+        strategy_manifest=strategy_manifest,
+        strategy_manifest_file=strategy_manifest_file,
+        skip_strategy=_as_bool(payload.get("skip_strategy"), default=False),
+        publish_private_repo=publish_private_repo,
+        github_owner=github_owner,
+        github_repo_name=github_repo_name,
         start_policy=start_policy if command == "op-build" else None,
         run_base_source_branch=run_base_source_branch,
         boss_model=boss_model,
@@ -11965,6 +12550,8 @@ def execute_request(req: OpRequest) -> dict[str, Any]:
         return command_map_codebase(req)
     if req.command == "op-new-project":
         return command_new_project(req)
+    if req.command == "op-strategy":
+        return command_strategy(req)
     if req.command == "op-plan":
         return command_plan(req)
     if req.command == "op-initialize":

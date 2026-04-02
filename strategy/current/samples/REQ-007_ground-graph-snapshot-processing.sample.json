@@ -1,0 +1,152 @@
+{
+  "requirement_id": "REQ-007",
+  "surface": "ground_graph_snapshot_ingestion",
+  "schema_version": "req-007.ground-graph-snapshot-ingestion.v1",
+  "ingested_at": "2026-03-14T22:00:00Z",
+  "source_artifact": {
+    "path": "examples/fixtures/ground-graph-snapshot-ingestion.json",
+    "schema_version": "ground-graph-snapshot.v1",
+    "captured_at": "2026-03-14T21:30:00Z",
+    "graph_id": "ground-graph-2026-03-14T213000Z",
+    "checksum_sha256": "2c71e5f54177607d3f00bcfb9cb2ebfb67a5fadcd01f6024b91979c948f66645"
+  },
+  "lineage_anchors": [
+    {
+      "project_id": "earth-core-runtime",
+      "era_id": "era-2026-q1",
+      "plan_id": "plan-runtime-014",
+      "phase_id": "phase-stabilization",
+      "run_id": "run-131",
+      "linked_project_id": "shared-observability",
+      "relationship": "shares_signals_with",
+      "anchor_id": "earth-core-runtime::era-2026-q1::plan-runtime-014::phase-stabilization::run-131::shared-observability::shares_signals_with"
+    },
+    {
+      "project_id": "optimus-prime-gsd-fusion",
+      "era_id": "era-2026-q1",
+      "plan_id": "plan-canary-001",
+      "phase_id": "phase-implementation",
+      "run_id": "run-042",
+      "linked_project_id": "earth-core-runtime",
+      "relationship": "depends_on",
+      "anchor_id": "optimus-prime-gsd-fusion::era-2026-q1::plan-canary-001::phase-implementation::run-042::earth-core-runtime::depends_on"
+    },
+    {
+      "project_id": "optimus-prime-gsd-fusion",
+      "era_id": "era-2026-q1",
+      "plan_id": "plan-canary-001",
+      "phase_id": "phase-verification",
+      "run_id": "run-043",
+      "linked_project_id": "shared-observability",
+      "relationship": "publishes_to",
+      "anchor_id": "optimus-prime-gsd-fusion::era-2026-q1::plan-canary-001::phase-verification::run-043::shared-observability::publishes_to"
+    }
+  ],
+  "lineage_index": {
+    "project_ids": [
+      "earth-core-runtime",
+      "optimus-prime-gsd-fusion"
+    ],
+    "era_ids": [
+      "era-2026-q1"
+    ],
+    "plan_ids": [
+      "plan-canary-001",
+      "plan-runtime-014"
+    ],
+    "phase_ids": [
+      "phase-implementation",
+      "phase-stabilization",
+      "phase-verification"
+    ],
+    "run_ids": [
+      "run-042",
+      "run-043",
+      "run-131"
+    ],
+    "linked_project_ids": [
+      "earth-core-runtime",
+      "shared-observability"
+    ]
+  },
+  "cross_project_context": {
+    "active_project_id": "optimus-prime-gsd-fusion",
+    "linked_projects": [
+      "earth-core-runtime",
+      "shared-observability"
+    ],
+    "linked_project_context": [
+      {
+        "linked_project_id": "earth-core-runtime",
+        "lineage_anchor_count": 1,
+        "relationship_types": [
+          "depends_on"
+        ],
+        "anchor_ids": [
+          "optimus-prime-gsd-fusion::era-2026-q1::plan-canary-001::phase-implementation::run-042::earth-core-runtime::depends_on"
+        ]
+      },
+      {
+        "linked_project_id": "shared-observability",
+        "lineage_anchor_count": 2,
+        "relationship_types": [
+          "publishes_to",
+          "shares_signals_with"
+        ],
+        "anchor_ids": [
+          "earth-core-runtime::era-2026-q1::plan-runtime-014::phase-stabilization::run-131::shared-observability::shares_signals_with",
+          "optimus-prime-gsd-fusion::era-2026-q1::plan-canary-001::phase-verification::run-043::shared-observability::publishes_to"
+        ]
+      }
+    ],
+    "active_project_anchor_count": 2,
+    "total_anchor_count": 3
+  },
+  "evidence_refs": {
+    "earth_sweep": [
+      "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json",
+      "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+    ],
+    "recommendation": [
+      "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+    ]
+  },
+  "recommendation": {
+    "decision": "planning_with_open_risks",
+    "summary": "1 supported cross-project action(s); 2 open risk(s); 0 deferred action(s).",
+    "supported_actions": [
+      {
+        "linked_project_id": "earth-core-runtime",
+        "action": "Align canary rollout checkpoint with run-131 stabilization outputs.",
+        "evidence_refs": [
+          "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+        ],
+        "lineage_anchor_ids": [
+          "optimus-prime-gsd-fusion::era-2026-q1::plan-canary-001::phase-implementation::run-042::earth-core-runtime::depends_on"
+        ]
+      }
+    ],
+    "deferred_actions": [],
+    "open_risks": [
+      {
+        "risk_id": "non-graph-project::Schedule external dependency handshake.::not_in_ground_graph",
+        "reason": "candidate_linked_project_missing_from_ground_graph",
+        "linked_project_id": "non-graph-project",
+        "action": "Schedule external dependency handshake.",
+        "evidence_refs": [
+          "reports/earth/sweeps/shared-observability/signals-2026-03-14.json"
+        ]
+      },
+      {
+        "risk_id": "shared-observability::Define expanded telemetry obligation for phase-verification.::missing_earth_evidence",
+        "reason": "candidate_action_missing_earth_sweep_evidence_refs",
+        "linked_project_id": "shared-observability",
+        "action": "Define expanded telemetry obligation for phase-verification.",
+        "evidence_refs": []
+      }
+    ],
+    "evidence_refs": [
+      "reports/earth/sweeps/earth-core-runtime/plan-runtime-014-run-131.json"
+    ]
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "requirement_id": "REQ-007",
+  "surface": "ground_graph_snapshot_ingestion",
+  "schema_version": "req-007.ground-graph-snapshot-ingestion.v1",
+  "ingested_at": "2026-03-14T21:50:00Z",
+  "source_artifact": {
+    "path": "examples/fixtures/ground-graph-snapshot-ingestion.json",
+    "schema_version": "ground-graph-snapshot.v1",
+    "captured_at": "2026-03-14T21:30:00Z",
+    "graph_id": "ground-graph-2026-03-14T213000Z",
+    "checksum_sha256": "2c71e5f54177607d3f00bcfb9cb2ebfb67a5fadcd01f6024b91979c948f66645"
+  },
+  "lineage_anchors": [
+    {
+      "project_id": "earth-core-runtime",
+      "era_id": "era-2026-q1",
+      "plan_id": "plan-runtime-014",
+      "phase_id": "phase-stabilization",
+      "run_id": "run-131",
+      "linked_project_id": "shared-observability",
+      "relationship": "shares_signals_with",
+      "anchor_id": "earth-core-runtime::era-2026-q1::plan-runtime-014::phase-stabilization::run-131::shared-observability::shares_signals_with"
+    },
+    {
+      "project_id": "optimus-prime-gsd-fusion",
+      "era_id": "era-2026-q1",
+      "plan_id": "plan-canary-001",
+      "phase_id": "phase-implementation",
+      "run_id": "run-042",
+      "linked_project_id": "earth-core-runtime",
+      "relationship": "depends_on",
+      "anchor_id": "optimus-prime-gsd-fusion::era-2026-q1::plan-canary-001::phase-implementation::run-042::earth-core-runtime::depends_on"
+    },
+    {
+      "project_id": "optimus-prime-gsd-fusion",
+      "era_id": "era-2026-q1",
+      "plan_id": "plan-canary-001",
+      "phase_id": "phase-verification",
+      "run_id": "run-043",
+      "linked_project_id": "shared-observability",
+      "relationship": "publishes_to",
+      "anchor_id": "optimus-prime-gsd-fusion::era-2026-q1::plan-canary-001::phase-verification::run-043::shared-observability::publishes_to"
+    }
+  ],
+  "lineage_index": {
+    "project_ids": [
+      "earth-core-runtime",
+      "optimus-prime-gsd-fusion"
+    ],
+    "era_ids": [
+      "era-2026-q1"
+    ],
+    "plan_ids": [
+      "plan-canary-001",
+      "plan-runtime-014"
+    ],
+    "phase_ids": [
+      "phase-implementation",
+      "phase-stabilization",
+      "phase-verification"
+    ],
+    "run_ids": [
+      "run-042",
+      "run-043",
+      "run-131"
+    ],
+    "linked_project_ids": [
+      "earth-core-runtime",
+      "shared-observability"
+    ]
+  }
+}
