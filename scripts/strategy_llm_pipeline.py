@@ -23,6 +23,7 @@ try:
     from scripts import strategy_llm_pipeline_req043 as _req43
     from scripts import strategy_llm_pipeline_req044 as _req44
     from scripts import strategy_llm_pipeline_req045 as _req45
+    from scripts.langsmith_tracing import emit_langsmith_trace
 except ModuleNotFoundError:
     _repo_root = Path(__file__).resolve().parents[1]
     if str(_repo_root) not in sys.path:
@@ -36,6 +37,7 @@ except ModuleNotFoundError:
     from scripts import strategy_llm_pipeline_req043 as _req43
     from scripts import strategy_llm_pipeline_req044 as _req44
     from scripts import strategy_llm_pipeline_req045 as _req45
+    from scripts.langsmith_tracing import emit_langsmith_trace
 
 TOOL = "strategy-llm-pipeline"
 TOOL_VERSION = "1.0.0"
@@ -14062,6 +14064,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional absolute or relative root used when builders persist trace artifacts.",
     )
+    parser.add_argument(
+        "--langsmith-tracing",
+        action="store_true",
+        help=(
+            "Emit an optional LangSmith trace for the generated pipeline run. "
+            "Also enabled by LANGSTACK_TRACING=true, LANGSMITH_TRACING=true, or LANGCHAIN_TRACING_V2=true."
+        ),
+    )
     return parser
 
 
@@ -14146,6 +14156,12 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     requirement_id = _as_text(output_payload.get("requirement_id"))
+    emit_langsmith_trace(
+        input_payload=input_payload,
+        output_payload=output_payload,
+        force=bool(args.langsmith_tracing),
+        emit=_timestamped_print if requirement_id != REQ_046_REQUIREMENT_ID else None,
+    )
     call_metadata = output_payload.get("call_metadata")
     if isinstance(call_metadata, Mapping) and _as_text(call_metadata.get("llm_call_trace_path")):
         trace_output_path = _write_llm_call_trace(output_payload)
