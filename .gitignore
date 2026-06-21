@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.langsmith.local.env
 
 # Generated test-train runtime state and drill artifacts
 reports/optimus-prime/runtime/DRILL_REPORT.md
