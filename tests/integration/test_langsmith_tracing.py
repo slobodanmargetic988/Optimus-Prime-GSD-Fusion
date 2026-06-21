@@ -172,3 +172,78 @@ def test_op_trace_success_event_does_not_raise() -> None:
 
     assert result["event_name"] == "op.command.result"
     assert result["payload"]["status"] == "completed"
+
+
+def test_op_trace_compact_payload_keeps_runtime_duration_context() -> None:
+    result = langsmith_tracing.trace_op_command_event(
+        "op.simple_build.manager.result",
+        {
+            "status": "ok",
+            "ok": True,
+            "cycle_number": 4,
+            "manager": "BOSS",
+            "worker_id": "worker-1",
+            "profile_alias": "codex-opbuild",
+            "executor_model": "gpt-5.5",
+            "duration_seconds": 479.414,
+            "started_at": "2026-06-21T13:52:26Z",
+            "finished_at": "2026-06-21T14:00:26Z",
+        },
+    )
+
+    payload = result["payload"]
+    assert payload["cycle_number"] == 4
+    assert payload["manager"] == "BOSS"
+    assert payload["profile_alias"] == "codex-opbuild"
+    assert payload["executor_model"] == "gpt-5.5"
+    assert payload["duration_seconds"] == 479.414
+
+
+def test_op_trace_returncode_marks_live_subprocess_failure() -> None:
+    assert langsmith_tracing._op_payload_indicates_failure(
+        "op.simple_build.worker_dispatch.live",
+        {"returncode": 2},
+    )
+
+
+def test_live_span_inputs_match_langsmith_process_inputs_shape() -> None:
+    inputs = langsmith_tracing._live_span_inputs(
+        {
+            "span_name": "op.manager.boss",
+            "event_name": "op.simple_build.manager.live",
+            "payload": {
+                "cycle_number": 4,
+                "manager": "BOSS",
+                "duration_seconds": 479.414,
+            },
+            "operation": object(),
+        }
+    )
+
+    assert inputs["event_name"] == "op.simple_build.manager.live"
+    assert inputs["payload"]["cycle_number"] == 4
+    assert inputs["payload"]["manager"] == "BOSS"
+    assert inputs["payload"]["duration_seconds"] == 479.414
+    assert "operation" not in inputs
+
+
+def test_run_traced_op_operation_disabled_executes_operation_once(monkeypatch) -> None:
+    monkeypatch.delenv("LANGSTACK_TRACING", raising=False)
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
+    calls = {"count": 0}
+
+    def operation() -> dict:
+        calls["count"] += 1
+        return {"status": "ok"}
+
+    result = langsmith_tracing.run_traced_op_operation(
+        span_name="op.manager.boss",
+        event_name="op.simple_build.manager.live",
+        payload={"manager": "BOSS"},
+        operation=operation,
+        run_type="llm",
+    )
+
+    assert result == {"status": "ok"}
+    assert calls["count"] == 1

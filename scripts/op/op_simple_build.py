@@ -23,7 +23,7 @@ SCRIPTS_ROOT = SCRIPT_DIR.parent
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from langsmith_tracing import emit_op_event_trace
+from langsmith_tracing import emit_op_event_trace, run_traced_op_operation
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_RUN_BASE_SOURCE_BRANCH = "main"
@@ -3647,86 +3647,110 @@ def _codex_exec_prompt(
                 reason_code="llm_profile_rate_limited",
             )
 
-    try:
-        completed = subprocess.run(
-            cmd,
-            cwd=str(cfg.repo_root),
-            input=prompt_text,
-            text=True,
-            capture_output=True,
-            timeout=max(1, int(timeout_seconds)),
-            check=False,
-            env=env,
-        )
-        stdout_path.write_text(completed.stdout or "", encoding="utf-8")
-        stderr_path.write_text(completed.stderr or "", encoding="utf-8")
-        finished_at = utc_now_iso()
-        rate_limit_details = None
-        if completed.returncode != 0:
-            rate_limit_details = _classify_codex_usage_limit(completed.stdout or "", completed.stderr or "")
-        return ManagerResult(
-            manager=manager_name,
-            status="ok" if completed.returncode == 0 else "failed",
-            timeout=False,
-            returncode=int(completed.returncode),
-            started_at=started_at,
-            finished_at=finished_at,
-            duration_seconds=round(time.monotonic() - start_time, 3),
-            stdout_path=str(stdout_path),
-            stderr_path=str(stderr_path),
-            message=(
-                None
-                if completed.returncode == 0
-                else str((rate_limit_details or {}).get("message") or "codex exec returned non-zero")
-            ),
-            reason_code=(
-                None
-                if completed.returncode == 0
-                else str((rate_limit_details or {}).get("reason_code") or "manager_non_zero_exit")
-            ),
-            details=(
-                {
-                    "reset_at": rate_limit_details.get("reset_at"),
-                }
-                if rate_limit_details
-                else None
-            ),
-            session_id=_extract_session_id(completed.stdout or "", completed.stderr or ""),
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout_text = _coerce_output_text(exc.stdout)
-        stderr_text = _coerce_output_text(exc.stderr)
-        stdout_path.write_text(stdout_text, encoding="utf-8")
-        stderr_path.write_text(stderr_text, encoding="utf-8")
-        finished_at = utc_now_iso()
-        return ManagerResult(
-            manager=manager_name,
-            status="timeout",
-            timeout=True,
-            returncode=None,
-            started_at=started_at,
-            finished_at=finished_at,
-            duration_seconds=round(time.monotonic() - start_time, 3),
-            stdout_path=str(stdout_path),
-            stderr_path=str(stderr_path),
-            message="manager call timed out",
-            reason_code="manager_timeout",
-        )
-    except FileNotFoundError:
-        finished_at = utc_now_iso()
-        return ManagerResult(
-            manager=manager_name,
-            status="failed",
-            timeout=False,
-            returncode=None,
-            started_at=started_at,
-            finished_at=finished_at,
-            duration_seconds=round(time.monotonic() - start_time, 3),
-            stdout_path=str(stdout_path),
-            stderr_path=str(stderr_path),
-            message="codex binary not found",
-            reason_code="manager_binary_missing",
-        )
+    def _run_codex_manager() -> ManagerResult:
+        try:
+            completed = subprocess.run(
+                cmd,
+                cwd=str(cfg.repo_root),
+                input=prompt_text,
+                text=True,
+                capture_output=True,
+                timeout=max(1, int(timeout_seconds)),
+                check=False,
+                env=env,
+            )
+            stdout_path.write_text(completed.stdout or "", encoding="utf-8")
+            stderr_path.write_text(completed.stderr or "", encoding="utf-8")
+            finished_at = utc_now_iso()
+            rate_limit_details = None
+            if completed.returncode != 0:
+                rate_limit_details = _classify_codex_usage_limit(completed.stdout or "", completed.stderr or "")
+            return ManagerResult(
+                manager=manager_name,
+                status="ok" if completed.returncode == 0 else "failed",
+                timeout=False,
+                returncode=int(completed.returncode),
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_seconds=round(time.monotonic() - start_time, 3),
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+                message=(
+                    None
+                    if completed.returncode == 0
+                    else str((rate_limit_details or {}).get("message") or "codex exec returned non-zero")
+                ),
+                reason_code=(
+                    None
+                    if completed.returncode == 0
+                    else str((rate_limit_details or {}).get("reason_code") or "manager_non_zero_exit")
+                ),
+                details=(
+                    {
+                        "reset_at": rate_limit_details.get("reset_at"),
+                    }
+                    if rate_limit_details
+                    else None
+                ),
+                session_id=_extract_session_id(completed.stdout or "", completed.stderr or ""),
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout_text = _coerce_output_text(exc.stdout)
+            stderr_text = _coerce_output_text(exc.stderr)
+            stdout_path.write_text(stdout_text, encoding="utf-8")
+            stderr_path.write_text(stderr_text, encoding="utf-8")
+            finished_at = utc_now_iso()
+            return ManagerResult(
+                manager=manager_name,
+                status="timeout",
+                timeout=True,
+                returncode=None,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_seconds=round(time.monotonic() - start_time, 3),
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+                message="manager call timed out",
+                reason_code="manager_timeout",
+            )
+        except FileNotFoundError:
+            finished_at = utc_now_iso()
+            return ManagerResult(
+                manager=manager_name,
+                status="failed",
+                timeout=False,
+                returncode=None,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_seconds=round(time.monotonic() - start_time, 3),
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
+                message="codex binary not found",
+                reason_code="manager_binary_missing",
+            )
+
+    return run_traced_op_operation(
+        span_name=f"op.manager.{safe_name}",
+        event_name="op.simple_build.manager.live",
+        run_type="llm",
+        payload={
+            "command": "op-simple-build",
+            "repo_root": str(cfg.repo_root),
+            "cycle_number": cycle_number,
+            "manager": manager_name,
+            "executor_provider": "codex",
+            "executor_model": model_text,
+            "profile_alias": _canonical_codex_alias("", codex_home_text) if codex_home_text else "",
+            "reasoning_effort": reasoning_effort_text,
+            "timeout_seconds": int(timeout_seconds),
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "last_message_path": str(last_message_path),
+            "resume_session_id": str(resume_session_id or ""),
+        },
+        operation=_run_codex_manager,
+        extra_tags=["manager", safe_name, "codex"],
+    )
 
 
 def _blackbox_exec_prompt(
@@ -7091,7 +7115,34 @@ def _dispatch_packets(
                 cmd.extend(["--codex-home", profile_home])
 
             try:
-                proc = subprocess.run(cmd, cwd=str(cfg.repo_root), capture_output=True, text=True, timeout=30, check=False)
+                def _run_dispatch_command() -> subprocess.CompletedProcess[str]:
+                    return subprocess.run(
+                        cmd,
+                        cwd=str(cfg.repo_root),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+
+                proc = run_traced_op_operation(
+                    span_name="op.worker_dispatch.launch",
+                    event_name="op.simple_build.worker_dispatch.live",
+                    run_type="tool",
+                    payload={
+                        "command": "op-simple-build",
+                        "repo_root": str(cfg.repo_root),
+                        "cycle_number": cycle_number,
+                        "worker_id": worker_id,
+                        "packet_id": packet_id,
+                        "profile_alias": profile_alias,
+                        "executor_provider": dispatch_provider,
+                        "executor_model": dispatch_model,
+                        "worker_worktree": str(worker_worktree_resolved),
+                    },
+                    operation=_run_dispatch_command,
+                    extra_tags=["worker-dispatch", worker_id, profile_alias],
+                )
                 stdout_text = (proc.stdout or "").strip()
                 stderr_text = (proc.stderr or "").strip()
                 if proc.returncode == 0:

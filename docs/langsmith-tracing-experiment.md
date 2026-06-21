@@ -72,6 +72,11 @@ The OP command surface also emits optional LangSmith spans when tracing is enabl
 - `op.simple_build.cycle.start/summary`: each OP Simple cycle.
 - `op.simple_build.manager.start/result`: manager LLM calls such as BOSS, merge-manager, and wrapup-manager.
 - `op.simple_build.worker_dispatch.start/result`: worker packet dispatch launches.
+- `op.simple_build.manager.live`: live timed LLM span around the actual manager `codex exec` subprocess.
+- `op.simple_build.worker_dispatch.live`: live timed tool span around the worker dispatch launch command.
+
+The `*.start`, `*.result`, and `*.summary` events are still useful breadcrumbs, but they are emitted after local OP events complete and therefore usually show near-zero LangSmith table latency.
+Use the `*.live` spans when comparing wall-clock behavior in LangSmith: BOSS latency, timeout/error status, model, profile alias, cycle number, and stdout/stderr artifact paths are attached directly to those spans.
 
 To run the first calculator-app experiment with strategy skipped, planning enabled, and Codex as the executor:
 

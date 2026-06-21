@@ -6,9 +6,10 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, TypeVar
 
 EmitFn = Callable[[str], None]
+T = TypeVar("T")
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _SECRET_KEY_RE = re.compile(r"(api[_-]?key|token|secret|password|authorization|credential)", re.IGNORECASE)
@@ -23,10 +24,23 @@ class OpTraceRecordedFailure(RuntimeError):
     """Raised inside traceable OP runs so LangSmith marks failed OP events as errors."""
 
 
+class OpTraceOperationFailure(RuntimeError):
+    """Raised inside a live trace span while preserving the real operation result."""
+
+    def __init__(self, message: str, result: Any) -> None:
+        super().__init__(message)
+        self.result = result
+
+
 try:
     from langsmith import traceable as _langsmith_traceable
 except Exception:  # pragma: no cover - depends on optional local package state.
     _langsmith_traceable = None
+
+try:
+    from langsmith.run_helpers import get_current_run_tree as _get_current_run_tree
+except Exception:  # pragma: no cover - depends on optional local package state.
+    _get_current_run_tree = None
 
 
 def _utc_timestamp() -> str:
@@ -300,6 +314,9 @@ def _op_payload_indicates_failure(event_name: str, payload: Mapping[str, Any]) -
     exit_code = payload.get("exit_code")
     if exit_code not in (None, "", 0, "0"):
         return True
+    returncode = payload.get("returncode")
+    if returncode not in (None, "", 0, "0"):
+        return True
     errors = payload.get("errors")
     if isinstance(errors, list) and errors:
         return True
@@ -318,16 +335,30 @@ def _compact_op_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "start_policy",
         "executor_provider",
         "executor_model",
+        "profile_alias",
         "selected_aliases",
         "max_build_cycles",
         "max_parallel_workers",
         "dry_run",
         "override_old_plan",
+        "cycle_number",
+        "manager",
+        "worker_id",
+        "packet_id",
+        "thread_id",
+        "pid",
         "status",
         "reason",
+        "reason_code",
+        "message",
         "ok",
         "task_id",
         "stage",
+        "duration_seconds",
+        "started_at",
+        "finished_at",
+        "timeout",
+        "returncode",
         "plan_id",
         "attempt",
         "bundle_path",
@@ -381,6 +412,9 @@ def _failed_event_message(event_name: str, compact_payload: Mapping[str, Any]) -
     exit_code = compact_payload.get("exit_code")
     if exit_code not in (None, ""):
         parts.append(f"exit_code={exit_code}")
+    returncode = compact_payload.get("returncode")
+    if returncode not in (None, ""):
+        parts.append(f"returncode={returncode}")
     errors = compact_payload.get("errors")
     if isinstance(errors, list) and errors:
         summaries: list[str] = []
@@ -395,6 +429,212 @@ def _failed_event_message(event_name: str, compact_payload: Mapping[str, Any]) -
     if stderr_excerpt:
         parts.append("stderr=" + _truncate_text(stderr_excerpt, limit=800))
     return "; ".join(parts)
+
+
+def _op_trace_metadata(event_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "op_event_name": event_name,
+        "environment": os.getenv("LANGSTACK_ENVIRONMENT", "dev"),
+        "agent_version": os.getenv("LANGSTACK_AGENT_VERSION", "langstack-experiment-v1"),
+    }
+    for key in (
+        "command",
+        "repo_root",
+        "cycle_number",
+        "manager",
+        "worker_id",
+        "packet_id",
+        "executor_provider",
+        "executor_model",
+        "profile_alias",
+        "status",
+        "reason_code",
+        "thread_id",
+        "pid",
+    ):
+        value = payload.get(key)
+        if value not in (None, ""):
+            metadata[key] = _redact(value)
+    provider = _as_text(payload.get("executor_provider"))
+    model = _as_text(payload.get("executor_model")) or _as_text(payload.get("model"))
+    if provider:
+        metadata["ls_provider"] = "openai" if provider == "codex" else provider
+    if model:
+        metadata["ls_model_name"] = model
+    return metadata
+
+
+def _slug_tag(value: Any) -> str:
+    text = _as_text(value).lower()
+    if not text:
+        return ""
+    text = re.sub(r"[^a-z0-9_.:-]+", "-", text)
+    return text.strip("-")
+
+
+def _op_trace_tags(event_name: str, payload: Mapping[str, Any], extra_tags: Sequence[str] | None = None) -> list[str]:
+    tags = ["op-build", _slug_tag(event_name)]
+    manager = _slug_tag(payload.get("manager"))
+    worker_id = _slug_tag(payload.get("worker_id"))
+    status = _slug_tag(payload.get("status"))
+    cycle_number = payload.get("cycle_number")
+    if manager:
+        tags.extend(["manager", manager])
+    if worker_id:
+        tags.extend(["worker", worker_id])
+    if status:
+        tags.append(f"status:{status}")
+    try:
+        tags.append(f"cycle-{int(cycle_number):06d}")
+    except (TypeError, ValueError):
+        pass
+    for tag in extra_tags or []:
+        normalized = _slug_tag(tag)
+        if normalized:
+            tags.append(normalized)
+    seen: set[str] = set()
+    out: list[str] = []
+    for tag in tags:
+        if tag and tag not in seen:
+            seen.add(tag)
+            out.append(tag)
+    return out
+
+
+def _configure_current_run(
+    *,
+    span_name: str,
+    event_name: str,
+    payload: Mapping[str, Any],
+    extra_tags: Sequence[str] | None = None,
+) -> None:
+    if _get_current_run_tree is None:
+        return
+    try:
+        run_tree = _get_current_run_tree()
+    except Exception:
+        return
+    if run_tree is None:
+        return
+    try:
+        run_tree.name = span_name
+        run_tree.add_metadata(_op_trace_metadata(event_name, payload))
+        run_tree.add_tags(_op_trace_tags(event_name, payload, extra_tags))
+    except Exception:
+        return
+
+
+def _live_span_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
+    event_name = _as_text(inputs.get("event_name") or "op.live_span")
+    payload = inputs.get("payload") or {}
+    payload = payload if isinstance(payload, Mapping) else {}
+    return {
+        "event_name": event_name,
+        "payload": _op_trace_payload(payload),
+    }
+
+
+def _live_span_outputs(output: Any) -> dict[str, Any]:
+    if isinstance(output, Mapping):
+        return _redact(output)
+    return {"result": _redact(_result_payload(output))}
+
+
+def _result_payload(result: Any) -> dict[str, Any]:
+    if isinstance(result, Mapping):
+        return dict(result)
+    if hasattr(result, "__dict__"):
+        return {
+            key: value
+            for key, value in vars(result).items()
+            if isinstance(key, str) and not key.startswith("_")
+        }
+    return {"result": result}
+
+
+def _merged_result_payload(base_payload: Mapping[str, Any], result: Any) -> dict[str, Any]:
+    merged = dict(base_payload)
+    merged.update(_result_payload(result))
+    return merged
+
+
+@_traceable(
+    name="op_runtime.live_llm_span",
+    run_type="llm",
+    process_inputs=_live_span_inputs,
+    process_outputs=_live_span_outputs,
+)
+def _trace_op_live_llm_span(
+    span_name: str,
+    event_name: str,
+    payload: Mapping[str, Any],
+    operation: Callable[[], T],
+    extra_tags: Sequence[str] | None = None,
+) -> T:
+    _configure_current_run(span_name=span_name, event_name=event_name, payload=payload, extra_tags=extra_tags)
+    result = operation()
+    merged_payload = _merged_result_payload(payload, result)
+    compact = _op_event_base(event_name, merged_payload)
+    if _op_payload_indicates_failure(event_name, merged_payload):
+        raise OpTraceOperationFailure(_failed_event_message(event_name, compact["payload"]), result)
+    return result
+
+
+@_traceable(
+    name="op_runtime.live_tool_span",
+    run_type="tool",
+    process_inputs=_live_span_inputs,
+    process_outputs=_live_span_outputs,
+)
+def _trace_op_live_tool_span(
+    span_name: str,
+    event_name: str,
+    payload: Mapping[str, Any],
+    operation: Callable[[], T],
+    extra_tags: Sequence[str] | None = None,
+) -> T:
+    _configure_current_run(span_name=span_name, event_name=event_name, payload=payload, extra_tags=extra_tags)
+    result = operation()
+    merged_payload = _merged_result_payload(payload, result)
+    compact = _op_event_base(event_name, merged_payload)
+    if _op_payload_indicates_failure(event_name, merged_payload):
+        raise OpTraceOperationFailure(_failed_event_message(event_name, compact["payload"]), result)
+    return result
+
+
+def run_traced_op_operation(
+    *,
+    span_name: str,
+    event_name: str,
+    payload: Mapping[str, Any],
+    operation: Callable[[], T],
+    run_type: str = "chain",
+    extra_tags: Sequence[str] | None = None,
+    force: bool = False,
+    emit: EmitFn | None = None,
+) -> T:
+    if not is_langsmith_tracing_enabled(force=force) or _langsmith_traceable is None:
+        return operation()
+    os.environ.setdefault("LANGSMITH_TRACING", "true")
+    result_holder: dict[str, Any] = {}
+
+    def _once() -> T:
+        result = operation()
+        result_holder["result"] = result
+        return result
+
+    try:
+        if run_type == "tool":
+            return _trace_op_live_tool_span(span_name, event_name, payload, _once, extra_tags)
+        return _trace_op_live_llm_span(span_name, event_name, payload, _once, extra_tags)
+    except OpTraceOperationFailure as exc:
+        return exc.result
+    except Exception as exc:  # pragma: no cover - defensive around optional SaaS/client behavior.
+        if "result" in result_holder:
+            _emit(emit, f"LangSmith live OP trace failed after operation completed: {exc}")
+            return result_holder["result"]
+        _emit(emit, f"LangSmith live OP trace failed; running operation without live span: {exc}")
+        return operation()
 
 
 def _op_trace_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
