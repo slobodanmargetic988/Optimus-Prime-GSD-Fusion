@@ -19,6 +19,12 @@ export LANGSMITH_API_KEY="..."
 export LANGSMITH_PROJECT="optimus-prime-gsd-fusion"
 ```
 
+EU LangSmith workspaces must also set the EU API endpoint:
+
+```bash
+export LANGSMITH_ENDPOINT="https://eu.api.smith.langchain.com"
+```
+
 You can also force tracing for one CLI run:
 
 ```bash
@@ -37,6 +43,9 @@ The bridge emits nested `@traceable` runs:
 By default, trace inputs are compact summaries to reduce accidental source-code or secret exposure.
 Set `LANGSTACK_TRACE_INCLUDE_PAYLOADS=true` only when you intentionally want full redacted payload snapshots in LangSmith.
 Keys matching token, secret, password, credential, authorization, or API key patterns are redacted before tracing.
+
+Failed OP events are intentionally raised inside the `@traceable` wrapper and then caught by OP, so LangSmith marks the trace run as `error` without changing OP command behavior.
+Failure traces include compact error summaries and, when available, a bounded redacted excerpt from `llm_stderr_ref` so root causes such as Codex config parse failures are visible in LangSmith.
 
 ## Useful metadata
 
@@ -71,6 +80,8 @@ export LANGSTACK_TRACING=true
 export LANGSMITH_TRACING=true
 export LANGSMITH_API_KEY="..."
 export LANGSMITH_PROJECT="optimus-prime-gsd-fusion-op-build"
+# For EU LangSmith accounts:
+# export LANGSMITH_ENDPOINT="https://eu.api.smith.langchain.com"
 export LANGSTACK_ENVIRONMENT=dev
 export LANGSTACK_AGENT_VERSION=langstack-op-build-experiment-v1
 

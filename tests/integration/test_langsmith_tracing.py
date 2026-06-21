@@ -115,3 +115,60 @@ def test_strategy_llm_pipeline_cli_accepts_langsmith_tracing_without_package(tmp
     assert json.loads(output_path.read_text(encoding="utf-8"))["requirement_id"] == "REQ-025"
     if langsmith_tracing._langsmith_traceable is None:
         assert "LangSmith tracing requested but the optional 'langsmith' package is not installed." in run.stderr
+
+
+def test_failed_op_trace_event_raises_for_langsmith_error_status(tmp_path: Path) -> None:
+    stderr_path = tmp_path / "llm_stderr.log"
+    stderr_path.write_text(
+        'Error loading config.toml: unknown variant "default", expected "fast" or "flex"\n'
+        "api_key=should-not-leak\n",
+        encoding="utf-8",
+    )
+
+    payload = {
+        "status": "failed",
+        "exit_code": 1,
+        "llm_stderr_ref": str(stderr_path),
+        "errors": [{"code": "planner_bundle_missing", "message": "planner bundle missing"}],
+    }
+
+    try:
+        langsmith_tracing.trace_op_planner_attempt_event("op.plan.planner_attempt.result", payload)
+    except langsmith_tracing.OpTraceRecordedFailure as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("failed OP trace events must raise so LangSmith marks the run as errored")
+
+    assert "OP trace event failed" in message
+    assert "planner_bundle_missing" in message
+    assert 'unknown variant "default"' in message
+    assert "should-not-leak" not in message
+    assert "[redacted]" in message
+
+
+def test_emit_op_event_trace_catches_recorded_failure(monkeypatch) -> None:
+    monkeypatch.setenv("LANGSTACK_TRACING", "true")
+    monkeypatch.setattr(langsmith_tracing, "_langsmith_traceable", lambda *args, **kwargs: (lambda fn: fn))
+
+    result = langsmith_tracing.emit_op_event_trace(
+        event_name="op.command.error",
+        payload={
+            "status": "failed",
+            "ok": False,
+            "errors": [{"code": "planner_retry_exhausted", "message": "planner failed"}],
+        },
+    )
+
+    assert result["enabled"] is True
+    assert result["recorded_error"] is True
+    assert "planner_retry_exhausted" in result["error"]
+
+
+def test_op_trace_success_event_does_not_raise() -> None:
+    result = langsmith_tracing.trace_op_command_event(
+        "op.command.result",
+        {"status": "completed", "ok": True, "errors": []},
+    )
+
+    assert result["event_name"] == "op.command.result"
+    assert result["payload"]["status"] == "completed"

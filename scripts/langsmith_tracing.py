@@ -12,7 +12,15 @@ EmitFn = Callable[[str], None]
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _SECRET_KEY_RE = re.compile(r"(api[_-]?key|token|secret|password|authorization|credential)", re.IGNORECASE)
+_SECRET_TEXT_RE = re.compile(
+    r"(?i)(api[_-]?key|token|secret|password|authorization|credential)(\s*[:=]\s*)([^\s,;]+)"
+)
 _DEFAULT_PROJECT = "optimus-prime-gsd-fusion"
+_DEFAULT_FAILURE_EXCERPT_LIMIT = 2000
+
+
+class OpTraceRecordedFailure(RuntimeError):
+    """Raised inside traceable OP runs so LangSmith marks failed OP events as errors."""
 
 
 try:
@@ -267,6 +275,37 @@ def _truncate_text(value: Any, *, limit: int = 2000) -> str:
     return text[:limit] + f"...[truncated {len(text) - limit} chars]"
 
 
+def _redact_text(value: Any) -> str:
+    return _SECRET_TEXT_RE.sub(r"\1\2[redacted]", _as_text(value))
+
+
+def _failure_excerpt_from_path(path_value: Any, *, limit: int = _DEFAULT_FAILURE_EXCERPT_LIMIT) -> str:
+    path_text = _as_text(path_value)
+    if not path_text:
+        return ""
+    try:
+        with open(path_text, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read(limit + 1)
+    except OSError:
+        return ""
+    return _truncate_text(_redact_text(text), limit=limit)
+
+
+def _op_payload_indicates_failure(event_name: str, payload: Mapping[str, Any]) -> bool:
+    status = _as_text(payload.get("status")).lower()
+    if event_name.endswith(".error") or status in {"failed", "error"}:
+        return True
+    if payload.get("ok") is False:
+        return True
+    exit_code = payload.get("exit_code")
+    if exit_code not in (None, "", 0, "0"):
+        return True
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        return True
+    return False
+
+
 def _compact_op_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     interesting_keys = {
         "command",
@@ -291,8 +330,13 @@ def _compact_op_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "stage",
         "plan_id",
         "attempt",
+        "bundle_path",
         "exit_code",
+        "last_message_ref",
+        "llm_stderr_ref",
+        "llm_stdout_ref",
         "parse_ok",
+        "prompt_path",
         "schema_ok",
         "plan_check_ok",
         "control_number",
@@ -313,10 +357,44 @@ def _compact_op_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         value = payload.get(list_key)
         if isinstance(value, list):
             compact[f"{list_key}_count"] = len(value)
+            if list_key == "errors":
+                compact["errors"] = _redact(value[:5])
     data = payload.get("data")
     if isinstance(data, Mapping):
         compact["data"] = _compact_op_payload(data)
     return compact
+
+
+def _enrich_failed_op_payload(event_name: str, raw_payload: Mapping[str, Any], compact_payload: dict[str, Any]) -> None:
+    if not _op_payload_indicates_failure(event_name, raw_payload):
+        return
+    stderr_excerpt = _failure_excerpt_from_path(raw_payload.get("llm_stderr_ref"))
+    if stderr_excerpt:
+        compact_payload["llm_stderr_excerpt"] = stderr_excerpt
+
+
+def _failed_event_message(event_name: str, compact_payload: Mapping[str, Any]) -> str:
+    parts = [f"OP trace event failed: {event_name}"]
+    status = _as_text(compact_payload.get("status"))
+    if status:
+        parts.append(f"status={status}")
+    exit_code = compact_payload.get("exit_code")
+    if exit_code not in (None, ""):
+        parts.append(f"exit_code={exit_code}")
+    errors = compact_payload.get("errors")
+    if isinstance(errors, list) and errors:
+        summaries: list[str] = []
+        for item in errors[:3]:
+            if isinstance(item, Mapping):
+                code = _as_text(item.get("code")) or "error"
+                message = _truncate_text(item.get("message"), limit=300)
+                summaries.append(f"{code}: {message}" if message else code)
+        if summaries:
+            parts.append("errors=" + " | ".join(summaries))
+    stderr_excerpt = _as_text(compact_payload.get("llm_stderr_excerpt"))
+    if stderr_excerpt:
+        parts.append("stderr=" + _truncate_text(stderr_excerpt, limit=800))
+    return "; ".join(parts)
 
 
 def _op_trace_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -326,18 +404,23 @@ def _op_trace_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _op_event_base(event_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    compact_payload = _op_trace_payload(payload)
+    _enrich_failed_op_payload(event_name, payload, compact_payload)
     return {
         "event_name": event_name,
         "project_name": os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or _DEFAULT_PROJECT,
         "environment": os.getenv("LANGSTACK_ENVIRONMENT", "dev"),
         "agent_version": os.getenv("LANGSTACK_AGENT_VERSION", "langstack-experiment-v1"),
-        "payload": _op_trace_payload(payload),
+        "payload": compact_payload,
     }
 
 
 @_traceable(name="op_runtime.command", run_type="chain")
 def trace_op_command_event(event_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-    return _op_event_base(event_name, payload)
+    compact = _op_event_base(event_name, payload)
+    if _op_payload_indicates_failure(event_name, payload):
+        raise OpTraceRecordedFailure(_failed_event_message(event_name, compact["payload"]))
+    return compact
 
 
 @_traceable(name="op_runtime.planner_attempt", run_type="llm")
@@ -352,12 +435,17 @@ def trace_op_planner_attempt_event(event_name: str, payload: Mapping[str, Any]) 
             }
         ]
     compact["model"] = _as_text(payload.get("model")) or os.getenv("LANGSTACK_TRACE_MODEL", "codex-planner")
+    if _op_payload_indicates_failure(event_name, payload):
+        raise OpTraceRecordedFailure(_failed_event_message(event_name, compact["payload"]))
     return compact
 
 
 @_traceable(name="op_runtime.orchestration_tool", run_type="tool")
 def trace_op_tool_event(event_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-    return _op_event_base(event_name, payload)
+    compact = _op_event_base(event_name, payload)
+    if _op_payload_indicates_failure(event_name, payload):
+        raise OpTraceRecordedFailure(_failed_event_message(event_name, compact["payload"]))
+    return compact
 
 
 def emit_op_event_trace(
@@ -381,6 +469,14 @@ def emit_op_event_trace(
             trace_op_tool_event(event_name, payload)
         else:
             trace_op_command_event(event_name, payload)
+    except OpTraceRecordedFailure as exc:
+        return {
+            "enabled": True,
+            "event_name": event_name,
+            "run_type": run_type,
+            "recorded_error": True,
+            "error": str(exc),
+        }
     except Exception as exc:  # pragma: no cover - defensive around optional SaaS/client behavior.
         _emit(emit, f"LangSmith OP trace failed without changing OP output: {exc}")
         return {"enabled": False, "reason": "trace_failed", "error": str(exc)}
