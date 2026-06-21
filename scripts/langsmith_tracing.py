@@ -227,6 +227,7 @@ def emit_langsmith_trace(
     if _langsmith_traceable is None:
         _emit(emit, "LangSmith tracing requested but the optional 'langsmith' package is not installed.")
         return {"enabled": False, "reason": "langsmith_package_missing"}
+    os.environ.setdefault("LANGSMITH_TRACING", "true")
 
     project_name = os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or _DEFAULT_PROJECT
     environment = os.getenv("LANGSTACK_ENVIRONMENT", "dev")
@@ -257,3 +258,130 @@ def emit_langsmith_trace(
         "environment": environment,
         "iteration_count": len(result.get("iterations") or []),
     }
+
+
+def _truncate_text(value: Any, *, limit: int = 2000) -> str:
+    text = _as_text(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"...[truncated {len(text) - limit} chars]"
+
+
+def _compact_op_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    interesting_keys = {
+        "command",
+        "repo_root",
+        "mission",
+        "mission_file",
+        "scope",
+        "scope_file",
+        "skip_strategy",
+        "start_policy",
+        "executor_provider",
+        "executor_model",
+        "selected_aliases",
+        "max_build_cycles",
+        "max_parallel_workers",
+        "dry_run",
+        "override_old_plan",
+        "status",
+        "reason",
+        "ok",
+        "task_id",
+        "stage",
+        "plan_id",
+        "attempt",
+        "exit_code",
+        "parse_ok",
+        "schema_ok",
+        "plan_check_ok",
+        "control_number",
+        "control_run_id",
+    }
+    compact: dict[str, Any] = {
+        "top_level_keys": sorted(str(key) for key in payload.keys()),
+    }
+    for key in sorted(interesting_keys):
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if isinstance(value, str):
+            compact[key] = _truncate_text(value)
+        else:
+            compact[key] = _redact(value)
+    for list_key in ("warnings", "errors", "artifacts", "dispatch_results", "assignment_observations"):
+        value = payload.get(list_key)
+        if isinstance(value, list):
+            compact[f"{list_key}_count"] = len(value)
+    data = payload.get("data")
+    if isinstance(data, Mapping):
+        compact["data"] = _compact_op_payload(data)
+    return compact
+
+
+def _op_trace_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if is_full_payload_tracing_enabled():
+        return _redact(payload)
+    return _compact_op_payload(payload)
+
+
+def _op_event_base(event_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "event_name": event_name,
+        "project_name": os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or _DEFAULT_PROJECT,
+        "environment": os.getenv("LANGSTACK_ENVIRONMENT", "dev"),
+        "agent_version": os.getenv("LANGSTACK_AGENT_VERSION", "langstack-experiment-v1"),
+        "payload": _op_trace_payload(payload),
+    }
+
+
+@_traceable(name="op_runtime.command", run_type="chain")
+def trace_op_command_event(event_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    return _op_event_base(event_name, payload)
+
+
+@_traceable(name="op_runtime.planner_attempt", run_type="llm")
+def trace_op_planner_attempt_event(event_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    compact = _op_event_base(event_name, payload)
+    prompt_preview = payload.get("prompt_preview")
+    if prompt_preview is not None:
+        compact["messages"] = [
+            {
+                "role": "user",
+                "content": _truncate_text(prompt_preview, limit=4000),
+            }
+        ]
+    compact["model"] = _as_text(payload.get("model")) or os.getenv("LANGSTACK_TRACE_MODEL", "codex-planner")
+    return compact
+
+
+@_traceable(name="op_runtime.orchestration_tool", run_type="tool")
+def trace_op_tool_event(event_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    return _op_event_base(event_name, payload)
+
+
+def emit_op_event_trace(
+    *,
+    event_name: str,
+    payload: Mapping[str, Any],
+    run_type: str = "chain",
+    force: bool = False,
+    emit: EmitFn | None = None,
+) -> dict[str, Any]:
+    if not is_langsmith_tracing_enabled(force=force):
+        return {"enabled": False, "reason": "tracing_disabled"}
+    if _langsmith_traceable is None:
+        _emit(emit, "LangSmith tracing requested but the optional 'langsmith' package is not installed.")
+        return {"enabled": False, "reason": "langsmith_package_missing"}
+    os.environ.setdefault("LANGSMITH_TRACING", "true")
+    try:
+        if run_type == "llm":
+            trace_op_planner_attempt_event(event_name, payload)
+        elif run_type == "tool":
+            trace_op_tool_event(event_name, payload)
+        else:
+            trace_op_command_event(event_name, payload)
+    except Exception as exc:  # pragma: no cover - defensive around optional SaaS/client behavior.
+        _emit(emit, f"LangSmith OP trace failed without changing OP output: {exc}")
+        return {"enabled": False, "reason": "trace_failed", "error": str(exc)}
+    return {"enabled": True, "event_name": event_name, "run_type": run_type}

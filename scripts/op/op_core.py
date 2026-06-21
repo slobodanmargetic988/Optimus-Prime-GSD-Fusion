@@ -21,8 +21,11 @@ from pathlib import Path
 from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+SCRIPTS_ROOT = SCRIPT_DIR.parent
+ENGINE_ROOT = SCRIPT_DIR.parents[1]
+for _path in (SCRIPT_DIR, SCRIPTS_ROOT, ENGINE_ROOT):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 from boss_config import (
     DEFAULT_BOSS_MODEL,
@@ -31,10 +34,10 @@ from boss_config import (
     sanitize_boss_reasoning_effort,
 )
 
-ENGINE_ROOT = SCRIPT_DIR.parents[1]
 SKILLS_ROOT = ENGINE_ROOT / "skills"
 
 from op_router import SUPPORTED_COMMANDS, normalize_command
+from langsmith_tracing import emit_op_event_trace
 from planner.llm_planner import (
     materialize_bundle,
     render_prompt,
@@ -8396,6 +8399,22 @@ def _run_llm_plan_generation(
         prompt_path.write_text(prompt, encoding="utf-8")
 
         started_at = utc_now_iso()
+        emit_op_event_trace(
+            event_name="op.plan.planner_attempt.start",
+            run_type="llm",
+            payload={
+                "command": req.command,
+                "repo_root": str(req.repo_root),
+                "attempt": attempt,
+                "started_at": started_at,
+                "bundle_path": str(bundle_path),
+                "prompt_path": str(prompt_path),
+                "prompt_preview": prompt,
+                "model": "codex exec",
+                "skip_strategy": req.skip_strategy,
+                "executor_provider": req.executor_provider,
+            },
+        )
         try:
             exit_code = run_codex_exec(
                 repo_root=req.repo_root,
@@ -8426,6 +8445,23 @@ def _run_llm_plan_generation(
                     "llm_stderr_ref": str(stderr_path),
                     "status": "failed",
                     "exit_code": None,
+                },
+            )
+            emit_op_event_trace(
+                event_name="op.plan.planner_attempt.error",
+                run_type="llm",
+                payload={
+                    "command": req.command,
+                    "repo_root": str(req.repo_root),
+                    "attempt": attempt,
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                    "bundle_path": str(bundle_path),
+                    "prompt_path": str(prompt_path),
+                    "status": "failed",
+                    "errors": [error_row],
+                    "model": "codex exec",
+                    "skip_strategy": req.skip_strategy,
                 },
             )
             _emit_build_progress(req, f"planner generation failed before validation on attempt #{attempt}: {exc}")
@@ -8472,6 +8508,30 @@ def _run_llm_plan_generation(
                 "llm_stderr_ref": str(stderr_path),
                 "status": "passed" if final_validation else "failed",
                 "exit_code": exit_code,
+            },
+        )
+        emit_op_event_trace(
+            event_name="op.plan.planner_attempt.result",
+            run_type="llm",
+            payload={
+                "command": req.command,
+                "repo_root": str(req.repo_root),
+                "attempt": attempt,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "bundle_path": str(bundle_path),
+                "prompt_path": str(prompt_path),
+                "llm_stdout_ref": str(stdout_path),
+                "llm_stderr_ref": str(stderr_path),
+                "last_message_ref": str(last_message_path),
+                "parse_ok": parse_ok,
+                "schema_ok": schema_ok,
+                "plan_check_ok": plan_check_ok,
+                "status": "passed" if final_validation else "failed",
+                "exit_code": exit_code,
+                "errors": validation_errors,
+                "model": "codex exec",
+                "skip_strategy": req.skip_strategy,
             },
         )
 
@@ -9404,22 +9464,87 @@ def _run_controller_cycle(
         "emit_stdout": False,
     }
 
+    emit_op_event_trace(
+        event_name="op.build.controller_cycle.start",
+        run_type="tool",
+        payload={
+            "command": req.command,
+            "repo_root": str(req.repo_root),
+            "control_number": int(control_number),
+            "control_run_id": control_run_id,
+            "profile_aliases": profile_aliases or ["codex"],
+            "sleep_minutes": req.sleep_minutes,
+            "dry_run": req.dry_run,
+        },
+    )
     code, out, err = _run([sys.executable, str(script), "--input-json", "-"], cwd=req.repo_root, stdin_text=json.dumps(payload))
     raw = out.strip()
     if not raw:
+        emit_op_event_trace(
+            event_name="op.build.controller_cycle.error",
+            run_type="tool",
+            payload={
+                "command": req.command,
+                "repo_root": str(req.repo_root),
+                "control_number": int(control_number),
+                "control_run_id": control_run_id,
+                "status": "failed",
+                "errors": [{"code": "empty_output", "message": err.strip()}],
+                "exit_code": code,
+            },
+        )
         raise OpError("runtime_error", f"controller returned empty output (stderr={err.strip()})", stage="build")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
+        emit_op_event_trace(
+            event_name="op.build.controller_cycle.error",
+            run_type="tool",
+            payload={
+                "command": req.command,
+                "repo_root": str(req.repo_root),
+                "control_number": int(control_number),
+                "control_run_id": control_run_id,
+                "status": "failed",
+                "errors": [{"code": "invalid_json", "message": str(exc)}],
+                "exit_code": code,
+            },
+        )
         raise OpError("runtime_error", f"controller output is not valid JSON: {exc}", stage="build") from exc
 
     if code not in {0, 1}:
+        emit_op_event_trace(
+            event_name="op.build.controller_cycle.error",
+            run_type="tool",
+            payload={
+                "command": req.command,
+                "repo_root": str(req.repo_root),
+                "control_number": int(control_number),
+                "control_run_id": control_run_id,
+                "status": "failed",
+                "errors": [{"code": "unexpected_exit", "message": err.strip() or raw}],
+                "exit_code": code,
+            },
+        )
         raise OpError(
             "runtime_error",
             f"controller returned unexpected exit code {code}: {err.strip() or raw}",
             stage="build",
         )
     if not isinstance(parsed, dict):
+        emit_op_event_trace(
+            event_name="op.build.controller_cycle.error",
+            run_type="tool",
+            payload={
+                "command": req.command,
+                "repo_root": str(req.repo_root),
+                "control_number": int(control_number),
+                "control_run_id": control_run_id,
+                "status": "failed",
+                "errors": [{"code": "non_object_output", "message": "controller output must be object JSON"}],
+                "exit_code": code,
+            },
+        )
         raise OpError("runtime_error", "controller output must be object JSON", stage="build")
     returned_control_number = _coerce_nonneg_int(parsed.get("control_number"), default=0)
     if returned_control_number != int(control_number):
@@ -9441,6 +9566,20 @@ def _run_controller_cycle(
             ),
             stage="build",
         )
+    emit_op_event_trace(
+        event_name="op.build.controller_cycle.result",
+        run_type="tool",
+        payload={
+            "command": req.command,
+            "repo_root": str(req.repo_root),
+            "control_number": int(control_number),
+            "control_run_id": control_run_id,
+            "status": _as_str(parsed.get("status")) or "completed",
+            "ok": bool(parsed.get("ok", code == 0)),
+            "exit_code": code,
+            "result": parsed,
+        },
+    )
     return parsed
 
 
@@ -9932,6 +10071,27 @@ def _dispatch_task_packet(
         "dry_run": req.dry_run,
         "cycle_note": f"/op-build:{stage}:{task_id}",
     }
+    emit_op_event_trace(
+        event_name="op.build.dispatch.start",
+        run_type="tool",
+        payload={
+            "command": req.command,
+            "repo_root": str(req.repo_root),
+            "task_id": task_id,
+            "stage": stage,
+            "plan_id": plan_id,
+            "phase_id": payload.get("phase_id"),
+            "lane_id": lane_id,
+            "slot": slot_name,
+            "role": cfg["role"],
+            "dispatch_mode": dispatch_mode,
+            "executor_provider": executor_provider,
+            "executor_model": executor_model,
+            "branch_name": branch_name,
+            "worktree_root": worktree_root,
+            "dry_run": req.dry_run,
+        },
+    )
     result = _run_tool_json(script, payload, req.repo_root)
     if _as_bool_field(result.get("ok")):
         if stage in {"test", "review"}:
@@ -9967,6 +10127,28 @@ def _dispatch_task_packet(
         out = {"ok": True, "task_id": task_id, "stage": stage, "dispatch": result}
         if dispatch_warnings:
             out["warnings"] = dispatch_warnings
+        emit_op_event_trace(
+            event_name="op.build.dispatch.result",
+            run_type="tool",
+            payload={
+                "command": req.command,
+                "repo_root": str(req.repo_root),
+                "task_id": task_id,
+                "stage": stage,
+                "plan_id": plan_id,
+                "phase_id": payload.get("phase_id"),
+                "lane_id": lane_id,
+                "slot": slot_name,
+                "role": cfg["role"],
+                "dispatch_mode": dispatch_mode,
+                "executor_provider": executor_provider,
+                "executor_model": executor_model,
+                "status": "dispatched",
+                "ok": True,
+                "dispatch": result,
+                "warnings": dispatch_warnings,
+            },
+        )
         return out
     task["status"] = "blocked"
     task["owner_slot"] = None
@@ -9985,6 +10167,28 @@ def _dispatch_task_packet(
     out = {"ok": False, "task_id": task_id, "stage": stage, "dispatch": result}
     if dispatch_warnings:
         out["warnings"] = dispatch_warnings
+    emit_op_event_trace(
+        event_name="op.build.dispatch.result",
+        run_type="tool",
+        payload={
+            "command": req.command,
+            "repo_root": str(req.repo_root),
+            "task_id": task_id,
+            "stage": stage,
+            "plan_id": plan_id,
+            "phase_id": payload.get("phase_id"),
+            "lane_id": lane_id,
+            "slot": slot_name,
+            "role": cfg["role"],
+            "dispatch_mode": dispatch_mode,
+            "executor_provider": executor_provider,
+            "executor_model": executor_model,
+            "status": "failed",
+            "ok": False,
+            "dispatch": result,
+            "warnings": dispatch_warnings,
+        },
+    )
     return out
 
 
@@ -12577,4 +12781,54 @@ def execute_request(req: OpRequest) -> dict[str, Any]:
 
 def run_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     req = parse_request(payload)
-    return execute_request(req)
+    start_payload = {
+        "command": req.command,
+        "repo_root": str(req.repo_root),
+        "mission": req.mission,
+        "mission_file": req.mission_file,
+        "scope": req.scope,
+        "scope_file": req.scope_file,
+        "skip_strategy": req.skip_strategy,
+        "start_policy": req.start_policy,
+        "executor_provider": req.executor_provider,
+        "executor_model": req.executor_model,
+        "selected_aliases": req.selected_aliases,
+        "max_build_cycles": req.max_build_cycles,
+        "max_parallel_workers": req.max_parallel_workers,
+        "dry_run": req.dry_run,
+        "override_old_plan": req.override_old_plan,
+    }
+    emit_op_event_trace(
+        event_name="op.command.start",
+        run_type="chain",
+        payload=start_payload,
+    )
+    try:
+        result = execute_request(req)
+    except OpError as exc:
+        emit_op_event_trace(
+            event_name="op.command.error",
+            run_type="chain",
+            payload={
+                **start_payload,
+                "status": "failed",
+                "ok": False,
+                "errors": [{"code": exc.code, "message": exc.message, "stage": exc.stage}],
+            },
+        )
+        raise
+    emit_op_event_trace(
+        event_name="op.command.result",
+        run_type="chain",
+        payload={
+            **start_payload,
+            "status": _as_str(result.get("status")) or "completed",
+            "ok": bool(result.get("ok")),
+            "summary": _as_str(result.get("summary")),
+            "warnings": result.get("warnings") if isinstance(result.get("warnings"), list) else [],
+            "errors": result.get("errors") if isinstance(result.get("errors"), list) else [],
+            "artifacts": result.get("artifacts") if isinstance(result.get("artifacts"), list) else [],
+            "data": result.get("data") if isinstance(result.get("data"), dict) else {},
+        },
+    )
+    return result

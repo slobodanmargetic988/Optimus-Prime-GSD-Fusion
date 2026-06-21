@@ -50,3 +50,41 @@ export LANGSTACK_TRACE_MODEL=deterministic-replay
 
 This experiment starts with deterministic replay spans because the current pipeline materializes LLM-call-shaped trace rows rather than issuing live model requests in this path.
 That gives us LangSmith visibility into the existing autonomous builder trace structure first, then leaves a clear place to wrap real model calls when those are introduced.
+
+## OP build tracing
+
+The OP command surface also emits optional LangSmith spans when tracing is enabled:
+
+- `op.command.start/result/error`: top-level OP command lifecycle.
+- `op.plan.planner_attempt.start/result/error`: Codex planner attempts during `/op-plan` and `/op-initialize`.
+- `op.build.controller_cycle.*`: legacy controller-cycle orchestration boundaries.
+- `op.build.dispatch.*`: legacy worker dispatch boundaries.
+- `op.simple_build.start/result`: OP Simple runtime lifecycle used by `/op-build`.
+- `op.simple_build.cycle.start/summary`: each OP Simple cycle.
+- `op.simple_build.manager.start/result`: manager LLM calls such as BOSS, merge-manager, and wrapup-manager.
+- `op.simple_build.worker_dispatch.start/result`: worker packet dispatch launches.
+
+To run the first calculator-app experiment with strategy skipped, planning enabled, and Codex as the executor:
+
+```bash
+export LANGSTACK_TRACING=true
+export LANGSMITH_TRACING=true
+export LANGSMITH_API_KEY="..."
+export LANGSMITH_PROJECT="optimus-prime-gsd-fusion-op-build"
+export LANGSTACK_ENVIRONMENT=dev
+export LANGSTACK_AGENT_VERSION=langstack-op-build-experiment-v1
+
+caffeinate -dimsu python3 scripts/op/opctl.py \
+  --command /op-build \
+  --repo-root /Users/slobodan/projects/Earth/Optimus-Prime-GSD-Fusion \
+  --skip-strategy \
+  --start-policy new \
+  --override-old-plan \
+  --executor-provider codex \
+  --mission "Build a small calculator app for the first LangSmith traced OP build run." \
+  --scope "Create a simple calculator app with digit input, add/subtract/multiply/divide, clear, equals, keyboard-friendly interaction if practical, and a focused verification command." \
+  --max-build-cycles 3 \
+  --json-pretty
+```
+
+Remove `--max-build-cycles 3` when you want the autonomous loop to continue until its normal terminal condition.

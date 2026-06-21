@@ -10,6 +10,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -19,6 +20,10 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SCRIPTS_ROOT = SCRIPT_DIR.parent
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
+
+from langsmith_tracing import emit_op_event_trace
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_RUN_BASE_SOURCE_BRANCH = "main"
@@ -4099,6 +4104,25 @@ def _invoke_manager(
         log_profile_alias = None
     log_reasoning_effort = str(cfg.boss_reasoning_effort).strip() if manager_uses_boss_model else None
     log_tooling_effort = "medium_tooling" if manager_name in {"BOSS", "merge-manager", "wrapup-manager"} else None
+    emit_op_event_trace(
+        event_name="op.simple_build.manager.start",
+        run_type="llm",
+        payload={
+            "command": "op-simple-build",
+            "repo_root": str(cfg.repo_root),
+            "cycle_number": cycle_number,
+            "manager": manager_name,
+            "executor_provider": log_executor_provider,
+            "executor_model": log_executor_model,
+            "profile_alias": log_profile_alias,
+            "reasoning_effort": log_reasoning_effort,
+            "tooling_effort": log_tooling_effort,
+            "dry_run": cfg.dry_run,
+            "expected_artifacts": expected_artifacts,
+            "context": context,
+            "model": log_executor_model or log_executor_provider,
+        },
+    )
     if cfg.dry_run:
         if manager_name == "BOSS":
             _write_boss_stub(cfg, cycle_number)
@@ -4593,6 +4617,38 @@ def _invoke_manager(
             else None,
             "runtime_context_valid": timeout_log_runtime.get("runtime_context_valid"),
             "runtime_context_invalid_reasons": timeout_log_runtime.get("invalid_reasons"),
+        },
+    )
+    emit_op_event_trace(
+        event_name="op.simple_build.manager.result",
+        run_type="llm",
+        payload={
+            "command": "op-simple-build",
+            "repo_root": str(cfg.repo_root),
+            "cycle_number": cycle_number,
+            "manager": manager_name,
+            "status": result.status,
+            "ok": result.status == "ok",
+            "timeout": result.timeout,
+            "returncode": result.returncode,
+            "started_at": result.started_at,
+            "finished_at": result.finished_at,
+            "duration_seconds": result.duration_seconds,
+            "stdout_path": result.stdout_path,
+            "stderr_path": result.stderr_path,
+            "session_id": result.session_id,
+            "message": result.message,
+            "reason_code": result.reason_code,
+            "details": result.details if isinstance(result.details, dict) else {},
+            "executor_provider": log_executor_provider,
+            "executor_model": log_executor_model,
+            "profile_alias": log_profile_alias,
+            "reasoning_effort": log_reasoning_effort,
+            "tooling_effort": log_tooling_effort,
+            "llm_hardening_present": llm_hardening_present,
+            "llm_hardening_source": llm_hardening_source,
+            "prompt_preview": locals().get("prompt_text", ""),
+            "model": log_executor_model or log_executor_provider,
         },
     )
     return result
@@ -6951,6 +7007,23 @@ def _dispatch_packets(
             "timestamp": timestamp,
             "message": "",
         }
+        emit_op_event_trace(
+            event_name="op.simple_build.worker_dispatch.start",
+            run_type="tool",
+            payload={
+                "command": "op-simple-build",
+                "repo_root": str(cfg.repo_root),
+                "cycle_number": cycle_number,
+                "worker_id": worker_id,
+                "packet_id": packet_id,
+                "profile_alias": profile_alias,
+                "executor_provider": dispatch_provider,
+                "executor_model": dispatch_model,
+                "worker_worktree": str(worker_worktree) if worker_worktree is not None else "",
+                "prompt_preview": prompt,
+                "model": dispatch_model or dispatch_provider,
+            },
+        )
 
         if _executor_uses_codex_backend(dispatch_provider) and script is None:
             event["status"] = "launch_failed"
@@ -7083,6 +7156,27 @@ def _dispatch_packets(
 
         event_rows.append(event)
         _append_jsonl(cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE, event)
+        emit_op_event_trace(
+            event_name="op.simple_build.worker_dispatch.result",
+            run_type="tool",
+            payload={
+                "command": "op-simple-build",
+                "repo_root": str(cfg.repo_root),
+                "cycle_number": cycle_number,
+                "worker_id": worker_id,
+                "packet_id": packet_id,
+                "profile_alias": profile_alias,
+                "executor_provider": dispatch_provider,
+                "executor_model": dispatch_model,
+                "status": event.get("status"),
+                "ok": event.get("status") == "launched",
+                "thread_id": event.get("thread_id"),
+                "pid": event.get("pid"),
+                "message": event.get("message"),
+                "prompt_preview": prompt,
+                "model": dispatch_model or dispatch_provider,
+            },
+        )
 
     if event_rows:
         _update_dispatch_registry(cfg, event_rows)
@@ -9413,6 +9507,43 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
     cfg = _build_config(req)
     warnings: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    emit_op_event_trace(
+        event_name="op.simple_build.start",
+        run_type="chain",
+        payload={
+            "command": str(getattr(req, "command", "") or "op-simple-build"),
+            "repo_root": str(cfg.repo_root),
+            "max_build_cycles": cfg.max_build_cycles,
+            "max_parallel_workers": cfg.max_parallel_workers,
+            "dry_run": cfg.dry_run,
+            "executor_provider": cfg.executor_provider,
+            "executor_model": cfg.executor_model,
+            "selected_aliases": cfg.selected_aliases,
+            "resume_mode": cfg.resume_mode,
+            "run_base_source_branch": cfg.run_base_source_branch,
+            "boss_model": cfg.boss_model,
+            "boss_reasoning_effort": cfg.boss_reasoning_effort,
+        },
+    )
+
+    def _with_simple_trace(result: dict[str, Any]) -> dict[str, Any]:
+        emit_op_event_trace(
+            event_name="op.simple_build.result",
+            run_type="chain",
+            payload={
+                "command": str(getattr(req, "command", "") or "op-simple-build"),
+                "repo_root": str(cfg.repo_root),
+                "status": str(result.get("status") or ""),
+                "ok": bool(result.get("ok")),
+                "summary": str(result.get("summary") or ""),
+                "warnings": result.get("warnings") if isinstance(result.get("warnings"), list) else [],
+                "errors": result.get("errors") if isinstance(result.get("errors"), list) else [],
+                "artifacts": result.get("artifacts") if isinstance(result.get("artifacts"), list) else [],
+                "data": result.get("data") if isinstance(result.get("data"), dict) else {},
+            },
+        )
+        return result
+
     preexisting_run_lock = _read_json(cfg.repo_root / RUN_LOCK_FILE, default={})
     if not isinstance(preexisting_run_lock, dict):
         preexisting_run_lock = {}
@@ -9432,7 +9563,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
 
     lock_ok, lock_ref, active_lock = _acquire_run_lock(cfg)
     if not lock_ok:
-        return {
+        return _with_simple_trace({
             "ok": False,
             "status": "blocked_preflight",
             "summary": "Build blocked: another /op-simple-build loop is active.",
@@ -9449,7 +9580,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             "next_action": "Wait for active /op-simple-build to finish, or clear stale lock after confirming owner process is gone.",
             "state_ref": str((cfg.repo_root / RUN_LOCK_FILE).resolve()),
             "data": {},
-        }
+        })
 
     final_status = "completed"
     final_summary = "OP Simple build finished."
@@ -9512,7 +9643,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
         _seed_plan_artifacts_from_planner(cfg)
         lane_contract_ok, lane_contract = _plan_lane_base_branches_contract(cfg)
         if not lane_contract_ok:
-            return {
+            return _with_simple_trace({
                 "ok": False,
                 "status": "blocked_preflight",
                 "summary": "Build blocked: plan_packets lane-base contract is invalid.",
@@ -9535,7 +9666,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                     "lane_base_branches_required": True,
                     "plan_packets_ref": str((cfg.repo_root / ARTIFACT_FILES["plan_packets"]).resolve()),
                 },
-            }
+            })
         _refresh_lane_base_watchdog_registry(
             cfg,
             cycle_number=_load_cycle_counter(cfg),
@@ -9558,6 +9689,22 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             cycle_number += 1
             cycles_this_run += 1
             _write_cycle_counter(cfg, cycle_number)
+            emit_op_event_trace(
+                event_name="op.simple_build.cycle.start",
+                run_type="chain",
+                payload={
+                    "command": str(getattr(req, "command", "") or "op-simple-build"),
+                    "repo_root": str(cfg.repo_root),
+                    "cycle_number": cycle_number,
+                    "cycles_this_run": cycles_this_run,
+                    "max_build_cycles": cfg.max_build_cycles,
+                    "max_parallel_workers": cfg.max_parallel_workers,
+                    "executor_provider": cfg.executor_provider,
+                    "executor_model": cfg.executor_model,
+                    "dry_run": cfg.dry_run,
+                    "resume_mode": cfg.resume_mode,
+                },
+            )
 
             terminate_path = cfg.repo_root / TERMINATE_FILE_NAME
             if terminate_path.exists():
@@ -10460,6 +10607,27 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
                 cycle_mode=cycle_mode,
                 base_summary=base_summary,
             )
+            emit_op_event_trace(
+                event_name="op.simple_build.cycle.summary",
+                run_type="chain",
+                payload={
+                    "command": str(getattr(req, "command", "") or "op-simple-build"),
+                    "repo_root": str(cfg.repo_root),
+                    "cycle_number": cycle_number,
+                    "cycles_this_run": cycles_this_run,
+                    "cycle_mode": cycle_mode,
+                    "manager_statuses": manager_statuses,
+                    "dispatch_counts": dispatch_counts,
+                    "task_counts": summary.get("task_counts") if isinstance(summary, dict) else {},
+                    "project_done": bool(summary.get("project_done")) if isinstance(summary, dict) else False,
+                    "insurmountable_blocker": bool(summary.get("insurmountable_blocker")) if isinstance(summary, dict) else False,
+                    "stop_reason": str(summary.get("stop_reason") or "") if isinstance(summary, dict) else "",
+                    "termination": summary.get("termination") if isinstance(summary, dict) else {},
+                    "summary_ref": str((cfg.repo_root / ARTIFACT_FILES["cycle_summary"]).resolve()),
+                    "manager_call_log": str((cfg.repo_root / MANAGER_CALL_LOG_FILE).resolve()),
+                    "dispatch_launch_log": str((cfg.repo_root / DISPATCH_LAUNCH_LOG_FILE).resolve()),
+                },
+            )
             trace_errors: list[str] = []
             try:
                 trace_errors = _emit_cycle_trace_events(
@@ -10754,7 +10922,7 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             "run_base_branch": str((init_state.get("run_context") or {}).get("run_base_branch") or ""),
             "run_base_from_branch": str((init_state.get("run_context") or {}).get("run_base_from_branch") or ""),
         }
-        return {
+        return _with_simple_trace({
             "ok": final_status == "completed",
             "status": final_status,
             "summary": final_summary,
@@ -10764,9 +10932,9 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             "next_action": final_next_action,
             "state_ref": str((cfg.repo_root / ARTIFACT_FILES["cycle_summary"]).resolve()),
             "data": data,
-        }
+        })
     except SimpleBuildError as exc:
-        return {
+        return _with_simple_trace({
             "ok": False,
             "status": "failed",
             "summary": "OP Simple build failed.",
@@ -10776,9 +10944,9 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             "next_action": "Repair OP Simple runtime artifacts/config and rerun /op-simple-build.",
             "state_ref": str((cfg.repo_root / CURRENT_DIR).resolve()),
             "data": {},
-        }
+        })
     except Exception as exc:  # noqa: BLE001
-        return {
+        return _with_simple_trace({
             "ok": False,
             "status": "failed",
             "summary": "OP Simple build failed.",
@@ -10788,6 +10956,6 @@ def run_op_simple_build(req: Any) -> dict[str, Any]:
             "next_action": "Inspect manager logs under .op-simple/history and rerun /op-simple-build.",
             "state_ref": str((cfg.repo_root / CURRENT_DIR).resolve()),
             "data": {},
-        }
+        })
     finally:
         _release_run_lock(cfg, lock_ref if isinstance(lock_ref, str) else None)
