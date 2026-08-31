@@ -23,10 +23,42 @@ from scripts.install.common import SCHEMA_VERSION, parse_git_commit, sha256_file
 
 PLATFORMS = ["darwin", "linux"]
 PAYLOAD_PATHS = [
+    "agents",
+    "contracts",
     "scripts/op",
     "scripts/op_simple",
     "scripts/install",
+    "scripts/langsmith_tracing.py",
+    "scripts/quality",
+    "scripts/release",
     "scripts/test-train",
+    "scripts/strategy_artifacts_handoff.py",
+    "scripts/strategy_context_sweep.py",
+    "scripts/strategy_context_sweep_req020.py",
+    "scripts/strategy_context_sweep_req021.py",
+    "scripts/strategy_context_workers",
+    "scripts/strategy_llm_pipeline.py",
+    "scripts/strategy_llm_pipeline_req027_035.py",
+    "scripts/strategy_llm_pipeline_req036.py",
+    "scripts/strategy_llm_pipeline_req038_041.py",
+    "scripts/strategy_llm_pipeline_req039_047.py",
+    "scripts/strategy_llm_pipeline_req040.py",
+    "scripts/strategy_llm_pipeline_req042.py",
+    "scripts/strategy_llm_pipeline_req043.py",
+    "scripts/strategy_llm_pipeline_req044.py",
+    "scripts/strategy_llm_pipeline_req045.py",
+    "scripts/strategy_packet_validate.py",
+    "scripts/strategy_validators.py",
+    "scripts/_strategy_artifacts_req048_049_processing.py",
+    "scripts/_strategy_artifacts_req049.py",
+    "scripts/_strategy_artifacts_req050_compat.py",
+    "scripts/_strategy_artifacts_req052.py",
+    "scripts/_strategy_artifacts_req054_060_066.py",
+    "scripts/_strategy_artifacts_req056_057_063_069.py",
+    "scripts/_strategy_artifacts_req056_059.py",
+    "scripts/_strategy_artifacts_req056_062_068.py",
+    "scripts/_strategy_artifacts_req058_064_070.py",
+    "scripts/_strategy_artifacts_req069.py",
     "scripts/runtime-heal.sh",
     "scripts/runtime/start.sh",
     "scripts/runtime/health.sh",
@@ -35,7 +67,16 @@ PAYLOAD_PATHS = [
     "scripts/db-impact-detector.sh",
     "scripts/db-reset-migrate-seed.sh",
     "skills",
+    "op-tools/strategy",
+    "examples/fixtures",
+    "docs/contracts",
+    "docs/install",
     "docs/plans/OP_SIMPLE_SCHEMA_CATALOG_V2.md",
+    "docs/plans/PROGRAM_LANES_OVERVIEW.md",
+    "docs/plans/LANE_B_IMPLEMENTATION_STATUS.md",
+    "docs/plans/LANE_C_IMPLEMENTATION_STATUS.md",
+    "docs/plans/OP_PREPLANNER_STRATEGY_RESEARCH_STAGE.md",
+    "docs/release",
     "README.md",
     "VERSION",
 ]
@@ -49,6 +90,33 @@ REQUIRED_RUNTIME_SKILL_DIRS = [
     "skills/test-train-manager",
     "skills/thread-dispatch",
     "skills/workstation-preparation",
+]
+
+# Strategy/planning assets that installed OP needs for strategy-enabled demos,
+# validators, planner context, and operator self-service docs.
+REQUIRED_STRATEGY_PAYLOAD_FILES = [
+    "scripts/op/strategy_runner.py",
+    "scripts/op/run_strategy.py",
+    "scripts/langsmith_tracing.py",
+    "scripts/strategy_llm_pipeline.py",
+    "scripts/strategy_artifacts_handoff.py",
+    "scripts/strategy_packet_validate.py",
+    "scripts/strategy_validators.py",
+    "scripts/strategy_context_sweep.py",
+    "scripts/strategy_context_workers/__init__.py",
+    "contracts/strategy_packet.v1.schema.json",
+    "op-tools/strategy/README.md",
+    "op-tools/strategy/contracts/STRATEGY_PACKET_V1.md",
+    "op-tools/strategy/contracts/strategy_packet.v1.schema.json",
+    "op-tools/strategy/examples/strategy_packet.sample.v1.json",
+    "docs/install/BEGINNER_DEMO.md",
+    "docs/install/QUICKSTART.md",
+    "docs/install/UPGRADE.md",
+    "docs/install/TROUBLESHOOTING.md",
+    "docs/install/USING_OP_FOR_PROJECTS.md",
+    "docs/release/LANE_C_RELEASE_CHECKLIST.md",
+    "scripts/release/build_lane_c_bundle.py",
+    "scripts/release/validate_release_readiness.py",
 ]
 
 
@@ -79,6 +147,9 @@ def _collect_payload_files(repo_root: Path) -> list[str]:
     if run.returncode == 0:
         tracked = [item.decode("utf-8") for item in run.stdout.split(b"\x00") if item]
         out = [item for item in tracked if (repo_root / item).is_file()]
+        for rel in REQUIRED_STRATEGY_PAYLOAD_FILES:
+            if (repo_root / rel).is_file():
+                out.append(rel)
         return sorted(set(out))
 
     out: list[str] = []
@@ -113,6 +184,18 @@ def _validate_required_runtime_skills(repo_root: Path, managed_files: list[str])
     if missing_skills:
         raise RuntimeError(
             "bundle missing required runtime skills: " + ", ".join(missing_skills)
+        )
+
+
+def _validate_required_strategy_payload(repo_root: Path, managed_files: list[str]) -> None:
+    missing_paths = [rel for rel in REQUIRED_STRATEGY_PAYLOAD_FILES if not (repo_root / rel).is_file()]
+    if missing_paths:
+        raise RuntimeError(f"missing required strategy payload files: {', '.join(missing_paths)}")
+    managed = set(managed_files)
+    missing_managed = [rel for rel in REQUIRED_STRATEGY_PAYLOAD_FILES if rel not in managed]
+    if missing_managed:
+        raise RuntimeError(
+            "bundle missing required strategy payload files: " + ", ".join(missing_managed)
         )
 
 
@@ -185,6 +268,7 @@ def build_bundle(repo_root: Path, out_dir: Path, version: str) -> dict[str, Any]
 
     managed_files = _collect_payload_files(repo_root)
     _validate_required_runtime_skills(repo_root, managed_files)
+    _validate_required_strategy_payload(repo_root, managed_files)
     checksums = _copy_payload(repo_root, bundle_dir, managed_files)
     _write_checksum_files(bundle_dir, checksums)
     manifest = {

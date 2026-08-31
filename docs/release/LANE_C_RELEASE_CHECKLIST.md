@@ -22,6 +22,14 @@
    - `SHA256SUMS.json`
    - `<bundle>.tar.gz`
 3. Verify checksums and manifest required fields.
+4. Confirm strategy/demo payload files are present:
+   - `scripts/op/strategy_runner.py`
+   - `scripts/op/run_strategy.py`
+   - `scripts/strategy_llm_pipeline.py`
+   - `contracts/strategy_packet.v1.schema.json`
+   - `op-tools/strategy/examples/strategy_packet.sample.v1.json`
+   - `docs/install/BEGINNER_DEMO.md`
+   - `docs/install/USING_OP_FOR_PROJECTS.md`
 
 ## Publish
 
@@ -51,3 +59,4 @@
 4. Uninstall removes only managed files.
 5. `opctl doctor` returns expected status.
 6. `/op-*` workflow commands still emit unchanged Lane B JSON contract.
+7. Strategy-enabled initialize path is documented and can find bundled strategy assets.

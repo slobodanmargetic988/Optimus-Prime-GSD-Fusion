@@ -21,6 +21,8 @@ Current distribution mode: **private GitHub Releases** (prerelease channel first
 - macOS or Linux
 - Python 3.11+
 - `git`, `bash`
+- Codex CLI available on `PATH` for strategy, planning, and build LLM calls
+- at least one authenticated Codex home, usually `~/.codex/auth.json`
 - GitHub access to this private repository
 - Auth via one of:
   1. `gh auth login`
@@ -83,18 +85,57 @@ python3 scripts/install/op_install.py \
 
 ## How to Use (Core Workflow)
 
+OP is installed once, then pointed at another project with `--repo-root`.
+
+For a first demo on a target project:
+
+```bash
+cd /absolute/path/to/target-project
+opctl doctor --json-pretty
+```
+
+Strategy is optional but recommended. If `strategy/STRATEGY_MANIFEST.md` exists,
+`/op-initialize` runs the strategy stage before planning and writes:
+
+- `strategy/current/strategy_packet.md`
+- `strategy/current/STRATEGY_SUMMARY.md`
+
+Minimal strategy manifest:
+
+```md
+# Strategy Manifest
+
+## Mission
+Build or update this project according to the operator request.
+
+## Scope
+- Inspect README, source code, tests, and docs.
+- Identify constraints, sequencing risks, and reusable context.
+- Produce planner-facing guidance before implementation planning starts.
+
+## Sources to inspect
+- README.md
+- docs/
+- tests/
+```
+
 ## 1) Planning Bootstrap
 
 Run one command to prepare planning artifacts:
 
 ```bash
-opctl /op-initialize --mission "Build X" --scope "Y" --json-pretty
+opctl /op-initialize \
+  --repo-root /absolute/path/to/target-project \
+  --mission "Build X" \
+  --scope "Y" \
+  --json-pretty
 ```
 
 File-source mode is also supported:
 
 ```bash
 opctl /op-initialize \
+  --repo-root /absolute/path/to/target-project \
   --mission-file /abs/path/to/mission.md \
   --scope-file /abs/path/to/scope.txt \
   --json-pretty
@@ -117,7 +158,7 @@ Planner behavior:
 ## 2) One-Command Build (Initialize + Run)
 
 ```bash
-opctl /op-build --json-pretty
+opctl /op-build --repo-root /absolute/path/to/target-project --json-pretty
 ```
 
 `/op-build` now has start-policy routing built in:
@@ -138,10 +179,17 @@ Auto mode still forces a fresh run when you explicitly supply fresh-run intent:
 - `--override-old-plan`
 - `--run-base-source-branch`
 
+Strategy routing flags:
+- `--strategy-manifest "<markdown text>"` provides an inline manifest for the strategy stage.
+- `--strategy-manifest-file strategy/custom.md` points to a manifest file in the target project.
+- `--skip-strategy` bypasses strategy generation and lets planning continue without strategy artifacts.
+- If no strategy manifest exists and no explicit strategy flag is passed, initialize skips strategy and records that reason.
+
 Use file inputs directly on `/op-build`:
 
 ```bash
 opctl /op-build \
+  --repo-root /absolute/path/to/target-project \
   --mission-file /abs/path/to/mission.md \
   --scope-file /abs/path/to/scope.txt \
   --override-old-plan \
@@ -331,7 +379,9 @@ python3 scripts/install/op_install.py \
 - `managed_checksum_mismatch`: installed files differ from manifest checksums
 
 Detailed guides:
+- [BEGINNER DEMO FOR NON-PROGRAMMERS](docs/install/BEGINNER_DEMO.md)
 - [QUICKSTART](docs/install/QUICKSTART.md)
+- [USING OP FOR PROJECTS](docs/install/USING_OP_FOR_PROJECTS.md)
 - [UPGRADE](docs/install/UPGRADE.md)
 - [TROUBLESHOOTING](docs/install/TROUBLESHOOTING.md)
 - [TERMINAL DEBUG OUTPUT POLICY](docs/contracts/TERMINAL_DEBUG_OUTPUT_POLICY.md)

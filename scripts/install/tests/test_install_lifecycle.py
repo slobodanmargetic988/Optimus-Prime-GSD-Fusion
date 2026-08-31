@@ -57,6 +57,33 @@ def test_global_install_and_uninstall_flow():
         }
         for rel in worker_template_readmes:
             assert (install_root / rel).is_file()
+        strategy_demo_assets = {
+            "agents/optimus-planner/README.md",
+            "contracts/strategy_packet.v1.schema.json",
+            "docs/install/BEGINNER_DEMO.md",
+            "docs/install/QUICKSTART.md",
+            "docs/install/TROUBLESHOOTING.md",
+            "docs/install/UPGRADE.md",
+            "docs/install/USING_OP_FOR_PROJECTS.md",
+            "docs/release/LANE_C_RELEASE_CHECKLIST.md",
+            "examples/fixtures/multi-call-strategy-pipeline-planner.json",
+            "op-tools/strategy/README.md",
+            "op-tools/strategy/contracts/STRATEGY_PACKET_V1.md",
+            "op-tools/strategy/examples/strategy_packet.sample.v1.json",
+            "scripts/langsmith_tracing.py",
+            "scripts/op/run_strategy.py",
+            "scripts/op/strategy_runner.py",
+            "scripts/release/build_lane_c_bundle.py",
+            "scripts/release/validate_release_readiness.py",
+            "scripts/strategy_artifacts_handoff.py",
+            "scripts/strategy_context_sweep.py",
+            "scripts/strategy_context_workers/__init__.py",
+            "scripts/strategy_llm_pipeline.py",
+            "scripts/strategy_packet_validate.py",
+            "scripts/strategy_validators.py",
+        }
+        for rel in strategy_demo_assets:
+            assert (install_root / rel).is_file()
         codex_skills = Path(home) / ".codex" / "skills"
         required = {
             "dispatch-worker-packet",

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Expanded Lane C release bundles with strategy/planning runtime assets, contracts,
+  examples, operator docs, and planner agent templates needed for installed OP
+  demos against other projects.
+- Updated install documentation for strategy-enabled `/op-initialize` and
+  `/op-build` usage on target repositories.
+- Added a beginner-friendly demo guide with a minimal global install command
+  sequence for non-programmer evaluators.
+
 ## 0.3.0-rc.2 - 2026-02-27
 
 - Fixed release bundle file selection to avoid runtime cache artifacts (`__pycache__`, `*.pyc`) in managed payload/checksum contracts.

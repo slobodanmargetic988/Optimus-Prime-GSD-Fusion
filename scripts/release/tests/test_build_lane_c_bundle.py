@@ -94,4 +94,39 @@ def test_bundle_manifest_includes_op_simple_runtime_assets():
         for rel in required:
             assert rel in managed
         templates_manifest = set(manifest.get("templates_manifest") or [])
-        assert templates_manifest == set()
+        assert templates_manifest
+
+
+def test_bundle_manifest_includes_strategy_and_operator_docs_assets():
+    repo_root = Path(__file__).resolve().parents[3]
+    with tempfile.TemporaryDirectory() as tmp:
+        out = MODULE.build_bundle(repo_root, Path(tmp), "9.9.14-test")
+        manifest = json.loads((Path(out["bundle_dir"]) / "bundle_manifest.json").read_text(encoding="utf-8"))
+        managed = set(manifest["managed_files"])
+        required = {
+            "agents/optimus-planner/README.md",
+            "contracts/strategy_packet.v1.schema.json",
+            "docs/install/BEGINNER_DEMO.md",
+            "docs/install/QUICKSTART.md",
+            "docs/install/TROUBLESHOOTING.md",
+            "docs/install/UPGRADE.md",
+            "docs/install/USING_OP_FOR_PROJECTS.md",
+            "docs/release/LANE_C_RELEASE_CHECKLIST.md",
+            "examples/fixtures/multi-call-strategy-pipeline-planner.json",
+            "op-tools/strategy/README.md",
+            "op-tools/strategy/contracts/STRATEGY_PACKET_V1.md",
+            "op-tools/strategy/examples/strategy_packet.sample.v1.json",
+            "scripts/langsmith_tracing.py",
+            "scripts/op/run_strategy.py",
+            "scripts/op/strategy_runner.py",
+            "scripts/release/build_lane_c_bundle.py",
+            "scripts/release/validate_release_readiness.py",
+            "scripts/strategy_artifacts_handoff.py",
+            "scripts/strategy_context_sweep.py",
+            "scripts/strategy_context_workers/__init__.py",
+            "scripts/strategy_llm_pipeline.py",
+            "scripts/strategy_packet_validate.py",
+            "scripts/strategy_validators.py",
+        }
+        for rel in required:
+            assert rel in managed

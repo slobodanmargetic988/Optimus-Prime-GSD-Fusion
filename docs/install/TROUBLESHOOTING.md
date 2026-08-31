@@ -49,6 +49,41 @@ Fix:
 Note:
 - `--repair` does not bypass checksum integrity failures; it repairs only safe filesystem/launcher/state normalization paths.
 
+## `strategy_manifest_missing`
+
+Cause:
+- `/op-strategy` was called directly, or `/op-initialize` was called with an explicit missing `--strategy-manifest-file`.
+
+Fix:
+1. Create `strategy/STRATEGY_MANIFEST.md` in the target project, or
+2. Pass `--strategy-manifest-file /path/to/manifest.md`, or
+3. Pass `--skip-strategy` for a planning/build smoke test without strategy.
+
+Note:
+- `/op-initialize` skips strategy automatically when no default manifest exists and no explicit strategy flag is passed.
+
+## `override_required`
+
+Cause:
+- existing `reports/optimus-prime/planning` artifacts were detected.
+
+Fix:
+1. Re-run with `--override-old-plan` only when replacing the old plan is intentional.
+2. Use `opctl /op-status --repo-root <project> --json-pretty` first when you are not sure whether a prior OP run exists.
+
+## Codex command or profile errors
+
+Cause:
+- Codex CLI is not on `PATH`,
+- no authenticated Codex home exists,
+- `CODEX_HOME` points to the wrong profile,
+- selected aliases do not map to `.codex*` homes with `auth.json`.
+
+Fix:
+1. Run `codex --help`.
+2. Confirm `~/.codex/auth.json` exists, or set `CODEX_HOME` to the intended Codex home.
+3. For multiple accounts, create homes such as `~/.codex-second` and pass `--selected-aliases "codex,second"`.
+
 ## Launchers not found (`opctl`/`op`)
 
 Global default:
