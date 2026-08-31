@@ -117,7 +117,7 @@ Terminal one by one:
 cd ~
 mkdir -p projects
 cd projects
-git clone https://github.com/slobodanmargetic988/Optimus-Prime-GSD-Fusion.git
+git clone ssh://gitea@git.weeyuga.com/slobodanmargetic988/Optimus-Prime-GSD-Fusion.git
 cd Optimus-Prime-GSD-Fusion
 python3 -m scripts.release.build_lane_c_bundle --repo-root "$PWD" --out-dir dist --version 0.3.0-rc.2-local-demo
 python3 scripts/install/op_install.py --bundle-dir dist/optimus-prime-0.3.0-rc.2-local-demo --mode global
