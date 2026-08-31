@@ -74,7 +74,7 @@ and `scope.md`.
 Run:
 
 ```bash
-op /op-build --mission-file mission.md --scope-file scope.md --max-build-cycles 1
+op /op-build --mission-file mission.md --scope-file scope.md --max-build-cycles 10
 ```
 
 This command tells OP to plan the project first, then do one short build pass.
