@@ -11,7 +11,21 @@ const {Controller, validateConfig, buildPayload, redact} = require('../electron/
 const {Runtime, windowsPathToLinux} = require('../electron/runtime.cjs');
 const {prepareProvider} = require('../electron/provider-config.cjs');
 const vault = {isEncryptionAvailable: () => true, getSelectedStorageBackend: () => 'keychain', encryptString: value => Buffer.from([...value].reverse().join('')), decryptString: value => [...value.toString()].reverse().join('')};
-function fixture(t) { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'optimus-desktop-test-')); t.after(() => fs.rmSync(root, {recursive: true, force: true})); const project = path.join(root, 'project'); fs.mkdirSync(path.join(project, '.git'), {recursive: true}); return {root, project, store: new Store(path.join(root, 'state'), vault)}; }
+function fixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'optimus-desktop-test-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  // These tests run serially. Isolate Git identity so a developer's global
+  // configuration cannot hide failures in the repository-local fallback.
+  const isolated = {GIT_CONFIG_GLOBAL: path.join(root, 'empty.gitconfig'), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_COUNT: '0'};
+  const prior = Object.fromEntries(Object.keys(isolated).map(key => [key, process.env[key]]));
+  fs.writeFileSync(isolated.GIT_CONFIG_GLOBAL, '');
+  Object.assign(process.env, isolated);
+  t.after(() => {for (const [key, value] of Object.entries(prior)) {if (value === undefined) delete process.env[key]; else process.env[key] = value;}});
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  require('node:child_process').execFileSync('git', ['init', '-q', '-b', 'main', project], {env: process.env});
+  return {root, project, store: new Store(path.join(root, 'state'), vault)};
+}
 function config(project, extra = {}) {return {trustProject: true, mode: 'existing', projectPath: project, provider: 'codex', workers: 2, maxTasks: 40, maxCycles: 3, mission: 'Build a task manager', scope: 'A local task manager', files: [], ...extra};}
 function runtime() { const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {}; return {root: '/runtime', child, convert: value => value, environment: async () => ({ready: true, checks: [], providers: [{id: 'codex', available: true}, {id: 'claude', available: true}]}), launch(settings, envelope) {this.envelope = envelope; return child;}, stop: async () => {}, git: async () => ({stdout: ''})}; }
 test('credentials are encrypted, hidden from renderer, and never fall back to plaintext', t => {const {root, store} = fixture(t); const settings = store.settings(); settings.providers.codex.apiKey = 'sensitive-api-key'; store.saveSettings(settings); assert.equal(store.secret('codex'), 'sensitive-api-key'); assert.equal(store.settings().providers.codex.apiKey, undefined); assert.equal(store.settings().providers.codex.hasApiKey, true); assert.ok(!fs.readFileSync(path.join(root, 'state/desktop-state.json'), 'utf8').includes('sensitive-api-key')); store.safeStorage.getSelectedStorageBackend = () => 'basic_text'; assert.throws(() => store.saveSettings(settings), /Secure OS credential/); store.safeStorage.getSelectedStorageBackend = () => 'keychain';});
