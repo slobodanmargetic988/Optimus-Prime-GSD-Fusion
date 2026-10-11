@@ -16,6 +16,7 @@ if str(OP_ROOT) not in sys.path:
     sys.path.insert(0, str(OP_ROOT))
 
 from planner.llm_planner import BundleArtifact, PlannerError, parse_bundle_jsonl
+from planner.plan_limits import parse_max_plan_tasks, plan_task_limit_errors
 
 REQUIRED_STATIC = {
     "PLAN_PACKETS.json",
@@ -1272,8 +1273,12 @@ def _validate_text(path: str, artifact: BundleArtifact, errors: list[dict[str, o
         _err(errors, "planner_bundle_schema_error", f"{path} must start with heading '{header}'")
 
 
-def validate_bundle_contract(bundle_path: Path, planning_root: Path) -> tuple[dict[str, BundleArtifact] | None, list[dict[str, object]]]:
+def validate_bundle_contract(bundle_path: Path, planning_root: Path, *, max_plan_tasks: int | None = None) -> tuple[dict[str, BundleArtifact] | None, list[dict[str, object]]]:
     errors: list[dict[str, object]] = []
+    try:
+        max_plan_tasks = parse_max_plan_tasks(max_plan_tasks)
+    except ValueError as exc:
+        return None, [{"code": "input_error", "message": str(exc)}]
     try:
         bundle = parse_bundle_jsonl(bundle_path, planning_root)
     except PlannerError as exc:
@@ -1313,6 +1318,7 @@ def validate_bundle_contract(bundle_path: Path, planning_root: Path) -> tuple[di
     task_ids: list[str] = []
     req_ids: list[str] = []
     if plan_packets is not None:
+        errors.extend(plan_task_limit_errors(plan_packets.get("tasks"), max_plan_tasks))
         plan_id, task_ids, req_ids, _ = _validate_plan_packets(plan_packets, errors)
     if plan_check is not None:
         _validate_plan_check(plan_check, errors)
@@ -1411,8 +1417,8 @@ def validate_bundle_contract(bundle_path: Path, planning_root: Path) -> tuple[di
     return (None, errors) if errors else (bundle, [])
 
 
-def validate(bundle_path: Path, planning_root: Path) -> tuple[bool, list[dict[str, object]]]:
-    _bundle, errors = validate_bundle_contract(bundle_path, planning_root)
+def validate(bundle_path: Path, planning_root: Path, *, max_plan_tasks: int | None = None) -> tuple[bool, list[dict[str, object]]]:
+    _bundle, errors = validate_bundle_contract(bundle_path, planning_root, max_plan_tasks=max_plan_tasks)
     return len(errors) == 0, errors
 
 
@@ -1420,13 +1426,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate OP planner JSONL bundle")
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--bundle-path", required=True)
+    parser.add_argument("--max-plan-tasks", type=int)
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).expanduser().resolve()
     bundle_path = Path(args.bundle_path).expanduser().resolve()
     planning_root = (repo_root / "reports" / "optimus-prime" / "planning").resolve()
 
-    ok, errors = validate(bundle_path, planning_root)
+    ok, errors = validate(bundle_path, planning_root, max_plan_tasks=args.max_plan_tasks)
     out = {
         "schema_version": "1.0",
         "ok": ok,

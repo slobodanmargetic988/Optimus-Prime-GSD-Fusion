@@ -1,0 +1,91 @@
+{
+  "name": "optimus-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Your local workspace for autonomous software builds",
+  "author": "Slobodan Margetic",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "start": "npm run build && electron .",
+    "desktop:dev": "node scripts/dev.cjs",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && vite build",
+    "test": "node --test tests/*.test.cjs",
+    "stage": "node scripts/stage-runtime.cjs",
+    "package": "npm run build && npm run stage && electron-builder --publish never",
+    "package:dir": "npm run build && npm run stage && electron-builder --dir --publish never",
+    "smoke": "node scripts/smoke-desktop.cjs"
+  },
+  "dependencies": {
+    "lucide-react": "1.55.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.4"
+  },
+  "build": {
+    "appId": "app.optimus.desktop",
+    "productName": "Optimus",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "!electron/*.test.cjs",
+      "!electron/contract.d.ts",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".runtime",
+        "to": "runtime"
+      }
+    ],
+    "asar": true,
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "maintainer": "Optimus"
+    },
+    "icon": "build/icon.png"
+  },
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/slobodanmargetic988/Optimus-Prime-GSD-Fusion.git"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/slobodanmargetic988"
+  }
+}

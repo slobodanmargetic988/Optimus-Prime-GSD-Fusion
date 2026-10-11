@@ -108,7 +108,9 @@ def run_strategy(
     manifest_file: str | None = None,
     emit: Callable[[str], None] | None = None,
     codex_home: str | None = None,
+    executor: Callable[..., int] | None = None,
 ) -> StrategyRunResult:
+    # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=high_tooling.
     repo_root = repo_root.resolve()
     manifest_source = resolve_strategy_manifest_source(
         repo_root=repo_root,
@@ -140,7 +142,7 @@ def run_strategy(
                 emit(f"running strategy generation attempt {attempt}/{STRATEGY_MAX_ATTEMPTS}")
             _clear_strategy_outputs(packet_path, summary_path)
             try:
-                run_codex_exec(
+                (executor or run_codex_exec)(
                     repo_root=repo_root,
                     prompt_text=prompt_text,
                     output_last_message=last_message_path,

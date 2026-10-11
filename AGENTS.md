@@ -17,6 +17,12 @@ When writing project `scope.md` files for OP/BP planning, include this exact man
 - Any prompt tweak requests must be handed back to the user for manual insertion.
 - Provide prompt tweak suggestions in narrative form (not direct template edits).
 
+## Explicit Desktop Planning Limits
+- The operator can explicitly choose `--max-plan-tasks N` / JSON `max_plan_tasks` from 1 through 400. For that run, this newer operator choice overrides the fixed 400-task minimum above and any older minimum in scope documents.
+- This setting is a maximum, not a required task count. Keep requested scope and quality checks; reject or replan an oversized plan rather than truncating it or silently omitting work.
+- If the setting is omitted, preserve existing CLI planning policy. Plans created with a cap persist it in planning `STATE.json`; build and resume recheck that cap before dispatch.
+- Implement the override through runtime configuration and deterministic validation. Prompt template files remain unchanged.
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 

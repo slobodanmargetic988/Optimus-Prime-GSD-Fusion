@@ -63,3 +63,18 @@ dist/optimus-prime-*.gz
 /reports/optimus-prime/TEST_WAVE_LOG.jsonl
 # END OPTIMUS-PRIME MANAGED REPORT IGNORES
 .gitnexus
+
+# Local secrets, desktop state and generated verification artifacts
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local.env
+*.pem
+*.p12
+*.pfx
+**/auth.json
+**/desktop-state.json
+/output/
+**/gitleaks-report*.json
+/website/**/.openai/

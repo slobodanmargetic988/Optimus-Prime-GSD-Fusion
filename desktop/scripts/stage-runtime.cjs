@@ -1,0 +1,21 @@
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.resolve(__dirname, '../..');
+const destination = path.join(root, 'desktop/.runtime');
+fs.rmSync(destination, {recursive: true, force: true});
+const exclude = new Set(['__pycache__', '.pytest_cache', 'tests', 'node_modules', '.DS_Store']);
+for (const directory of ['scripts', 'skills']) fs.cpSync(path.join(root, directory), path.join(destination, directory), {recursive: true, filter: source => !source.split(path.sep).some(part => exclude.has(part)) && !source.endsWith('.pyc')});
+fs.mkdirSync(path.join(destination, 'docs/plans'), {recursive: true});
+fs.copyFileSync(path.join(root, 'docs/plans/OP_SIMPLE_SCHEMA_CATALOG_V2.md'), path.join(destination, 'docs/plans/OP_SIMPLE_SCHEMA_CATALOG_V2.md'));
+fs.mkdirSync(path.join(destination, 'desktop/electron'), {recursive: true});
+fs.copyFileSync(path.join(root, 'desktop/electron/runtime-bridge.py'), path.join(destination, 'desktop/electron/runtime-bridge.py'));
+for (const name of ['LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md']) fs.copyFileSync(path.join(root, name), path.join(destination, name));
+fs.cpSync(path.join(root, 'licenses'), path.join(destination, 'licenses'), {recursive: true});
+// Electron downloads its distribution lazily; ensure its bundled notices exist.
+require('electron');
+const electronDist = process.env.ELECTRON_OVERRIDE_DIST_PATH || path.join(path.dirname(require.resolve('electron/package.json')), 'dist');
+fs.copyFileSync(path.join(electronDist, 'LICENSE'), path.join(destination, 'licenses/Electron-LICENSE.txt'));
+fs.copyFileSync(path.join(electronDist, 'LICENSES.chromium.html'), path.join(destination, 'licenses/LICENSES.chromium.html'));
+for (const required of ['docs/plans/OP_SIMPLE_SCHEMA_CATALOG_V2.md', 'scripts/op/opctl.py', 'scripts/op/planner/prompts/llm_plan_prompt.md', 'skills/thread-dispatch/scripts/dispatch_codex_run.py', 'skills/workstation-preparation/scripts/prepare_workstation.py', 'desktop/electron/runtime-bridge.py']) if (!fs.existsSync(path.join(destination, required))) throw new Error(`Missing required runtime file: ${required}`);
+console.log('Optimus runtime staged in desktop/.runtime. Python, Git and provider CLIs are runtime prerequisites.');

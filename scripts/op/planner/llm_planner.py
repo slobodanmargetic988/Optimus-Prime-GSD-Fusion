@@ -176,7 +176,10 @@ def run_codex_exec(
     stdout_path: Path,
     stderr_path: Path,
     codex_home: str | None = None,
+    codex_profile: str | None = None,
+    model: str | None = None,
 ) -> int:
+    # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=high_tooling.
     output_last_message.parent.mkdir(parents=True, exist_ok=True)
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     stderr_path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,6 +196,10 @@ def run_codex_exec(
         str(output_last_message),
         "-",
     ]
+    if codex_profile:
+        cmd[2:2] = ["--profile", codex_profile]
+    if model:
+        cmd[2:2] = ["--model", model]
     env = None
     codex_home_text = (codex_home or "").strip()
     if codex_home_text:

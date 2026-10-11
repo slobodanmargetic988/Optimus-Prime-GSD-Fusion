@@ -1,0 +1,90 @@
+name: desktop-build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "scripts/**"
+      - "skills/**"
+      - "docs/plans/OP_SIMPLE_SCHEMA_CATALOG_V2.md"
+      - ".github/workflows/desktop-build.yml"
+  push:
+    tags:
+      - "desktop-v*"
+
+# Build review artifacts only. Publishing, signing and release credentials are
+# intentionally outside this workflow.
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            arch: arm64
+          - os: macos-latest
+            platform: mac
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: windows-latest
+            platform: win
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install locked desktop dependencies
+        run: npm ci
+      - name: Verify desktop backend with local process fixtures
+        if: runner.os != 'Windows'
+        run: npm test
+      - name: Verify provider routing and planning limits with fixtures
+        if: runner.os != 'Windows'
+        working-directory: .
+        run: |
+          python -m pip install pytest
+          python -m pytest scripts/op/tests/test_claude_executor.py scripts/op/tests/test_plan_limits.py scripts/op/tests/test_planning_executors.py -q
+      - name: Build and type-check interface
+        run: npm run build
+      - name: Stage engine and verify clean startup
+        run: |
+          npm run stage
+          python scripts/check-runtime.py
+      - name: Package unsigned review installers
+        run: npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+      - name: Upload installers for manual testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimus-desktop-${{ matrix.platform }}-${{ matrix.arch }}-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.exe
+            desktop/release/*.AppImage
+            desktop/release/*.deb

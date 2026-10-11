@@ -1,0 +1,27 @@
+title = "Optimus credential scanning"
+
+[extend]
+useDefault = true
+
+# These are application identifiers, not authentication credentials. Keep the
+# exceptions constrained to both the exact identifier format and known files.
+# Do not exclude whole fixture, log, test, or documentation directories.
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "REQ-053 deterministic SHA-256-derived recommendation identifiers"
+condition = "AND"
+paths = [
+  '''(^|/)strategy/current/samples/REQ-053_recommendation-id-stability-contract\.sample\.json$''',
+  '''(^|/)op-tools/strategy/strategy/current/recommendation_id_stability_contract\.v1\.json$''',
+]
+regexTarget = "secret"
+regexes = ['''^ridkey\.[a-f0-9]{12}$''']
+
+[[rules.allowlists]]
+description = "REQ-057 static validation reason codes from historical validator versions"
+condition = "AND"
+paths = ['''(^|/)scripts/strategy_validators\.py$''']
+regexTarget = "secret"
+regexes = ['''(?i)^req_057_policy_(missing|unexpected)_keys$''']

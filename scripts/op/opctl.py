@@ -175,12 +175,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-mode", choices=["json", "json+text"], default=None)
     parser.add_argument("--max-build-cycles", type=int)
     parser.add_argument("--max-parallel-workers", type=int)
+    parser.add_argument("--max-plan-tasks", type=int, help="Optional maximum generated plan tasks (1–400); existing planning policy applies when omitted")
     parser.add_argument("--worktrees-parent")
     parser.add_argument("--start-policy", choices=["auto", "new", "resume"], default=None)
     parser.add_argument("--run-base-source-branch")
     parser.add_argument("--profile")
     parser.add_argument("--selected-aliases")
-    parser.add_argument("--executor-provider", choices=["codex", "openrouter", "blackbox"], default=None)
+    parser.add_argument("--executor-provider", choices=["codex", "openrouter", "blackbox", "claude"], default=None)
     parser.add_argument("--executor-model")
     parser.add_argument("--blackbox-lane", choices=["free", "api_key"], default=None)
     parser.add_argument("--allow-worker-executor-override", action="store_true")
@@ -236,6 +237,8 @@ def merge_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload["max_build_cycles"] = args.max_build_cycles
     if args.max_parallel_workers is not None:
         payload["max_parallel_workers"] = args.max_parallel_workers
+    if args.max_plan_tasks is not None:
+        payload["max_plan_tasks"] = args.max_plan_tasks
     if args.worktrees_parent is not None:
         payload["worktrees_parent"] = args.worktrees_parent
     if args.start_policy is not None:

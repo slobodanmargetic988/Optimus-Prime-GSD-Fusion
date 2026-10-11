@@ -24,6 +24,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from langsmith_tracing import emit_op_event_trace, run_traced_op_operation
+from op.claude_executor import launch_claude_background, run_claude_exec
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_RUN_BASE_SOURCE_BRANCH = "main"
@@ -164,14 +165,14 @@ RETRYABLE_BOSS_PROFILE_ERROR_PATTERNS = (
 )
 CODEX_USAGE_LIMIT_REGEX = re.compile(r"you'?ve hit your usage limit", re.IGNORECASE)
 CODEX_USAGE_LIMIT_RESET_REGEX = re.compile(r"try again at\s+([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM))", re.IGNORECASE)
-EXECUTOR_PROVIDERS = {"codex", "openrouter", "blackbox"}
+EXECUTOR_PROVIDERS = {"codex", "openrouter", "blackbox", "claude"}
 BLACKBOX_LANES = {"free", "api_key"}
 BLACKBOX_DEFAULT_MODELS = {
     "free": "blackboxai/minimax/minimax-free",
     "api_key": "blackboxai/minimax/minimax-m2.5",
 }
 BLACKBOX_KEYCHAIN_SERVICE = "BLACKBOXAI_KEY"
-NEW_EXECUTOR_LOG_ROOT = Path("/Users/slobodan/projects/LOGS") / "op-executors"
+NEW_EXECUTOR_LOG_ROOT = Path(os.environ.get("OP_EXECUTOR_LOG_ROOT") or str(Path.home() / ".optimus" / "logs" / "op-executors")).expanduser()
 NEW_EXECUTOR_LOG_MAX_BYTES = 3 * 1024 * 1024 * 1024
 NEW_EXECUTOR_LOG_CHECK_INTERVAL_SECONDS = 900
 NEW_EXECUTOR_LOG_STATE_FILE = NEW_EXECUTOR_LOG_ROOT / "MAINTENANCE_STATE.json"
@@ -186,7 +187,7 @@ DEFAULT_CYCLE_RELEASE_TIMEOUT_SECONDS = 900
 DEFAULT_CYCLE_RELEASE_POLL_SECONDS = 5
 CYCLE_RELEASE_DEAD_PID_GUARD_SECONDS = 10
 CYCLE_RELEASE_MODES = {"token_conservative", "max_work"}
-DEFAULT_WORKTREES_PARENT = Path("/Users/slobodan/Forest")
+DEFAULT_WORKTREES_PARENT = Path.home() / ".optimus" / "worktrees"
 TRACE_EVENT_TIMESTAMP_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 TRACE_EVENT_SOURCE_SHA_REGEX = re.compile(r"^[0-9a-f]{7,40}$")
 TRACE_EVENT_ACTOR_TYPES = {"manager", "worker", "service", "operator", "system"}
@@ -1894,7 +1895,7 @@ def _manager_llm_metadata(cfg: RunConfig, *, manager_name: str, log_row: dict[st
     model = model_from_row or _resolve_executor_model(
         cfg,
         provider=provider,
-        model_override=cfg.executor_model or (cfg.boss_model if manager_name == "BOSS" else None),
+        model_override=cfg.executor_model or (cfg.boss_model if manager_name == "BOSS" and provider != "claude" else None),
     )
     profile_alias = _manager_profile_alias_from_log_row(row)
     reasoning_effort = str(row.get("reasoning_effort") or "").strip() or (
@@ -2819,6 +2820,10 @@ def _ensure_initialize_state(cfg: RunConfig, run_meta: dict[str, Any] | None = N
 
 def _resolve_workstation_prepare_script(cfg: RunConfig) -> Path | None:
     candidates: list[Path] = []
+    override = os.environ.get("OP_WORKSTATION_PREPARE_SCRIPT", "").strip()
+    if override:
+        candidate = Path(override).expanduser()
+        return candidate.resolve() if candidate.is_file() else None
     codex_home = os.environ.get("CODEX_HOME")
     if codex_home:
         candidates.append(
@@ -4107,6 +4112,70 @@ def _write_cycle_manager_decision(
     _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["cycle_manager_decision"], payload)
 
 
+def _claude_exec_prompt(
+    cfg: RunConfig,
+    manager_name: str,
+    cycle_number: int,
+    timeout_seconds: int,
+    prompt_text: str,
+    *,
+    model: str | None = None,
+) -> ManagerResult:
+    # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=medium_tooling.
+    started_at = utc_now_iso()
+    start_time = time.monotonic()
+    cycle_dir = _ensure_history_cycle_dir(cfg, cycle_number)
+    safe_name = manager_name.lower().replace(" ", "-")
+    stdout_path = cycle_dir / f"manager-{safe_name}.stdout.log"
+    stderr_path = cycle_dir / f"manager-{safe_name}.stderr.log"
+    final_path = cycle_dir / f"manager-{safe_name}.last_message.txt"
+    result = run_claude_exec(
+        repo_root=cfg.repo_root,
+        prompt_text=prompt_text,
+        output_last_message=final_path,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        timeout_seconds=timeout_seconds,
+        model=model,
+        reasoning_effort=cfg.boss_reasoning_effort,
+    )
+    return ManagerResult(
+        manager=manager_name,
+        status="ok" if result.returncode == 0 else "failed",
+        timeout=result.timeout,
+        returncode=result.returncode,
+        started_at=started_at,
+        finished_at=utc_now_iso(),
+        duration_seconds=round(time.monotonic() - start_time, 3),
+        stdout_path=str(stdout_path),
+        stderr_path=str(stderr_path),
+        message=result.message,
+        reason_code=result.reason_code,
+        session_id=result.session_id,
+    )
+
+
+def _write_claude_profile_snapshot(cfg: RunConfig, cycle_number: int) -> None:
+    """Publish a local execution identity, not fabricated provider quota data."""
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": utc_now_iso(),
+        "cycle_number": cycle_number,
+        "source": "claude-local-cli",
+        "provider": "claude",
+        "quota_status": "provider_managed_unknown",
+        "profiles": [{
+            "alias": "claude-local",
+            "provider": "claude",
+            "hard_gated": False,
+            "soft_gated": False,
+            "quota_status": "provider_managed_unknown",
+        }],
+    }
+    _atomic_write_json(cfg.repo_root / ARTIFACT_FILES["profile_snapshot"], payload)
+    _atomic_write_json(cfg.repo_root / CURRENT_DIR / f"_profile_snapshot_raw_cycle{cycle_number}.json", payload)
+
+
 def _invoke_manager(
     cfg: RunConfig,
     *,
@@ -4121,7 +4190,7 @@ def _invoke_manager(
     log_executor_model = _resolve_executor_model(
         cfg,
         provider=log_executor_provider,
-        model_override=cfg.executor_model or (cfg.boss_model if manager_uses_boss_model else None),
+        model_override=cfg.executor_model or (cfg.boss_model if manager_uses_boss_model and log_executor_provider != "claude" else None),
     )
     log_profile_alias = str(cfg.codex_profile or "").strip() or None
     if not _executor_uses_codex_backend(log_executor_provider):
@@ -4174,6 +4243,8 @@ def _invoke_manager(
         if not _executor_uses_codex_backend(log_executor_provider):
             log_profile_alias = None
         uses_codex_backend = _executor_uses_codex_backend(executor_provider)
+        if executor_provider == "claude":
+            _write_claude_profile_snapshot(cfg, cycle_number)
         selected_manager_alias: str | None = None
         selected_manager_home: str | None = None
         resume_session_id: str | None = None
@@ -4276,11 +4347,17 @@ def _invoke_manager(
                 "model": _resolve_executor_model(
                     cfg,
                     provider=executor_provider,
-                    model_override=cfg.executor_model or (cfg.boss_model if manager_uses_boss_model else None),
+                    model_override=cfg.executor_model or (cfg.boss_model if manager_uses_boss_model and executor_provider != "claude" else None),
                 ),
                 "blackbox_lane": _normalize_blackbox_lane(cfg.blackbox_lane),
             },
         }
+        if executor_provider == "claude":
+            packet["executor"].update({
+                "profile_alias": "claude-local",
+                "quota_source": "provider_managed_unknown",
+                "credential_source": "local_cli",
+            })
         prompt_text = template.strip()
         if manager_name == "BOSS" and _llm_profile_mode_enabled(cfg):
             profile_name = str(cfg.codex_profile or "").strip()
@@ -4303,7 +4380,7 @@ def _invoke_manager(
         manager_model = _resolve_executor_model(
             cfg,
             provider=executor_provider,
-            model_override=cfg.executor_model or (cfg.boss_model if manager_uses_boss_model else None),
+            model_override=cfg.executor_model or (cfg.boss_model if manager_uses_boss_model and executor_provider != "claude" else None),
         )
         log_executor_model = manager_model
         if uses_codex_backend:
@@ -4502,6 +4579,10 @@ def _invoke_manager(
                             "selection_evidence": rotation_selection_evidence,
                         },
                     )
+        elif executor_provider == "claude":
+            result = _claude_exec_prompt(
+                cfg, manager_name, cycle_number, timeout, prompt_text, model=manager_model,
+            )
         else:
             result = _blackbox_exec_prompt(
                 cfg,
@@ -4715,7 +4796,7 @@ def _extract_remaining_percent(window: Any) -> float | None:
 
 
 def _llm_profile_mode_enabled(cfg: RunConfig) -> bool:
-    return bool(str(cfg.codex_profile or "").strip())
+    return _executor_uses_codex_backend(_normalize_executor_provider(cfg.executor_provider)) and bool(str(cfg.codex_profile or "").strip())
 
 
 def _utc_iso_from_datetime(value: datetime) -> str:
@@ -5355,6 +5436,9 @@ def _profile_snapshot_row_count(cfg: RunConfig) -> int:
 
 
 def _bootstrap_profile_snapshot_before_first_boss(cfg: RunConfig, *, cycle_number: int) -> tuple[bool, str]:
+    if _normalize_executor_provider(cfg.executor_provider) == "claude":
+        _write_claude_profile_snapshot(cfg, cycle_number)
+        return True, "Claude local CLI identity is ready; quotas are enforced by the provider"
     if not _executor_uses_codex_backend(_normalize_executor_provider(cfg.executor_provider)):
         return True, "profile snapshot bootstrap skipped for non-codex executor provider"
     if _llm_profile_mode_enabled(cfg):
@@ -5479,6 +5563,16 @@ def _soonest_profile_reset_at(rows: list[dict[str, Any]]) -> tuple[str | None, f
 
 
 def _evaluate_rate_exhaustion_state(cfg: RunConfig) -> RateGateEvaluation:
+    if _normalize_executor_provider(cfg.executor_provider) == "claude":
+        return RateGateEvaluation(
+            outcome="has_capacity",
+            hard_gated_aliases=[],
+            soonest_reset_at=None,
+            hours_until_reset=None,
+            threshold_hours=int(RATE_GATE_TERMINAL_THRESHOLD_HOURS),
+            live_worker_pids=[],
+            message="Codex quota registry does not apply to Claude; the CLI enforces its own account limits",
+        )
     rows = _profile_snapshot_rows(cfg)
     threshold_hours = int(RATE_GATE_TERMINAL_THRESHOLD_HOURS)
     if not rows:
@@ -5919,12 +6013,17 @@ def _resolve_pre_boss_rate_evaluation(
 
 
 def _resolve_dispatch_script(cfg: RunConfig) -> Path | None:
+    override = os.environ.get("OP_THREAD_DISPATCH_SCRIPT", "").strip()
+    if override:
+        candidate = Path(override).expanduser()
+        return candidate.resolve() if candidate.is_file() else None
     codex_home = os.environ.get("CODEX_HOME")
     candidates: list[Path] = []
     if codex_home:
         candidates.append(Path(codex_home).expanduser() / "skills" / "thread-dispatch" / "scripts" / "dispatch_codex_run.py")
     candidates.append(Path.home() / ".codex" / "skills" / "thread-dispatch" / "scripts" / "dispatch_codex_run.py")
     candidates.append(cfg.repo_root / "skills" / "thread-dispatch" / "scripts" / "dispatch_codex_run.py")
+    candidates.append(SCRIPTS_ROOT.parent / "skills" / "thread-dispatch" / "scripts" / "dispatch_codex_run.py")
     for candidate in candidates:
         if candidate.exists():
             return candidate.resolve()
@@ -6983,6 +7082,34 @@ def _launch_blackbox_dispatch(
     return "launched", int(proc.pid), None, "blackbox dispatch started"
 
 
+def _launch_claude_dispatch(
+    cfg: RunConfig,
+    *,
+    cycle_number: int,
+    worker_id: str,
+    packet_id: str,
+    worker_worktree: Path,
+    prompt: str,
+    model: str | None,
+) -> tuple[str, int | None, str | None, str]:
+    # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=medium_tooling.
+    safe_worker = re.sub(r"[^A-Za-z0-9._-]+", "-", worker_id or "worker")
+    safe_packet = re.sub(r"[^A-Za-z0-9._-]+", "-", packet_id or "packet")
+    # Keep the established evidence path so existing reconciliation finds logs.
+    dispatch_log = worker_worktree / ".codex-dispatch" / f"dispatch-claude-{cycle_number}-{safe_worker}-{safe_packet}.log"
+    try:
+        launched = launch_claude_background(
+            repo_root=worker_worktree,
+            prompt_text=prompt,
+            stdout_path=dispatch_log,
+            model=model,
+            reasoning_effort=cfg.boss_reasoning_effort,
+        )
+    except (OSError, ValueError) as exc:
+        return "launch_failed", None, None, f"Claude dispatch failed to start: {exc}"
+    return "launched", launched.pid, launched.session_id, f"Claude dispatch started; log={dispatch_log}"
+
+
 def _dispatch_packets(
     cfg: RunConfig,
     cycle_number: int,
@@ -7180,7 +7307,8 @@ def _dispatch_packets(
                 counters["unknown"] += 1
                 active_count += 1
         else:
-            status, pid, thread_id, message = _launch_blackbox_dispatch(
+            launch = _launch_claude_dispatch if dispatch_provider == "claude" else _launch_blackbox_dispatch
+            status, pid, thread_id, message = launch(
                 cfg,
                 cycle_number=cycle_number,
                 worker_id=worker_id,

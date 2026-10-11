@@ -45,6 +45,7 @@ from planner.llm_planner import (
 )
 from planner.validate_git_bootstrap import validate_git_bootstrap
 from planner.validate_plan_bundle import validate_bundle_contract
+from planner.plan_limits import parse_max_plan_tasks, plan_task_limit_errors
 import strategy_runner
 
 SCHEMA_VERSION = "1.0"
@@ -351,6 +352,7 @@ class OpRequest:
     cycle_release_mode: str = "token_conservative"
     cycle_release_timeout_seconds: int = 900
     cycle_release_poll_seconds: int = 5
+    max_plan_tasks: int | None = None
 
 
 def utc_now_iso() -> str:
@@ -967,7 +969,11 @@ def _validate_profile_selection_payload(payload: Any, *, stage: str) -> dict[str
             stage=stage,
         )
     selected_aliases = [alias for alias in (_as_str(item) for item in selected_aliases_raw) if alias]
-    if not selected_aliases:
+    explicit_executor_configuration = (
+        payload.get("selection_policy") == "explicit_executor_configuration"
+        and payload.get("executor_provider") in {"codex", "openrouter", "blackbox", "claude"}
+    )
+    if not selected_aliases and not explicit_executor_configuration:
         raise OpError(
             "profile_selection_invalid",
             "PROFILE_SELECTION.json selected_aliases must contain at least one alias",
@@ -6943,9 +6949,8 @@ def _git_bootstrap_prompt_text(
         raise OpError("git_bootstrap_execution_failed", f"git bootstrap prompt template not found: {template_path}", stage="initialize")
     template_text = template_path.read_text(encoding="utf-8")
     validator_script = GIT_BOOTSTRAP_VALIDATOR_SCRIPT_PATH.resolve()
-    validator_command = (
-        f"python3 {validator_script} --repo-root {req.repo_root} --required-branch {GIT_BOOTSTRAP_REQUIRED_BRANCH} --require-readme"
-    )
+    validator_args = [sys.executable, str(validator_script), "--repo-root", str(req.repo_root), "--required-branch", GIT_BOOTSTRAP_REQUIRED_BRANCH, "--require-readme"]
+    validator_command = subprocess.list2cmdline(validator_args) if os.name == "nt" else shlex.join(validator_args)
     prompt = template_text
     replacements = {
         "{{REPO_ROOT}}": str(req.repo_root),
@@ -6964,7 +6969,56 @@ def _git_bootstrap_prompt_text(
     return prompt
 
 
+def _run_planning_executor(req: OpRequest, **kwargs: Any) -> int:
+    """Route planning/bootstrap/strategy through the explicitly selected local executor."""
+    # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=high_tooling.
+    kwargs.pop("repo_root", None)
+    supplied_home = kwargs.pop("codex_home", None)
+    if req.executor_provider == "claude":
+        from claude_executor import run_claude_exec
+
+        result = run_claude_exec(repo_root=req.repo_root, model=req.executor_model, **kwargs)
+        return result.returncode
+    if req.executor_provider == "blackbox":
+        from op_simple_build import _build_blackbox_exec_command
+
+        if req.blackbox_lane == "free":
+            raise OSError("Planning requires the Blackbox API-key lane; free-tier routing is not permitted for high-effort planning")
+        cmd, env, error = _build_blackbox_exec_command(req, kwargs["prompt_text"])
+        if error:
+            raise OSError(error)
+        for key in ("stdout_path", "stderr_path", "output_last_message"):
+            kwargs[key].parent.mkdir(parents=True, exist_ok=True)
+        kwargs["output_last_message"].unlink(missing_ok=True)
+        try:
+            result = subprocess.run(cmd, cwd=req.repo_root, env=env, capture_output=True, text=True, timeout=1800, check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise OSError("Blackbox planning execution timed out after 1800 seconds") from exc
+        kwargs["stdout_path"].write_text(result.stdout or "", encoding="utf-8")
+        kwargs["stderr_path"].write_text(result.stderr or "", encoding="utf-8")
+        kwargs["output_last_message"].write_text(result.stdout or "", encoding="utf-8")
+        return result.returncode
+    if req.codex_profile:
+        kwargs["codex_profile"] = req.codex_profile
+    if req.executor_model:
+        kwargs["model"] = req.executor_model
+    if req.codex_profile:
+        supplied_home = _as_str(os.environ.get("CODEX_HOME"))
+    elif req.selected_aliases:
+        if _repo_path(req.repo_root, PROFILE_SELECTION_JSON).exists():
+            rows = _load_profile_selection_required(req.repo_root, stage="plan")
+        else:
+            rows = _validate_profile_selection_payload(_detect_profile_selection_payload(), stage="plan")
+        homes = rows.get("alias_to_home", {})
+        aliases = req.selected_aliases
+        supplied_home = next((homes.get(alias) or homes.get(f"codex-{alias}") for alias in aliases if homes.get(alias) or homes.get(f"codex-{alias}")), None)
+        if not supplied_home:
+            raise OSError("No authenticated Codex home matches the explicitly selected aliases")
+    return run_codex_exec(repo_root=req.repo_root, codex_home=supplied_home, **kwargs)
+
+
 def _ensure_git_initialized_for_initialize(req: OpRequest) -> tuple[list[dict[str, Any]], list[str]]:
+    # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=high_tooling.
     warnings: list[dict[str, Any]] = []
     artifacts: list[str] = []
     exit_code = 0
@@ -6986,7 +7040,8 @@ def _ensure_git_initialized_for_initialize(req: OpRequest) -> tuple[list[dict[st
         artifacts.extend([str(prompt_path), str(stdout_path), str(stderr_path), str(last_message_path)])
 
         try:
-            exit_code = run_codex_exec(
+            exit_code = _run_planning_executor(
+                req,
                 repo_root=req.repo_root,
                 prompt_text=prompt,
                 output_last_message=last_message_path,
@@ -6995,7 +7050,7 @@ def _ensure_git_initialized_for_initialize(req: OpRequest) -> tuple[list[dict[st
             )
         except OSError as exc:
             _emit_build_progress(req, f"git bootstrap failed before verification: {exc}")
-            raise OpError("git_bootstrap_execution_failed", f"unable to invoke codex exec for git bootstrap: {exc}", stage="initialize") from exc
+            raise OpError("git_bootstrap_execution_failed", f"unable to invoke {req.executor_provider} for git bootstrap: {exc}", stage="initialize") from exc
 
     branch_layout = _ensure_initialize_branch_layout(req.repo_root)
     _emit_build_progress(
@@ -7028,7 +7083,7 @@ def _ensure_git_initialized_for_initialize(req: OpRequest) -> tuple[list[dict[st
         warnings.append(
             {
                 "code": "git_bootstrap_nonzero_exit",
-                "message": f"codex exec exited with code {exit_code} during git bootstrap; verification still passed",
+                "message": f"{req.executor_provider} exited with code {exit_code} during git bootstrap; verification still passed",
                 "stage": "initialize",
             }
         )
@@ -7366,6 +7421,7 @@ def _strategy_request_state(req: OpRequest, *, auto_optional: bool) -> dict[str,
 
 
 def _run_strategy_command(req: OpRequest, *, auto_optional: bool) -> dict[str, Any]:
+    # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=high_tooling.
     strategy_state = _strategy_request_state(req, auto_optional=auto_optional)
     manifest_path = strategy_state["manifest_path"]
     manifest_ref = _as_str(strategy_state.get("manifest_ref")) or ""
@@ -7422,12 +7478,16 @@ def _run_strategy_command(req: OpRequest, *, auto_optional: bool) -> dict[str, A
             },
         }
 
+    executor_kwargs: dict[str, Any] = {}
+    if req.executor_provider != "codex" or req.codex_profile or req.executor_model or req.selected_aliases:
+        executor_kwargs["executor"] = lambda **kwargs: _run_planning_executor(req, **kwargs)
     try:
         result = strategy_runner.run_strategy(
             repo_root=req.repo_root,
             manifest=req.strategy_manifest,
             manifest_file=req.strategy_manifest_file,
             emit=lambda message: _emit_build_progress(replace(req, command="op-strategy"), message),
+            **executor_kwargs,
         )
     except strategy_runner.StrategyRunnerError as exc:
         return {
@@ -8095,7 +8155,7 @@ def _validate_hardening_rule(tasks: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def _planner_validate_bundle(req: OpRequest, bundle_path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     planning_root = _repo_path(req.repo_root, PLANNING_REL)
-    strict_bundle, strict_errors = validate_bundle_contract(bundle_path, planning_root)
+    strict_bundle, strict_errors = validate_bundle_contract(bundle_path, planning_root, max_plan_tasks=req.max_plan_tasks)
     if strict_errors:
         return None, [{"code": _as_str(item.get("code")) or "planner_bundle_schema_error", "message": _as_str(item.get("message")) or "planner bundle validation failed", **{k: v for k, v in item.items() if k not in {"code", "message"}}} for item in strict_errors]
     if strict_bundle is None:
@@ -8338,9 +8398,10 @@ def _planner_prompt_text(
         raise OpError("planner_execution_failed", f"planner prompt template not found: {template_path}", stage="plan")
     template_text = template_path.read_text(encoding="utf-8")
     validator_script = PLANNER_VALIDATOR_SCRIPT_PATH.resolve()
-    validator_command = (
-        f"python3 {validator_script} --repo-root {req.repo_root} --bundle-path {bundle_path}"
-    )
+    validator_args = [sys.executable, str(validator_script), "--repo-root", str(req.repo_root), "--bundle-path", str(bundle_path)]
+    if req.max_plan_tasks is not None:
+        validator_args.extend(["--max-plan-tasks", str(req.max_plan_tasks)])
+    validator_command = subprocess.list2cmdline(validator_args) if os.name == "nt" else shlex.join(validator_args)
     prompt = render_prompt(
         template_text,
         repo_root=req.repo_root,
@@ -8361,6 +8422,18 @@ def _planner_prompt_text(
     strategy_note = strategy_runner.build_planner_strategy_note(skip_strategy=req.skip_strategy)
     if strategy_note:
         prompt += "\n\n" + strategy_note
+    if req.max_plan_tasks is not None:
+        prompt += (
+            "\n\nExplicit operator planning limit for this run:\n"
+            f"Generate between 1 and {req.max_plan_tasks} total tasks in PLAN_PACKETS.json. "
+            "This is a maximum, not a target; use fewer tasks when sufficient. "
+            "The operator has explicitly replaced any older minimum-task-count policy for this run, "
+            "including a 400-task minimum in repository instructions or scope documents. "
+            "Keep all requested scope, acceptance criteria, verification, dependency and quality gates. "
+            "For small plans combine related work with its verification into the same task. "
+            "Do not omit requested work or truncate tasks to fit. If the scope cannot fit, explain the conflict and stop. "
+            "The validator rejects plans above this maximum.\n"
+        )
     return prompt
 
 
@@ -8370,10 +8443,13 @@ def _run_llm_plan_generation(
     mission_source: dict[str, Any],
     scope_source: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    # LLM interaction classification: reasoning_effort=high_effort, tooling_effort=high_tooling.
     planning_root = _repo_path(req.repo_root, PLANNING_REL)
     llm_root = _repo_path(req.repo_root, PLANNER_REL)
     attempts_log_path = _repo_path(req.repo_root, PLANNER_ATTEMPTS_JSONL)
-    _planner_alias, planner_codex_home = _select_planner_profile_from_rate_registry(req.repo_root, stage="plan")
+    planner_codex_home = None
+    if req.executor_provider in {"codex", "openrouter"} and not req.codex_profile:
+        _planner_alias, planner_codex_home = _select_planner_profile_from_rate_registry(req.repo_root, stage="plan")
     errors_for_retry: list[dict[str, Any]] = []
     final_validation: dict[str, Any] | None = None
     warnings: list[dict[str, Any]] = []
@@ -8410,13 +8486,14 @@ def _run_llm_plan_generation(
                 "bundle_path": str(bundle_path),
                 "prompt_path": str(prompt_path),
                 "prompt_preview": prompt,
-                "model": "codex exec",
+                "model": req.executor_model or f"{req.executor_provider} CLI default",
                 "skip_strategy": req.skip_strategy,
                 "executor_provider": req.executor_provider,
             },
         )
         try:
-            exit_code = run_codex_exec(
+            exit_code = _run_planning_executor(
+                req,
                 repo_root=req.repo_root,
                 prompt_text=prompt,
                 output_last_message=last_message_path,
@@ -8428,7 +8505,7 @@ def _run_llm_plan_generation(
             finished_at = utc_now_iso()
             error_row = {
                 "code": "planner_execution_failed",
-                "message": f"unable to invoke codex exec: {exc}",
+                "message": f"unable to invoke {req.executor_provider}: {exc}",
             }
             _append_jsonl(
                 attempts_log_path,
@@ -8460,7 +8537,7 @@ def _run_llm_plan_generation(
                     "prompt_path": str(prompt_path),
                     "status": "failed",
                     "errors": [error_row],
-                    "model": "codex exec",
+                    "model": req.executor_model or f"{req.executor_provider} CLI default",
                     "skip_strategy": req.skip_strategy,
                 },
             )
@@ -8530,7 +8607,7 @@ def _run_llm_plan_generation(
                 "status": "passed" if final_validation else "failed",
                 "exit_code": exit_code,
                 "errors": validation_errors,
-                "model": "codex exec",
+                "model": req.executor_model or f"{req.executor_provider} CLI default",
                 "skip_strategy": req.skip_strategy,
             },
         )
@@ -8543,7 +8620,7 @@ def _run_llm_plan_generation(
             warnings.append(
                 {
                     "code": "planner_execution_failed",
-                    "message": f"codex exec attempt {attempt} exited with code {exit_code}",
+                    "message": f"{req.executor_provider} attempt {attempt} exited with code {exit_code}",
                     "stage": "plan",
                 }
             )
@@ -8951,6 +9028,8 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
     requirements = _normalize_requirement_rows(plan_packets.get("requirements"))
     merged_state["requirements"] = requirements
     merged_state["phase_count"] = len(plan_packets.get("phases", [])) if isinstance(plan_packets.get("phases"), list) else 0
+    if req.max_plan_tasks is not None:
+        merged_state["max_plan_tasks"] = req.max_plan_tasks
     _atomic_write_json(state_path, merged_state)
 
     if requirements:
@@ -8977,6 +9056,8 @@ def command_plan(req: OpRequest) -> dict[str, Any]:
         data={
             "plan_id": plan_id,
             "plan_ready": bool(recomputed_plan_check.get("passed")),
+            "max_plan_tasks": req.max_plan_tasks,
+            "task_count": len(plan_packets.get("tasks", [])),
         },
     )
 
@@ -9052,7 +9133,16 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
         run_base_source_branch=req.run_base_source_branch,
     )
 
-    profile_selection = _detect_profile_selection_payload()
+    uses_subscription_profiles = req.executor_provider in {"codex", "openrouter"} and not req.codex_profile
+    profile_selection = _detect_profile_selection_payload() if uses_subscription_profiles else {
+        "schema_version": SCHEMA_VERSION,
+        "detected_at": utc_now_iso(),
+        "profiles": [],
+        "selected_aliases": [],
+        "selection_policy": "explicit_executor_configuration",
+        "executor_provider": req.executor_provider,
+        "notes": ["Uses the selected CLI configuration; no Codex subscription profiles are scanned."],
+    }
     profile_selection_path = _repo_path(req.repo_root, PROFILE_SELECTION_JSON)
     _atomic_write_json(profile_selection_path, profile_selection)
 
@@ -9069,7 +9159,7 @@ def command_initialize(req: OpRequest) -> dict[str, Any]:
         req.repo_root,
         stage="initialize",
         profile_selection=profile_selection,
-    )
+    ) if uses_subscription_profiles else []
 
     plan_result = command_plan(req)
     _update_app_lifecycle_era_plan_id(
@@ -11619,6 +11709,31 @@ def _preflight_build(
     return warnings, missing, state_payload, plan_packets, task_state, profile_selection
 
 
+def _enforce_existing_plan_task_limit(req: OpRequest) -> None:
+    """Recheck explicit/persisted plan caps before any build or resume dispatch."""
+    maximum = req.max_plan_tasks
+    if maximum is None:
+        state_path = _repo_path(req.repo_root, STATE_JSON)
+        if not state_path.exists():
+            return
+        state = _read_json(state_path)
+        if not isinstance(state, dict) or state.get("max_plan_tasks") is None:
+            return
+        try:
+            maximum = parse_max_plan_tasks(state["max_plan_tasks"])
+        except ValueError as exc:
+            raise OpError("input_error", f"Persisted planning limit is invalid: {exc}", stage="build_preflight") from exc
+    plan_path = _repo_path(req.repo_root, PLAN_PACKETS_JSON)
+    if not plan_path.exists():
+        raise OpError("plan_not_ready", "Cannot enforce the task limit: PLAN_PACKETS.json is missing. Run /op-initialize first.", stage="build_preflight")
+    plan = _read_json(plan_path)
+    if not isinstance(plan, dict) or not isinstance(plan.get("tasks"), list) or not plan["tasks"]:
+        raise OpError("plan_not_ready", "Cannot enforce the task limit: PLAN_PACKETS.tasks must be a non-empty list.", stage="build_preflight")
+    errors = plan_task_limit_errors(plan["tasks"], maximum)
+    if errors:
+        raise OpError(errors[0]["code"], errors[0]["message"], stage="build_preflight")
+
+
 def command_build(req: OpRequest) -> dict[str, Any]:
     from op_simple_build import SimpleBuildError, run_op_simple_build
 
@@ -11707,6 +11822,7 @@ def command_build(req: OpRequest) -> dict[str, Any]:
     else:
         simple_req = replace(req, command="op-resume")
 
+    _enforce_existing_plan_task_limit(simple_req)
     result = run_op_simple_build(simple_req)
     _sync_build_state_from_simple_result(req.repo_root, result)
     simple_warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
@@ -11899,6 +12015,7 @@ def command_health(req: OpRequest) -> dict[str, Any]:
 def command_simple_build(req: OpRequest) -> dict[str, Any]:
     from op_simple_build import run_op_simple_build
 
+    _enforce_existing_plan_task_limit(req)
     result = run_op_simple_build(req)
     _sync_build_state_from_simple_result(req.repo_root, result)
     return _response(
@@ -12509,6 +12626,7 @@ def _resume_reset_exhausted_retries(repo_root: Path) -> tuple[list[dict[str, Any
 
 
 def command_resume(req: OpRequest) -> dict[str, Any]:
+    _enforce_existing_plan_task_limit(req)
     simple_runtime_marker = req.repo_root / ".op-simple" / "current" / "initialize_state.json"
     if not simple_runtime_marker.exists():
         return _response(
@@ -12572,6 +12690,10 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
             stage="input",
         )
 
+    try:
+        max_plan_tasks = parse_max_plan_tasks(payload.get("max_plan_tasks"))
+    except ValueError as exc:
+        raise OpError("input_error", str(exc), stage="input") from exc
     max_build_cycles = payload.get("max_build_cycles")
     max_cycles_out: int | None
     if max_build_cycles is None:
@@ -12663,10 +12785,10 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
     profile = _as_str(payload.get("profile"))
     codex_profile = _as_str(payload.get("codex_profile")) or profile
     executor_provider = (_as_str(payload.get("executor_provider")) or "codex").lower()
-    if executor_provider not in {"codex", "openrouter", "blackbox"}:
+    if executor_provider not in {"codex", "openrouter", "blackbox", "claude"}:
         raise OpError(
             "input_error",
-            "executor_provider must be one of: codex, openrouter, blackbox",
+            "executor_provider must be one of: codex, openrouter, blackbox, claude",
             stage="input",
         )
     blackbox_lane = (_as_str(payload.get("blackbox_lane")) or "free").lower()
@@ -12746,6 +12868,7 @@ def parse_request(payload: dict[str, Any]) -> OpRequest:
         cycle_release_mode=cycle_release_mode,
         cycle_release_timeout_seconds=cycle_release_timeout_seconds,
         cycle_release_poll_seconds=cycle_release_poll_seconds,
+        max_plan_tasks=max_plan_tasks,
     )
 
 

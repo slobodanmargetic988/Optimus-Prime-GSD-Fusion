@@ -1,6 +1,12 @@
 # Optimus Prime GSD Fusion
 
-A deterministic, plan-driven autonomous builder built around the `/op-*` workflow.
+A free, local, plan-driven autonomous builder with a desktop interface and the `/op-*` command-line workflow. Configure your AI provider, set your task and worker limits, then plan, build and resume projects on your own computer.
+
+[Desktop setup](desktop/README.md) · [Contribute](CONTRIBUTING.md) · [Sponsor the project](https://github.com/sponsors/slobodanmargetic988)
+
+Optimus code is open source under [Apache 2.0](LICENSE). Third-party components retain their own licenses; see [the notices](THIRD_PARTY_NOTICES.md). The repository remains **private during testing** and will be made public only when the maintainer is ready. Access currently requires an invitation.
+
+Optimus is free to use. Sponsorship is optional and helps support development. Bring your own provider account; provider subscriptions and API usage remain your responsibility.
 
 This repository currently ships:
 - Lane A core cycle control
@@ -11,18 +17,32 @@ Current distribution mode: **private GitHub Releases** (prerelease channel first
 
 ## What You Get
 
+- Desktop app for macOS, Linux and Windows (Windows engine execution uses WSL 2)
+- New/existing projects, drag-and-drop inputs, provider settings and live progress
+- Optional task ceilings from 1 to 400 and configurable parallel workers
+
 - Deterministic 2-step flow: **plan first, then autonomous build**
 - Strict gates for quality, runtime health, and completion evidence
 - Install/update/uninstall/doctor commands for local or global usage
 - Repo-local and machine-readable artifacts for traceability
+
+## Desktop quick start
+
+```sh
+cd desktop
+npm ci
+npm start
+```
+
+Use Node.js 24. Python 3.11+, Git and the selected provider CLI must be installed. See the [desktop guide](desktop/README.md) for Windows/WSL setup, provider configuration and installer builds. The app’s **About** page links to this repository and GitHub Sponsors.
 
 ## Requirements
 
 - macOS or Linux
 - Python 3.11+
 - `git`, `bash`
-- Codex CLI available on `PATH` for strategy, planning, and build LLM calls
-- at least one authenticated Codex home, usually `~/.codex/auth.json`
+- A configured executor CLI on `PATH`: Codex, Claude Code, or Blackbox. OpenRouter uses a configured Codex provider profile.
+- For Codex subscription mode, at least one authenticated Codex home, usually `~/.codex/auth.json`. Claude and explicit API profiles do not require a Codex subscription home.
 - GitHub access to this private repository
 - Auth via one of:
   1. `gh auth login`
@@ -201,12 +221,20 @@ Execution continues with strict gates until:
 - deterministic hard stop condition is reached.
 
 Executor routing flags:
-- `--executor-provider codex|openrouter|blackbox` (default: `codex`)
+- `--executor-provider codex|openrouter|blackbox|claude` (default: `codex`)
 - `--selected-aliases "alias1,alias2,..."` (Codex account/home alias pool for rate/dispatch profile selection)
 - `--profile <codex_config_profile_name>` (optional Codex config profile inside selected `CODEX_HOME`; not a provider selector and not an alias selector)
 - `--executor-model <model-id>` (optional)
 - `--blackbox-lane free|api_key` (default: `free`)
 - `--allow-worker-executor-override` (default off)
+
+Desktop planning limits:
+- `--max-plan-tasks N` optionally caps the generated plan at 1–400 tasks. It is a maximum, not a target; smaller plans retain the same coverage and quality checks.
+- An explicit cap overrides older fixed minimum-task-count instructions for that run. Omitting it preserves existing CLI planning policy.
+- The cap is saved with the plan and rechecked before build/resume. Oversized plans are rejected, never silently truncated.
+- `--max-parallel-workers N` separately controls worker concurrency. `/op-initialize` still generates a plan without starting build execution.
+
+Planning, bootstrap, and strategy honor the selected executor. API configurations use `--profile` with an appropriate `CODEX_HOME`; Claude uses its own local CLI authentication. See [Desktop Runtime Contract](docs/contracts/DESKTOP_RUNTIME_CONTRACT.md).
 
 Alias vs profile quick rule:
 1. Use `--executor-provider` to choose backend (`codex`, `openrouter`, `blackbox`).
@@ -407,3 +435,7 @@ Lane status docs:
 - `docs/plans/LANE_B_IMPLEMENTATION_STATUS.md`
 - `docs/plans/LANE_C_IMPLEMENTATION_STATUS.md`
 - `docs/plans/PROGRAM_LANES_OVERVIEW.md`
+
+## Community and support
+
+Bug reports, documentation, examples and pull requests are welcome. See [Contributing](CONTRIBUTING.md), [Support](SUPPORT.md) and [Security](SECURITY.md). If Optimus helps you, consider [sponsoring development](https://github.com/sponsors/slobodanmargetic988). Sponsorship is voluntary and does not unlock features.
