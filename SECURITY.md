@@ -8,11 +8,9 @@ project files or Git commits.
 
 ## Reporting a vulnerability
 
-During private testing, invited collaborators should contact the maintainer
-privately and arrange a disclosure channel before sharing sensitive details.
-GitHub's private vulnerability reporting feature is not available while this
-repository is private. Enable it when the repository is made public; then use
-**Report a vulnerability** under its **Security** tab. Do not create a public
+Use [GitHub's private vulnerability reporting](https://github.com/slobodanmargetic988/Optimus-Prime-GSD-Fusion/security/advisories/new),
+also available as **Report a vulnerability** under the repository's **Security**
+tab. Reports are shared privately with the maintainer. Do not create a public
 issue containing credentials, exploit details or private project data.
 
 Include the affected version, operating system, a minimal reproduction, the

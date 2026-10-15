@@ -1,8 +1,8 @@
-# Lane C Upgrade Guide (Private Repo)
+# Lane C Upgrade Guide
 
 Updates are explicit/manual by design.
 
-## Upgrade from private prerelease channel
+## Upgrade from the public prerelease channel
 
 ```bash
 opctl update \

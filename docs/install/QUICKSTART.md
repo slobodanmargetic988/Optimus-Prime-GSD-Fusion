@@ -10,7 +10,7 @@ projects.
 - `git`, `bash`, and `python3` on `PATH`
 - Codex CLI available on `PATH` for strategy/planning/build LLM calls
 - at least one authenticated Codex home, usually `~/.codex/auth.json`
-- GitHub access to this private repository when installing from releases
+- Network access to the public GitHub repository when installing from releases
 
 Optional but useful:
 - `gh` authenticated with `gh auth login`
@@ -18,7 +18,7 @@ Optional but useful:
 - Playwright/browser tooling for projects that need UI verification
 - LangSmith credentials only when intentionally enabling tracing experiments
 
-## 1. Authenticate for private release access
+## 1. Configure GitHub authentication for the release installer
 
 Use one of:
 
@@ -39,7 +39,7 @@ Token resolution order in installer/update:
 2. `GH_TOKEN`
 3. `GITHUB_TOKEN`
 
-## 2. Install from private prerelease
+## 2. Install from a public prerelease
 
 ```bash
 python3 scripts/install/op_install.py \

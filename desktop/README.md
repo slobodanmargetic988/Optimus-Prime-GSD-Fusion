@@ -15,7 +15,7 @@ by the provider you select.
 
 Optimus is free and open source under [Apache 2.0](../LICENSE), with
 [separate notices for third-party components](../THIRD_PARTY_NOTICES.md).
-The repository remains private while testing is completed. See [the product contract](../docs/DESKTOP_PRODUCT.md)
+The source repository is public; the desktop app still needs community testing. See [the product contract](../docs/DESKTOP_PRODUCT.md)
 and [runtime contract](../docs/contracts/DESKTOP_RUNTIME_CONTRACT.md).
 
 ## Requirements
@@ -149,7 +149,7 @@ and [GitHub Sponsors](https://github.com/sponsors/slobodanmargetic988). Sponsors
 is optional; contributions, bug reports and documentation improvements are welcome.
 AI provider usage remains separate and is charged by the provider you choose.
 
-The repository stays private during testing. Before publishing installers,
+The source is publicly available. Before a production desktop release,
 configure platform signing/notarization, define supported OS/provider versions,
 and complete live provider and target-device release checks. Current workflow
 artifacts are unsigned review builds. A successful package build does not prove
@@ -179,8 +179,9 @@ Pending before a production release:
 
 - [x] Restore the project’s Apache 2.0 license, retain third-party notices and add
   optional GitHub sponsorship.
-- [ ] Review the final publication snapshot, dependency notices and supported versions;
-  keep the repository private until the maintainer approves publication.
+- [x] Review the source publication snapshot and dependency notices; the maintainer
+  authorized public source access on October 15, 2026.
+- [ ] Define and validate supported desktop OS/provider versions.
 - [ ] Configure macOS signing/notarization, Windows signing and a signed update
   distribution process; test installation and updates.
 - [ ] Run the GitHub installer matrix and test the resulting packages on actual

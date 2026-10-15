@@ -4,7 +4,7 @@ A free, local, plan-driven autonomous builder with a desktop interface and the `
 
 [Website](https://optimus.weeyuga.com/) · [Desktop setup](desktop/README.md) · [Contribute](CONTRIBUTING.md) · [Sponsor the project](https://github.com/sponsors/slobodanmargetic988)
 
-Optimus code is open source under [Apache 2.0](LICENSE). Third-party components retain their own licenses; see [the notices](THIRD_PARTY_NOTICES.md). The repository remains **private during testing** and will be made public only when the maintainer is ready. Access currently requires an invitation.
+Optimus code is open source under [Apache 2.0](LICENSE). Third-party components retain their own licenses; see [the notices](THIRD_PARTY_NOTICES.md). The [GitHub repository](https://github.com/slobodanmargetic988/Optimus-Prime-GSD-Fusion) is public. Everyone is welcome to use the source, test the app and contribute.
 
 Optimus is free to use. Sponsorship is optional and helps support development. Bring your own provider account; provider subscriptions and API usage remain your responsibility.
 
@@ -38,9 +38,9 @@ branches explicitly between remotes rather than mirroring every local ref.
 This repository currently ships:
 - Lane A core cycle control
 - Lane B autonomous planning/build execution
-- Lane C private-first install/update/release pipeline
+- Lane C install/update/release pipeline
 
-Current distribution mode: **private GitHub Releases** (prerelease channel first).
+Current distribution mode: **public GitHub Releases** (prerelease channel first).
 
 ## What You Get
 
@@ -70,15 +70,15 @@ Use Node.js 24. Python 3.11+, Git and the selected provider CLI must be installe
 - `git`, `bash`
 - A configured executor CLI on `PATH`: Codex, Claude Code, or Blackbox. OpenRouter uses a configured Codex provider profile.
 - For Codex subscription mode, at least one authenticated Codex home, usually `~/.codex/auth.json`. Claude and explicit API profiles do not require a Codex subscription home.
-- GitHub access to this private repository
-- Auth via one of:
+- Network access to GitHub for release downloads
+- The release installer supports authentication via one of:
   1. `gh auth login`
   2. `GH_TOKEN`
   3. `GITHUB_TOKEN`
 
-## Install (Private Release)
+## Install (Prerelease)
 
-### 1) Authenticate
+### 1) Configure GitHub authentication for the release installer
 
 ```bash
 gh auth login

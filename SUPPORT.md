@@ -5,8 +5,7 @@ Start with the [desktop setup guide](desktop/README.md) or the
 
 For bugs and feature requests, use
 [GitHub Issues](https://github.com/slobodanmargetic988/Optimus-Prime-GSD-Fusion/issues).
-The repository remains private during testing, so access currently requires an
-invitation. Include your app and provider CLI versions, operating system and a
+The repository is public and community contributions are welcome. Include your app and provider CLI versions, operating system and a
 small reproducible example. Redact credentials and private project content before
 sharing diagnostic output. See [SECURITY.md](SECURITY.md) for sensitive reports.
 

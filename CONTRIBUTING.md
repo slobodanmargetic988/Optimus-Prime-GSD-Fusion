@@ -2,8 +2,9 @@
 
 Optimus is a free local tool for planning and building software with your own AI
 provider. Bug reports, provider compatibility testing, documentation, examples
-and focused pull requests are welcome. The repository is private while the
-maintainer completes testing; these instructions also apply to invited collaborators.
+and focused pull requests are welcome. The repository is public. The CLI is
+confirmed usable; the desktop app remains experimental and untested in real
+projects. Help test it and send a pull request with any necessary bug fixes.
 
 ## Report an issue
 

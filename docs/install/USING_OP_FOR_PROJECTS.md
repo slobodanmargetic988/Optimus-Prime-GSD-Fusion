@@ -13,7 +13,7 @@ against a target repository with `--repo-root`.
 - a target project that is a git repository, or permission for OP to bootstrap git
 
 Optional:
-- `gh` or `GH_TOKEN`/`GITHUB_TOKEN` for private release install/update
+- `gh` or `GH_TOKEN`/`GITHUB_TOKEN` for authenticated release install/update
 - multiple Codex homes for rate/profile routing
 - Playwright/browser dependencies for UI projects
 - LangSmith credentials only when intentionally enabling tracing experiments

@@ -6,8 +6,9 @@ GitHub/Gitea branches and tags and the final staged publication-preparation file
 
 **No confirmed credentials were found in the audited repository content,
 history, release assets, installers, or available workflow logs.** The repository
-stays private until its owner chooses to publish it. This is a dated audit with
-the limits below; it is not a guarantee against every possible secret format.
+was private during this audit. Its owner explicitly authorized publication on
+October 15, 2026. This is a dated audit with the limits below; it is not a
+guarantee against every possible secret format.
 
 ## Scope and results
 
@@ -107,9 +108,10 @@ changing visibility.
   historical details. Existing third-party license notices remain applicable.
 - The audit does not cover private local ignored files, unrelated services, or
   future commits. Repeat checks after any change before publication.
-- **Do not change repository visibility automatically.** Its owner makes the
-  publication decision. No credential rotation or history rewrite was indicated
-  for repository content by this audit.
+- The owner explicitly authorized making the GitHub repository public on
+  October 15, 2026. Publication follows a fresh scan of the final source snapshot
+  and a passing credential-scan workflow. No credential rotation or history
+  rewrite was indicated for repository content by this audit.
 
 Only this sanitized report and preventive configuration belong in Git. Recovery
 bundles, extracted packages, detailed scanner output, and private audit material

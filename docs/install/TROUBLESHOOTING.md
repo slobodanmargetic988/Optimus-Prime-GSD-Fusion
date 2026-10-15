@@ -3,7 +3,7 @@
 ## `auth_error`
 
 Cause:
-- no usable GitHub token for private releases
+- no usable GitHub token for the authenticated release installer
 
 Fix:
 1. Run `gh auth login`, or

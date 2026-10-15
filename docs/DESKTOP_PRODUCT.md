@@ -10,8 +10,8 @@ a move to hosted execution: the local machine remains the execution host.
 
 Optimus and its updates are free. Project code is licensed under Apache 2.0;
 third-party components retain their own licenses in [the notices](../THIRD_PARTY_NOTICES.md).
-The repository remains private during testing and will be made public only after
-maintainer approval.
+The source repository is public. The CLI is confirmed usable; the desktop app
+remains experimental and needs real-project testing and community bug fixes.
 
 The desktop **About** page links to the
 [GitHub repository](https://github.com/slobodanmargetic988/Optimus-Prime-GSD-Fusion)
