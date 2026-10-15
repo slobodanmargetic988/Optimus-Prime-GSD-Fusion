@@ -53,3 +53,8 @@ To roll back content, atomically replace `current` with a symlink to a previous
 release directory. The original HTTP vhost is backed up at
 `/var/backups/optimus-website/20261014-initial/nginx-http.conf`; preserve HTTPS
 when rolling back content. Future uploads must exclude macOS `._*` sidecar files.
+
+On October 15, 2026, the desktop-testing notice was added to the live page.
+Current content release: `/srv/optimus.weeyuga.com/releases/20261015-testing-notice`.
+The notice distinguishes the confirmed usable CLI from the experimental,
+untested desktop workflows and invites bug reports and bug-fix pull requests.

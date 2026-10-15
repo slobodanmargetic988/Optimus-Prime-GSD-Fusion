@@ -1,5 +1,13 @@
 # Optimus Desktop
 
+**Testing notice:** The Optimus CLI is confirmed usable. The desktop app is an
+experimental, untested preview for real project workflows and may have bugs.
+Passing automated checks and installer builds does not establish end-to-end
+desktop reliability. Anyone willing to test it is welcome to report issues and
+submit a pull request (merge request) with any necessary bug fixes. Please include
+your OS, provider, reproduction steps, and logs with credentials removed; see
+[Contributing](../CONTRIBUTING.md).
+
 Optimus Desktop runs the Optimus planning and build engine on your computer.
 It supports new projects, existing Git repositories, saved-run resume, provider
 settings, task limits, worker limits and live engine progress. AI usage is billed

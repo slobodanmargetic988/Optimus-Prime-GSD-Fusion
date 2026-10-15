@@ -2,11 +2,38 @@
 
 A free, local, plan-driven autonomous builder with a desktop interface and the `/op-*` command-line workflow. Configure your AI provider, set your task and worker limits, then plan, build and resume projects on your own computer.
 
-[Desktop setup](desktop/README.md) · [Contribute](CONTRIBUTING.md) · [Sponsor the project](https://github.com/sponsors/slobodanmargetic988)
+[Website](https://optimus.weeyuga.com/) · [Desktop setup](desktop/README.md) · [Contribute](CONTRIBUTING.md) · [Sponsor the project](https://github.com/sponsors/slobodanmargetic988)
 
 Optimus code is open source under [Apache 2.0](LICENSE). Third-party components retain their own licenses; see [the notices](THIRD_PARTY_NOTICES.md). The repository remains **private during testing** and will be made public only when the maintainer is ready. Access currently requires an invitation.
 
 Optimus is free to use. Sponsorship is optional and helps support development. Bring your own provider account; provider subscriptions and API usage remain your responsibility.
+
+## Testing status
+
+**The CLI is confirmed usable. The desktop app is experimental, has not been
+validated end to end in real projects, and may have bugs.** Automated checks and
+installer builds have passed, but they do not establish real-world desktop
+reliability. Volunteers are welcome to test it, report problems, and submit a
+pull request (merge request) for any fixes they find necessary. Include the OS,
+provider, reproduction steps, and relevant logs with credentials removed. See
+[Contributing](CONTRIBUTING.md) and the [desktop guide](desktop/README.md).
+
+## Branch policy
+
+The shared GitHub and Gitea repositories retain two long-lived branches:
+
+| Branch | Purpose |
+| --- | --- |
+| `main` | Current integrated CLI, desktop preview, documentation, and website. Use this branch for the latest source. |
+| `langstack` | Retained development/reference lineage for the LangStack integration. Its current implementation is included in `main`; it is kept for comparison and continued integration work. |
+
+Old `op-simple-canary-*`, worker/task, lane-baseline, and completed review
+branches are disposable build/test history. They were removed during the
+October 15, 2026 publication cleanup; a private recovery archive was retained
+outside the published repository. They are not additional supported versions.
+Keep future canary and worker branches local or in dedicated test repositories,
+and remove short-lived review branches after integration. Sync the two retained
+branches explicitly between remotes rather than mirroring every local ref.
 
 This repository currently ships:
 - Lane A core cycle control

@@ -1,51 +1,116 @@
-# Private release credential audit
+# Publication credential audit
 
-Audit date: 2026-10-11. Repository baseline: `659c6fdbc39291058ea6c6efa0432389f4ffb249`, plus the exact staged publication-preparation source on `codex/free-open-source-desktop`.
+Audit date: **2026-10-15**. This supersedes the October 11 audit. The baseline
+was GitHub `main` at `2c1a8fc27c5fab554fcddc097ef225edc6602ca5`, plus all fetched
+GitHub/Gitea branches and tags and the final staged publication-preparation files.
 
-**No confirmed credentials were found in the audited Git history or source snapshot.** The repository remains private while the application is tested. This is a dated scan result, not a guarantee that future changes or every possible secret format are safe.
+**No confirmed credentials were found in the audited repository content,
+history, release assets, installers, or available workflow logs.** The repository
+stays private until its owner chooses to publish it. This is a dated audit with
+the limits below; it is not a guarantee against every possible secret format.
 
-## Scope and evidence
+## Scope and results
 
-| Check | Scope | Result |
+| Surface | Scope | Result |
 | --- | --- | --- |
-| Gitleaks 8.30.1 history scan | 559 commits reachable from 363 local refs, including fetched GitHub branches/tags, local branches, stash, and Codex snapshot refs | No unreviewed findings |
-| Additional reflog scan | 565 reachable/reflog commits | No unreviewed findings |
-| Complete historical file contents | 2,805 distinct Git blobs, 141,817,135 bytes | No confirmed credentials |
-| Publication-candidate working tree | 1,200 tracked and nonignored untracked files at the initial snapshot | No confirmed credentials |
-| Final staged source | All 1,205 files extracted directly from the Git index, including this finalized report | No unreviewed findings |
-| Commit and annotated-tag messages | All reachable commit messages and both annotated tags | No findings |
-| Supplemental patterns | Provider tokens, JWTs, private-key markers, credential-bearing URLs, signed access URLs, sensitive credential filenames | No findings |
-| Image text | Local OCR of all 13 reachable image blobs and all 6 final staged images, followed by credential scanning | No findings; OCR can miss text |
-| Compressed content inventory | File signatures checked for ZIP, gzip, tar, xz, bzip2, and 7z | No reachable compressed archives found |
-| Remote configuration | Credential-bearing HTTP remote URLs | None found |
+| Fresh remote recovery mirror | All 158 GitHub branches, 158 Gitea branches, and both tags on each remote; 556 distinct reachable commits | No unreviewed history findings |
+| Complete historical file versions | 2,797 distinct blobs, 138,499,747 bytes, with original paths preserved for scanning; commit and annotated-tag messages included | No unreviewed findings |
+| Additional local history | All local refs and reflogs, 568 reachable commits | No unreviewed findings |
+| Supplemental content checks | Private-key markers, credential-bearing URLs, signed access URLs, JWTs, and sensitive credential filenames across all historical blobs | No candidates |
+| Images | Local OCR of all six historical repository images and the one distinct extracted installer image | No findings; OCR can miss text |
+| GitHub releases | Both releases and all eight downloadable assets, including unpacked CLI bundles | No findings |
+| Desktop build artifacts | All four unexpired artifact archives, containing seven installers for macOS ARM64/x64, Linux x64, and Windows x64 | No findings |
+| Extracted installer contents | ZIP, DMG, AppImage, DEB, NSIS/7z, nested tar/xz, and all seven app.asar copies explicitly unpacked; 34,496 file instances reduced by SHA-256 to 5,097 distinct files | No findings in scanner-readable content, approximately 559 MB |
+| Available Actions logs | All five downloadable workflow-log archives, unpacked and scanned | No findings |
+| Actions job output | Metadata for all ten workflow runs, 25 jobs, and 33 annotations, including decoded text | No repository-supplied credentials found |
+| Other GitHub surfaces | Repository/release metadata, PRs, issues, commit/issue comments, variables, environments, and secret-name inventory | No repository-supplied credentials found |
+| Final publication source | All 1,211 files exported directly from the staged Git tree, including this finalized report | No findings |
 
-GitHub branches and tags were fetched before the final history check. The repository was not shallow. No pull requests or advertised pull-request head refs were present. Some audited local refs are not published on GitHub, so this scope is broader than the remote's advertised branch/tag history.
+There were no PR head refs, Git notes, forks, wiki/discussion surfaces, repository
+submodules, LFS objects, issues, comments, Actions variables, environments, or
+configured Actions secrets in the inspected repository. The repository was not
+shallow. No historical compressed Git blobs were found by file signatures.
 
-Archive scanning was enabled to depth 2 and recursive decoding to depth 5. Scans ran locally. No source, screenshots, findings, or credentials were uploaded to a scanning service, and no token-validation requests were made.
+All scans and OCR ran locally. No repository contents or candidate credentials
+were sent to an external scanning service, and no credential-validation requests
+were made. GitHub API access used the existing authenticated CLI.
 
-## Reviewed false positives
+## Reviewed detections
 
-The unmodified default scanner reported 64 historical occurrences, corresponding to 34 occurrences in distinct blob versions and 10 in the initial working-tree snapshot. Every occurrence was reviewed:
+Unmodified Gitleaks defaults reported **64 historical occurrences**. Rechecking
+the original file and line for every occurrence confirmed only:
 
-- Recommendation stability identifiers in the REQ-053 sample and its historical generated contract. The runtime deterministically derives these identifiers from recommendation content using SHA-256; they do not authorize access.
-- Two static REQ-057 validation reason codes in historical versions of `scripts/strategy_validators.py`.
+- 60 deterministic recommendation identifiers with the format
+  `ridkey.[12 lowercase hexadecimal characters]` in the two documented REQ-053
+  sample/generated-contract locations.
+- Four static REQ-057 validator reason-code occurrences in
+  `scripts/strategy_validators.py`.
 
-The root `.gitleaks.toml` permits only those exact identifier formats in their specific files, using both conditions together. It does not exclude test, fixture, documentation, or log directories. A synthetic regression check verified that a credential-shaped value inserted into an excepted file is still detected, and that an excepted identifier format in an unrelated file is still detected.
+The existing `.gitleaks.toml` permits these exact patterns only in their exact
+files, requiring both conditions together. It does not exclude fixture, log,
+test, or documentation directories. All candidates were accounted for; the
+reviewed history and historical-content scans returned zero findings.
 
-The reviewed configuration passed the complete history scan, the initial current-source scan, and the final exact staged-source scan. The staged-source scan was repeated after this report was finalized. No credential rotation or history rewrite was indicated by these results.
+The authenticated GitHub repository API also returned a short-lived
+`temp_clone_token`. That credential was generated by GitHub for the authenticated
+API caller; it was not in source, history, releases, or public repository data.
+It was removed from local API captures and decoded audit text. Sanitized API
+metadata then passed the scan. Raw API responses must never be committed.
+
+## Synchronization and branch cleanup
+
+- GitHub already contained the current implementation and desktop/website work.
+  Gitea `main` had one separate Apache-license commit whose files were already
+  identical to the restored project license. Its history is merged without
+  replacing newer implementation work.
+- The shared repositories retain `main` and `langstack`. `main` is the current
+  integrated source; `langstack` preserves the integration/reference lineage.
+  Gitea's older `langstack` is fast-forwarded to the GitHub version.
+- The cleanup removes 152 canary branches, three integrated review branches,
+  and one obsolete lane baseline. The baseline's three unique commits contain
+  an older merge-evidence checker superseded by the current implementation.
+- Before deletion, a private full-ref mirror and verified recovery bundle were
+  saved outside this repository. Branch removal does not replace a credential
+  audit: the removed histories were scanned too, since commits may remain
+  accessible by SHA or in existing clones.
+- Three rebuildable pre-publication Actions caches were deleted. Available
+  release assets and installer artifacts were retained after scanning.
 
 ## Ongoing protection
 
-`.github/workflows/secret-scan.yml` scans complete fetched history and a complete tracked-source snapshot on pushes, pull requests, and manual runs. It uses a pinned checkout action and a checksum-verified Gitleaks release. Scanner output is fully redacted. Reports are not uploaded as workflow artifacts.
+`.github/workflows/secret-scan.yml` checks complete fetched history and an entire
+tracked-source snapshot on source pushes, pull requests, and manual runs. It uses
+a pinned checkout action and checksum-verified Gitleaks release, redacted output,
+archive scanning, and recursive decoding. It ignores neither allow-comments nor
+unreviewed ignore files. Branch-deletion events skip the runner because they
+publish no new source; ordinary code pushes remain scanned.
 
-Local credential files, environment files, runtime state, private hosting metadata, generated installers, and inspection output must remain outside the committed source. Repeat the staged-source scan after any further changes, and repeat the history and source scans before changing repository visibility.
+Local scans used Gitleaks 8.30.1, recursive decoding to depth eight, explicit
+installer/ASAR extraction, and archive scanning where applicable. The GitHub job
+is an additional check; confirm its result on the final pushed commit before
+changing visibility.
 
-## Limits and publication gate
+## Limits and publication decision
 
-- This result applies to the reviewed staged source and the stated history baseline. Changes made after this audit require another scan.
-- Existing history includes local filesystem paths and generated engineering reports. They did not contain detected credentials, but this audit does not remove personal machine names or certify business confidentiality.
-- The audit covers Git data and the stated source snapshot. GitHub Actions logs, uploaded release assets, issue attachments, external services, and ignored local files are separate surfaces.
-- Pattern scanners and OCR can miss unknown, encrypted, obfuscated, fragmented, or visually unreadable secrets. No scan proves complete absence.
-- Do not make the repository public automatically. The owner will choose when testing and publication review are complete.
+- Five older workflow logs have expired and return unavailable; they cannot be
+  downloaded from GitHub. Their surviving job metadata and annotations were
+  checked, and the retained release assets were downloaded and scanned.
+- GitHub's built-in private-repository secret-scanning and code-scanning alert
+  APIs were unavailable to this account. Local scans and the repository's
+  independent credential-scan workflow provide the recorded evidence.
+- Pattern scanners and OCR can miss unknown, fragmented, encrypted, obfuscated,
+  or visually unreadable secrets. Binary payloads were unpacked and inspected
+  through available scanners; no claim is made that every possible encoding is
+  detectable. No scan proves absolute absence.
+- Existing history contains local paths and generated engineering reports.
+  Credential scanning does not certify business confidentiality or remove those
+  historical details. Existing third-party license notices remain applicable.
+- The audit does not cover private local ignored files, unrelated services, or
+  future commits. Repeat checks after any change before publication.
+- **Do not change repository visibility automatically.** Its owner makes the
+  publication decision. No credential rotation or history rewrite was indicated
+  for repository content by this audit.
 
-Raw redacted findings and intermediate extracted content remain in a private local audit directory outside the repository; only this sanitized summary and the preventive configuration belong in Git.
+Only this sanitized report and preventive configuration belong in Git. Recovery
+bundles, extracted packages, detailed scanner output, and private audit material
+remain outside the repository.
