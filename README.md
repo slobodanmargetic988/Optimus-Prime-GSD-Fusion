@@ -1,5 +1,7 @@
 # Optimus Prime GSD Fusion
 
+[![Support me](https://img.shields.io/badge/Support%20me-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/slobodanmargetic988)
+
 A free, local, plan-driven autonomous builder with a desktop interface and the `/op-*` command-line workflow. Configure your AI provider, set your task and worker limits, then plan, build and resume projects on your own computer.
 
 [Website](https://optimus.weeyuga.com/) · [Desktop setup](desktop/README.md) · [Contribute](CONTRIBUTING.md) · [Sponsor the project](https://github.com/sponsors/slobodanmargetic988)
